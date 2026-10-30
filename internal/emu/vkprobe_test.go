@@ -125,8 +125,24 @@ func TestVkParseProperties(t *testing.T) {
 	}
 }
 
-// TestRunVulkanProbe runs the probe in this process (this machine has an NVIDIA GPU with a Vulkan driver).
+// hostHasVulkan: the probe tests below need a Vulkan driver with a device (the dev machine has an NVIDIA GPU; CI
+// runners have no GPU and vkCreateInstance fails). Only a well-formed "no driver / no device" answer counts as
+// absent; anything unparsable returns true so the test runs and reports it.
+func hostHasVulkan() bool {
+	var buf bytes.Buffer
+	RunVulkanProbe(&buf)
+	var out vkProbeOutput
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &out); err != nil {
+		return true
+	}
+	return out.Loaded && out.Result == 0 && len(out.Devices) > 0
+}
+
+// TestRunVulkanProbe runs the probe in this process (skipped on a host without a Vulkan driver).
 func TestRunVulkanProbe(t *testing.T) {
+	if !hostHasVulkan() {
+		t.Skip("no Vulkan driver with a device on this host")
+	}
 	var buf bytes.Buffer
 	if code := RunVulkanProbe(&buf); code != 0 {
 		t.Fatalf("exit code %d", code)
@@ -175,6 +191,9 @@ func TestVulkanProbeHelperProcess(t *testing.T) {
 }
 
 func TestRunVulkanProbeChild(t *testing.T) {
+	if !hostHasVulkan() {
+		t.Skip("no Vulkan driver with a device on this host")
+	}
 	saved := vulkanProbeArgv
 	defer func() { vulkanProbeArgv = saved }()
 	exe, err := os.Executable()

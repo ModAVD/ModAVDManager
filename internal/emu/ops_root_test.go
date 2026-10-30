@@ -198,7 +198,9 @@ func TestOpsCheckOnEmptyRoot(t *testing.T) {
 	if it := byID["acceleration"]; it.OK != nil {
 		t.Fatalf("acceleration without an emulator must be unknown: %+v", it)
 	}
-	if it := byID["vulkan"]; it.OK == nil || !*it.OK {
+	// without a Vulkan driver (CI runners) the item is a non-blocking failure with advice
+	if it := byID["vulkan"]; hostHasVulkan() && (it.OK == nil || !*it.OK) ||
+		!hostHasVulkan() && (it.OK == nil || *it.OK || it.Blocking || it.Advice == "") {
 		t.Fatalf("vulkan = %+v", it)
 	}
 	if it := byID["disk"]; it.OK == nil {
