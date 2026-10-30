@@ -4,6 +4,8 @@
 
 > 这是非官方项目，与 Google 没有关联。
 
+使用说明和参与开发的说明在 ModAVD 文档站：[管理器和命令行](https://modavd.github.io/components/manager)、[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
+
 - [这是什么](#这是什么)
 - [和 ModAVD 的关系](#和-modavd-的关系)
 - [命令行](#命令行)
@@ -164,6 +166,7 @@ go test ./...
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
 - 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义或删了字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
+- 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
 ## 许可证
 
