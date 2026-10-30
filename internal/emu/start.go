@@ -254,6 +254,9 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	if err != nil {
 		return nil, owed(err)
 	}
+	if !m.waitSDCard(ctx, i) {
+		m.Log.Warnf("实例 %d 安卓已开机，但 /sdcard 在 %.0f 秒内还没挂好；继续返回，稍后再试", i, sdcardMountWait.Seconds())
+	}
 	if res.Launched {
 		res.BootSeconds = time.Since(launchedAt).Seconds()
 		prog.emit("boot", fmt.Sprintf("实例 %d 安卓已开机（%.1f 秒）", i, res.BootSeconds), progressBooted)
@@ -326,6 +329,27 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	res.TotalSeconds = time.Since(t0).Seconds()
 	prog.emit("done", fmt.Sprintf("实例 %d 已就绪（共 %.1f 秒）", i, res.TotalSeconds), progressTotal)
 	return res, nil
+}
+
+// waitSDCard covers the short interval after sys.boot_completed in which vold has not mounted shared storage yet.
+// A timeout is only a warning: the emulator is usable and a later start/status call can observe the mount.
+func (m *Manager) waitSDCard(ctx context.Context, i int) bool {
+	deadline := time.Now().Add(sdcardMountWait)
+	for {
+		if err := ctxErr(ctx); err != nil {
+			return false
+		}
+		res := m.shell(ctx, i, "test -d /sdcard && test -r /sdcard && test -w /sdcard", statusAdbTimeout)
+		if res.Code == 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		if !sleepOrDone(ctx, 500*time.Millisecond) {
+			return false
+		}
+	}
 }
 
 // waitBoot polls sys.boot_completed every second until it is 1 (AUTO-MAS _wait_boot). An instance this call launched

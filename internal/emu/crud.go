@@ -164,7 +164,14 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		startLock.Unlock()
 		return nil, err
 	}
+	bridgeLock, err := m.tryInstanceLock(i, "bridge", "正在装执行桥")
+	if err != nil {
+		startLock.Unlock()
+		stopLock.Unlock()
+		return nil, err
+	}
 	unlock := func() {
+		bridgeLock.Unlock()
 		stopLock.Unlock()
 		startLock.Unlock()
 	}

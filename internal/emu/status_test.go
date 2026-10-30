@@ -18,7 +18,7 @@ func TestStatusOfAndBusyOf(t *testing.T) {
 	if statusOf(true, false) != StatusStarting || statusOf(true, true) != StatusOnline {
 		t.Fatal("qemu: starting until booted")
 	}
-	if busyOf(false, false) != "" || busyOf(false, true) != "starting" || busyOf(true, false) != "stopping" || busyOf(true, true) != "stopping" {
+	if busyOf(false, false, false) != "" || busyOf(false, true, false) != "starting" || busyOf(true, false, false) != "stopping" || busyOf(true, true, false) != "stopping" || busyOf(false, false, true) != "bridging" {
 		t.Fatal("busyOf")
 	}
 }

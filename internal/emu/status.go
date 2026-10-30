@@ -130,6 +130,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		info.PID = int(p.PID)
 		if t := p.StartedAt(); !t.IsZero() {
 			info.StartedAt = t.Format(time.RFC3339)
+			info.StartedAtMS = t.UnixMilli()
 		}
 		if booted != nil {
 			info.Booted = *booted
@@ -141,7 +142,8 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		info.Screencap.ShmReady = win.SharedMemoryExists(info.Screencap.Shm)
 	}
 	info.Status = statusOf(info.Running, info.Booted)
-	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"))
+	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
+	info.Bridge = m.bridgeState(ctx, i, info.Running)
 
 	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS()}
 	if n, ok := in.CPU(); ok {
@@ -176,8 +178,10 @@ func statusOf(running, booted bool) Status {
 }
 
 // busyOf: a stop that runs wins over a start (a stop does not wait for a start, and ends it).
-func busyOf(stopping, starting bool) string {
+func busyOf(stopping, starting, bridging bool) string {
 	switch {
+	case bridging:
+		return "bridging"
 	case stopping:
 		return "stopping"
 	case starting:
@@ -185,6 +189,19 @@ func busyOf(stopping, starting bool) string {
 	default:
 		return ""
 	}
+}
+
+func (m *Manager) bridgeState(ctx context.Context, i int, running bool) string {
+	if !m.bridgeWanted(i) {
+		return "off"
+	}
+	if regularFile(bridgeMarker(m.Root, i)) {
+		return "pending"
+	}
+	if running && m.guestBridge(ctx, i) == bridgeProp {
+		return "installed"
+	}
+	return "unknown"
 }
 
 // lockHeld: some process (this one included: the lock is per handle) holds lock kind of instance i right now.

@@ -51,9 +51,14 @@ type InstanceInfo struct {
 	// Busy: "starting" / "stopping" while some modavd process holds that lock of the instance (AUTO-MAS's updater
 	// must not swap sdk\emulator then); "" otherwise.
 	Busy string `json:"busy"`
-	PID  int    `json:"pid"`
+	// Bridge is off (disabled), pending (marker requests install), installed, or unknown (the instance is off or
+	// the guest did not answer). An offline instance is unknown when its marker is absent because the guest property
+	// cannot be queried; only an explicit off setting is definitive.
+	Bridge string `json:"bridge"`
+	PID    int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
-	StartedAt string `json:"started_at"`
+	StartedAt   string `json:"started_at"`
+	StartedAtMS int64  `json:"started_at_ms"`
 	// Serial is the device on the private adb server (adb -P <adb_server_port> -s <serial>). Scripts that use their own
 	// adb server connect to AdbAddress instead.
 	Serial      string         `json:"serial"`

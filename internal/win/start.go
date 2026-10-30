@@ -224,7 +224,7 @@ type spawnReply struct {
 // StartDetached), which starts exe with StartDetached semantics, reports the child to us and exits at once. The
 // child's parent PID then names a dead process, so tools that end "the process tree" of modavd (Claude Code ends an
 // MCP server's whole tree on disconnect; AUTO-MAS Runtime's job object) cannot reach the emulator: ending qemu
-// without a guest shutdown is a power cut (AGENTS.md). Output must be given as opt.OutputPath (opened by the helper,
+// without a guest shutdown is a power cut. Output must be given as opt.OutputPath (opened by the helper,
 // appended to); opt.Output is not allowed here. The helper gets opt.Env and passes it on. Returns the grandchild.
 //
 // Protocol: one JSON argument (spawnRequest) after "__spawn"; the helper's stdout is a pipe to us carrying one JSON

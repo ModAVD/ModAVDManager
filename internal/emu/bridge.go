@@ -11,8 +11,8 @@ package emu
 // It runs without -Reboot: where the script would reboot the guest (the first remount only turns verity off; the new
 // build.prop line is read at boot) modavd shuts the instance down and boots it cold instead. A guest reboot under
 // WHPX can leave one vCPU deaf to IPIs, and the guest then spins in smp_call_function forever (10-30 bridge-default
-// regression: soft lockup in toggle_allocation_gate right after the install's `adb reboot`, docs/自研模拟器-AOSP提交/TSC.md
-// has the same picture); a cold boot does not reset vCPUs in place.
+// regression: soft lockup in toggle_allocation_gate right after the install's `adb reboot`; a cold boot does not
+// reset vCPUs in place.
 //
 // Instances AUTO-MAS creates and boots itself never come through here; `modavd bridge <i> install` does them (and
 // any older instance).
@@ -294,6 +294,14 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 	if _, err := m.instance(i); err != nil {
 		return nil, err
 	}
+	bridgeLock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	if err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "实例执行桥锁文件打不开")
+	}
+	if !ok {
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装执行桥，无法重复操作", i)
+	}
+	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
 	_, wasRunning := m.findQemu(i)
 
@@ -322,7 +330,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			res.Restarted = true
 		}
 		if !wasRunning || res.Restarted {
-			sr, err := m.Start(ctx, i, StartOptions{})
+			sr, err := m.Start(ctx, i, StartOptions{NoBridge: true})
 			if err != nil {
 				return nil, err
 			}

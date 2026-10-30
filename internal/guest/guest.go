@@ -1,6 +1,5 @@
 // Package guest holds the scripts modavd pushes into the guest after boot. They are copies of AUTO-MAS
-// res/avd/guest/*.sh (the product versions; mas-idlepoll.sh differs from aemu-lab tools/launcher/ only in a comment,
-// mas-wifi-fastpath.sh equals tools/guest/). Until AUTO-MAS calls modavd for booting, changes go into both places.
+// res/avd/guest/*.sh (the product versions). Keep these shared scripts in sync with the companion launcher.
 package guest
 
 import (
@@ -14,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 //go:embed scripts/*.sh
@@ -58,7 +59,7 @@ func LocalFile(dir, name string) (string, error) {
 	sum := sha256.Sum256(b)
 	sub := filepath.Join(dir, hex.EncodeToString(sum[:])[:12])
 	path := filepath.Join(sub, name)
-	switch old, err := os.ReadFile(path); {
+	switch old, err := readStable(path); {
 	case err == nil && bytes.Equal(old, b):
 		return path, nil
 	case err == nil:
@@ -81,12 +82,31 @@ func LocalFile(dir, name string) (string, error) {
 	if err != nil {
 		os.Remove(tmp)
 		// another writer got there first: its file is just as good when it holds these bytes
-		if old, rerr := os.ReadFile(path); rerr == nil && bytes.Equal(old, b) {
+		if old, rerr := readStable(path); rerr == nil && bytes.Equal(old, b) {
 			return path, nil
 		}
 		return "", err
 	}
 	return path, nil
+}
+
+// readStable tolerates the short window in which another writer has renamed a complete file but still has its
+// handle open. Windows reports that as ERROR_SHARING_VIOLATION (or ERROR_LOCK_VIOLATION); retrying here makes the
+// content-addressed first write safe across processes without weakening the no-replace invariant.
+func readStable(path string) ([]byte, error) {
+	const attempts = 40
+	for n := 0; ; n++ {
+		b, err := os.ReadFile(path)
+		if err == nil || n >= attempts || !sharingViolation(err) {
+			return b, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func sharingViolation(err error) bool {
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == syscall.Errno(32) || errno == syscall.Errno(33))
 }
 
 // Remote is the guest path of a script.
