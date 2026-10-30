@@ -1,15 +1,15 @@
 # Build tools\modavd.exe reproducibly: the same source and Go version give the same bytes on any machine and path.
 #
-#   pwsh -NoProfile -File tools\modavd\build.ps1             # -> tools\modavd\out\tools\modavd.exe, out\ModAVD.exe
-#   pwsh -NoProfile -File tools\modavd\build.ps1 -Out <dir> -Go <go1.26.5>\bin\go.exe
-#   pwsh -NoProfile -File tools\modavd\build.ps1 -Test      # go vet + go test first
+#   pwsh -NoProfile -File build.ps1                         # -> out\tools\modavd.exe, out\ModAVD.exe
+#   pwsh -NoProfile -File build.ps1 -Out <dir> -Go <go1.26.5>\bin\go.exe
+#   pwsh -NoProfile -File build.ps1 -Test                    # go vet + go test first
 #
 # modavd.exe is the console program (CLI, MCP); ModAVD.exe is the manager, a GUI-subsystem exe (-H=windowsgui, no
 # console window when double-clicked) built from cmd/modavd-gui. In the package: <root>\tools\modavd.exe and
 # <root>\ModAVD.exe.
 #
 # -trimpath keeps local paths (GOROOT under C:\Users, the source dir) out of the binary, which the release privacy scan
-# would flag; -buildvcs=false keeps the private repo's commit and dirty flag out. GOTOOLCHAIN=local plus the check
+# would flag; -buildvcs=false keeps repository metadata and dirty flags out. GOTOOLCHAIN=local plus the check
 # against go.mod's toolchain line makes sure no other Go version builds it silently. No -X version stamp (see
 # internal/buildinfo).
 

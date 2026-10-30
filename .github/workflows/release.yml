@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'ModAVD/ModAVDManager'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: verify tag and ancestry
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "invalid tag: $env:TAG" }
+          git merge-base --is-ancestor $env:SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'tag is not on origin/main' }
+      - name: build and verify
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.Substring(1)
+          $want = (Select-String -LiteralPath 'internal/buildinfo/buildinfo.go' -Pattern 'Version = "([^"]+)"').Matches.Groups[1].Value
+          if ($want -ne $version) { throw "buildinfo.Version=$want, tag=$version" }
+          pwsh -NoProfile -File build.ps1 -Out out
+          $sums = @{}
+          foreach ($line in Get-Content "release/$version.SHA256SUMS.txt") { if ($line -match '^([0-9a-f]{64})  (.+)$') { $sums[$Matches[2]] = $Matches[1] } }
+          foreach ($name in @('ModAVD.exe', 'tools/modavd.exe')) {
+            $got = (Get-FileHash "out/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($got -ne $sums[$name]) { throw "$name hash mismatch" }
+          }
+          $zip = "ModAVDManager-$version-win-x64.zip"
+          $env:GOTOOLCHAIN = 'local'
+          go run ./internal/tools/mkzip -dir out -version $version -out $zip
+          $gotZip = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($gotZip -ne $sums[$zip]) { throw 'zip hash mismatch' }
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item $zip, "release/$version.SHA256SUMS.txt" artifacts
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: release-assets
+          path: artifacts
+          if-no-files-found: error
+
+  draft:
+    needs: build
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-assets
+          path: artifacts
+      - name: verify artifact
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.Substring(1)
+          $sumPath = "artifacts/$version.SHA256SUMS.txt"
+          $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
+          $line = Get-Content $sumPath | Where-Object { $_ -match "^([0-9a-f]{64})  ModAVDManager-$version-win-x64\.zip$" }
+          $expected = $Matches[1]
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'downloaded zip hash mismatch' }
+          if (gh release view $env:TAG 2>$null) { throw 'release already exists' }
+      - name: create draft
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = $env:TAG.Substring(1)
+          $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
+          $sumPath = "artifacts/$version.SHA256SUMS.txt"
+          gh release create $env:TAG --draft --verify-tag --notes-file "release/$version.md" $zip $sumPath
