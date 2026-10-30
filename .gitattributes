@@ -1,0 +1,6 @@
+# go:embed takes the working-tree bytes: LF everywhere, so every checkout builds the same exe
+* text eol=lf
+# ...except the binaries (the exe icon resource, icons and images of the manager page): never converted
+*.syso -text
+*.ico -text
+*.png -text

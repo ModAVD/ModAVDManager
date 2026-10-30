@@ -1,0 +1,32 @@
+ModAVDManager
+Copyright 2026 qiyinxi
+
+本仓库的代码按 GNU Affero General Public License 第 3 版或（由你选择）任何更新的版本发布
+（SPDX：AGPL-3.0-or-later），全文见 LICENSE。下面三项例外或另有来源。
+
+一、图标与美术（不在本仓库的许可范围内）
+
+  cmd/modavd-gui/modavd.ico
+  cmd/modavd-gui/rsrc_windows_amd64.syso（把上面的图标编进 ModAVD.exe 的资源文件）
+  internal/ui/web/assets/ 下的图片（icon-16.png、icon-32.png、icon-48.png、icon-256.png、modavd.ico）
+
+  这些是 ModAVD 的程序图标，和模拟器的图标是同一张图，都是同人创作。
+  画中角色是《明日方舟》的艾雅法拉，角色及其设计的版权归上海鹰角网络所有。
+  这些图片不在本仓库的 AGPL-3.0 许可范围内，也不随本项目的任何其他许可证授权，
+  只作为管理器的图标随程序分发。
+  本项目与鹰角网络无关，也未获其认可。
+  如有版权问题，请通过 https://github.com/ModAVD/ModAVD/issues 或邮件 qiyinxi@foxmail.com 联系，
+  我们会立即处理。
+
+二、internal/avd/testdata/instances_ref.py
+
+  复制自 AUTO-MAS（https://github.com/AUTO-MAS-Project/AUTO-MAS），版权归 AUTO-MAS 的作者，
+  按 AGPL-3.0-or-later 许可。
+  它只供测试使用：测试在单独的 Python 进程里运行它，把输出和本仓库的 Go 代码逐字节对照。
+  它不编进 ModAVD.exe 和 modavd.exe。
+
+三、Go 标准库和运行时
+
+  编译出的 ModAVD.exe 和 modavd.exe 包含 Go 标准库和运行时（https://go.dev），
+  Copyright 2009 The Go Authors，按 BSD-3-Clause 许可发布，
+  许可证全文见 https://go.dev/LICENSE 或 Go 发行版里的 LICENSE 文件。

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'">
+<meta name="color-scheme" content="light dark">
+<title>ModAVD</title>
+<link rel="icon" href="/assets/modavd.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/js/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img src="/assets/icon-48.png" width="28" height="28" alt="">
+    <span class="brand-name">ModAVD</span>
+    <span class="brand-ver" id="ver" hidden></span>
+  </div>
+  <div class="tools">
+    <button class="tchip" id="rootChip" type="button" title="在资源管理器里打开模拟器目录">
+      <span data-icon="folder"></span><span class="tchip-path" id="rootPath"><span class="sk sk-text"></span></span>
+    </button>
+    <button class="tchip" id="checkChip" type="button" aria-haspopup="dialog">
+      <span data-icon="shield"></span><span class="lbl">电脑检查</span><span class="sep" aria-hidden="true"></span><span class="st loading" id="checkState">检查中…</span>
+    </button>
+    <button class="tchip" id="actBtn" type="button" aria-haspopup="dialog">
+      <span data-icon="pulse"></span><span class="lbl">活动</span><span class="badge" id="actBadge" hidden></span>
+    </button>
+    <div class="iseg" id="themeSeg" role="radiogroup" aria-label="外观">
+      <button type="button" role="radio" data-v="system" title="跟随系统" aria-label="跟随系统"><span data-icon="auto"></span></button>
+      <button type="button" role="radio" data-v="light" title="浅色" aria-label="浅色"><span data-icon="sun"></span></button>
+      <button type="button" role="radio" data-v="dark" title="深色" aria-label="深色"><span data-icon="moon"></span></button>
+    </div>
+  </div>
+</header>
+
+<div class="reconnect" id="reconnect" role="status" hidden><span class="spin"></span><span id="reconnectText">正在重新连接…</span><button class="link-btn" id="reconnectBtn" type="button" hidden>重新连接</button></div>
+
+<main class="main">
+  <div id="banner" hidden></div>
+  <section aria-labelledby="instTitle">
+    <div class="section-head">
+      <h1 id="instTitle">实例</h1>
+      <span class="count" id="instCount"></span>
+      <div class="summary" id="summary"></div>
+      <div class="iseg view-seg" id="viewSeg" role="radiogroup" aria-label="显示方式">
+        <button type="button" role="radio" data-v="card" title="卡片" aria-label="卡片"><span data-icon="cards"></span></button>
+        <button type="button" role="radio" data-v="list" title="列表" aria-label="列表"><span data-icon="rows"></span></button>
+      </div>
+      <button class="btn btn-primary" id="createBtn" type="button"><span data-icon="plus"></span>新建实例</button>
+    </div>
+    <div class="grid" id="grid" aria-live="off"></div>
+    <div id="emptyBox" hidden>
+      <div class="empty" id="emptyState">
+        <svg class="empty-art" viewBox="0 0 176 118" aria-hidden="true">
+          <defs><pattern id="emptyDots" width="10" height="10" patternUnits="userSpaceOnUse"><circle class="art-dot" cx="5" cy="5" r="1"/></pattern></defs>
+          <rect class="art-soft" x="10" y="8" width="156" height="88" rx="12"/>
+          <rect x="10" y="8" width="156" height="88" rx="12" fill="url(#emptyDots)"/>
+          <rect class="art-line" x="10" y="8" width="156" height="88" rx="12"/>
+          <path class="art-line" d="M72 110h32M88 96v14"/>
+          <rect class="art-tile" x="67" y="31" width="42" height="42" rx="12"/>
+          <path class="art-plus" d="M88 43v18M79 52h18"/>
+          <g transform="translate(97 23) rotate(18 14 10)">
+            <path class="art-tail" d="M12.6 10.6 9.4 18.6l2.8-.9 1.4 2.5 1.6-9.2zm2.8 0 3.2 8-2.8-.9-1.4 2.5-1.6-9.2z"/>
+            <path class="art-bow" d="M14 9.5C10.6 3 4.1.6 2 3.1-.1 5.7 1 13.3 14 9.5zm0 0c3.4-6.5 9.9-8.9 12-6.4 2.1 2.6 1 10.2-12 6.4z"/>
+            <rect class="art-knot" x="11.4" y="6.9" width="5.2" height="5.2" rx="2"/>
+          </g>
+        </svg>
+        <h2>还没有实例</h2>
+        <p>实例是一台独立的安卓模拟器，每台可以登录一个游戏账号挂机。</p>
+        <p class="small">首次开机会做初始化，约 1&#8288;–&#8288;2 分钟。</p>
+        <button class="btn btn-primary" id="emptyCreate" type="button"><span data-icon="plus"></span>新建第一台实例</button>
+      </div>
+      <div class="empty" id="failState" hidden></div>
+    </div>
+  </section>
+</main>
+
+<div class="toasts" id="toasts"></div>
+<input type="file" id="apkInput" accept=".apk,application/vnd.android.package-archive" hidden>
+</body>
+</html>
