@@ -202,8 +202,13 @@ func (m *Manager) finishBridge(ctx context.Context, i int, opt StartOptions, res
 		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥正由另一次 modavd 在装，这次不装", i))
 		return res, nil
 	}
-	defer lock.Unlock()
-	return m.installBridge(ctx, i, opt, res)
+	r, err := m.installBridge(ctx, i, opt, res)
+	lock.Unlock()
+	// the instance in the result was read under this lock: the install is over now
+	if r != nil && r.Instance.Busy == "bridging" {
+		r.Instance.Busy = busyOf(m.stopping(i), false, false)
+	}
+	return r, err
 }
 
 // installBridge is finishBridge with the bridge lock already held by the caller.
@@ -308,7 +313,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		return nil, errs.Wrap(errs.Internal, err, "实例执行桥锁文件打不开")
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装执行桥，无法重复操作", i)
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i)
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}

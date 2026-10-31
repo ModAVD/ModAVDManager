@@ -38,7 +38,7 @@ func TestBridgeLockExcludes(t *testing.T) {
 			t.Fatalf("bridge %s while bridging: %v", action, err)
 		}
 	}
-	if _, err := m.Delete(ctx, i); errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正在装执行桥") {
+	if _, err := m.Delete(ctx, i); errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正在装卸执行桥") {
 		l.Unlock()
 		t.Fatalf("delete while bridging: %v", err)
 	}
