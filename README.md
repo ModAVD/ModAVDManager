@@ -117,7 +117,13 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 管理器 ModAVD.exe
 
-双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不联网、不用构建工具。
+双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；单独下载包可在设置里检查更新。
+
+## 自更新
+
+只有单独下载包会自更新。程序目录必须有 `modavd-manager.json` 且没有 `mas-avd.json`、`sdk\`、`avd\` 等 ModAVD 根目录文件；拿不准时只提示“随 ModAVD 更新”。命令行使用 `modavd self-update --check` 检查，确认后运行 `modavd self-update` 下载并替换。下载只接受 GitHub 官方 Release、会核对 SHA-256、协议大版本变化或不可变标记缺失时不会替换。`HTTPS_PROXY` / `NO_PROXY` 是唯一读取的代理变量，命令行不会自动联网。
+
+替换期间如果任一 exe 被其他进程使用会停止并提示先关机、关闭 MCP 客户端。更新通过同卷临时文件、写入并同步 `update.json` 后原子改名，失败会回滚；手工回滚时关闭所有管理器进程，把 `ModAVD.exe.old` 恢复为 `ModAVD.exe`、`tools\modavd.exe.old` 恢复为 `tools\modavd.exe`，再删除 `update.json` 和残留的 `.new` 文件。
 
 - 功能：实例卡片（在线时有画面缩略图）、开关机（带进度）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。

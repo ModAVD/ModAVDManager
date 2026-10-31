@@ -17,8 +17,9 @@ import (
 )
 
 type manifest struct {
-	Version string            `json:"version"`
-	Files   map[string]string `json:"files"`
+	Version  string            `json:"version"`
+	Protocol int               `json:"protocol"`
+	Files    map[string]string `json:"files"`
 }
 
 func digest(data []byte) string {
@@ -52,7 +53,7 @@ func main() {
 		data[name] = b
 		hashes[name] = digest(b)
 	}
-	manifestBytes, err := json.Marshal(manifest{Version: *version, Files: hashes})
+	manifestBytes, err := json.Marshal(manifest{Version: *version, Protocol: 1, Files: hashes})
 	if err != nil {
 		panic(err)
 	}

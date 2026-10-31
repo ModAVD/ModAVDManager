@@ -58,17 +58,21 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
+	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
+	"modavd/internal/update"
 	"modavd/internal/win"
 )
 
@@ -137,8 +141,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
 			return emu.RunBootWatch(args[1:], stderr)
+		case "__version":
+			return writeHiddenVersion(stdout)
 		}
 	}
+	update.Finalize()
 	// StartOrphan re-runs this executable as the spawn helper.
 	if exe, err := os.Executable(); err == nil {
 		win.OrphanHelper = exe
@@ -152,6 +159,13 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		stop()
 	}()
 	return run(ctx, args, stdin, stdout, stderr, defaultDeps())
+}
+
+func writeHiddenVersion(w io.Writer) int {
+	if _, err := fmt.Fprintf(w, "{\"ok\":true,\"data\":{\"version\":%q,\"protocol\":%d,\"go\":%q}}\n", buildinfo.Version, buildinfo.Protocol, runtime.Version()); err != nil {
+		return 1
+	}
+	return 0
 }
 
 // cmdCtx is what a command's run function gets.

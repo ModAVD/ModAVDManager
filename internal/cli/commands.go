@@ -17,6 +17,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
+	"modavd/internal/update"
 	"modavd/internal/win"
 )
 
@@ -70,6 +71,7 @@ var (
 	optShellTO      = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
 	optCheckMB      = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
 	optNoBridge     = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
+	optUpdateCheck  = flagSpec{"check", kindBool, "", "只检查，不下载或替换"}
 	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 )
@@ -211,6 +213,12 @@ func init() {
 			details: "不需要根目录。protocol 是 --json 输出、退出码和 MCP 工具的版本，字段改了含义或去掉时才加一。",
 			final:   true,
 			run:     runVersion, human: humanOf(formatVersion),
+		},
+		{
+			name: "self-update", args: "[--check]", summary: "检查或安装独立下载包的新版本",
+			details: "只对单独下载包联网；ModAVD 根目录里的程序只提示随 ModAVD 更新。默认检查并在确认可替换时更新，--check 只检查。",
+			flags:   []flagSpec{optUpdateCheck}, final: true,
+			run: runSelfUpdate, human: humanOf(formatSelfUpdate),
 		},
 		{
 			name: "mcp", summary: "在 stdin / stdout 上提供 MCP 服务",
@@ -883,6 +891,19 @@ func runServers(c *cmdCtx) (any, error) {
 
 func runVersion(c *cmdCtx) (any, error) {
 	return &VersionResult{Version: buildinfo.Version, Protocol: buildinfo.Protocol, Go: runtime.Version()}, nil
+}
+
+func runSelfUpdate(c *cmdCtx) (any, error) {
+	if c.inv.isSet("check") {
+		return update.Check(c.ctx, update.Options{})
+	}
+	return update.SelfUpdate(c.ctx, update.Options{})
+}
+
+func formatSelfUpdate(w io.Writer, r *update.Result) {
+	if r.Message != "" {
+		fmt.Fprintln(w, r.Message)
+	}
 }
 
 func runMCP(c *cmdCtx) (any, error) {
