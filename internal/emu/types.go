@@ -108,12 +108,17 @@ type CreateRequest struct {
 	CPU             *int
 	DataPartitionGB *int
 	FPS             *int
-	// NoBridge: no execution bridge (bridge.go). By default a new instance gets the bridge's boot marker and its
-	// first start installs the bridge.
+	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
+	// marker and create's setup installs it.
 	NoBridge bool
-	Timeout  time.Duration
+	// Timeout bounds create's whole setup (createinit.go); 0 = DefaultCreateTimeout.
+	Timeout time.Duration
+	// Progress, when set, is told about each step of the setup (same events as StartOptions.Progress, one 0–1000 bar).
 	Progress func(Progress)
-	Resume   bool
+	// Resume runs the setup again on instance *Index, whose setup failed; the other options are not used.
+	Resume bool
+	// filesOnly: only the files, no setup (the first start sets the instance up, as before 0.2.0). Tests.
+	filesOnly bool
 }
 
 type UpdateRequest struct {

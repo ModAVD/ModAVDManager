@@ -86,16 +86,11 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	if err != nil {
 		return nil, err
 	}
-	if !opt.creating {
-		if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
-			if state == "creating" {
-				return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在创建，不能开机", i)
-			}
-			advice := fmt.Sprintf("用 modavd create --resume %d 重试", i)
-			if logFile != "" {
-				advice += "；日志见 " + logFile
-			}
-			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 创建失败：%s", i, message).WithAdvice(advice)
+	// A new instance boots only for create's own setup until that is done (createinit.go); the boot watch of that
+	// boot's qemu may adopt it again.
+	if !opt.creating && opt.watchQemu == nil {
+		if err := m.notCreated(i, "不能开机"); err != nil {
+			return nil, err
 		}
 	}
 	col := &logx.Collector{}

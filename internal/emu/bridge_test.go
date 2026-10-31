@@ -18,7 +18,7 @@ func TestBridgeLockExcludes(t *testing.T) {
 	m, _ := opsTestManager(t)
 	ctx := context.Background()
 	i := 6
-	_, err := m.Create(ctx, CreateRequest{Index: &i})
+	_, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &i})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)

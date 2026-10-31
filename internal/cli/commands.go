@@ -17,6 +17,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
+	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -65,8 +66,8 @@ var (
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）"}
 	optTimeout       = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
-	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建初始化最多执行多少秒（超时会关机并标记创建失败）"}
-	optResume        = flagSpec{"resume", kindInt, "N", "重试指定编号的失败创建"}
+	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
+	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的；其他选项不用）"}
 	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
@@ -100,10 +101,13 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--no-bridge]",
-			summary: "新建一台实例",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--no-bridge] [--timeout 1200] | --resume N",
+			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧。内存和核数只能取列出的档位，不会自动凑整。" +
-				"默认第一次用 modavd 或管理器开机时装上 arm64 执行桥（只对内置名单里的游戏生效，其余应用照旧），--no-bridge 不装。",
+				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
+				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印；之后第一次开机和平常一样快。" +
+				"这期间实例的状态是 creating，不能开机、修改或删除；失败（或被打断）是 create_failed，" +
+				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
 			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optNoBridge, optCreateTimeout, optResume},
 			final: true,
 			run:   runCreate, human: humanOf(formatCreate),
@@ -264,12 +268,9 @@ type StatusResult struct {
 	Booted        bool       `json:"booted"`
 	Busy          string     `json:"busy"`
 	PID           int        `json:"pid"`
-	Bridge        string     `json:"bridge,omitempty"`
-	Creation      string     `json:"creation,omitempty"`
-	CreationError string     `json:"creation_error,omitempty"`
-	CreationLog   string     `json:"creation_log,omitempty"`
-	StartedAt     string     `json:"started_at,omitempty"`
-	StartedAtMS   int64      `json:"started_at_ms,omitempty"`
+	Creation      string     `json:"creation"`
+	CreationError string     `json:"creation_error"`
+	CreationLog   string     `json:"creation_log"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
@@ -356,7 +357,15 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.Timeout = time.Duration(n) * time.Second
 	}
 	if inv.isSet("resume") {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "no-bridge"} {
+			if inv.isSet(o) {
+				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
+			}
+		}
 		i := inv.intOpt("resume")
+		if !root.ValidIndex(i) {
+			return req, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
+		}
 		req.Index = &i
 		req.Resume = true
 	}
@@ -408,7 +417,7 @@ func intPtrOpt(inv *invocation, name string) *int {
 
 func statusOf(in *emu.InstanceInfo) *StatusResult {
 	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted,
-		Busy: in.Busy, PID: in.PID, Bridge: in.Bridge, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog, StartedAt: in.StartedAt, StartedAtMS: in.StartedAtMS}
+		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------

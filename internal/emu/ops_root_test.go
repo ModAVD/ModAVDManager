@@ -52,7 +52,7 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	m, _ := opsTestManager(t)
 	ctx := context.Background()
 
-	created, err := m.Create(ctx, CreateRequest{Title: "测试实例"})
+	created, err := m.Create(ctx, CreateRequest{filesOnly: true, Title: "测试实例"})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)
@@ -73,15 +73,15 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 		t.Fatalf("initialized / path: %+v", created)
 	}
 
-	if _, err := m.Create(ctx, CreateRequest{Index: &i}); errs.CodeOf(err) != errs.AlreadyExists {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &i}); errs.CodeOf(err) != errs.AlreadyExists {
 		t.Fatalf("same index again: %v", err)
 	}
 	five := 5
-	if _, err := m.Create(ctx, CreateRequest{Index: &five}); errs.CodeOf(err) != errs.InvalidArgument {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &five}); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Fatalf("index 5: %v", err)
 	}
 	bad := 1000
-	if _, err := m.Create(ctx, CreateRequest{MemoryMB: &bad}); errs.CodeOf(err) != errs.InvalidArgument {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, MemoryMB: &bad}); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Fatalf("memory 1000: %v", err)
 	}
 

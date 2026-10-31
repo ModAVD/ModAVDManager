@@ -69,7 +69,9 @@ export function viewState(inst) {
   const job = lastJob(i, true);
   const kind = (job && job.kind) || S.pending[i];
   let key = 'offline';
-  if (kind === 'stop' || inst.busy === 'stopping') key = 'stopping';
+  if (kind === 'create' || kind === 'resume' || inst.status === 'creating') key = 'creating';
+  else if (inst.status === 'create_failed') key = 'createfail';
+  else if (kind === 'stop' || inst.busy === 'stopping') key = 'stopping';
   else if (kind === 'start' || kind === 'restart' || inst.status === 'starting' || inst.busy === 'starting') key = 'starting';
   else if (inst.status === 'online') key = 'online';
   let failed = null;
@@ -81,8 +83,9 @@ export function viewState(inst) {
   return { key, job, kind, failed };
 }
 
-const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'] };
-const FAIL = { start: '开机失败', restart: '重启失败', stop: '关机失败', install: '安装失败' };
+const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
+  creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
+const FAIL = { start: '开机失败', restart: '重启失败', stop: '关机失败', install: '安装失败', create: '新建失败' };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -141,6 +144,7 @@ function makeCard(i) {
     if (m === 'blocked') goBanner();
     else if (m === 'start') A.start(i);
     else if (m === 'stop') A.stop(i);
+    else if (m === 'resume') A.resumeCreate(i);
   });
   c.view = btn('btn btn-ghost act-view', [icon('screen'), '画面'], view);
   c.more = btn('icon-btn act-more', icon('more'), menu, {
@@ -197,14 +201,14 @@ function updateCard(c, inst) {
     c.next = 0;
     c.hold = null;
   }
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.kind === 'install';
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install';
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
-  setText(c.phText, v.key === 'error' ? '上次开机没有成功' : live ? '正在取画面…' : '未开机');
+  setText(c.phText, v.key === 'error' ? '上次开机没有成功' : v.key === 'createfail' ? '新建时的初始化没做完' : live ? '正在取画面…' : '未开机');
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
+    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     const n = pct(p);
@@ -217,13 +221,14 @@ function updateCard(c, inst) {
   c.view.title = live ? '实时画面，可以点按' : '开机后才能看画面';
 
   const blocked = rootBlocked();
-  const mode = v.key === 'starting' ? ['busy', pt] : v.key === 'stopping' ? ['busy', '关机中'] : inst.running ? ['stop', '关机']
+  const mode = v.key === 'starting' || v.key === 'creating' ? ['busy', pt] : v.key === 'createfail' ? ['resume', '重试初始化']
+    : v.key === 'stopping' ? ['busy', '关机中'] : inst.running ? ['stop', '关机']
     : blocked ? ['blocked', '开机'] : ['start', '开机'];
   const sig = mode.join();
   if (sig !== c.psig) {
     c.psig = sig;
     const b = c.primary;
-    b.replaceChildren(mode[0] === 'busy' ? h('span', { class: 'spin' }) : icon('power'), h('span', { text: mode[1] }));
+    b.replaceChildren(mode[0] === 'busy' ? h('span', { class: 'spin' }) : icon(mode[0] === 'resume' ? 'refresh' : 'power'), h('span', { text: mode[1] }));
     b.className = 'btn btn-power act-power ' + (mode[0] === 'start' ? 'btn-tonal' : 'btn-secondary');
     b.dataset.mode = mode[0];
     b.title = mode[0] === 'blocked' ? BLOCKED : '';
@@ -235,7 +240,11 @@ function updateCard(c, inst) {
 
 function renderNotes(c, inst, v) {
   const notes = [];
-  const f = v.failed;
+  const f = v.key === 'createfail' ? null : v.failed;
+  if (v.key === 'createfail') {
+    notes.push({ tone: 'err', ic: 'bad', text: `新建失败：${inst.creation_error || '初始化没做完'}`,
+      advice: '点「重试初始化」再做一次，或在「更多」里删除这台实例' + (inst.creation_log ? `；日志 ${inst.creation_log}` : '') });
+  }
   if (f) {
     const e = f.error || {};
     // 内存不够 is the one failure a setting fixes: offer the setting right there
@@ -243,7 +252,7 @@ function renderNotes(c, inst, v) {
     notes.push({ tone: 'err', ic: 'bad', text: `${FAIL[f.kind] || '失败'}：${e.message || '原因未知'}`, advice: e.advice, job: f.id, mem });
   }
   if (inst.software_renderer) notes.push({ tone: 'warn', ic: 'alert', text: '软件渲染：显卡驱动不可用，游戏会卡' });
-  if (!inst.initialized && !inst.running && v.key !== 'starting') notes.push({ tone: 'info', ic: 'info', text: '首次开机会做初始化，约 1⁠–⁠2 分钟' });
+  if (!inst.initialized && !inst.running && !inst.creation && v.key !== 'starting' && v.key !== 'creating') notes.push({ tone: 'info', ic: 'info', text: '首次开机会做初始化，约 1⁠–⁠2 分钟' });
   const sig = JSON.stringify(notes);
   if (sig === c.nsig) return;
   c.nsig = sig;
@@ -265,12 +274,13 @@ function menuItems(c) {
   const inst = c.inst;
   const i = c.i;
   const v = viewState(inst);
-  const busy = v.key === 'starting' || v.key === 'stopping';
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating';
   const running = inst.running || v.key === 'starting';
+  const fresh = v.key === 'creating' || v.key === 'createfail'; // create's setup is not done
   const vis = !!S.win[i];
   const blocked = rootBlocked();
   return [
-    { label: '带窗口开机', icon: 'window', disabled: running || busy || blocked, hint: blocked && !running ? '目录未就绪' : '', run: () => A.start(i, true) },
+    { label: '带窗口开机', icon: 'window', disabled: running || busy || blocked || fresh, hint: blocked && !running ? '目录未就绪' : '', run: () => A.start(i, true) },
     { label: '重启', icon: 'refresh', disabled: !inst.running || busy || blocked, hint: blocked && inst.running ? '目录未就绪' : '', run: () => A.restart(i) },
     v.key === 'starting' && { label: '关机', icon: 'power', run: () => A.stop(i) },
     { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
@@ -280,7 +290,7 @@ function menuItems(c) {
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },
-    { label: '设置…', icon: 'sliders', run: () => openSettings(i) },
+    { label: '设置…', icon: 'sliders', disabled: fresh, run: () => openSettings(i) },
     { label: '删除…', icon: 'trash', danger: true, disabled: running || busy, hint: running || busy ? '先关机' : '', run: () => openDelete(i) },
   ];
 }

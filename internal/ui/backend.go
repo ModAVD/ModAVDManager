@@ -16,6 +16,8 @@ type backend interface {
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	// FreeIndex is the index Create picks when none is given.
+	FreeIndex() (int, error)
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)

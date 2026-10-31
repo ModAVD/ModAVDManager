@@ -128,7 +128,7 @@ func toolDefs() []*toolDef {
 			"List every ModAVD instance under the server's root (fixed by --root) with its status (offline / "+
 				"starting / online), adb serial and address, ports and the options of its next boot.",
 			readOnly(), reflect.TypeFor[emu.ListResult](), nil,
-			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				return b.List(ctx)
 			}),
 
@@ -136,7 +136,7 @@ func toolDefs() []*toolDef {
 			"Get one instance by index: status, adb serial and address, ports, screenshot shared memory and the "+
 				"options of its next boot.",
 			readOnly(), reflect.TypeFor[emu.InstanceInfo](), []prop{indexProp(true)},
-			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
 				if err != nil {
 					return nil, err
@@ -176,7 +176,11 @@ func toolDefs() []*toolDef {
 			}),
 
 		finishing(newTool("create_instance", "Create instance",
-			fmt.Sprintf("Create a new, stopped instance. Omitted options take the defaults (%d MB memory, %d CPU "+
+			fmt.Sprintf("Create a new instance and set it up: one headless boot runs the boot setup, the host IME, the "+
+				"first-boot setup and the arm64 execution bridge, then a normal shutdown. Takes a few minutes (progress "+
+				"notifications with a progressToken); returns the stopped, ready instance. Until then its status is "+
+				"creating; a failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
+				"Omitted options take the defaults (%d MB memory, %d CPU "+
 				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory, CPU and fps "+
 				"only accept the listed steps; the data partition can later only be made larger (update_instance).",
 				avd.DefaultMemoryMB, avd.DefaultCPU, avd.DefaultDataPartitionGB, avd.DefaultFPS),

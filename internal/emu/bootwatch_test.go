@@ -198,7 +198,7 @@ func stubGuestBoot(t *testing.T) *guestStub {
 // gone it fails without launching anything.
 func TestBootWatchTick(t *testing.T) {
 	m, logs := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{})
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

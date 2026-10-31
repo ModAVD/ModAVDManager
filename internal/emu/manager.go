@@ -25,7 +25,6 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/guest"
-	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
@@ -337,7 +336,7 @@ func (m *Manager) guestLockPath(i int) string {
 // removeLockFiles deletes the lock files, the setup marker and the boot record of instance i (after Delete); best
 // effort.
 func (m *Manager) removeLockFiles(i int) {
-	for _, kind := range []string{"start", "boot", "stop", "watch", "bridge"} {
+	for _, kind := range []string{"start", "boot", "stop", "watch", "bridge", "create"} {
 		os.Remove(m.lockPath(i, kind))
 	}
 	os.Remove(m.setupMarkerPath(i))
@@ -352,40 +351,6 @@ func (m *Manager) instance(i int) (*avd.Instance, error) {
 		return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
 	}
 	return avd.Get(m.Root, i)
-}
-
-func (m *Manager) creationState(i int) (state, message, logFile string) {
-	meta := m.Root.InstanceMeta(i)
-	if meta == nil {
-		return "", "", ""
-	}
-	state = metaText(meta.Get("creationState"))
-	message = metaText(meta.Get("creationError"))
-	logFile = metaText(meta.Get("creationLog"))
-	return state, message, logFile
-}
-
-func (m *Manager) setCreationState(i int, state, message, logFile string) error {
-	return m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
-		if state == "" {
-			meta.Delete("creationState")
-			meta.Delete("creationError")
-			meta.Delete("creationLog")
-			return nil
-		}
-		meta.Set("creationState", jsonord.NewString(state))
-		if message != "" {
-			meta.Set("creationError", jsonord.NewString(message))
-		} else {
-			meta.Delete("creationError")
-		}
-		if logFile != "" {
-			meta.Set("creationLog", jsonord.NewString(logFile))
-		} else {
-			meta.Delete("creationLog")
-		}
-		return nil
-	})
 }
 
 func (m *Manager) rootInfo() RootInfo {

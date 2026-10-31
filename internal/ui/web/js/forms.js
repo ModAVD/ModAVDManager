@@ -12,6 +12,7 @@ const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
 const FPS = [[30, '30 Hz'], [60, '60 Hz']];
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MIN12 = '约 1⁠–⁠2 分钟';
+const CREATE_TIME = '一般要几分钟';
 const settingsOpen = new Map();
 let seq = 0;
 
@@ -112,13 +113,14 @@ export function openCreate() {
         return;
       }
       submit(ctl, ok, '正在新建…', box, async () => {
-        const inst = await api.post('/api/instances', {
+        // a job: the setup boots the instance headless for a few minutes; its card shows the progress
+        const job = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           fps: Number(f.fps.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
-        }, { headers: { Prefer: 'respond-async' } });
-        if (inst && inst.kind === 'create') return { title: '正在新建实例', text: '后台会无头开机、完成初始化并正常关机；可在活动面板查看进度。' };
-        if (!S.list.instances.some((x) => x.index === inst.index)) S.list.instances.push(inst);
-        return { title: `已新建${quoted(inst)}`, text: `adb 地址 ${inst.adb_address}。首次开机会做初始化，${MIN12}。` };
+        });
+        A.onJob(job);
+        S.watch.add(job.id);
+        return { title: `正在新建实例 ${job.index}`, text: `后台无头开机做完初始化后关机，${CREATE_TIME}；关掉窗口也会在后台做完。` };
       });
     },
   });

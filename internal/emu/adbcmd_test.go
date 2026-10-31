@@ -30,7 +30,7 @@ func qemuScanRecorder(t *testing.T) *[][]int {
 func opsTestInstance(t *testing.T) (*Manager, int) {
 	t.Helper()
 	m, _ := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{})
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)

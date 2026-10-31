@@ -143,14 +143,13 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
-	if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
-		info.Creation = state
-		info.CreationError, info.CreationLog = message, logFile
-		if state == "creating" {
-			info.Status, info.Busy = StatusCreating, "creating"
-		} else {
-			info.Status = StatusCreateFailed
-		}
+	// create's setup (createinit.go): "creating" overrides what the boots of that setup look like from outside
+	info.Creation, info.CreationError, info.CreationLog = m.creation(i)
+	switch info.Creation {
+	case creationCreating:
+		info.Status, info.Busy = StatusCreating, "creating"
+	case creationFailed:
+		info.Status = StatusCreateFailed
 	}
 
 	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS()}

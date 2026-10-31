@@ -14,7 +14,7 @@ import (
 // this every round); the running check is the Manager's own process scan.
 func TestSetWindowVisibleNotRunning(t *testing.T) {
 	m, logs := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{})
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)

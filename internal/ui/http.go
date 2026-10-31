@@ -35,6 +35,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/instances/{i}/stop", s.handleStop)
 	m.HandleFunc("POST /api/instances/{i}/restart", s.handleRestart)
 	m.HandleFunc("POST /api/instances/{i}/install", s.handleInstall)
+	m.HandleFunc("POST /api/instances/{i}/resume", s.handleResumeCreate)
 	m.HandleFunc("POST /api/instances/{i}/window", s.handleWindow)
 	m.HandleFunc("POST /api/instances/{i}/input", s.handleInput)
 	m.HandleFunc("GET /api/instances/{i}/screenshot", s.handleScreenshot)

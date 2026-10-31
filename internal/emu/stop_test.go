@@ -479,7 +479,7 @@ func TestRunLaunchingStop(t *testing.T) {
 func stopTestSetup(t *testing.T, f *stopFake, scan func() map[int]win.Process) (*Manager, int, *win.FileLock) {
 	t.Helper()
 	m, _ := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{})
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)
@@ -730,7 +730,7 @@ func TestWaitStartingQemu(t *testing.T) {
 func TestStopWhileStartHasNotLaunched(t *testing.T) {
 	m, _ := opsTestManager(t)
 	ctx := context.Background()
-	created, err := m.Create(ctx, CreateRequest{})
+	created, err := m.Create(ctx, CreateRequest{filesOnly: true})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)
