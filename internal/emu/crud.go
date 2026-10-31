@@ -89,10 +89,8 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 			m.Log.Warnf("实例 %d 没记下「不装执行桥」，开机时还是会装: %v", i, err)
 		}
 	} else if err := writeBridgeMarker(m.Root, i); err != nil {
-		// first boot writable; any start (modavd / the manager) installs the bridge (bridge.go)
+		// first boot writable; the setup below (or, for filesOnly, any start) installs the bridge (bridge.go)
 		m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
-	} else {
-		m.Log.Infof("实例 %d 第一次开机时会装 arm64 执行桥", i)
 	}
 	if req.filesOnly {
 		lock.Unlock()
