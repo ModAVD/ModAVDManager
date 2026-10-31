@@ -48,12 +48,20 @@ type InstanceInfo struct {
 	Status  Status `json:"status"`
 	Running bool   `json:"running"` // qemu process exists (MuMuManager is_process_started)
 	Booted  bool   `json:"booted"`  // Android finished booting (MuMuManager is_android_started)
-	// Busy: "starting" / "stopping" while some modavd process holds that lock of the instance (AUTO-MAS's updater
-	// must not swap sdk\emulator then); "" otherwise.
+	// Busy: "starting" / "stopping" / "bridging" while some modavd process holds that lock of the instance (AUTO-MAS's
+	// updater must not swap sdk\emulator then); "" otherwise. "bridging" covers the whole bridge install, including the
+	// stops and cold boots in it; callers that do not know a value treat it as busy.
 	Busy string `json:"busy"`
-	PID  int    `json:"pid"`
+	// Bridge (the arm64 execution bridge): "off" (instances.<i>.bridge is false), "pending" (the next start modavd
+	// launches installs it), "installed" (the booted guest runs it) or "unknown". Only a booted guest is asked; an
+	// instance that is off or still booting and has the bridge's boot marker after its first boot reads unknown, since
+	// the marker stays while the bridge is installed and also after a failed install.
+	Bridge string `json:"bridge"`
+	PID    int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt string `json:"started_at"`
+	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.
+	StartedAtMS int64 `json:"started_at_ms"`
 	// Serial is the device on the private adb server (adb -P <adb_server_port> -s <serial>). Scripts that use their own
 	// adb server connect to AdbAddress instead.
 	Serial      string         `json:"serial"`
@@ -134,6 +142,9 @@ type StartOptions struct {
 	// NoBridge: do not install the execution bridge on this boot even when its marker is there and the bridge is not
 	// (bridge.go), the way AUTO-MAS boots. Bridge starts with it to uninstall.
 	NoBridge bool
+	// bridgeLocked: the caller (Bridge) holds the instance's bridge lock, so the install step runs under it instead of
+	// taking it (the lock is per handle: a second TryLock in the same process fails).
+	bridgeLocked bool
 }
 
 type Progress struct {

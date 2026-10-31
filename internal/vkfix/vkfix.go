@@ -1,8 +1,8 @@
 // Package vkfix builds the patched guest Vulkan encoder (bindlock2, includes khrfix) from the image's own
 // /vendor/lib64/libvulkan_enc.so on the user's machine; the patched file is never distributed.
 //
-// Byte-for-byte port of AUTO-MAS app/utils/common/emulator2/avd/vulkanfix.py (itself a copy of aemu-lab
-// tools/guest/bindlock.py): khrfix jumps for vkUpdateDescriptorSetWithTemplateKHR, and lock wrappers around
+// Byte-for-byte port of the companion Vulkan fix implementation: khrfix jumps for
+// vkUpdateDescriptorSetWithTemplateKHR, and lock wrappers around
 // ResourceTracker::on_vkBindImageMemory(2) placed in the freed dynCheck function body.
 //
 //  1. khrfix (09-30, Star Rail normal mode): the two vkUpdateDescriptorSetWithTemplateKHR entries call the raw

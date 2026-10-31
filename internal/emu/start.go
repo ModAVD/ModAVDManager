@@ -105,6 +105,9 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	// whole setup, because installing takes a cold boot or two; and only on a boot this start launched, never on a
 	// running instance it adopted (someone may be playing on it: the install restarts adbd and boots it cold).
 	if bridge && res.Launched && m.bridgePending(ctx, i) {
+		if opt.bridgeLocked {
+			return m.installBridge(ctx, i, opt, res)
+		}
 		return m.finishBridge(ctx, i, opt, res)
 	}
 	return res, nil
@@ -303,6 +306,12 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		return nil, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 在开机后设置期间退出了（模拟器 pid %d）：%s", i,
 			qemu.PID, orText(logTail(res.LogFile, 8), "日志见 "+m.Root.LogsDir()))
 	}
+	// Callers write to /sdcard right after start (10-31 measurements): it is not there yet at sys.boot_completed,
+	// takes another 1–3 s to accept a new file after it is mounted, and the zygote restart of the Vulkan fix takes it
+	// away again for about 7 s. Usually ready long before the setup is done, so this costs nothing then.
+	if !m.waitSDCard(ctx, i) && ctx.Err() == nil {
+		m.Log.Warnf("实例 %d 开机后 /sdcard 在 %.0f 秒内一直写不进文件；先返回，稍后再写", i, sdcardMountWait.Seconds())
+	}
 	res.SetupPending = ab.SetupPending
 	// The boot read before the setup, so a guest that rebooted during it is set up again by the watch. Unknown (adb
 	// failed): the old record stays, which at worst makes the watch set this boot up once more.
@@ -326,6 +335,35 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	res.TotalSeconds = time.Since(t0).Seconds()
 	prog.emit("done", fmt.Sprintf("实例 %d 已就绪（共 %.1f 秒）", i, res.TotalSeconds), progressTotal)
 	return res, nil
+}
+
+// waitSDCard waits up to sdcardMountWait until a new file can be created in /sdcard (and removed again). Being
+// mounted, or test -w, is not enough: right after the mount both say yes while creating a file still fails with
+// EPERM. A timeout is only a warning: the emulator is usable, the caller's write fails visibly if it is still too early.
+func (m *Manager) waitSDCard(ctx context.Context, i int) bool {
+	return pollUntil(ctx, sdcardMountWait, 500*time.Millisecond, func() bool {
+		return m.shell(ctx, i, sdcardProbe, statusAdbTimeout).Code == 0
+	})
+}
+
+// sdcardProbe creates and removes a file in /sdcard as the shell user (whom apps and AUTO-MAS's adb push write as).
+const sdcardProbe = "f=/sdcard/.modavd-sdcard-check; touch $f && rm -f $f"
+
+// pollUntil calls ok (at least once) every interval until it returns true (true), limit has passed or ctx ends
+// (false).
+func pollUntil(ctx context.Context, limit, every time.Duration, ok func() bool) bool {
+	deadline := time.Now().Add(limit)
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		if ok() {
+			return true
+		}
+		if !time.Now().Before(deadline) || !sleepOrDone(ctx, every) {
+			return false
+		}
+	}
 }
 
 // waitBoot polls sys.boot_completed every second until it is 1 (AUTO-MAS _wait_boot). An instance this call launched

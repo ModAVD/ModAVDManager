@@ -1,5 +1,5 @@
 // Package apk reads the package name and versionCode from an APK's binary AndroidManifest.xml, without aapt
-// (neither the release package nor dev SDKs have it). Port of Get-ApkManifestInfo in tools/launcher/avd-p0.ps1:
+// (neither the release package nor development SDKs have it). Port of the launcher's Get-ApkManifestInfo helper:
 // walk the chunks — string pool (0x0001), resource ids (0x0180), the first start tag (<manifest>) — and read its
 // "package" (string attribute) and "versionCode" (integer attribute; resource id 0x0101021b).
 //

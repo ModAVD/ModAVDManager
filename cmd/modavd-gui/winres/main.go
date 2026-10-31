@@ -2,7 +2,7 @@
 // the application manifest (RT_MANIFEST), as a COFF object with a single .rsrc section. The Go linker merges a
 // package's .syso files into the executable, so the icon shows in Explorer and the taskbar with no extra tool.
 //
-//	cd tools\modavd\cmd\modavd-gui && go run ./winres        (or: go generate ./cmd/modavd-gui)
+//	go run ./cmd/modavd-gui/winres
 //
 // The output is deterministic (no timestamps), so the same icon gives the same bytes and release builds stay
 // reproducible. Run it again only when modavd.ico or the manifest changes, and commit the .syso.

@@ -21,7 +21,7 @@ import (
 // The host input method org.modavd.ime: the guest half of the emulator's modavd_ime channel; what the user types
 // with a Windows IME in the emulator window reaches the app through it. It has no input view and leaves key events
 // alone, so `adb shell input`, maatouch and MaaFW input reach the app as before. Same constants as AUTO-MAS HOST_IME*
-// and the launcher tools/launcher/avd-p0.ps1.
+// and the launcher's embedded setup script.
 const (
 	hostImePackage = "org.modavd.ime"
 	hostImeID      = "org.modavd.ime/.HostImeService"

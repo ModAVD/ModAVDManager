@@ -217,7 +217,7 @@ func tuneHostScheduling(p win.Process) string {
 }
 
 // setupGuestWriteback sets the guest dirty_expire / dirty_writeback to 200 / 100 cs and reads them back (10-04 hard
-// kill tests, AGENTS.md: "delete, then rename the temp file over" came back 0 bytes up to 34 s after the write at
+// kill tests, deleting then renaming the temp file came back 0 bytes up to 34 s after the write at
 // the default 3000 / 500; 200 / 100 shrinks that to about 5 s for ~14% more host writes).
 func (m *Manager) setupGuestWriteback(ctx context.Context, i int) {
 	res := m.su(ctx, i, fmt.Sprintf("echo %d > /proc/sys/vm/dirty_expire_centisecs; "+

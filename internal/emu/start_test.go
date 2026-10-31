@@ -425,3 +425,27 @@ func TestSleepOrDone(t *testing.T) {
 		t.Errorf("ctxErr = %v", err)
 	}
 }
+
+// TestPollUntil: the /sdcard wait's loop. Stops at the first true; gives up after its limit (a timeout is only a
+// warning for start); a canceled start does not probe at all.
+func TestPollUntil(t *testing.T) {
+	ctx := context.Background()
+	n := 0
+	if !pollUntil(ctx, time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
+		t.Fatalf("true on the third probe: n = %d", n)
+	}
+	n = 0
+	t0 := time.Now()
+	if pollUntil(ctx, 30*time.Millisecond, 5*time.Millisecond, func() bool { n++; return false }) {
+		t.Fatal("never true, yet reported true")
+	}
+	if d := time.Since(t0); d < 30*time.Millisecond || d > 2*time.Second || n < 2 {
+		t.Fatalf("gave up after %v and %d probes", d, n)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	n = 0
+	if pollUntil(cctx, time.Second, time.Millisecond, func() bool { n++; return true }) || n != 0 {
+		t.Fatalf("canceled: probed %d times", n)
+	}
+}

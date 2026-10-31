@@ -84,9 +84,9 @@ func TestFormatListTable(t *testing.T) {
 	}
 
 	buf.Reset()
-	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`, LocalSDK: true, SDK: `C:\emu-src\sdk-mas35`}})
+	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`, LocalSDK: true, SDK: `C:\sdk-src\sdk-mas35`}})
 	out := buf.String()
-	if !strings.Contains(out, "ModAVD 版本未知") || !strings.Contains(out, `SDK：C:\emu-src\sdk-mas35（mas-avd.json 的 sdkRoot）`) ||
+	if !strings.Contains(out, "ModAVD 版本未知") || !strings.Contains(out, `SDK：C:\sdk-src\sdk-mas35（mas-avd.json 的 sdkRoot）`) ||
 		!strings.Contains(out, "还没有实例") {
 		t.Errorf("empty list = %q", out)
 	}

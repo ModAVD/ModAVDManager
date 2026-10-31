@@ -62,6 +62,7 @@ const (
 	balloonReportingOrder  = 9
 	logcatBufferSize       = "16M"
 	guestTmpDir            = "/data/local/tmp"
+	sdcardMountWait        = 60 * time.Second
 	emulatorShmNamePrefix  = "SHM_videmulator"
 	installLauncherTimeout = 180 * time.Second
 )
@@ -335,7 +336,7 @@ func (m *Manager) guestLockPath(i int) string {
 // removeLockFiles deletes the lock files, the setup marker and the boot record of instance i (after Delete); best
 // effort.
 func (m *Manager) removeLockFiles(i int) {
-	for _, kind := range []string{"start", "boot", "stop", "watch"} {
+	for _, kind := range []string{"start", "boot", "stop", "watch", "bridge"} {
 		os.Remove(m.lockPath(i, kind))
 	}
 	os.Remove(m.setupMarkerPath(i))

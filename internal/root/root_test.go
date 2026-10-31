@@ -192,7 +192,7 @@ func TestPaths(t *testing.T) {
 		}
 	}
 	for meta, want := range map[string]string{
-		`{"sdkRoot": "  C:/emu-src/sdk-mas35/  "}`: `C:\emu-src\sdk-mas35`,
+		`{"sdkRoot": "  C:/sdk-src/sdk-mas35/  "}`: `C:\sdk-src\sdk-mas35`,
 		`{"sdkRoot": "dev-sdk"}`:                   d + `\dev-sdk`,
 		`{"sdkRoot": "   "}`:                       "",
 		`{"sdkRoot": 5}`:                           "",
@@ -204,8 +204,8 @@ func TestPaths(t *testing.T) {
 			t.Errorf("%s: LocalSDKRoot %q want %q", meta, got, want)
 		}
 	}
-	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": "C:\\emu-src\\sdk-mas35"}`))
-	if r.AdbExe() != `C:\emu-src\sdk-mas35\platform-tools\adb.exe` || r.SDK() != d+`\sdk` {
+	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": "C:\\sdk-src\\sdk-mas35"}`))
+	if r.AdbExe() != `C:\sdk-src\sdk-mas35\platform-tools\adb.exe` || r.SDK() != d+`\sdk` {
 		t.Errorf("runtime sdk: %s", r.AdbExe())
 	}
 }
