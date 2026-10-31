@@ -33,7 +33,7 @@ const (
 
 // testSDK is an SDK whose adb.exe the test may run (only run, never modified).
 func testSDK() string {
-	for _, sdk := range []string{`C:\emu-src\sdk-mas35`, `D:\ModAVD\sdk`} {
+	for _, sdk := range []string{`C:\sdk-src\sdk-mas35`, `D:\ModAVD\sdk`} {
 		if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
 			return sdk
 		}
