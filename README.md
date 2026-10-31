@@ -166,7 +166,7 @@ go test ./...
 - 核对：`Get-FileHash .\ModAVDManager-0.1.0-win-x64.zip -Algorithm SHA256`，和 `SHA256SUMS.txt` 里那一行比；解压出的两个 exe 也一样比。
 - 自己编出同样的字节：Go 1.26.5、`GOTOOLCHAIN=local`，`pwsh -NoProfile -File build.ps1 -Out out`，再 `go run ./internal/tools/mkzip -dir out -version <版本>` 打 zip。
 - 单独使用时给 `--root` 或设 `MODAVD_ROOT`，否则会提示找不到 ModAVD 根目录。不要把 zip 解压到 ModAVD 根目录里覆盖包里的那份。
-- v0.1.0 没有自更新，单独下载的要手动换；0.2.0 起才有。
+- 单独下载的管理器不会自己更新，新版本要手动下载替换；ModAVD 包里的那份随 ModAVD 整包一起更新。
 
 ## 参与
 
