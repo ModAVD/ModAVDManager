@@ -86,6 +86,18 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	if err != nil {
 		return nil, err
 	}
+	if !opt.Creating {
+		if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
+			if state == "creating" {
+				return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在创建，不能开机", i)
+			}
+			advice := fmt.Sprintf("用 modavd create --resume %d 重试", i)
+			if logFile != "" {
+				advice += "；日志见 " + logFile
+			}
+			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 创建失败：%s", i, message).WithAdvice(advice)
+		}
+	}
 	col := &logx.Collector{}
 	mm := m.withLog(col.Sink())
 	// The execution bridge (bridge.go): an instance about to be launched boots writable already, so the install after
@@ -290,6 +302,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	res.FirstBoot = ab.FirstBoot
 	res.ZygoteRestarted = ab.ZygoteRestarted
 	res.LogcatFile = ab.LogcatFile
+	res.HostIME = ab.HostIME
 
 	// The setup ran on adb alone, whose failures are only warnings: qemu may have gone meanwhile (a stop, which does
 	// not wait for a start; a host GPU driver reset). Reporting online with the old PID would send the caller on to a

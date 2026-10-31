@@ -128,7 +128,7 @@ func toolDefs() []*toolDef {
 			"List every ModAVD instance under the server's root (fixed by --root) with its status (offline / "+
 				"starting / online), adb serial and address, ports and the options of its next boot.",
 			readOnly(), reflect.TypeFor[emu.ListResult](), nil,
-			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				return b.List(ctx)
 			}),
 
@@ -136,7 +136,7 @@ func toolDefs() []*toolDef {
 			"Get one instance by index: status, adb serial and address, ports, screenshot shared memory and the "+
 				"options of its next boot.",
 			readOnly(), reflect.TypeFor[emu.InstanceInfo](), []prop{indexProp(true)},
-			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
 				if err != nil {
 					return nil, err
@@ -190,7 +190,7 @@ func toolDefs() []*toolDef {
 					"maximum": avd.MaxDataPartitionGB, "description": "Size of the data partition (games) in GB."}},
 				fpsProp("Display refresh rate."),
 			},
-			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				var req emu.CreateRequest
 				title, err := a.optString("title")
 				if err != nil {
@@ -214,6 +214,7 @@ func toolDefs() []*toolDef {
 				if req.FPS, err = a.optInt("fps"); err != nil {
 					return nil, err
 				}
+				req.Progress = progress
 				return b.Create(ctx, req)
 			})),
 

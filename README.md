@@ -85,6 +85,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
+- `create` 会无头开机完成执行桥、宿主输入法和首次初始化，再 sync 后正常关机；这段时间状态为 `creating`，失败为 `create_failed`，可用 `create --resume <i>` 重试或删除。创建命令支持 `--timeout`，CLI、MCP 和管理器活动面板都会显示进度。
 
 **退出码**：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 

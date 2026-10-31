@@ -115,7 +115,8 @@ export function openCreate() {
         const inst = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           fps: Number(f.fps.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
-        });
+        }, { headers: { Prefer: 'respond-async' } });
+        if (inst && inst.kind === 'create') return { title: '正在新建实例', text: '后台会无头开机、完成初始化并正常关机；可在活动面板查看进度。' };
         if (!S.list.instances.some((x) => x.index === inst.index)) S.list.instances.push(inst);
         return { title: `已新建${quoted(inst)}`, text: `adb 地址 ${inst.adb_address}。首次开机会做初始化，${MIN12}。` };
       });

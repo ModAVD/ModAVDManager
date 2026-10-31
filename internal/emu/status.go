@@ -144,6 +144,15 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
 	info.Bridge = m.bridgeState(ctx, i, info.Running)
+	if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
+		info.Creation = state
+		info.CreationError, info.CreationLog = message, logFile
+		if state == "creating" {
+			info.Status, info.Busy = StatusCreating, "creating"
+		} else {
+			info.Status = StatusCreateFailed
+		}
+	}
 
 	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS()}
 	if n, ok := in.CPU(); ok {

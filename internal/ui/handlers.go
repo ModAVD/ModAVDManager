@@ -67,14 +67,35 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if body.Title != nil {
 		req.Title = *body.Title
 	}
-	res, err := s.mgr.Create(detached(r), req)
+	if r.Header.Get("Prefer") != "respond-async" {
+		res, err := s.mgr.Create(detached(r), req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		s.hub.dropCached()
+		s.hub.requestRefresh()
+		writeJSON(w, http.StatusCreated, res)
+		return
+	}
+	jobIndex := -1
+	if req.Index != nil {
+		jobIndex = *req.Index
+	}
+	v, err := s.startJob(kindCreate, jobIndex, func(ctx context.Context, j *job, b backend) (any, error) {
+		req.Progress = s.progressFn(j)
+		res, err := b.Create(ctx, req)
+		if err == nil {
+			s.hub.dropCached()
+			s.hub.requestRefresh()
+		}
+		return res, err
+	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	s.hub.dropCached()
-	s.hub.requestRefresh()
-	writeJSON(w, http.StatusCreated, res)
+	writeJSON(w, http.StatusAccepted, v)
 }
 
 func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {

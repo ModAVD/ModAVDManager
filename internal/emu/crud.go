@@ -49,6 +49,12 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 			return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
 		}
 		if existing[i] {
+			if state, _, _ := m.creationState(i); state == "failed" && req.Resume {
+				return m.resumeCreate(ctx, i, req)
+			}
+			if state, _, _ := m.creationState(i); state == "creating" || state == "failed" {
+				return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在创建或创建失败，不能重复新建", i)
+			}
 			return nil, errs.Newf(errs.AlreadyExists, "实例 %s 已存在", root.AvdName(i))
 		}
 		// Leftovers of a delete or create that stopped half-way: not listed, but avd.Create refuses the index. Say
@@ -102,14 +108,91 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 	} else {
 		m.Log.Infof("实例 %d 第一次开机时会装 arm64 执行桥", i)
 	}
-	info := m.instanceInfo(ctx, in, nil, nil)
-	return &info, nil
+	if req.Progress == nil && req.Timeout == 0 && !req.Resume {
+		info := m.instanceInfo(ctx, in, nil, nil)
+		return &info, nil
+	}
+	if err := m.setCreationState(i, "creating", "", ""); err != nil {
+		return nil, err
+	}
+	return m.finishCreate(ctx, i, req)
+}
+
+func (m *Manager) resumeCreate(ctx context.Context, i int, req CreateRequest) (*InstanceInfo, error) {
+	if state, _, _ := m.creationState(i); state != "failed" {
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 不能重试", i)
+	}
+	if err := m.setCreationState(i, "creating", "", ""); err != nil {
+		return nil, err
+	}
+	return m.finishCreate(ctx, i, req)
+}
+
+func (m *Manager) finishCreate(ctx context.Context, i int, req CreateRequest) (*InstanceInfo, error) {
+	progress := req.Progress
+	emit := func(step, message string, done int) {
+		if progress != nil {
+			progress(Progress{Step: step, Message: message, Done: done, Total: 1000})
+		}
+	}
+	emit("create", fmt.Sprintf("实例 %d 创建中：后台无头开机", i), 20)
+	startOpt := StartOptions{Timeout: req.Timeout, Creating: true, Progress: func(p Progress) {
+		if progress != nil {
+			progress(p)
+		}
+	}, NoBridge: req.NoBridge}
+	sr, err := m.Start(ctx, i, startOpt)
+	if err != nil {
+		// A timeout or canceled boot leaves qemu running by design; creation must leave a stopped, retryable instance.
+		_, _ = m.Stop(context.Background(), i, StopOptions{})
+	}
+	if err == nil {
+		emit("create_stop", fmt.Sprintf("实例 %d 初始化完成，先 sync 再正常关机", i), 930)
+		_, err = m.Stop(ctx, i, StopOptions{})
+	}
+	if err == nil {
+		info, ierr := m.Info(ctx, i)
+		if ierr != nil {
+			err = ierr
+		} else if !req.NoBridge && info.Bridge != "installed" {
+			err = errs.Newf(errs.NotReady, "实例 %d 执行桥没有装好", i)
+		} else if !info.Initialized || !sr.HostIME {
+			err = errs.Newf(errs.NotReady, "实例 %d 首次初始化或宿主输入法没有完成", i)
+		}
+	}
+	if err != nil {
+		logFile := ""
+		if sr != nil {
+			logFile = sr.LogFile
+			if logFile == "" {
+				logFile = sr.LogcatFile
+			}
+		}
+		message := errs.As(err).Message
+		_ = m.setCreationState(i, "failed", message, logFile)
+		return nil, err
+	}
+	if err := m.setCreationState(i, "", "", ""); err != nil {
+		return nil, err
+	}
+	emit("done", fmt.Sprintf("实例 %d 创建完成", i), 1000)
+	return m.Info(ctx, i)
 }
 
 // Update changes title / memory / cpu / fps / data partition size (next boot).
 func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
 	if _, err := m.instance(i); err != nil {
 		return nil, err
+	}
+	if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
+		if state == "creating" {
+			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在创建，不能修改", i)
+		}
+		advice := fmt.Sprintf("用 modavd create --resume %d 重试", i)
+		if logFile != "" {
+			advice += "；日志见 " + logFile
+		}
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 创建失败：%s", i, message).WithAdvice(advice)
 	}
 	applied, err := avd.Update(m.Root, i, avd.UpdateOptions{
 		Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, DataPartitionGB: req.DataPartitionGB,

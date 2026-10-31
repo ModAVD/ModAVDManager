@@ -14,9 +14,11 @@ import (
 type Status string
 
 const (
-	StatusOffline  Status = "offline"  // no qemu process for this instance
-	StatusStarting Status = "starting" // qemu runs, Android has not finished booting (sys.boot_completed != 1)
-	StatusOnline   Status = "online"   // booted
+	StatusOffline      Status = "offline"       // no qemu process for this instance
+	StatusStarting     Status = "starting"      // qemu runs, Android has not finished booting (sys.boot_completed != 1)
+	StatusOnline       Status = "online"        // booted
+	StatusCreating     Status = "creating"      // create is running its first headless boot
+	StatusCreateFailed Status = "create_failed" // create stopped with an error; resume or delete is allowed
 )
 
 type Ports struct {
@@ -54,8 +56,11 @@ type InstanceInfo struct {
 	// Bridge is off (disabled), pending (marker requests install), installed, or unknown (the instance is off or
 	// the guest did not answer). An offline instance is unknown when its marker is absent because the guest property
 	// cannot be queried; only an explicit off setting is definitive.
-	Bridge string `json:"bridge"`
-	PID    int    `json:"pid"`
+	Bridge        string `json:"bridge"`
+	Creation      string `json:"creation"` // "creating" / "failed" while create-init is running or failed; empty when ready
+	CreationError string `json:"creation_error"`
+	CreationLog   string `json:"creation_log"`
+	PID           int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt   string `json:"started_at"`
 	StartedAtMS int64  `json:"started_at_ms"`
@@ -101,6 +106,9 @@ type CreateRequest struct {
 	// NoBridge: no execution bridge (bridge.go). By default a new instance gets the bridge's boot marker and its
 	// first start installs the bridge.
 	NoBridge bool
+	Timeout  time.Duration
+	Progress func(Progress)
+	Resume   bool
 }
 
 type UpdateRequest struct {
@@ -139,6 +147,8 @@ type StartOptions struct {
 	// NoBridge: do not install the execution bridge on this boot even when its marker is there and the bridge is not
 	// (bridge.go), the way AUTO-MAS boots. Bridge starts with it to uninstall.
 	NoBridge bool
+	// Creating is internal: the create-init transaction may boot the instance while its metadata says creating.
+	Creating bool
 }
 
 type Progress struct {
@@ -164,6 +174,7 @@ type StartResult struct {
 	// it; otherwise the next boot does.
 	SetupPending bool     `json:"setup_pending"`
 	Warnings     []string `json:"warnings"` // never null; setup steps that failed (none of them stop the boot)
+	HostIME      bool     `json:"host_ime"`
 }
 
 type StopOptions struct {

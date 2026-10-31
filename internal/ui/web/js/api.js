@@ -19,6 +19,7 @@ export async function request(method, path, body, opt = {}) {
     init.body = JSON.stringify(body);
   }
   if (opt.signal) init.signal = opt.signal;
+  if (opt.headers) Object.assign(init.headers, opt.headers);
   let res;
   try {
     res = await fetch(path, init);
