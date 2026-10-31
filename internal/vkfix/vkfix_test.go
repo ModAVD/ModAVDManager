@@ -4,16 +4,18 @@ import (
 	"bytes"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"modavd/internal/errs"
 )
 
-// The real libraries (read-only); the tests that need them are skipped when they are absent.
-const (
-	origLib = `C:\sdk-src\work\gfx\guestlibs\libvulkan_enc.so`
-	fixLib  = `C:\sdk-src\work\gfx\guestlibs\libvulkan_enc.khrfix-bindlock2.so`
+// The real libraries (read-only) in $MODAVD_TEST_VKLIBS: the image's libvulkan_enc.so and the patched copy AUTO-MAS
+// vulkanfix.py made of it, libvulkan_enc.khrfix-bindlock2.so. The tests that need them are skipped when they are absent.
+var (
+	origLib = filepath.Join(os.Getenv("MODAVD_TEST_VKLIBS"), "libvulkan_enc.so")
+	fixLib  = filepath.Join(os.Getenv("MODAVD_TEST_VKLIBS"), "libvulkan_enc.khrfix-bindlock2.so")
 )
 
 // Golden bytes printed by AUTO-MAS vulkanfix.py (_wrapper_bind / _wrapper_bind2 at their caves, _jmp, _EXIT_MAGIC).

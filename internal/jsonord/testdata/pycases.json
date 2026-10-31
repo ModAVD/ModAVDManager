@@ -29,7 +29,7 @@
 "out": "\"a\\\"b\\\\c/d\""
 },
 {
-"in": "eyJxIjogInNheSBcImhpXCIiLCAicCI6ICJDOlxcZW11LXNyY1xcc2RrLW1hczM1XFwiLCAidSI6ICJcdTRlMmRcdTY1ODcifQ==",
+"in": "eyJxIjogInNheSBcImhpXCIiLCAicCI6ICJDOlxcc2RrLXNyY1xcc2RrLW1hczM1XFwiLCAidSI6ICJcdTRlMmRcdTY1ODcifQ==",
 "out": "{\n  \"q\": \"say \\\"hi\\\"\",\n  \"p\": \"C:\\\\sdk-src\\\\sdk-mas35\\\\\",\n  \"u\": \"\u4e2d\u6587\"\n}"
 },
 {

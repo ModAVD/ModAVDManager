@@ -105,6 +105,9 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	// whole setup, because installing takes a cold boot or two; and only on a boot this start launched, never on a
 	// running instance it adopted (someone may be playing on it: the install restarts adbd and boots it cold).
 	if bridge && res.Launched && m.bridgePending(ctx, i) {
+		if opt.bridgeLocked {
+			return m.installBridge(ctx, i, opt, res)
+		}
 		return m.finishBridge(ctx, i, opt, res)
 	}
 	return res, nil
@@ -334,19 +337,23 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 // waitSDCard covers the short interval after sys.boot_completed in which vold has not mounted shared storage yet.
 // A timeout is only a warning: the emulator is usable and a later start/status call can observe the mount.
 func (m *Manager) waitSDCard(ctx context.Context, i int) bool {
-	deadline := time.Now().Add(sdcardMountWait)
+	return pollUntil(ctx, sdcardMountWait, 500*time.Millisecond, func() bool {
+		return m.shell(ctx, i, "test -d /sdcard && test -r /sdcard && test -w /sdcard", statusAdbTimeout).Code == 0
+	})
+}
+
+// pollUntil calls ok (at least once) every interval until it returns true (true), limit has passed or ctx ends
+// (false).
+func pollUntil(ctx context.Context, limit, every time.Duration, ok func() bool) bool {
+	deadline := time.Now().Add(limit)
 	for {
-		if err := ctxErr(ctx); err != nil {
+		if ctx.Err() != nil {
 			return false
 		}
-		res := m.shell(ctx, i, "test -d /sdcard && test -r /sdcard && test -w /sdcard", statusAdbTimeout)
-		if res.Code == 0 {
+		if ok() {
 			return true
 		}
-		if !time.Now().Before(deadline) {
-			return false
-		}
-		if !sleepOrDone(ctx, 500*time.Millisecond) {
+		if !time.Now().Before(deadline) || !sleepOrDone(ctx, every) {
 			return false
 		}
 	}

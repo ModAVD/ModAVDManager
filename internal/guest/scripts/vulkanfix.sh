@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # vulkanfix.sh <orig sha256> <patched sha256> - bind-mount the patched guest Vulkan encoder (bindlock2, includes
-# khrfix) over the image's own and restart zygote (it preloads the driver). Run as root (su 0 sh ...). Same steps as
-# The launcher carries the same Vulkan fix text; the patch itself is made on the host from the image's own library
+# khrfix) over the image's own and restart zygote (it preloads the driver). Run as root (su 0 sh ...). The launcher's
+# Vulkan fix runs the same steps; the patch itself is made on the host from the image's own library
 # (app/utils/common/emulator2/avd/vulkanfix.py), the patched file is never shipped.
 #
 # The patched copy stays in /data/local/tmp as a cache: the next boot mounts it again without a new upload. It is

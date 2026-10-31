@@ -2,7 +2,7 @@
 # mas-wifi-fastpath.sh - guest sees Wi-Fi, bulk data goes over eth0. Run as root
 # (adb root + adb shell, or adb shell su 0 sh ...). Same text is embedded in
 # external/qemu android/android-emu/android/network/wifi.cpp (-wifi-fastpath);
-# keep the two in sync. The simulator's embedded wifi implementation must be updated alongside this script.
+# keep the two in sync.
 #
 #   on      apply once (idempotent)
 #   daemon  start "watch" in the background unless already running
