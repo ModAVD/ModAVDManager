@@ -53,4 +53,4 @@ jobs:
           }
           python -B -I -X utf8 scripts/repo_checks.py
       - name: script tests
-        run: python -B -I -X utf8 -m unittest scripts/test_repo_checks.py
+        run: python -B -I -X utf8 scripts/test_repo_checks.py
