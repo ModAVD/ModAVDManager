@@ -26,6 +26,7 @@
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
 //	servers                                               emu.ServersResult
 //	version                                               VersionResult {"version","protocol","go"} (no root needed)
+//	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
 //
@@ -40,7 +41,8 @@
 // stderr only.
 //
 // Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument, 3 not found, 4 not ready / precheck
-// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled), except:
+// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update
+// unavailable / rejected), except:
 // shell without --json exits with the guest command's exit code, adb with adb's, and stop --all with the code of its
 // first failure (its envelope still says ok and lists both results and failed). Ctrl+C cancels the context
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
@@ -53,7 +55,8 @@
 // (emu.Manager.Wait: the logcat restart after a re-registration), after its output is written.
 //
 // Hidden subcommands, routed before any flag parsing or root lookup: __spawn (win.SpawnHelperMain, the helper of
-// win.StartOrphan) and __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process).
+// win.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
+// (emu.RunBootWatch).
 package cli
 
 import (

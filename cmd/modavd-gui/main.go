@@ -5,6 +5,7 @@
 // reopens the window.
 //
 //	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
+//	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
 //
 // Build (GUI subsystem: no console window):
 //
@@ -18,16 +19,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
+	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
@@ -48,6 +52,8 @@ func main() {
 			os.Exit(emu.RunVulkanProbe(os.Stdout))
 		case emu.BootWatchArg:
 			os.Exit(emu.RunBootWatch(os.Args[2:], os.Stderr))
+		case versionArg:
+			os.Exit(printVersion())
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
@@ -57,6 +63,23 @@ func main() {
 }
 
 const usage = "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
+
+// versionArg is the hidden `ModAVD.exe __version`: one line on stdout, the same envelope as `modavd version --json`,
+// no window, no server, no message box (for callers such as AUTO-MAS that need the manager's version without starting
+// it). Every later version keeps it.
+const versionArg = "__version"
+
+func printVersion() int {
+	b, err := json.Marshal(map[string]any{"ok": true, "data": map[string]any{
+		"version": buildinfo.Version, "protocol": buildinfo.Protocol, "go": runtime.Version()}})
+	if err != nil {
+		return 1
+	}
+	if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+		return 1
+	}
+	return 0
+}
 
 func run(args []string) (code int) {
 	var log *logx.Logger

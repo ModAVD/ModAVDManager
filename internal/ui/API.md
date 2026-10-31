@@ -53,6 +53,9 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | GET | `/api/jobs/{id}` | | `Job` |
 | POST | `/api/jobs/{id}/cancel` | | `Job` |
 | GET | `/api/events` | | `text/event-stream`，见下 |
+| GET | `/api/update` | | `UpdateView`，见下（不联网） |
+| POST | `/api/update/check` | `{}` | `UpdateView`：按设置的更新源查最新版本（不带 CDK）；检查进行中回 409 `busy` |
+| POST | `/api/update/settings` | `{source?: "github"\|"mirrorchyan", cdk?: string}` | `UpdateView`；`cdk` 为 `""` 时清除，CDK 加密保存，从不返回 |
 
 `{i}` 是实例编号（0–9，5 除外）。
 
@@ -88,11 +91,19 @@ data: <Job>                 任务有任何变化时
 event: log
 data: {"time":"…","level":"info|warn|error","msg":"…","job_id":"j12"}   不属于任务的消息 job_id 是 ""
 
+event: update
+data: <UpdateView>          检查、设置有变化时
+
 event: ping
 data: {}                    每 15 秒
 ```
 
-没有任何事件流连着时服务不轮询实例状态（`list` 要对每台在跑的实例发一次 adb）。
+### 更新 `UpdateView`
+
+`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`install_by_cli`（现在恒为 `true`：管理器里不能安装，由 AUTO-MAS 调 `modavd update install`）。
+
+- 只有点「检查更新」才联网；没有自动检查。
+- 更新源和 CDK 是本机这个 Windows 用户的设置（`%LOCALAPPDATA%\ModAVD\update-settings.json`），命令行更新时按它来。
 
 ## 生命周期
 

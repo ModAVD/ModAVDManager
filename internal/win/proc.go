@@ -313,6 +313,29 @@ func (p Process) CommandLine() ([]string, error) {
 	return args, nil
 }
 
+// ImagePath is the full path of the process's executable (QueryFullProcessImageNameW, Win32 form). Error when access is
+// denied (a process of another user, an elevated one) or the process is gone.
+func (p Process) ImagePath() (string, error) {
+	h, err := p.open(0)
+	if err != nil {
+		return "", p.openErr(err, "读程序路径")
+	}
+	defer syscall.CloseHandle(h)
+	buf := make([]uint16, 1024)
+	for range 4 {
+		n := uint32(len(buf))
+		r, _, e := procQueryFullProcessImageNameW.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n)))
+		if r != 0 {
+			return syscall.UTF16ToString(buf[:n]), nil
+		}
+		if e != syscall.ERROR_INSUFFICIENT_BUFFER {
+			return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到%s的程序路径: %v", p.label(), e))
+		}
+		buf = make([]uint16, len(buf)*4)
+	}
+	return "", errs.Newf(errs.Internal, "%s的程序路径太长", p.label())
+}
+
 // StartedAt converts Created to local time; zero time when unknown.
 func (p Process) StartedAt() time.Time {
 	if p.Created == 0 {

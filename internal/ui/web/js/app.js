@@ -8,6 +8,7 @@ import { initGrid, renderGrid, viewState, setView } from './cards.js';
 import { openCreate, openSettings, openDelete } from './forms.js';
 import { runCheck, checkSummary, openCheck, openActivity, renderBanner } from './panels.js';
 import { openViewer, openLogs } from './viewer.js';
+import { loadUpdate, onUpdate, renderUpdateChip, openUpdate } from './update.js';
 import * as A from './actions.js';
 
 const params = new URLSearchParams(location.search);
@@ -71,6 +72,7 @@ radioRow($('viewSeg'), (v, remember) => {
 })(params.get('view') || load('modavd.view'), false);
 $('rootChip').onclick = () => A.openFolder('root');
 $('checkChip').onclick = openCheck;
+$('updChip').onclick = openUpdate;
 $('actBtn').onclick = openActivity;
 $('createBtn').onclick = $('emptyCreate').onclick = openCreate;
 
@@ -102,6 +104,8 @@ function render() {
     else if (S.checkError) { st.className = 'st tone-idle'; st.textContent = '没查成'; }
     $('checkChip').setAttribute('aria-label', '电脑检查：' + st.textContent);
   }
+
+  renderUpdateChip($('updChip'), $('updBadge'));
 
   const n = runningCount();
   $('actBadge').hidden = !n;
@@ -148,12 +152,12 @@ function render() {
   $('reconnectBtn').hidden = !stale;
   $('grid').classList.toggle('stale', stale && !!list);
 
-  // ?open=create | check | activity | settings:<i> | delete:<i> | viewer:<i> | logs:<i>  (deep links, screenshots)
+  // ?open=create | check | activity | update | settings:<i> | delete:<i> | viewer:<i> | logs:<i>  (deep links, screenshots)
   if (!opened && list) {
     opened = true;
     const [k, a] = (params.get('open') || '').split(':');
     const i = Number(a);
-    const fn = { create: openCreate, check: openCheck, activity: openActivity, settings: () => openSettings(i), delete: () => openDelete(i),
+    const fn = { create: openCreate, check: openCheck, activity: openActivity, update: openUpdate, settings: () => openSettings(i), delete: () => openDelete(i),
       viewer: () => openViewer(i), logs: () => openLogs(i, params.get('kind')) }[k];
     if (fn) setTimeout(fn, 30);
   }
@@ -168,13 +172,14 @@ const loadJobs = () => api.get('/api/jobs').then((r) => { for (const j of r.jobs
 api.get('/api/info').then((info) => { S.info = info; update(); }).catch(() => {});
 A.loadInstances();
 loadJobs();
+loadUpdate();
 runCheck(false);
 
 const probe = () => api.get('/api/info').then((info) => { S.info = info; }).catch((e) => { if (e.status === 401) { S.conn = 'auth'; update(); } });
 let staleTimer = 0;
 const events = connectEvents({
   open() {
-    if (S.conn === 'lost' || S.conn === 'auth') loadJobs(); // job changes while the stream was down
+    if (S.conn === 'lost' || S.conn === 'auth') { loadJobs(); loadUpdate(); } // changes while the stream was down
     S.conn = 'open';
     S.lostAt = 0;
     clearTimeout(staleTimer);
@@ -197,6 +202,7 @@ const events = connectEvents({
     update();
   },
   job: A.onJob,
+  update: onUpdate,
   log(l) {
     S.logs.push(l);
     if (S.logs.length > 600) S.logs.splice(0, 100);

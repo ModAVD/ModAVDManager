@@ -307,3 +307,38 @@ func TestEmbeddedPage(t *testing.T) {
 		t.Fatalf("GET /: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }
+
+// TestUpdateSettings: the settings' update part — read without going online, source and CDK saved (the CDK never
+// comes back), installing left to the command line.
+func TestUpdateSettings(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness(t, nil)
+	var v map[string]any
+	expect(t, h.do("GET", "/api/update", nil), http.StatusOK, &v)
+	if v["source"] != "github" || v["cdk_set"] != false || v["install_by_cli"] != true || v["checking"] != false {
+		t.Fatalf("GET /api/update: %v", v)
+	}
+	resp := h.do("POST", "/api/update/settings", `{"source":"mirrorchyan","cdk":"cdk-xyz-1"}`)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "cdk-xyz-1") ||
+		!strings.Contains(body, `"source":"mirrorchyan"`) || !strings.Contains(body, `"cdk_set":true`) {
+		t.Fatalf("POST settings: %d %s", resp.StatusCode, body)
+	}
+	expect(t, h.do("POST", "/api/update/settings", `{"cdk":""}`), http.StatusOK, &v)
+	if v["cdk_set"] != false || v["source"] != "mirrorchyan" {
+		t.Fatalf("clear CDK: %v", v)
+	}
+	expectError(t, h.do("POST", "/api/update/settings", `{}`), 400, errs.Usage)
+	expectError(t, h.do("POST", "/api/update/settings", `{"source":"ftp"}`), 400, errs.InvalidArgument)
+	expectError(t, h.do("POST", "/api/update/apply", `{}`), 404, errs.NotFound)
+}
+
+func readBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

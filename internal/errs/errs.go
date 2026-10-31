@@ -22,6 +22,8 @@ const (
 	MetadataUnreadable = "metadata_unreadable" // mas-avd.json exists but cannot be read; never overwritten then
 	Unsupported        = "unsupported"         // not possible on this instance / host
 	Canceled           = "canceled"            // the caller canceled (Ctrl+C, MCP notifications/cancelled)
+	UpdateUnavailable  = "update_unavailable"  // update: the update source cannot be asked now (offline, rate limited, HTTP error)
+	UpdateRejected     = "update_rejected"     // update: a download failed its checks (size, hash, contents)
 	Internal           = "internal"            // anything else
 	NotImplemented     = "not_implemented"
 )
@@ -84,7 +86,7 @@ func As(err error) *Error {
 
 // ExitCode maps an error to the process exit code (part of the contract, see README):
 // 0 ok, 1 internal / other, 2 usage / invalid argument, 3 not found, 4 not ready / precheck failed,
-// 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled.
+// 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update unavailable / rejected.
 func ExitCode(err error) int {
 	switch CodeOf(err) {
 	case "":
@@ -103,6 +105,8 @@ func ExitCode(err error) int {
 		return 7
 	case Canceled:
 		return 8
+	case UpdateUnavailable, UpdateRejected:
+		return 9
 	default:
 		return 1
 	}

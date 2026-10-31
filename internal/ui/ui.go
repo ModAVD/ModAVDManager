@@ -105,6 +105,7 @@ type server struct {
 	jobs  jobTable
 	shots shotCache
 	check checkCache
+	upd   *updatePanel // update.go
 }
 
 func newServer(opt Options) (*server, error) {
@@ -168,6 +169,7 @@ func newServer(opt Options) (*server, error) {
 	if s.launch == nil {
 		s.launch = LaunchWindow
 	}
+	s.upd = &updatePanel{}
 	s.mgr = newBackend(lg.Tee(s.eventLogSink("")))
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.jobCtx, s.jobCancel = context.WithCancel(context.Background())
