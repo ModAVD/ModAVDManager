@@ -551,7 +551,10 @@ type processUse struct {
 	Unknown bool // its path could not be read; matched by name
 }
 
-var emulatorNames = []string{"qemu-system", "emulator", "netsimd", "crashpad_handler"}
+// emulatorNames are the image names that count as the emulator's when a process's path cannot be read (another
+// user's, a protected one). Not crashpad_handler (AUTO-MAS lists it): every Chromium-based service has one, often
+// running as SYSTEM, and the emulator's own runs only beside its emulator.exe / qemu, which are caught anyway.
+var emulatorNames = []string{"qemu-system", "emulator", "netsimd"}
 
 // processesUsing lists the processes whose image is under <root>\sdk\emulator (emulator, qemu, netsimd ...): running
 // exes do not stop a directory rename, so they are checked first. With programs, also the other processes running the
