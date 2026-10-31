@@ -10,6 +10,9 @@ concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   build:
     if: github.repository == 'ModAVD/ModAVDManager'
@@ -44,6 +47,7 @@ jobs:
           $want = (Select-String -LiteralPath 'internal/buildinfo/buildinfo.go' -Pattern 'Version = "([^"]+)"').Matches.Groups[1].Value
           if ($want -ne $version) { throw "buildinfo.Version=$want, tag=$version" }
           pwsh -NoProfile -File build.ps1 -Out out
+          if ($LASTEXITCODE -ne 0) { throw 'build.ps1 failed' }
           $sums = @{}
           foreach ($line in Get-Content "release/$version.SHA256SUMS.txt") { if ($line -match '^([0-9a-f]{64})  (.+)$') { $sums[$Matches[2]] = $Matches[1] } }
           foreach ($name in @('ModAVD.exe', 'tools/modavd.exe')) {
@@ -51,14 +55,14 @@ jobs:
             if ($got -ne $sums[$name]) { throw "$name hash mismatch" }
           }
           $zip = "ModAVDManager-$version-win-x64.zip"
-          $env:GOTOOLCHAIN = 'local'
           go run ./internal/tools/mkzip -dir out -version $version -out $zip
+          if ($LASTEXITCODE -ne 0) { throw 'mkzip failed' }
           $gotZip = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($gotZip -ne $sums[$zip]) { throw 'zip hash mismatch' }
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Copy-Item $zip artifacts
           Copy-Item "release/$version.SHA256SUMS.txt" "artifacts/SHA256SUMS.txt"
-      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: artifacts
@@ -67,6 +71,7 @@ jobs:
   draft:
     needs: build
     runs-on: windows-2025
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -74,7 +79,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: artifacts
@@ -83,21 +88,28 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          # Checked against the tag's own list, not only the copy that travelled with the artifact.
           $version = $env:TAG.Substring(1)
-          $sumPath = "artifacts/SHA256SUMS.txt"
-          $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
-          $line = Get-Content $sumPath | Where-Object { $_ -match "^([0-9a-f]{64})  ModAVDManager-$version-win-x64\.zip$" }
-          $expected = $Matches[1]
-          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw 'downloaded zip hash mismatch' }
-          if (gh release view $env:TAG 2>$null) { throw 'release already exists' }
+          $zip = "ModAVDManager-$version-win-x64.zip"
+          $sums = Get-Content -Raw "release/$version.SHA256SUMS.txt"
+          if ((Get-Content -Raw artifacts/SHA256SUMS.txt) -cne $sums) { throw 'artifact SHA256SUMS.txt differs from the tag' }
+          $have = (Get-ChildItem artifacts -File | ForEach-Object Name | Sort-Object) -join ','
+          $expect = (@($zip, 'SHA256SUMS.txt') | Sort-Object) -join ','
+          if ($have -cne $expect) { throw "unexpected artifact files: $have" }
+          $want = [regex]::Match($sums, "(?m)^([0-9a-f]{64})  $([regex]::Escape($zip))$").Groups[1].Value
+          $got = (Get-FileHash "artifacts/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $want -or $got -ne $want) { throw 'downloaded zip hash mismatch' }
       - name: create draft
         shell: pwsh
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           $version = $env:TAG.Substring(1)
-          $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
-          $sumPath = "artifacts/SHA256SUMS.txt"
-          gh release create $env:TAG --draft --verify-tag --notes-file "release/$version.md" $zip $sumPath
+          # Drafts are not bound to their tag, so one tag can collect several: list every release, drafts included.
+          $tags = gh api "repos/$env:GH_REPO/releases?per_page=100" --paginate --jq '.[].tag_name'
+          if ($LASTEXITCODE -ne 0) { throw 'cannot list releases' }
+          if ($tags -contains $env:TAG) { throw "a release for $env:TAG already exists (draft or published)" }
+          gh release create $env:TAG --draft --verify-tag --notes-file "release/$version.md" "artifacts/ModAVDManager-$version-win-x64.zip" artifacts/SHA256SUMS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
