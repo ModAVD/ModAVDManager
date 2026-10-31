@@ -25,9 +25,17 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      # the exact toolchain line, as in ci.yml (setup-go would resolve "go 1.26" to the newest 1.26.x)
+      - name: go version
+        id: go
+        shell: pwsh
+        run: |
+          $v = (Select-String -LiteralPath go.mod -Pattern '^toolchain\s+go(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $v) { throw 'go.mod has no toolchain line' }
+          "version=$v" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.go.outputs.version }}
           cache: false
       - name: verify tag and ancestry
         shell: pwsh
