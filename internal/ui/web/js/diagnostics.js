@@ -1,0 +1,108 @@
+// 设置 → 组件与问题反馈。所有操作都走 API 任务，页面关闭不会中断后台任务。
+
+import { h, icon, btn, attr, setText, showError } from './dom.js';
+import { S, update, subscribe } from './store.js';
+import { api } from './api.js';
+import { openDialog, toast, toastError, copyText } from './ui.js';
+
+const PRIVACY = '隐私提示：问题包只在本机生成，不会自动上传。问题包可能含本机路径、Windows 用户名、截图和日志；summary.txt 和日志通常可以公开贴到 Issue，crash 文件夹含线程栈和少量内存片段，请私下发到 qiyinxi@foxmail.com，并写上 Issue 编号。上传前请先看一眼问题包内容。';
+
+export function loadDiagnostics() {
+  return api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch((e) => {
+    S.componentsError = e;
+    update();
+  });
+}
+
+let ctl = null;
+
+const active = (kind) => [...S.jobs.values()].filter((j) => j.kind === kind && j.state === 'running').sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] || null;
+const latest = (kind) => [...S.jobs.values()].filter((j) => j.kind === kind).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] || null;
+
+function startJob(p) {
+  p.then((j) => { S.watch.add(j.id); S.jobs.set(j.id, j); update(); }).catch(toastError);
+}
+
+function cancel(id) {
+  api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`).then((j) => { S.jobs.set(j.id, j); update(); }).catch(toastError);
+}
+
+function openLicense(license, source) {
+  const text = h('pre', { class: 'loglines diag-license', tabindex: '0', text: license || '后台没有返回许可协议全文。' });
+  const note = h('p', { class: 'f-hint', text: `取自：${source || '未知镜像'}` });
+  const box = h('div', { class: 'diag-license-body' }, text, note);
+  const agree = btn('btn btn-primary', '同意并下载', () => {
+    agree.disabled = true;
+    startJob(api.post('/api/components/fetch', { accept_license: true }));
+    d.close();
+  });
+  const d = openDialog({ title: 'Android 软件开发套件许可协议', sub: '请完整阅读后再决定是否下载组件', cls: 'dlg-update', body: box,
+    actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), ok: agree }, light: true });
+}
+
+export function openDiagnostics() {
+  if (ctl) return;
+  const componentBox = h('div', { class: 'diag-components' });
+  const componentError = h('div', { class: 'form-error', role: 'alert', hidden: true });
+  const fetchBtn = btn('btn btn-secondary', [icon('download'), '补全组件'], () => {
+    api.get('/api/components/license').then((v) => openLicense(v.license, v.license_source)).catch(toastError);
+  });
+  const compHead = h('div', { class: 'diag-head' }, h('strong', { text: '组件' }), fetchBtn);
+  const compNote = h('p', { class: 'f-hint', text: '缺少组件时先查看许可协议；只有亲手点“同意并下载”才会开始下载。' });
+
+  const collectBox = h('div', { class: 'diag-result' });
+  const collectBtn = btn('btn btn-secondary', [icon('file'), '收集问题信息'], () => startJob(api.post('/api/diag/collect', {})));
+  const configBtn = btn('btn btn-ghost', [icon('copy'), '复制配置信息'], async () => {
+    try {
+      const v = await api.get('/api/diag/report-config');
+      openConfig(v.text || '');
+    } catch (e) { toastError(e); }
+  });
+  const feedbackHead = h('div', { class: 'diag-head' }, h('strong', { text: '问题反馈' }), h('div', { class: 'diag-actions' }, collectBtn, configBtn));
+  const privacy = h('p', { class: 'f-hint diag-privacy', text: PRIVACY });
+
+  ctl = openDialog({ title: '设置', sub: '组件、问题信息和配置信息', cls: 'dlg-update', light: true,
+    body: h('div', { class: 'dlg-body' }, compHead, compNote, componentError, componentBox, feedbackHead, privacy, collectBox) });
+
+  const render = () => {
+    const c = S.components;
+    if (c && Array.isArray(c.components)) {
+      componentBox.replaceChildren(...c.components.map((x) => h('div', { class: 'comp-row' },
+        h('span', { text: x.name || x.id }), h('span', { class: 'v', text: x.version || x.build || '未知版本' }),
+        h('span', { class: x.installed ? 'tone-ok' : 'tone-err', text: x.installed ? '已安装' : '缺少' }))));
+      fetchBtn.hidden = !c.components.some((x) => !x.optional && !x.installed);
+    }
+    if (S.componentsError) { showError(componentError, S.componentsError); componentError.hidden = false; }
+    else componentError.hidden = true;
+    const fj = active('components');
+    const cj = active('collect-info');
+    fetchBtn.disabled = !!fj;
+    collectBtn.disabled = !!cj;
+    const p = (j) => j && j.progress ? `${j.progress.message || j.progress.step || '进行中'}${j.progress.total ? `（${j.progress.done || 0}/${j.progress.total}）` : ''}` : '';
+    const rows = [];
+    if (fj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `补全组件：${p(fj)}`, btn('btn btn-ghost', '取消', () => cancel(fj.id))));
+    else if (latest('components')?.state === 'done') rows.push(h('p', { class: 'tone-ok', text: '组件补全完成。' }));
+    else if (latest('components')?.state === 'failed') rows.push(h('p', { class: 'tone-err', text: latest('components').error?.message || '组件补全失败。' }));
+    if (cj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `收集问题信息：${p(cj)}`, btn('btn btn-ghost', '取消', () => cancel(cj.id))));
+    const done = latest('collect-info');
+    if (!cj && done?.state === 'done' && done.result) {
+      rows.push(h('p', { class: 'diag-path', text: `问题包：${done.result.zip_path || '已生成'}` }),
+        h('div', { class: 'diag-actions' }, btn('btn btn-ghost', '在资源管理器里显示', () => api.post('/api/open', { what: 'path', path: done.result.zip_path }).then(() => toast({ title: '已打开资源管理器' })).catch(toastError))));
+      if (done.result.sections?.length) rows.push(h('ul', { class: 'diag-sections' }, ...done.result.sections.map((x) => h('li', { class: x.error ? 'tone-err' : 'tone-ok', text: `${x.name}：${x.error || '完成'}` }))));
+    } else if (!cj && done?.state === 'failed') rows.push(h('p', { class: 'tone-err', text: done.error?.message || '收集问题信息失败。' }));
+    collectBox.replaceChildren(...rows);
+  };
+  const un = subscribe(render);
+  ctl.onClose.push(() => { un(); ctl = null; });
+  loadDiagnostics();
+  render();
+}
+
+function openConfig(text) {
+  const pre = h('pre', { class: 'loglines diag-config', text });
+  const copy = btn('btn btn-primary', '复制', async () => {
+    if (await copyText(text)) toast({ title: '已复制' });
+    else toast({ tone: 'err', title: '没能复制', text: '请手动选中配置信息复制。' });
+  });
+  openDialog({ title: '配置信息', sub: '复制前请检查内容中是否包含不适合公开的信息', cls: 'dlg-update', body: h('div', { class: 'dlg-body' }, pre), actions: { ok: copy }, light: true });
+}

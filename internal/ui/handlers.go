@@ -223,6 +223,7 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		What  string `json:"what"`
 		Index *int   `json:"index"`
+		Path  string `json:"path"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -252,6 +253,28 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 			writeError(w, errs.Newf(errs.NotFound, "实例 %d 的文件夹不存在: %s", *body.Index, dir))
 			return
 		}
+	case "path":
+		if body.Path == "" {
+			writeError(w, errs.New(errs.Usage, "打开路径要给 path"))
+			return
+		}
+		path, err := filepath.Abs(body.Path)
+		if err != nil {
+			writeError(w, errs.Wrap(errs.InvalidArgument, err, "路径不可用"))
+			return
+		}
+		st, err := os.Stat(path)
+		if err != nil {
+			writeError(w, errs.Newf(errs.NotFound, "文件不存在: %s", path))
+			return
+		}
+		if st.IsDir() {
+			dir = path
+		} else {
+			// ShellExecute opens the containing folder for a generated zip. The
+			// UI still shows the exact zip path in the result.
+			dir = filepath.Dir(path)
+		}
 	default:
 		writeError(w, errs.Newf(errs.InvalidArgument, "what 只能是 root、logs 或 instance（给的是 %q）", body.What))
 		return
@@ -261,6 +284,63 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (s *server) handleComponents(w http.ResponseWriter, r *http.Request) {
+	res, err := s.diag.Components(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) handleComponentLicense(w http.ResponseWriter, r *http.Request) {
+	res, err := s.diag.License(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AcceptLicense *bool `json:"accept_license"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.AcceptLicense == nil || !*body.AcceptLicense {
+		writeError(w, errs.New(errs.Usage, "补全组件必须明确同意许可协议").WithAdvice("先阅读许可协议，再发送 accept_license: true"))
+		return
+	}
+	v, err := s.startRootJob(kindComponents, func(ctx context.Context, j *job, _ backend) (any, error) {
+		return s.diag.Fetch(ctx, true, func(p DiagProgress) { s.setDiagProgress(j, p) })
+	})
+	s.respondJob(w)(v, err)
+}
+
+func (s *server) handleDiagCollect(w http.ResponseWriter, r *http.Request) {
+	var body DiagCollectOptions
+	if !decode(w, r, &body) {
+		return
+	}
+	v, err := s.startRootJob(kindCollect, func(ctx context.Context, j *job, _ backend) (any, error) {
+		return s.diag.Collect(ctx, body, func(p DiagProgress) { s.setDiagProgress(j, p) })
+	})
+	s.respondJob(w)(v, err)
+}
+
+func (s *server) handleReportConfig(w http.ResponseWriter, r *http.Request) {
+	text, err := s.diag.ReportConfig(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Text string `json:"text"`
+	}{text})
 }
 
 func (s *server) handleCheck(w http.ResponseWriter, r *http.Request) {

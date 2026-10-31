@@ -268,9 +268,10 @@ function updateJob(r, j) {
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact'));
-  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : '取消等待');
-  r.cancelHint.hidden = j.kind === 'disk-compact';
+  const cancelBackend = j.kind === 'components' || j.kind === 'collect-info';
+  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || cancelBackend));
+  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : cancelBackend ? '取消' : '取消等待');
+  r.cancelHint.hidden = j.kind === 'disk-compact' || cancelBackend;
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
   const why = j.state === 'canceled' && j.error ? j.error.message || '' : '';
@@ -316,6 +317,8 @@ function resultText(j) {
   if (j.kind === 'disk-info') return diskInfoText(r);
   if (j.kind === 'disk-trim') return diskTrimText();
   if (j.kind === 'disk-compact') return diskCompactText(r);
+  if (j.kind === 'components') return '组件补全完成。';
+  if (j.kind === 'collect-info') return r.zip_path ? `问题包：${r.zip_path}` : '问题包已生成。';
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
     r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';

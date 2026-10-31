@@ -289,6 +289,22 @@ function run(j, steps) {
   next();
 }
 
+function runDiag(j) {
+  const collect = j.kind === 'collect-info';
+  step(j, collect ? 'collect' : 'download', collect ? '正在收集问题信息' : '正在补全组件', 100);
+  setTimeout(() => {
+    if (db.diagMode === (collect ? 'diag-fail' : 'components-fail')) {
+      failJob(j, 'internal', collect ? '收集问题信息失败（模拟）' : '组件下载失败（模拟）', '检查网络后重试');
+      return;
+    }
+    step(j, collect ? 'collect' : 'download', collect ? '正在打包问题信息' : '正在下载组件', 650);
+    setTimeout(() => finishJob(j, collect ? {
+      zip_path: `${ROOT}\\reports\\modavd-diagnostic.zip`, zip_size: '1.2 MB',
+      privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true,
+    } : { root: ROOT, components: [], downloads: [] }), 500);
+  }, 450);
+}
+
 function startSeq(inst, j, window) {
   const i = inst.index;
   if (!db.ready) {
@@ -680,6 +696,18 @@ async function handle(url, init) {
     return json(pub(inst), 201);
   }
   if (p === '/api/open') return json({});
+  if (p === '/api/components' && method === 'GET') return json({ root: ROOT, components: checkResult().components });
+  if (p === '/api/components/license' && method === 'GET') return json({ license: 'Android Software Development Kit License Agreement\n\n(mock)', license_source: 'mock' });
+  if (p === '/api/components/fetch' && method === 'POST') {
+    if (body.accept_license !== true) return errResp('usage', '补全组件必须明确同意许可协议');
+    if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');
+    const j = newJob('components', -1); runDiag(j); return json(j, 202);
+  }
+  if (p === '/api/diag/collect' && method === 'POST') {
+    if (db.jobs.some((j) => j.kind === 'collect-info' && j.state === 'running')) return errResp('busy', '收集问题信息正在进行');
+    const j = newJob('collect-info', -1); runDiag(j); return json(j, 202);
+  }
+  if (p === '/api/diag/report-config' && method === 'GET') return json({ text: `ModAVD mock 配置信息\nroot=${ROOT}` });
   if (p === '/api/check') {
     await sleep(url.searchParams.get('refresh') ? 2400 : 1300);
     return json(checkResult());
@@ -699,10 +727,10 @@ async function handle(url, init) {
     const j = db.jobs.find((x) => x.id === decodeURIComponent(m[1]));
     if (!j) return errResp('not_found', `没有任务 ${m[1]}`);
     if (m[2] && method === 'POST') {
-      if (j.state === 'running' && j.kind === 'start') {
+      if (j.state === 'running' && (j.kind === 'start' || j.kind === 'components' || j.kind === 'collect-info')) {
         j.state = 'canceled';
         j.finished_at = iso();
-        j.error = { code: 'canceled', message: '已停止等待，模拟器继续开机', advice: '' };
+        j.error = { code: 'canceled', message: j.kind === 'start' ? '已停止等待，模拟器继续开机' : '已取消后台任务', advice: '' };
         emit('job', j);
         log('warn', `实例 ${j.index} 已停止等待开机，模拟器继续开机`, j.id);
       }
@@ -935,6 +963,7 @@ export function install(scenario, params) {
   db.drop = params.get('drop') === '1';
   db.shotfail = params.get('shotfail') === '1';
   db.proxyfail = params.get('proxyfail') === '1';
+  db.diagMode = params.get('diag') || (scenario === 'components-fail' ? 'components-fail' : scenario === 'diag-fail' ? 'diag-fail' : '');
   window.__mockShots = {};
   setup(scenario);
   const real = window.fetch.bind(window);

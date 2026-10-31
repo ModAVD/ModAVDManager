@@ -19,6 +19,9 @@ const (
 	kindStop    = "stop"
 	kindInstall = "install"
 	kindCreate  = "create"
+	kindComponents = "components"
+	kindCollect = "collect-info"
+	rootJobIndex = -1
 
 	kindDiskInfo    = "disk-info"
 	kindDiskTrim    = "disk-trim"
@@ -44,6 +47,10 @@ func kindLabel(kind string) string {
 		return "安装 APK"
 	case kindCreate:
 		return "新建"
+	case kindComponents:
+		return "补全组件"
+	case kindCollect:
+		return "收集问题信息"
 	case kindDiskInfo:
 		return "查看磁盘占用"
 	case kindDiskTrim:

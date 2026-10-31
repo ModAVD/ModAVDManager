@@ -1,7 +1,7 @@
 // Formatting for people (zh-CN).
 
-export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
-export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk' };
+export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', components: '补全组件', 'collect-info': '收集问题信息', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
+export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk' };
 export const STATE = { running: '进行中', done: '完成', failed: '失败', canceled: '已取消' };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };
 

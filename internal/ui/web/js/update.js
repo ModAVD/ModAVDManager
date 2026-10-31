@@ -6,6 +6,7 @@ import { h, icon, btn, attr, setText, showError } from './dom.js';
 import { S, update, subscribe } from './store.js';
 import { api } from './api.js';
 import { openDialog, toast, toastError } from './ui.js';
+import { openDiagnostics } from './diagnostics.js';
 
 const clock = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
 const ver = (v) => (v ? v.replace(/^v/, '') : '');
@@ -49,6 +50,7 @@ export function openUpdate() {
     h('label', { class: 'f-label', for: 'upd-cdk', text: 'Mirror 酱 CDK' }),
     h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState));
   const note = h('p', { class: 'f-hint', text: '更新现在由 AUTO-MAS 发起（它调用 modavd update），会按这里选的更新源和 CDK 下载；这里先不能直接更新。' });
+  const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], openDiagnostics);
   const when = h('span', { class: 'foot-note' });
   const checkBtn = btn('btn btn-secondary', null, () => run(api.post('/api/update/check')));
   const installBtn = btn('btn btn-primary', [icon('download'), '更新'], null,
@@ -57,7 +59,7 @@ export function openUpdate() {
 
   ctl = openDialog({
     title: '设置', sub: 'ModAVD 更新：模拟器、组件、脚本和管理器整包更新', cls: 'dlg-update', light: true,
-    body: h('div', { class: 'dlg-body' }, msg, box, kv, fields, note),
+    body: h('div', { class: 'dlg-body' }, msg, box, kv, fields, note, h('div', { class: 'diag-launch' }, diagBtn)),
     foot: h('footer', { class: 'dlg-foot' }, when, checkBtn, installBtn),
   });
 

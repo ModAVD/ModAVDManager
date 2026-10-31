@@ -53,6 +53,7 @@ type Options struct {
 
 	// Test hooks.
 	newBackend func(log *logx.Logger) backend
+	newDiagBackend func(log *logx.Logger) diagBackend
 	token      string
 	web        fs.FS
 	openPath   func(path string) error
@@ -85,6 +86,7 @@ type server struct {
 	mgr        backend      // requests outside jobs; its messages also go to the event stream
 	poll       backend      // the instance poller: file log only, it runs every few seconds
 	newBackend func(log *logx.Logger) backend
+	diag       diagBackend
 	token      string
 	dev        bool
 	files      map[string]*staticFile
@@ -125,6 +127,11 @@ func newServer(opt Options) (*server, error) {
 		r := opt.Root
 		newBackend = func(l *logx.Logger) backend { return managerBackend{emu.New(r, l)} }
 	}
+	newDiagBackend := opt.newDiagBackend
+	if newDiagBackend == nil {
+		r := opt.Root
+		newDiagBackend = func(l *logx.Logger) diagBackend { return newRealDiagBackend(r, l) }
+	}
 	token := opt.token
 	if token == "" {
 		b := make([]byte, 32)
@@ -154,6 +161,7 @@ func newServer(opt Options) (*server, error) {
 		log:        lg,
 		poll:       newBackend(lg),
 		newBackend: newBackend,
+		diag:       newDiagBackend(lg),
 		token:      token,
 		dev:        opt.Dev,
 		files:      files,
