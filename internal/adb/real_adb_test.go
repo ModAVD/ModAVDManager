@@ -47,7 +47,7 @@ func realRoot(t *testing.T) (*root.Root, string) {
 	t.Helper()
 	sdk := testSDK()
 	if sdk == "" {
-		t.Skip("没有可用的 adb.exe（C:\\emu-src\\sdk-mas35 / D:\\ModAVD\\sdk）")
+		t.Skip("没有可用的 adb.exe（C:\\sdk-src\\sdk-mas35 / D:\\ModAVD\\sdk）")
 	}
 	dir := tempDir(t)
 	meta, _ := json.Marshal(map[string]any{
