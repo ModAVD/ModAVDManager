@@ -30,7 +30,7 @@
 },
 {
 "in": "eyJxIjogInNheSBcImhpXCIiLCAicCI6ICJDOlxcZW11LXNyY1xcc2RrLW1hczM1XFwiLCAidSI6ICJcdTRlMmRcdTY1ODcifQ==",
-"out": "{\n  \"q\": \"say \\\"hi\\\"\",\n  \"p\": \"C:\\\\emu-src\\\\sdk-mas35\\\\\",\n  \"u\": \"\u4e2d\u6587\"\n}"
+"out": "{\n  \"q\": \"say \\\"hi\\\"\",\n  \"p\": \"C:\\\\sdk-src\\\\sdk-mas35\\\\\",\n  \"u\": \"\u4e2d\u6587\"\n}"
 },
 {
 "in": "WzYxNDQsIC0xLCAxLjUsIDFlMywgMC4xLCAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAsIC0wLCAtMC4wLCAwLjAsIDFFNDAwLCAtMWU0MDAsIDFlLTQwMF0=",
