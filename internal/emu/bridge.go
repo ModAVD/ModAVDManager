@@ -104,7 +104,12 @@ func writeBridgeMarker(r *root.Root, i int) error {
 
 // guestBridge is the booted guest's ro.dalvik.vm.native.bridge ("" when adb did not answer).
 func (m *Manager) guestBridge(ctx context.Context, i int) string {
-	res := m.shell(ctx, i, "getprop ro.dalvik.vm.native.bridge", 0)
+	return m.guestBridgeWithin(ctx, i, 0)
+}
+
+// guestBridgeWithin is guestBridge with an adb timeout (0: m.shell's default).
+func (m *Manager) guestBridgeWithin(ctx context.Context, i int, timeout time.Duration) string {
+	res := m.shell(ctx, i, "getprop ro.dalvik.vm.native.bridge", timeout)
 	if res.Code != 0 {
 		return ""
 	}
@@ -197,8 +202,17 @@ func (m *Manager) finishBridge(ctx context.Context, i int, opt StartOptions, res
 		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥正由另一次 modavd 在装，这次不装", i))
 		return res, nil
 	}
-	defer lock.Unlock()
+	r, err := m.installBridge(ctx, i, opt, res)
+	lock.Unlock()
+	// the instance in the result was read under this lock: the install is over now
+	if r != nil && r.Instance.Busy == "bridging" {
+		r.Instance.Busy = busyOf(m.stopping(i), false, false)
+	}
+	return r, err
+}
 
+// installBridge is finishBridge with the bridge lock already held by the caller.
+func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
 	// The script's notes go to this log; the warnings of the cold boots come with their results (m, not mm, starts them).
 	col := &logx.Collector{}
 	mm := m.withLog(col.Sink())
@@ -299,7 +313,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		return nil, errs.Wrap(errs.Internal, err, "实例执行桥锁文件打不开")
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装执行桥，无法重复操作", i)
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i)
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
@@ -330,7 +344,8 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			res.Restarted = true
 		}
 		if !wasRunning || res.Restarted {
-			sr, err := m.Start(ctx, i, StartOptions{NoBridge: true})
+			// this start installs (installBridge, under the lock held above)
+			sr, err := m.Start(ctx, i, StartOptions{bridgeLocked: true})
 			if err != nil {
 				return nil, err
 			}

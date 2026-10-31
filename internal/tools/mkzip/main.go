@@ -1,24 +1,35 @@
-// Command mkzip creates the deterministic standalone manager archive.
+// Command mkzip packs the standalone download ModAVDManager-<version>-win-x64.zip from build.ps1's output. Neither
+// exe imports it. The archive is reproducible: entries sorted by name, stored (no compression, so no zlib version
+// can change the bytes), no directory entries, fixed time and mode.
+//
+//	go run ./internal/tools/mkzip -dir out -version 0.1.0 -out ModAVDManager-0.1.0-win-x64.zip
+//
+// LICENSE and NOTICE are the committed bytes (git cat-file at -rev), LICENSES/Go-LICENSE.txt is $(go env GOROOT)\LICENSE
+// (the Go standard library is BSD-3-Clause, whose text must go with the binaries), and modavd-manager.json marks the
+// standalone download for the updater (internal/update): version, Protocol and SHA-256 of every other entry.
 package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
+	"strings"
 	"time"
+
+	"modavd/internal/buildinfo"
 )
 
 type manifest struct {
 	Version  string            `json:"version"`
-	Protocol int               `json:"protocol"`
+	Protocol int               `json:"protocol"` // buildinfo.Protocol; the 0.1.0 marker has none
 	Files    map[string]string `json:"files"`
 }
 
@@ -28,80 +39,96 @@ func digest(data []byte) string {
 }
 
 func main() {
-	dir := flag.String("dir", "out", "build output directory")
-	version := flag.String("version", "0.1.0", "manager version")
-	out := flag.String("out", "", "zip path")
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "mkzip:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	dir := flag.String("dir", "out", "build.ps1 output directory")
+	version := flag.String("version", buildinfo.Version, "manager version")
+	out := flag.String("out", "", "zip path (default ModAVDManager-<version>-win-x64.zip)")
+	rev := flag.String("rev", "HEAD", "commit that LICENSE and NOTICE are taken from")
 	flag.Parse()
 	if *out == "" {
 		*out = fmt.Sprintf("ModAVDManager-%s-win-x64.zip", *version)
 	}
-	goRoot := runtime.GOROOT()
-	files := map[string]string{
-		"ModAVD.exe":              filepath.Join(*dir, "ModAVD.exe"),
-		"tools/modavd.exe":        filepath.Join(*dir, "tools", "modavd.exe"),
-		"LICENSE":                 "LICENSE",
-		"NOTICE":                  "NOTICE",
-		"LICENSES/Go-LICENSE.txt": filepath.Join(goRoot, "LICENSE"),
-	}
-	data := make(map[string][]byte, len(files)+1)
-	hashes := make(map[string]string, len(files))
-	for name, path := range files {
+
+	data := map[string][]byte{}
+	for name, path := range map[string]string{
+		"ModAVD.exe":       filepath.Join(*dir, "ModAVD.exe"),
+		"tools/modavd.exe": filepath.Join(*dir, "tools", "modavd.exe"),
+	} {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			panic(err)
+			return err
 		}
 		data[name] = b
+	}
+	for _, name := range []string{"LICENSE", "NOTICE"} {
+		b, err := output("git", "cat-file", "blob", *rev+":"+name)
+		if err != nil {
+			return fmt.Errorf("%s at %s: %w", name, *rev, err)
+		}
+		data[name] = b
+	}
+	goroot, err := output("go", "env", "GOROOT")
+	if err != nil {
+		return fmt.Errorf("go env GOROOT: %w", err)
+	}
+	if data["LICENSES/Go-LICENSE.txt"], err = os.ReadFile(filepath.Join(strings.TrimSpace(string(goroot)), "LICENSE")); err != nil {
+		return err
+	}
+
+	hashes := make(map[string]string, len(data))
+	for name, b := range data {
 		hashes[name] = digest(b)
 	}
-	manifestBytes, err := json.Marshal(manifest{Version: *version, Protocol: 1, Files: hashes})
+	mb, err := json.Marshal(manifest{Version: *version, Protocol: buildinfo.Protocol, Files: hashes})
 	if err != nil {
-		panic(err)
+		return err
 	}
-	data["modavd-manager.json"] = append(manifestBytes, '\n')
+	data["modavd-manager.json"] = append(mb, '\n')
 
 	names := make([]string, 0, len(data))
 	for name := range data {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if err := os.MkdirAll(filepath.Dir(filepath.Clean(*out)), 0o755); err != nil && filepath.Dir(filepath.Clean(*out)) != "." {
-		panic(err)
-	}
-	f, err := os.Create(*out)
-	if err != nil {
-		panic(err)
-	}
-	zw := zip.NewWriter(f)
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
 	epoch := time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, name := range names {
 		h := &zip.FileHeader{Name: name, Method: zip.Store, Modified: epoch}
 		h.SetMode(0o644)
 		w, err := zw.CreateHeader(h)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		if _, err := io.Copy(w, &byteReader{data: data[name]}); err != nil {
-			panic(err)
+		if _, err := w.Write(data[name]); err != nil {
+			return err
 		}
 	}
 	if err := zw.Close(); err != nil {
-		panic(err)
+		return err
 	}
-	if err := f.Close(); err != nil {
-		panic(err)
+	if d := filepath.Dir(*out); d != "." {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
 	}
+	return os.WriteFile(*out, buf.Bytes(), 0o644)
 }
 
-type byteReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *byteReader) Read(p []byte) (int, error) {
-	if r.pos == len(r.data) {
-		return 0, io.EOF
+// output runs a command and returns its stdout; stderr goes into the error.
+func output(name string, args ...string) ([]byte, error) {
+	var stderr bytes.Buffer
+	cmd := exec.Command(name, args...)
+	cmd.Stderr = &stderr
+	b, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
+	return b, nil
 }

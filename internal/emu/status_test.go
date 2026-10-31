@@ -3,12 +3,15 @@
 package emu
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/win"
 )
 
 func TestStatusOfAndBusyOf(t *testing.T) {
@@ -18,8 +21,56 @@ func TestStatusOfAndBusyOf(t *testing.T) {
 	if statusOf(true, false) != StatusStarting || statusOf(true, true) != StatusOnline {
 		t.Fatal("qemu: starting until booted")
 	}
-	if busyOf(false, false, false) != "" || busyOf(false, true, false) != "starting" || busyOf(true, false, false) != "stopping" || busyOf(true, true, false) != "stopping" || busyOf(false, false, true) != "bridging" {
+	if busyOf(false, false, false) != "" || busyOf(false, true, false) != "starting" || busyOf(true, false, false) != "stopping" ||
+		busyOf(true, true, false) != "stopping" || busyOf(false, false, true) != "bridging" || busyOf(true, true, true) != "bridging" {
 		t.Fatal("busyOf")
+	}
+}
+
+// TestBridgeStateWithoutGuest: what info / list say about the bridge of an instance that is off or still booting
+// (no guest to ask). Only a turned-off bridge is certain; the marker, which stays while the bridge is installed,
+// means unknown once the first boot has run.
+func TestBridgeStateWithoutGuest(t *testing.T) {
+	r := managerTestRoot(t, 1)
+	m := New(r, nil)
+	ctx := context.Background()
+	check := func(label string, initialized bool, want string) {
+		t.Helper()
+		if got := m.bridgeState(ctx, 1, false, initialized); got != want {
+			t.Errorf("%s: bridge = %q, want %q", label, got, want)
+		}
+	}
+	check("no marker", false, "pending")
+	check("no marker, first boot done elsewhere", true, "pending")
+	if err := writeBridgeMarker(r, 1); err != nil {
+		t.Fatal(err)
+	}
+	check("marker, first boot not run", false, "pending")
+	check("marker after the first boot", true, "unknown")
+	if err := m.setBridgeWanted(1, false); err != nil {
+		t.Fatal(err)
+	}
+	check("turned off", true, "off")
+	check("turned off before the first boot", false, "off")
+}
+
+// TestInstanceInfoStartedAtMS: started_at_ms is started_at's moment in Unix milliseconds; both empty when off.
+func TestInstanceInfoStartedAtMS(t *testing.T) {
+	m := New(managerTestRoot(t, 1), nil)
+	in, err := m.instance(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	at := time.Date(2026, 10, 28, 15, 4, 5, 123_000_000, time.Local)
+	booted := false
+	info := m.instanceInfo(ctx, in, &win.Process{PID: 4242, Created: filetimeOf(at)}, &booted)
+	if info.StartedAtMS != at.UnixMilli() || info.StartedAt != at.Format(time.RFC3339) || info.PID != 4242 {
+		t.Fatalf("running: started_at %q, started_at_ms %d (want %d)", info.StartedAt, info.StartedAtMS, at.UnixMilli())
+	}
+	off := m.instanceInfo(ctx, in, nil, nil)
+	if off.StartedAtMS != 0 || off.StartedAt != "" || off.Bridge != "pending" {
+		t.Fatalf("off: %+v", off)
 	}
 }
 

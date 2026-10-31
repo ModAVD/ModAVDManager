@@ -1,5 +1,5 @@
 // Package guest holds the scripts modavd pushes into the guest after boot. They are copies of AUTO-MAS
-// res/avd/guest/*.sh (the product versions). Keep these shared scripts in sync with the companion launcher.
+// res/avd/guest/*.sh (the product versions). Until AUTO-MAS calls modavd for booting, changes go into both places.
 package guest
 
 import (

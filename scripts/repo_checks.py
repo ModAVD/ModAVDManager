@@ -20,19 +20,20 @@ def allowed(name: str, email: str) -> bool:
 
 def commits(base: str, head: str, cwd: str = ".") -> list[str]:
     spec = f"{base}..{head}"
-    out = subprocess.check_output(["git", "rev-list", "--no-merges", spec], cwd=cwd, text=True)
+    out = subprocess.check_output(["git", "rev-list", "--no-merges", spec], cwd=cwd, text=True, encoding="utf-8")
     return [x for x in out.splitlines() if x]
 
 
 def check_commit(commit: str, cwd: str = ".") -> list[str]:
     fmt = "%an%x00%ae%x00%B"
-    raw = subprocess.check_output(["git", "show", "-s", f"--format={fmt}", commit], cwd=cwd, text=True)
+    raw = subprocess.check_output(["git", "show", "-s", f"--format={fmt}", commit], cwd=cwd, text=True,
+                                  encoding="utf-8")
     name, email, message = raw.split("\x00", 2)
     errors: list[str] = []
     if not allowed(name.strip(), email.strip()):
         errors.append(f"{commit}: author {name.strip()} <{email.strip()}> is not allowed")
     for line in message.splitlines():
-        if line.lower().startswith("co-authored-by:"):
+        if line.strip().lower().startswith("co-authored-by:"):
             value = line.split(":", 1)[1].strip()
             match = re.fullmatch(r".+ <([^<>]+)>", value)
             if not match or not allowed(value.rsplit(" <", 1)[0], match.group(1)):
