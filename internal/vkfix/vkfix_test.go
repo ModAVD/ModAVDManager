@@ -12,8 +12,8 @@ import (
 
 // The real libraries (read-only); the tests that need them are skipped when they are absent.
 const (
-	origLib = `C:\emu-src\work\gfx\guestlibs\libvulkan_enc.so`
-	fixLib  = `C:\emu-src\work\gfx\guestlibs\libvulkan_enc.khrfix-bindlock2.so`
+	origLib = `C:\sdk-src\work\gfx\guestlibs\libvulkan_enc.so`
+	fixLib  = `C:\sdk-src\work\gfx\guestlibs\libvulkan_enc.khrfix-bindlock2.so`
 )
 
 // Golden bytes printed by AUTO-MAS vulkanfix.py (_wrapper_bind / _wrapper_bind2 at their caves, _jmp, _EXIT_MAGIC).

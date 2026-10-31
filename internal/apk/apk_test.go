@@ -441,7 +441,7 @@ func TestReadManifestRejects(t *testing.T) {
 
 // ---- real APKs ---------------------------------------------------------------------------------------------------
 
-// Expected values come from Get-ApkManifestInfo in tools/launcher/avd-p0.ps1, run with pwsh on the same files.
+// Expected values come from Get-ApkManifestInfo in the launcher embedded helper, run with pwsh on the same files.
 // The IME's APKs are looked for in $MODAVD_TEST_IME_APK_DIR (the IME build's output directory); without it those
 // cases are skipped.
 func TestReadManifestRealAPKs(t *testing.T) {

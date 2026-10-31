@@ -262,7 +262,7 @@ func hasDirPrefix(path, dir string) bool {
 
 // resolvedPath is path with its links resolved, cleaned; the cleaned path itself when it cannot be resolved (it does
 // not exist, access denied). filepath.EvalSymlinks alone is not enough: since Go 1.23 it leaves mount points unresolved
-// on Windows, and a directory junction (C:\emu-src) is one.
+// on Windows, and a directory junction (C:\sdk-src) is one.
 func resolvedPath(path string) string {
 	if s, ok := finalPath(path); ok {
 		return filepath.Clean(s)
