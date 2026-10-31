@@ -6,7 +6,7 @@
 //
 // LICENSE and NOTICE are the committed bytes (git cat-file at -rev), LICENSES/Go-LICENSE.txt is $(go env GOROOT)\LICENSE
 // (the Go standard library is BSD-3-Clause, whose text must go with the binaries), and modavd-manager.json marks the
-// standalone download for the updater (internal/update): version, Protocol and SHA-256 of every other entry.
+// standalone download for the updater: version and SHA-256 of every other entry.
 package main
 
 import (
@@ -28,9 +28,8 @@ import (
 )
 
 type manifest struct {
-	Version  string            `json:"version"`
-	Protocol int               `json:"protocol"` // buildinfo.Protocol; the 0.1.0 marker has none
-	Files    map[string]string `json:"files"`
+	Version string            `json:"version"`
+	Files   map[string]string `json:"files"`
 }
 
 func digest(data []byte) string {
@@ -85,7 +84,7 @@ func run() error {
 	for name, b := range data {
 		hashes[name] = digest(b)
 	}
-	mb, err := json.Marshal(manifest{Version: *version, Protocol: buildinfo.Protocol, Files: hashes})
+	mb, err := json.Marshal(manifest{Version: *version, Files: hashes})
 	if err != nil {
 		return err
 	}

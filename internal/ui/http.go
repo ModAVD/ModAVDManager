@@ -45,6 +45,9 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/jobs/{id}", s.handleJob)
 	m.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancel)
 	m.HandleFunc("GET /api/events", s.handleEvents)
+	m.HandleFunc("GET /api/update", s.handleUpdateGet)
+	m.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
+	m.HandleFunc("POST /api/update/settings", s.handleUpdateSettings)
 	s.mux = m
 }
 
@@ -119,7 +122,7 @@ func httpStatus(code string) int {
 		return http.StatusUnprocessableEntity
 	case errs.Canceled:
 		return 499 // nginx's "client closed request": there is no standard status for it
-	case errs.LaunchFailed:
+	case errs.LaunchFailed, errs.UpdateUnavailable, errs.UpdateRejected:
 		return http.StatusBadGateway
 	case errs.Timeout:
 		return http.StatusGatewayTimeout

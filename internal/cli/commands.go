@@ -71,7 +71,7 @@ var (
 	optShellTO      = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
 	optCheckMB      = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
 	optNoBridge     = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
-	optUpdateCheck  = flagSpec{"check", kindBool, "", "只检查，不下载或替换"}
+	optAutoMAS      = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
 	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 )
@@ -216,10 +216,17 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "self-update", args: "[--check]", summary: "检查或安装独立下载包的新版本",
-			details: "只对单独下载包联网；ModAVD 根目录里的程序只提示随 ModAVD 更新。默认检查并在确认可替换时更新，--check 只检查。",
-			flags:   []flagSpec{optUpdateCheck}, final: true,
-			run: runSelfUpdate, human: humanOf(formatSelfUpdate),
+			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V]",
+			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
+			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）。不自动联网，只做给出的那一步：" +
+				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
+				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器窗口和 MCP 客户端；" +
+				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
+				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
+				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
+			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
+			flags: []flagSpec{optAutoMAS}, final: true,
+			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
 			name: "mcp", summary: "在 stdin / stdout 上提供 MCP 服务",
@@ -894,19 +901,76 @@ func runVersion(c *cmdCtx) (any, error) {
 	return &VersionResult{Version: buildinfo.Version, Protocol: buildinfo.Protocol, Go: runtime.Version()}, nil
 }
 
-func runSelfUpdate(c *cmdCtx) (any, error) {
-	if c.inv.isSet("check") {
-		return update.Check(c.ctx, update.Options{})
+func runUpdate(c *cmdCtx) (any, error) {
+	action := "status"
+	if len(c.inv.pos) > 0 {
+		action = strings.ToLower(c.inv.pos[0])
 	}
-	return update.SelfUpdate(c.ctx, update.Options{})
+	switch action {
+	case "status", "check", "prepare", "install", "recover":
+	default:
+		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.pos[0]).
+			WithAdvice(findCommand("update").usageAdvice())
+	}
+	r, err := c.deps.resolveRoot(c.inv.root)
+	if err != nil {
+		return nil, err
+	}
+	var last time.Time
+	u := update.New(r, c.log, update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
+		Progress: func(p update.Progress) {
+			if p.Stage != "downloading" || (time.Since(last) < 2*time.Second && p.Done != p.Total) {
+				return
+			}
+			last = time.Now()
+			c.log.Infof("%s：%.1f%%（%.1f / %.1f MB）", p.Message, p.Percent, float64(p.Done)/(1<<20), float64(p.Total)/(1<<20))
+		}})
+	switch action {
+	case "check":
+		return u.Check(c.ctx)
+	case "prepare":
+		return u.Prepare(c.ctx)
+	case "install":
+		return u.Install(c.ctx)
+	case "recover":
+		return u.Recover(c.ctx)
+	}
+	return u.Status(), nil
 }
 
-func formatSelfUpdate(w io.Writer, r *update.Result) {
+func formatUpdateStatus(w io.Writer, r *update.Status) {
+	cur := "未知"
+	if r.CurrentVersion != "" {
+		cur = strings.TrimPrefix(r.CurrentVersion, "v")
+	}
+	if r.CurrentBuild != "" {
+		cur += "（" + r.CurrentBuild + "）"
+	}
+	fmt.Fprintf(w, "ModAVD：%s，根目录 %s\n", cur, r.Root)
+	src := "GitHub"
+	if r.Source == update.SourceMirrorChyan {
+		src = "Mirror 酱（CDK " + map[bool]string{true: "已填", false: "没填，只能从 GitHub 下载"}[r.CDKSet] + "）"
+	}
+	fmt.Fprintf(w, "更新源：%s\n", src)
+	if !r.Updatable {
+		fmt.Fprintf(w, "不能更新：%s\n", r.NotUpdatableReason)
+	}
+	if r.Checked {
+		fmt.Fprintf(w, "最新版本：%s（%s）\n", strings.TrimPrefix(r.LatestVersion, "v"), r.LatestSource)
+	}
+	if r.PreparedVersion != "" {
+		fmt.Fprintf(w, "已下载并核对好、待安装：%s\n", strings.TrimPrefix(r.PreparedVersion, "v"))
+	}
+	if r.Recovered != "" {
+		fmt.Fprintln(w, r.Recovered)
+	}
+	for _, n := range r.Notices {
+		fmt.Fprintln(w, n)
+	}
 	if r.Message != "" {
 		fmt.Fprintln(w, r.Message)
 	}
 }
-
 func runMCP(c *cmdCtx) (any, error) {
 	r, rerr := c.deps.resolveRoot(c.inv.root)
 	if rerr != nil {

@@ -26,6 +26,7 @@
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
 //	servers                                               emu.ServersResult
 //	version                                               VersionResult {"version","protocol","go"} (no root needed)
+//	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
 //
@@ -40,7 +41,8 @@
 // stderr only.
 //
 // Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument, 3 not found, 4 not ready / precheck
-// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled), except:
+// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update
+// unavailable / rejected), except:
 // shell without --json exits with the guest command's exit code, adb with adb's, and stop --all with the code of its
 // first failure (its envelope still says ok and lists both results and failed). Ctrl+C cancels the context
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
@@ -53,26 +55,23 @@
 // (emu.Manager.Wait: the logcat restart after a re-registration), after its output is written.
 //
 // Hidden subcommands, routed before any flag parsing or root lookup: __spawn (win.SpawnHelperMain, the helper of
-// win.StartOrphan) and __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process).
+// win.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
+// (emu.RunBootWatch).
 package cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
-	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
-	"modavd/internal/update"
 	"modavd/internal/win"
 )
 
@@ -141,11 +140,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
 			return emu.RunBootWatch(args[1:], stderr)
-		case "__version":
-			return writeHiddenVersion(stdout)
 		}
 	}
-	update.Finalize()
 	// StartOrphan re-runs this executable as the spawn helper.
 	if exe, err := os.Executable(); err == nil {
 		win.OrphanHelper = exe
@@ -159,13 +155,6 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		stop()
 	}()
 	return run(ctx, args, stdin, stdout, stderr, defaultDeps())
-}
-
-func writeHiddenVersion(w io.Writer) int {
-	if _, err := fmt.Fprintf(w, "{\"ok\":true,\"data\":{\"version\":%q,\"protocol\":%d,\"go\":%q}}\n", buildinfo.Version, buildinfo.Protocol, runtime.Version()); err != nil {
-		return 1
-	}
-	return 0
 }
 
 // cmdCtx is what a command's run function gets.

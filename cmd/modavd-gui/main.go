@@ -5,6 +5,7 @@
 // reopens the window.
 //
 //	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
+//	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
 //
 // Build (GUI subsystem: no console window):
 //
@@ -18,6 +19,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -35,7 +37,6 @@ import (
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/ui"
-	"modavd/internal/update"
 	"modavd/internal/win"
 )
 
@@ -51,12 +52,10 @@ func main() {
 			os.Exit(emu.RunVulkanProbe(os.Stdout))
 		case emu.BootWatchArg:
 			os.Exit(emu.RunBootWatch(os.Args[2:], os.Stderr))
-		case "__version":
-			fmt.Fprintf(os.Stdout, "{\"ok\":true,\"data\":{\"version\":%q,\"protocol\":%d,\"go\":%q}}\n", buildinfo.Version, buildinfo.Protocol, runtime.Version())
-			os.Exit(0)
+		case versionArg:
+			os.Exit(printVersion())
 		}
 	}
-	update.Finalize()
 	if exe, err := os.Executable(); err == nil {
 		win.OrphanHelper = exe
 	}
@@ -64,6 +63,23 @@ func main() {
 }
 
 const usage = "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
+
+// versionArg is the hidden `ModAVD.exe __version`: one line on stdout, the same envelope as `modavd version --json`,
+// no window, no server, no message box (for callers such as AUTO-MAS that need the manager's version without starting
+// it). Every later version keeps it.
+const versionArg = "__version"
+
+func printVersion() int {
+	b, err := json.Marshal(map[string]any{"ok": true, "data": map[string]any{
+		"version": buildinfo.Version, "protocol": buildinfo.Protocol, "go": runtime.Version()}})
+	if err != nil {
+		return 1
+	}
+	if _, err := os.Stdout.Write(append(b, '\n')); err != nil {
+		return 1
+	}
+	return 0
+}
 
 func run(args []string) (code int) {
 	var log *logx.Logger
@@ -107,15 +123,6 @@ func run(args []string) (code int) {
 	// Not closed by a defer: the crash handler above still writes to it, and the process exit closes it anyway.
 	logFile := openLogFile(r.LogsDir())
 	log = logx.New(logFile.sink(minLevel))
-	if os.Getenv("MODAVD_NO_UPDATE_CHECK") != "1" && !*dev {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if u, err := update.Check(ctx, update.Options{}); err == nil && u.Available {
-				log.Infof("有新版本 %s，可在单独下载包中更新", u.Version)
-			}
-		}()
-	}
 
 	inst, err := lockInstance(r)
 	if err != nil {

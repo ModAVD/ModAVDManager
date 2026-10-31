@@ -65,6 +65,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
+| `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
 
 - `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 30 / 60。
@@ -87,7 +88,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 
-**退出码**：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
+**退出码**：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新查不了 / 下载没通过核对。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 
@@ -118,13 +119,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 管理器 ModAVD.exe
 
-双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；单独下载包可在设置里检查更新。
-
-## 自更新
-
-只有单独下载包会自更新。程序目录必须有 `modavd-manager.json` 且没有 `mas-avd.json`、`sdk\`、`avd\` 等 ModAVD 根目录文件；拿不准时只提示“随 ModAVD 更新”。命令行使用 `modavd self-update --check` 检查，确认后运行 `modavd self-update` 下载并替换。下载只接受 GitHub 官方 Release、会核对 SHA-256、协议大版本变化或不可变标记缺失时不会替换。`HTTPS_PROXY` / `NO_PROXY` 是唯一读取的代理变量，命令行不会自动联网。
-
-替换期间如果任一 exe 被其他进程使用会停止并提示先关机、关闭 MCP 客户端。更新通过同卷临时文件、写入并同步 `update.json` 后原子改名，失败会回滚；手工回滚时关闭所有管理器进程，把 `ModAVD.exe.old` 恢复为 `ModAVD.exe`、`tools\modavd.exe.old` 恢复为 `tools\modavd.exe`，再删除 `update.json` 和残留的 `.new` 文件。
+双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。
 
 - 功能：实例卡片（在线时有画面缩略图）、开关机（带进度）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。
@@ -132,6 +127,20 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 关掉窗口后，等正在跑的任务做完再退出。
 - 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
 - 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标是同人图（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)），不随代码许可授权。
+
+## 更新 ModAVD
+
+`modavd update` 更新根目录里的整个 ModAVD 包（模拟器、组件、脚本，也包括 `ModAVD.exe` 和 `tools\modavd.exe` 自己），和 AUTO-MAS 的「魔改 AVD 一键更新」做的是同一件事，用的也是同一个 `<根>\.update\` 目录和状态文件：哪边更新到一半被打断，另一边都能接着补完或退回。AUTO-MAS 还会保留自己的更新器两个大版本，之后改成调用这个命令。
+
+- 只做明确要求的那一步，不自动联网、不在后台下载：
+  - `modavd update`（`status`）只看本地；`check` 查最新版本；
+  - `prepare` 下载、解包、按包里的 `modavd-manifest.json` 逐文件核对、暂存好，实例开着也行；
+  - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器窗口和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
+  - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
+- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。管理器里暂时只能改设置和检查更新，「更新」按钮不可用。
+- 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
+- `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
+- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。Go 不读 Windows 的系统代理，只认 `HTTPS_PROXY` / `NO_PROXY`。
 
 ## 构建
 
@@ -175,7 +184,7 @@ go test ./...
 - 核对：`Get-FileHash .\ModAVDManager-0.1.0-win-x64.zip -Algorithm SHA256`，和 `SHA256SUMS.txt` 里那一行比；解压出的两个 exe 也一样比。
 - 自己编出同样的字节：Go 1.26.5、`GOTOOLCHAIN=local`，`pwsh -NoProfile -File build.ps1 -Out out`，再 `go run ./internal/tools/mkzip -dir out -version <版本>` 打 zip。
 - 单独使用时给 `--root` 或设 `MODAVD_ROOT`，否则会提示找不到 ModAVD 根目录。不要把 zip 解压到 ModAVD 根目录里覆盖包里的那份。
-- v0.1.0 没有自更新，单独下载的要手动换；0.2.0 起才有。
+- 单独下载的管理器不会自己更新，新版本要手动下载替换；ModAVD 包里的那份随 ModAVD 更新（见「更新 ModAVD」）。
 
 ## 参与
 

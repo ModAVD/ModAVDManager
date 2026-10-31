@@ -67,7 +67,7 @@ export function connectEvents(on) {
         on.lost(true);
       } else on.lost(false);
     };
-    for (const type of ['instances', 'job', 'log']) {
+    for (const type of ['instances', 'job', 'log', 'update']) {
       me.addEventListener(type, (ev) => {
         if (me !== es) return;
         let d;

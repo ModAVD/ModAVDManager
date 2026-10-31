@@ -282,6 +282,9 @@ func (r *Root) UpdateMetadata(fn func(o *jsonord.Obj) error) error {
 	return r.editMetadata(func(o *jsonord.Obj) (bool, error) { return true, fn(o) })
 }
 
+// EditMetadata is UpdateMetadata where fn also says whether it changed anything: nothing is written when it did not.
+func (r *Root) EditMetadata(fn func(o *jsonord.Obj) (bool, error)) error { return r.editMetadata(fn) }
+
 // editMetadata is UpdateMetadata where fn also says whether it changed anything (no write when not).
 func (r *Root) editMetadata(fn func(o *jsonord.Obj) (bool, error)) error {
 	l, err := r.lockMetadata()
