@@ -75,7 +75,7 @@ func TestRejections(t *testing.T) {
 	expectError(t, h.do("POST", "/api/instances", "{}", withHeader("Origin", "http://127.0.0.1:1")),
 		http.StatusForbidden, "forbidden")
 	expect(t, h.do("POST", "/api/instances", "{}", withHeader("Origin", "http://localhost:"+port)),
-		http.StatusCreated, nil)
+		http.StatusAccepted, nil)
 
 	// unknown API paths answer in JSON too
 	expectError(t, h.do("GET", "/api/nothing", nil), http.StatusNotFound, errs.NotFound)
@@ -113,26 +113,44 @@ func TestErrorStatusMapping(t *testing.T) {
 func TestCreateUpdateDelete(t *testing.T) {
 	h := newHarness(t, nil)
 
-	var info emu.InstanceInfo
-	expect(t, h.do("POST", "/api/instances", map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4,
-		"data_partition_gb": 32, "fps": 30}), http.StatusCreated, &info)
-	if info.Index != 2 || info.Title != "测试机" {
-		t.Fatalf("created %+v", info)
+	// create is a job (its setup boots the instance for minutes); one without an index gets it picked at once, so the
+	// job (and its card) belongs to that instance from the start
+	create := func(body any) jobView {
+		t.Helper()
+		var v jobView
+		expect(t, h.do("POST", "/api/instances", body), http.StatusAccepted, &v)
+		if v.Kind != kindCreate {
+			t.Fatalf("create job %+v", v)
+		}
+		return h.waitJob(v.ID, stateIs(stateDone))
 	}
-	expect(t, h.do("POST", "/api/instances", "{}"), http.StatusCreated, nil)
-	expect(t, h.do("POST", "/api/instances", nil), http.StatusCreated, nil)
+	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30})
+	if res, _ := j.Result.(map[string]any); j.Index != 2 || res["title"] != "测试机" {
+		t.Fatalf("created %+v", j)
+	}
+	auto1, auto2 := create("{}"), create(nil)
+	if auto1.Index < 0 || auto2.Index < 0 || auto1.Index == auto2.Index {
+		t.Fatalf("jobs of creates without index: %+v / %+v", auto1, auto2)
+	}
+	var rj jobView
+	expect(t, h.do("POST", "/api/instances/3/resume", "{}"), http.StatusAccepted, &rj)
+	h.waitJob(rj.ID, stateIs(stateDone))
 	h.f.mu.Lock()
 	c := h.f.created
 	h.f.mu.Unlock()
-	if len(c) != 3 {
+	if len(c) != 4 {
 		t.Fatalf("creates %d", len(c))
 	}
 	r := c[0]
-	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 {
+	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 ||
+		r.Progress == nil || r.Resume {
 		t.Fatalf("create request %+v", r)
 	}
-	if r := c[1]; r.Title != "" || r.Index != nil || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil {
+	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil {
 		t.Fatalf("empty create request %+v", r)
+	}
+	if r := c[3]; !r.Resume || r.Index == nil || *r.Index != 3 {
+		t.Fatalf("resume request %+v", r)
 	}
 
 	if e := expectError(t, h.do("POST", "/api/instances", `{"memory":4096}`), 400, errs.Usage); !strings.Contains(e.Message, "memory") {
@@ -156,7 +174,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	}
 	expect(t, h.do("PATCH", "/api/instances/2", `{"title":"新名字","memory_mb":8192,"cpu":8}`), http.StatusOK, nil)
 	expect(t, h.do("PATCH", "/api/instances/2", `{"data_partition_gb":96}`), http.StatusOK, nil)
-	expectError(t, h.do("PATCH", "/api/instances/7", `{"fps":30}`), 404, errs.NotFound)
+	expectError(t, h.do("PATCH", "/api/instances/9", `{"fps":30}`), 404, errs.NotFound)
 	h.f.mu.Lock()
 	u := h.f.updated
 	h.f.mu.Unlock()

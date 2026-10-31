@@ -19,8 +19,12 @@ import (
 	"modavd/internal/win"
 )
 
-// Create makes a new instance (validated options, free index and ports) and returns it.
+// Create makes a new instance (validated options, free index and ports), sets it up with one headless boot
+// (createinit.go) and returns it, stopped. req.Resume runs that setup again on an instance whose setup failed.
 func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
+	if req.Resume {
+		return m.resumeCreate(ctx, req)
+	}
 	memory, cpu, dataGB, err := avd.ValidateOptions(req.MemoryMB, req.CPU, req.DataPartitionGB)
 	if err != nil {
 		return nil, err
@@ -49,6 +53,9 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 			return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
 		}
 		if existing[i] {
+			if err := m.notCreated(i, "不能再新建"); err != nil {
+				return nil, err
+			}
 			return nil, errs.Newf(errs.AlreadyExists, "实例 %s 已存在", root.AvdName(i))
 		}
 		// Leftovers of a delete or create that stopped half-way: not listed, but avd.Create refuses the index. Say
@@ -58,36 +65,21 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 				root.AvdName(i), strings.Join(left, "、")).
 				WithAdvice(fmt.Sprintf("先用 modavd delete %d --yes 清掉这些残留再新建，或换一个编号", i))
 		}
-	} else {
-		// Leftovers of a half-deleted instance (an .ini or a directory without the other) do not count as
-		// instances, but avd.Create refuses their index: skip them here instead of failing with "already exists"
-		// (Delete clears them).
-		for k := 0; k <= root.MaxIndex; k++ {
-			if len(instanceFilesOnDisk(m.Root, k)) > 0 {
-				existing[k] = true
-			}
-		}
-		var busyErr error
-		i, err = avd.FreeIndex(existing, func(ports []int) []int {
-			busy, err := win.BusyPorts(ports)
-			if err != nil {
-				busyErr = err
-				return ports
-			}
-			return busy
-		})
-		if err != nil {
-			if busyErr != nil {
-				return nil, errs.Wrap(errs.Internal, busyErr, "读不了端口占用情况: "+busyErr.Error())
-			}
-			return nil, err
-		}
+	} else if i, err = m.freeIndex(existing); err != nil {
+		return nil, err
 	}
 
+	// Held from before the files exist until the setup is done: nobody else starts, changes or deletes the instance
+	// meanwhile, and status tells "creating" from a create that was killed (createinit.go).
+	lock, err := m.tryInstanceLock(i, "create", "正在新建")
+	if err != nil {
+		return nil, err
+	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
 		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps,
 	})
 	if err != nil {
+		lock.Unlock()
 		return nil, err
 	}
 	m.Log.Infof("已新建魔改 AVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %d GB / 帧率 %d）", i, memory, cpu, dataGB, fps)
@@ -97,18 +89,91 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 			m.Log.Warnf("实例 %d 没记下「不装执行桥」，开机时还是会装: %v", i, err)
 		}
 	} else if err := writeBridgeMarker(m.Root, i); err != nil {
-		// first boot writable; any start (modavd / the manager) installs the bridge (bridge.go)
+		// first boot writable; the setup below (or, for filesOnly, any start) installs the bridge (bridge.go)
 		m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
-	} else {
-		m.Log.Infof("实例 %d 第一次开机时会装 arm64 执行桥", i)
 	}
-	info := m.instanceInfo(ctx, in, nil, nil)
-	return &info, nil
+	if req.filesOnly {
+		lock.Unlock()
+		info := m.instanceInfo(ctx, in, nil, nil)
+		return &info, nil
+	}
+	return m.setupNew(ctx, i, req, lock)
+}
+
+// FreeIndex is the index Create picks when none is given (the manager names its create job after it).
+func (m *Manager) FreeIndex() (int, error) {
+	insts, err := avd.List(m.Root)
+	if err != nil {
+		return 0, err
+	}
+	existing := map[int]bool{}
+	for _, in := range insts {
+		existing[in.Index] = true
+	}
+	return m.freeIndex(existing)
+}
+
+// freeIndex is the smallest index that is not in existing, has no leftovers and whose ports are free.
+func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
+	// Leftovers of a half-deleted instance (an .ini or a directory without the other) do not count as instances, but
+	// avd.Create refuses their index: skip them here instead of failing with "already exists" (Delete clears them).
+	for k := 0; k <= root.MaxIndex; k++ {
+		if len(instanceFilesOnDisk(m.Root, k)) > 0 {
+			existing[k] = true
+		}
+	}
+	var busyErr error
+	i, err := avd.FreeIndex(existing, func(ports []int) []int {
+		busy, err := win.BusyPorts(ports)
+		if err != nil {
+			busyErr = err
+			return ports
+		}
+		return busy
+	})
+	if err != nil {
+		if busyErr != nil {
+			return 0, errs.Wrap(errs.Internal, busyErr, "读不了端口占用情况: "+busyErr.Error())
+		}
+		return 0, err
+	}
+	return i, nil
+}
+
+// resumeCreate runs the setup again on an instance whose setup failed (or was killed); its bridge setting is the one
+// recorded at create.
+func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
+	if req.Index == nil {
+		return nil, errs.New(errs.Usage, "--resume 要给实例编号")
+	}
+	i := *req.Index
+	if _, err := m.instance(i); err != nil {
+		return nil, err
+	}
+	lock, err := m.tryInstanceLock(i, "create", "正在新建")
+	if err != nil {
+		return nil, err
+	}
+	// with the lock in hand, a recorded "creating" is one that was killed (creation() would see our own lock)
+	if state := m.creationRecorded(i); state != creationFailed && state != creationCreating {
+		lock.Unlock()
+		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
+			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
+	}
+	if _, running := m.findQemu(i); running {
+		lock.Unlock()
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的模拟器还开着", i).
+			WithAdvice(fmt.Sprintf("先 modavd stop %d，再重试", i))
+	}
+	return m.setupNew(ctx, i, req, lock)
 }
 
 // Update changes title / memory / cpu / fps / data partition size (next boot).
 func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
 	if _, err := m.instance(i); err != nil {
+		return nil, err
+	}
+	if err := m.notCreated(i, "不能修改"); err != nil {
 		return nil, err
 	}
 	applied, err := avd.Update(m.Root, i, avd.UpdateOptions{
@@ -170,7 +235,16 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		stopLock.Unlock()
 		return nil, err
 	}
+	// a create still setting the instance up (between its boots no other lock is held); a failed one may go
+	createLock, err := m.tryInstanceLock(i, "create", "正在新建")
+	if err != nil {
+		bridgeLock.Unlock()
+		startLock.Unlock()
+		stopLock.Unlock()
+		return nil, err
+	}
 	unlock := func() {
+		createLock.Unlock()
 		bridgeLock.Unlock()
 		stopLock.Unlock()
 		startLock.Unlock()
