@@ -182,7 +182,7 @@ func New(dir string) (*Root, error) { return openDir(cleanArg(dir), "") }
 
 func (r *Root) SDK() string { return filepath.Join(r.Dir, SDKDir) } // <root>\sdk
 
-// LocalSDKRoot is mas-avd.json's sdkRoot (a dev SDK such as C:\emu-src\sdk-mas35), "" when not set. A relative
+// LocalSDKRoot is mas-avd.json's sdkRoot (a dev SDK such as C:\sdk-src\sdk-mas35), "" when not set. A relative
 // value is taken relative to the root (AUTO-MAS would resolve it against its own working directory, which is
 // never what was meant).
 func (r *Root) LocalSDKRoot() string {
