@@ -31,9 +31,12 @@ const (
 	testScriptPort = 20076
 )
 
-// testSDK is an SDK whose adb.exe the test may run (only run, never modified).
+// testSDK is an SDK whose adb.exe the test may run (only run, never modified): $MODAVD_TEST_SDK, else the package's.
 func testSDK() string {
-	for _, sdk := range []string{`C:\sdk-src\sdk-mas35`, `D:\ModAVD\sdk`} {
+	for _, sdk := range []string{os.Getenv("MODAVD_TEST_SDK"), `D:\ModAVD\sdk`} {
+		if sdk == "" {
+			continue
+		}
 		if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
 			return sdk
 		}
@@ -47,7 +50,7 @@ func realRoot(t *testing.T) (*root.Root, string) {
 	t.Helper()
 	sdk := testSDK()
 	if sdk == "" {
-		t.Skip("没有可用的 adb.exe（C:\\sdk-src\\sdk-mas35 / D:\\ModAVD\\sdk）")
+		t.Skip("没有可用的 adb.exe（MODAVD_TEST_SDK / D:\\ModAVD\\sdk）")
 	}
 	dir := tempDir(t)
 	meta, _ := json.Marshal(map[string]any{

@@ -143,7 +143,6 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
-	info.Bridge = m.bridgeState(ctx, i, info.Running)
 	if state, message, logFile := m.creationState(i); state == "creating" || state == "failed" {
 		info.Creation = state
 		info.CreationError, info.CreationLog = message, logFile
@@ -170,6 +169,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		info.Renderer = metaText(meta.Get("renderer"))
 		info.SoftwareRenderer = metaTruthy(meta.Get("softwareRenderer"))
 	}
+	info.Bridge = m.bridgeState(ctx, i, info.Booted, info.Initialized)
 	return info
 }
 
@@ -186,7 +186,8 @@ func statusOf(running, booted bool) Status {
 	}
 }
 
-// busyOf: a stop that runs wins over a start (a stop does not wait for a start, and ends it).
+// busyOf: a stop that runs wins over a start (a stop does not wait for a start, and ends it). The bridge install
+// wins over both: it stops and starts the instance itself, a cold boot or two, while holding the bridge lock.
 func busyOf(stopping, starting, bridging bool) string {
 	switch {
 	case bridging:
@@ -200,17 +201,36 @@ func busyOf(stopping, starting, bridging bool) string {
 	}
 }
 
-func (m *Manager) bridgeState(ctx context.Context, i int, running bool) string {
+// Bridge states (InstanceInfo.Bridge).
+const (
+	bridgeStateOff       = "off"       // instances.<i>.bridge is false: no start installs it
+	bridgeStatePending   = "pending"   // wanted and not there yet: the next start modavd launches installs it
+	bridgeStateInstalled = "installed" // the booted guest runs it
+	bridgeStateUnknown   = "unknown"   // off or still booting with the marker: installed, or not yet (see bridgeState)
+)
+
+// bridgeState is InstanceInfo.Bridge. Only a booted guest tells installed from not (one getprop, statusAdbTimeout).
+// The boot marker stays for as long as the bridge is installed (it keeps the system writable), so on an instance that
+// is off or still booting the marker alone means "installed, or the last install failed": unknown. Pending there is
+// what a start would install for sure: no marker yet (it places one first), or the marker of an instance whose first
+// boot (which comes before the install) has not run.
+func (m *Manager) bridgeState(ctx context.Context, i int, booted, initialized bool) string {
 	if !m.bridgeWanted(i) {
-		return "off"
+		return bridgeStateOff
 	}
-	if regularFile(bridgeMarker(m.Root, i)) {
-		return "pending"
+	if booted {
+		switch b := m.guestBridgeWithin(ctx, i, statusAdbTimeout); {
+		case b == bridgeProp:
+			return bridgeStateInstalled
+		case b != "":
+			return bridgeStatePending
+		}
+		return bridgeStateUnknown
 	}
-	if running && m.guestBridge(ctx, i) == bridgeProp {
-		return "installed"
+	if !regularFile(bridgeMarker(m.Root, i)) || !initialized {
+		return bridgeStatePending
 	}
-	return "unknown"
+	return bridgeStateUnknown
 }
 
 // lockHeld: some process (this one included: the lock is per handle) holds lock kind of instance i right now.

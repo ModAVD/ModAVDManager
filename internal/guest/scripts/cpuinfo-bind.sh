@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # cpuinfo-bind.sh - one cpuinfo entry per real vCPU for the ARM translation layer. Run as root (su 0 sh ...).
-# Keep this text in sync with the launcher’s embedded guest script.
+# Same text as the inline script in the launcher; keep the two in sync.
 #
 # ARM games run through libndk_translation, which answers their /proc/cpuinfo from
 # /system/etc/cpuinfo.{arm64,arm}.txt: a single "processor : 1" entry. Unity then reports

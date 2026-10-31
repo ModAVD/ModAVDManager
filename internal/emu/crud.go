@@ -136,7 +136,7 @@ func (m *Manager) finishCreate(ctx context.Context, i int, req CreateRequest) (*
 		}
 	}
 	emit("create", fmt.Sprintf("实例 %d 创建中：后台无头开机", i), 20)
-	startOpt := StartOptions{Timeout: req.Timeout, Creating: true, Progress: func(p Progress) {
+	startOpt := StartOptions{Timeout: req.Timeout, creating: true, Progress: func(p Progress) {
 		if progress != nil {
 			progress(p)
 		}
@@ -247,7 +247,7 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		startLock.Unlock()
 		return nil, err
 	}
-	bridgeLock, err := m.tryInstanceLock(i, "bridge", "正在装执行桥")
+	bridgeLock, err := m.tryInstanceLock(i, "bridge", "正在装卸执行桥")
 	if err != nil {
 		startLock.Unlock()
 		stopLock.Unlock()

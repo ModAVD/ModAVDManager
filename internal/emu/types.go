@@ -50,20 +50,25 @@ type InstanceInfo struct {
 	Status  Status `json:"status"`
 	Running bool   `json:"running"` // qemu process exists (MuMuManager is_process_started)
 	Booted  bool   `json:"booted"`  // Android finished booting (MuMuManager is_android_started)
-	// Busy: "starting" / "stopping" while some modavd process holds that lock of the instance (AUTO-MAS's updater
-	// must not swap sdk\emulator then); "" otherwise.
+	// Busy: "starting" / "stopping" / "bridging" while some modavd process holds that lock of the instance (AUTO-MAS's
+	// updater must not swap sdk\emulator then); "" otherwise. "bridging" covers the whole bridge install, including the
+	// stops and cold boots in it; callers that do not know a value treat it as busy.
 	Busy string `json:"busy"`
-	// Bridge is off (disabled), pending (marker requests install), installed, or unknown (the instance is off or
-	// the guest did not answer). An offline instance is unknown when its marker is absent because the guest property
-	// cannot be queried; only an explicit off setting is definitive.
-	Bridge        string `json:"bridge"`
-	Creation      string `json:"creation"` // "creating" / "failed" while create-init is running or failed; empty when ready
+	// Bridge (the arm64 execution bridge): "off" (instances.<i>.bridge is false), "pending" (the next start modavd
+	// launches installs it), "installed" (the booted guest runs it) or "unknown". Only a booted guest is asked; an
+	// instance that is off or still booting and has the bridge's boot marker after its first boot reads unknown, since
+	// the marker stays while the bridge is installed and also after a failed install.
+	Bridge string `json:"bridge"`
+	// Creation is "creating" while create sets the instance up (its headless first boot), "failed" when that stopped
+	// (CreationError says why, CreationLog is that boot's log); "" for a ready instance. See crud.go.
+	Creation      string `json:"creation"`
 	CreationError string `json:"creation_error"`
 	CreationLog   string `json:"creation_log"`
 	PID           int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
-	StartedAt   string `json:"started_at"`
-	StartedAtMS int64  `json:"started_at_ms"`
+	StartedAt string `json:"started_at"`
+	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.
+	StartedAtMS int64 `json:"started_at_ms"`
 	// Serial is the device on the private adb server (adb -P <adb_server_port> -s <serial>). Scripts that use their own
 	// adb server connect to AdbAddress instead.
 	Serial      string         `json:"serial"`
@@ -147,8 +152,11 @@ type StartOptions struct {
 	// NoBridge: do not install the execution bridge on this boot even when its marker is there and the bridge is not
 	// (bridge.go), the way AUTO-MAS boots. Bridge starts with it to uninstall.
 	NoBridge bool
-	// Creating is internal: the create-init transaction may boot the instance while its metadata says creating.
-	Creating bool
+	// bridgeLocked: the caller (Bridge) holds the instance's bridge lock, so the install step runs under it instead of
+	// taking it (the lock is per handle: a second TryLock in the same process fails).
+	bridgeLocked bool
+	// creating: create's own first boot (crud.go), which may boot an instance whose metadata says creating.
+	creating bool
 }
 
 type Progress struct {
