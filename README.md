@@ -56,7 +56,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge]` | 新建。默认带 arm64 执行桥，第一次开机时装上；`--no-bridge` 记下这台不要桥，以后开机也不装 |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window] [--timeout 300] [--no-bridge]` | 开机，等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例还没有执行桥时接着装上，`--no-bridge` 这次不装 |
@@ -87,6 +87,11 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
+- **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
+  - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。
+  - 失败（含新建的进程被结束）是 `create_failed`，`creation_error` 写原因、`creation_log` 是那次开机的日志；这时 `start`、`set`、`bridge` 返回 `not_ready`（退出码 4）。用 `create --resume N` 重做初始化，或者 `delete N --yes` 删掉。
+  - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
+  - 进度：命令行逐步打印到 stderr；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示进度条，关掉窗口会在后台做完。
 
 **退出码**：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新查不了 / 下载没通过核对。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 

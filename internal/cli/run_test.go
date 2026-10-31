@@ -1082,6 +1082,38 @@ func TestCommandsReachManager(t *testing.T) {
 	}
 }
 
+// TestCreateFlags: create passes --timeout and a progress printer; --resume takes the index and nothing else.
+func TestCreateFlags(t *testing.T) {
+	h := newHarness()
+	var got []emu.CreateRequest
+	h.fake.create = func(req emu.CreateRequest) (*emu.InstanceInfo, error) {
+		got = append(got, req)
+		if req.Progress != nil {
+			req.Progress(emu.Progress{Step: "create", Message: "后台无头开机", Done: 20, Total: 1000})
+		}
+		in := sampleInstance(1)
+		return &in, nil
+	}
+	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge")
+	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge ||
+		got[0].Resume || !strings.Contains(r.stderr, "后台无头开机") {
+		t.Fatalf("create: exit %d, %+v, stderr %s", r.code, got, r.stderr)
+	}
+	r = h.run(t, nil, "create", "--resume", "6", "--json")
+	if r.code != 0 || len(got) != 2 || !got[1].Resume || *got[1].Index != 6 {
+		t.Fatalf("resume: exit %d, %+v", r.code, got)
+	}
+	for _, bad := range [][]string{{"create", "--resume", "6", "--memory", "4G"}, {"create", "--resume", "6", "--index", "6"},
+		{"create", "--timeout", "0"}, {"create", "--resume", "5"}} {
+		if r := h.run(t, nil, bad...); r.code != 2 {
+			t.Errorf("%v: exit %d, want 2 (%s)", bad, r.code, r.stderr)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("a refused create reached the manager: %+v", got)
+	}
+}
+
 func TestStatusSubset(t *testing.T) {
 	h := newHarness()
 	h.fake.info = func(i int) (*emu.InstanceInfo, error) {
@@ -1090,13 +1122,13 @@ func TestStatusSubset(t *testing.T) {
 		return &in, nil
 	}
 	r := h.run(t, nil, "status", "3", "--json")
-	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"busy":"stopping","pid":4242}}` + "\n"
+	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":""}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)
 	}
 	h.fake.info = nil
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"busy":"","pid":0}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":""}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("offline stdout = %s", r.stdout)
 	}

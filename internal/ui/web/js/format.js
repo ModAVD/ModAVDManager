@@ -1,7 +1,7 @@
 // Formatting for people (zh-CN).
 
-export const KIND = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK' };
-export const KIND_ICON = { start: 'power', stop: 'stop', restart: 'refresh', install: 'download' };
+export const KIND = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK', create: '新建' };
+export const KIND_ICON = { start: 'power', stop: 'stop', restart: 'refresh', install: 'download', create: 'plus' };
 export const STATE = { running: '进行中', done: '完成', failed: '失败', canceled: '已取消' };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };
 

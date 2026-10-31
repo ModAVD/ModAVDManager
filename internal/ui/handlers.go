@@ -67,14 +67,43 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if body.Title != nil {
 		req.Title = *body.Title
 	}
-	res, err := s.mgr.Create(detached(r), req)
+	// The job is the instance's from the start (its card shows the progress): pick the index now when none is given.
+	if req.Index == nil {
+		i, err := s.mgr.FreeIndex()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		req.Index = &i
+	}
+	s.startCreateJob(w, *req.Index, req)
+}
+
+// handleResumeCreate runs the setup of an instance whose create failed again (emu create --resume).
+func (s *server) handleResumeCreate(w http.ResponseWriter, r *http.Request) {
+	i, ok := pathIndex(w, r)
+	if !ok || !decode(w, r, &struct{}{}) {
+		return
+	}
+	s.startCreateJob(w, i, emu.CreateRequest{Index: &i, Resume: true})
+}
+
+// startCreateJob: create sets the instance up with a headless boot of a few minutes (emu createinit.go), so it runs
+// as a job with progress; a closed window waits for it.
+func (s *server) startCreateJob(w http.ResponseWriter, i int, req emu.CreateRequest) {
+	v, err := s.startJob(kindCreate, i, func(ctx context.Context, j *job, b backend) (any, error) {
+		req.Progress = s.progressFn(j)
+		s.hub.requestRefresh() // the new instance shows up as creating at once
+		res, err := b.Create(ctx, req)
+		s.hub.dropCached()
+		s.hub.requestRefresh()
+		return res, err
+	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	s.hub.dropCached()
-	s.hub.requestRefresh()
-	writeJSON(w, http.StatusCreated, res)
+	writeJSON(w, http.StatusAccepted, v)
 }
 
 func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {

@@ -14,9 +14,11 @@ import (
 type Status string
 
 const (
-	StatusOffline  Status = "offline"  // no qemu process for this instance
-	StatusStarting Status = "starting" // qemu runs, Android has not finished booting (sys.boot_completed != 1)
-	StatusOnline   Status = "online"   // booted
+	StatusOffline      Status = "offline"       // no qemu process for this instance
+	StatusStarting     Status = "starting"      // qemu runs, Android has not finished booting (sys.boot_completed != 1)
+	StatusOnline       Status = "online"        // booted
+	StatusCreating     Status = "creating"      // create is running its first headless boot
+	StatusCreateFailed Status = "create_failed" // create stopped with an error; resume or delete is allowed
 )
 
 type Ports struct {
@@ -57,7 +59,12 @@ type InstanceInfo struct {
 	// instance that is off or still booting and has the bridge's boot marker after its first boot reads unknown, since
 	// the marker stays while the bridge is installed and also after a failed install.
 	Bridge string `json:"bridge"`
-	PID    int    `json:"pid"`
+	// Creation is "creating" while create sets the instance up (its headless first boot), "failed" when that stopped
+	// (CreationError says why, CreationLog is that boot's log); "" for a ready instance. See crud.go.
+	Creation      string `json:"creation"`
+	CreationError string `json:"creation_error"`
+	CreationLog   string `json:"creation_log"`
+	PID           int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt string `json:"started_at"`
 	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.
@@ -101,9 +108,17 @@ type CreateRequest struct {
 	CPU             *int
 	DataPartitionGB *int
 	FPS             *int
-	// NoBridge: no execution bridge (bridge.go). By default a new instance gets the bridge's boot marker and its
-	// first start installs the bridge.
+	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
+	// marker and create's setup installs it.
 	NoBridge bool
+	// Timeout bounds create's whole setup (createinit.go); 0 = DefaultCreateTimeout.
+	Timeout time.Duration
+	// Progress, when set, is told about each step of the setup (same events as StartOptions.Progress, one 0–1000 bar).
+	Progress func(Progress)
+	// Resume runs the setup again on instance *Index, whose setup failed; the other options are not used.
+	Resume bool
+	// filesOnly: only the files, no setup (the first start sets the instance up, as before 0.2.0). Tests.
+	filesOnly bool
 }
 
 type UpdateRequest struct {
@@ -145,6 +160,8 @@ type StartOptions struct {
 	// bridgeLocked: the caller (Bridge) holds the instance's bridge lock, so the install step runs under it instead of
 	// taking it (the lock is per handle: a second TryLock in the same process fails).
 	bridgeLocked bool
+	// creating: create's own first boot (crud.go), which may boot an instance whose metadata says creating.
+	creating bool
 }
 
 type Progress struct {
@@ -170,6 +187,7 @@ type StartResult struct {
 	// it; otherwise the next boot does.
 	SetupPending bool     `json:"setup_pending"`
 	Warnings     []string `json:"warnings"` // never null; setup steps that failed (none of them stop the boot)
+	HostIME      bool     `json:"host_ime"`
 }
 
 type StopOptions struct {

@@ -219,6 +219,10 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 	mm.Log.Infof("魔改 AVD 实例 %d 有执行桥的开机标记，桥还没装：现在装（中间要关机再开机一到两次）", i)
 	notWritable := 0
 	for round := 1; round <= bridgeInstallRounds; round++ {
+		if opt.Progress != nil {
+			opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 装 arm64 执行桥（第 %d 轮）", i, round),
+				Done: 0, Total: progressTotal})
+		}
 		run, err := mm.runBridgeScript(ctx, i, "install", false)
 		if err != nil && errs.As(err).Code == errs.Canceled {
 			res.Warnings = append(res.Warnings, col.Messages()...)
@@ -272,7 +276,8 @@ func (m *Manager) bridgeRestart(ctx context.Context, i int, opt StartOptions) (*
 	if err := m.waitQemuGone(ctx, i); err != nil {
 		return nil, err
 	}
-	r, err := m.Start(ctx, i, StartOptions{Window: opt.Window, Timeout: opt.Timeout, Progress: opt.Progress, NoBridge: true})
+	r, err := m.Start(ctx, i, StartOptions{Window: opt.Window, Timeout: opt.Timeout, Progress: opt.Progress, NoBridge: true,
+		creating: opt.creating})
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +311,9 @@ type BridgeResult struct {
 // An instance that was off is stopped again.
 func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResult, error) {
 	if _, err := m.instance(i); err != nil {
+		return nil, err
+	}
+	if err := m.notCreated(i, "不能装卸执行桥"); err != nil {
 		return nil, err
 	}
 	bridgeLock, ok, err := win.TryLock(m.lockPath(i, "bridge"))

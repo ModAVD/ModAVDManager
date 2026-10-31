@@ -35,13 +35,14 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?}` | 201 `InstanceInfo` |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`） |
 | PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?}` | `UpdateResult` |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{window?: bool}` | 202 `Job` |
 | POST | `/api/instances/{i}/stop` | `{force?: bool}` | 202 `Job` |
 | POST | `/api/instances/{i}/restart` | `{window?: bool, force?: bool}` | 202 `Job` |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
+| POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |
 | POST | `/api/instances/{i}/window` | `{visible: bool}` | `WindowResult` |
 | POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是 1280×720 显示的像素）或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
 | GET | `/api/instances/{i}/screenshot` | | `image/png`（`adb exec-out screencap -p`），`Cache-Control: no-store`；没开机回 409 |
@@ -70,11 +71,11 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
  "result":null,"error":null,"warnings":[]}
 ```
 
-- `kind`：`start` / `stop` / `restart` / `install`。
+- `kind`：`start` / `stop` / `restart` / `install` / `create`。
 - `state`：`running` / `done` / `failed` / `canceled`。
-- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含重启的关机阶段、等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`。`total` 一律 1000。
+- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含重启的关机阶段、等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；装执行桥的每一轮是 `bridge`；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
 - 安装任务的 `result.apk` 是用户上传的文件名，不是服务端的临时路径（临时文件任务结束就删了）。
-- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult`，没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
+- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult` / `InstanceInfo`（新建），没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
 - 同一实例同时只能有一个任务在跑；第二个回 409 `busy`。**例外**：开机任务进行中可以发关机（和 emu 一致：开机中照样能关）。
 - 取消开机：只停止等待，模拟器继续开机，不会被强制结束。
 

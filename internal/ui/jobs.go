@@ -21,6 +21,7 @@ const (
 	kindStop    = "stop"
 	kindRestart = "restart"
 	kindInstall = "install"
+	kindCreate  = "create"
 
 	stateRunning  = "running"
 	stateDone     = "done"
@@ -42,6 +43,8 @@ func kindLabel(kind string) string {
 		return "重启"
 	case kindInstall:
 		return "安装 APK"
+	case kindCreate:
+		return "新建"
 	}
 	return kind
 }

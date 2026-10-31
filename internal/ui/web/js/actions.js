@@ -6,7 +6,7 @@ import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur } from './format.js';
 import { openActivity } from './panels.js';
 
-const VERB = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK' };
+const VERB = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK', create: '新建' };
 const isBoot = (j) => j.kind === 'start' || j.kind === 'restart';
 const activity = { label: '查看活动', run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
@@ -36,7 +36,8 @@ function notify(job) {
     const w = Math.max((r.warnings || []).length, (job.warnings || []).length);
     toast({ tone: w ? 'warn' : 'ok', title: `${who}已开机`, action: w ? activity : null,
       text: [r.first_boot && '首次初始化已完成', r.total_seconds && `用时 ${dur(r.total_seconds)}`, w && `有 ${w} 个设置步骤没成功`].filter(Boolean).join('，') });
-  } else if (job.kind === 'stop') toast({ title: `${who}已关机` });
+  } else if (job.kind === 'create') toast({ title: `${who}新建好了`, text: '初始化已做完，已关机；第一次开机和平常一样快。' });
+  else if (job.kind === 'stop') toast({ title: `${who}已关机` });
   else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
 }
 
@@ -65,6 +66,8 @@ export async function start(i, window = false) {
 }
 export const stop = (i, force = false) => run(i, 'stop', { force });
 export const restart = (i) => run(i, 'restart', { window: !!S.win[i] });
+// 重试初始化: the setup of a new instance that failed (its job is a create job)
+export const resumeCreate = (i) => run(i, 'resume', {});
 
 export async function install(i, file) {
   const fd = new FormData();

@@ -118,9 +118,9 @@ function render() {
   const failed = !list && S.loadError;
   if (list) {
     setText($('instCount'), `${list.instances.length} 台`);
-    const c = { online: 0, starting: 0, stopping: 0, offline: 0 };
+    const c = { online: 0, starting: 0, stopping: 0, offline: 0, creating: 0, createfail: 0 };
     for (const inst of list.instances) c[viewState(inst).key.replace('error', 'offline')]++;
-    const parts = [['ok', c.online, '运行中'], ['warn', c.starting, '开机中'], ['warn', c.stopping, '关机中'], ['idle', c.offline, '已关机']].filter((p) => p[1]);
+    const parts = [['ok', c.online, '运行中'], ['warn', c.starting, '开机中'], ['warn', c.creating, '新建中'], ['warn', c.stopping, '关机中'], ['err', c.createfail, '新建失败'], ['idle', c.offline, '已关机']].filter((p) => p[1]);
     if (changed('sum', parts.join('|'))) $('summary').replaceChildren(...parts.map(([tone, k, t]) => h('span', { class: 'sum-item tone-' + tone, text: `${k} ${t}` })));
     const full = list.instances.length >= 9;
     attr($('createBtn'), 'aria-disabled', full || null);

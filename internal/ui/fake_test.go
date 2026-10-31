@@ -131,6 +131,18 @@ func (b fakeBackend) Create(ctx context.Context, req emu.CreateRequest) (*emu.In
 	return &in, nil
 }
 
+// FreeIndex is the fake's "smallest free index": 2 when nothing is there, as Create without an index assumes.
+func (b fakeBackend) FreeIndex() (int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	for i := 2; i <= 9; i++ {
+		if _, ok := b.f.instances[i]; !ok && i != 5 {
+			return i, nil
+		}
+	}
+	return 0, errs.New(errs.AlreadyExists, "没有空闲编号")
+}
+
 func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error) {
 	b.f.mu.Lock()
 	b.f.updated = append(b.f.updated, req)

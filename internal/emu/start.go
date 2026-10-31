@@ -86,6 +86,13 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	if err != nil {
 		return nil, err
 	}
+	// A new instance boots only for create's own setup until that is done (createinit.go); the boot watch of that
+	// boot's qemu may adopt it again.
+	if !opt.creating && opt.watchQemu == nil {
+		if err := m.notCreated(i, "不能开机"); err != nil {
+			return nil, err
+		}
+	}
 	col := &logx.Collector{}
 	mm := m.withLog(col.Sink())
 	// The execution bridge (bridge.go): an instance about to be launched boots writable already, so the install after
@@ -290,6 +297,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	res.FirstBoot = ab.FirstBoot
 	res.ZygoteRestarted = ab.ZygoteRestarted
 	res.LogcatFile = ab.LogcatFile
+	res.HostIME = ab.HostIME
 
 	// The setup ran on adb alone, whose failures are only warnings: qemu may have gone meanwhile (a stop, which does
 	// not wait for a start; a host GPU driver reset). Reporting online with the old PID would send the caller on to a

@@ -43,6 +43,7 @@ const allowInstallSourcesScript = `set -o pipefail; ` +
 
 type afterBootResult struct {
 	FirstBoot       bool
+	HostIME         bool
 	ZygoteRestarted bool
 	LogcatFile      string
 	// SetupPending: the Vulkan fix this boot still needs was left out (an app was in the foreground or an install was
@@ -193,6 +194,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		}
 		step()
 	}
+	r.HostIME = imeDefault
 	return r, ctxErr(ctx)
 }
 

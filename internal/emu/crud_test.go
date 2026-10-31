@@ -34,7 +34,7 @@ func TestDeleteHalfInstances(t *testing.T) {
 	ctx := context.Background()
 	create := func(i int) {
 		t.Helper()
-		_, err := m.Create(ctx, CreateRequest{Index: &i})
+		_, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &i})
 		opsSkipIfNotImplemented(t, err)
 		if err != nil {
 			t.Fatal(err)
@@ -69,7 +69,7 @@ func TestDeleteHalfInstances(t *testing.T) {
 		t.Fatalf("not an instance any more: %v", err)
 	}
 	zero := 0
-	_, err := m.Create(ctx, CreateRequest{Index: &zero})
+	_, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &zero})
 	if errs.CodeOf(err) != errs.AlreadyExists || !strings.Contains(err.Error(), "不完整") ||
 		!strings.Contains(err.Error(), "modavd delete 0 --yes") {
 		t.Fatalf("explicit create on leftovers: %v", err)
