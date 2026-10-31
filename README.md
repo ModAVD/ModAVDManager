@@ -159,11 +159,14 @@ go test ./...
 - 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`。
 - CI（`.github/workflows/ci.yml`）在 `windows-2025` 上跑格式检查、`go vet`、`go test`、`build.ps1`、隐私扫描和作者检查；只在 PR 或手动触发时运行。
 
-## 独立下载与哈希
+## 单独下载与哈希
 
-v0.1.0 是第一个独立版本。压缩包名为 `ModAVDManager-0.1.0-win-x64.zip`，内容只有两个程序、许可证和清单；压缩包不带顶层目录。下载后核对 `release/0.1.0.SHA256SUMS.txt` 中的两个 exe 与 zip 的 SHA-256。v0.1.0 没有自更新，单独下载的文件需要手动替换；从 v0.2.0 起才提供自更新。
-
-自己编译需要 Go 1.26.5、`GOTOOLCHAIN=local`，运行 `build.ps1`。单独使用时必须指定 `--root` 或 `MODAVD_ROOT`，否则程序会提示找不到 ModAVD 根目录。
+- 每个版本的 GitHub Release 附 `ModAVDManager-<版本>-win-x64.zip` 和 `SHA256SUMS.txt`，后者和仓库里的 `release/<版本>.SHA256SUMS.txt` 是同一份。v0.1.0 是第一个独立版本，两个 exe 和 ModAVD 0.36.0 包里的逐字节相同。
+- zip 没有顶层目录，里面是 `ModAVD.exe`、`tools\modavd.exe`、`LICENSE`、`NOTICE`、`LICENSES\Go-LICENSE.txt`，以及单独下载包的标记 `modavd-manager.json`（版本号和其余各文件的 SHA-256）。
+- 核对：`Get-FileHash .\ModAVDManager-0.1.0-win-x64.zip -Algorithm SHA256`，和 `SHA256SUMS.txt` 里那一行比；解压出的两个 exe 也一样比。
+- 自己编出同样的字节：Go 1.26.5、`GOTOOLCHAIN=local`，`pwsh -NoProfile -File build.ps1 -Out out`，再 `go run ./internal/tools/mkzip -dir out -version <版本>` 打 zip。
+- 单独使用时给 `--root` 或设 `MODAVD_ROOT`，否则会提示找不到 ModAVD 根目录。不要把 zip 解压到 ModAVD 根目录里覆盖包里的那份。
+- v0.1.0 没有自更新，单独下载的要手动换；0.2.0 起才有。
 
 ## 参与
 
