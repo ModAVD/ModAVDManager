@@ -56,7 +56,8 @@ jobs:
           $gotZip = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($gotZip -ne $sums[$zip]) { throw 'zip hash mismatch' }
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          Copy-Item $zip, "release/$version.SHA256SUMS.txt" artifacts
+          Copy-Item $zip artifacts
+          Copy-Item "release/$version.SHA256SUMS.txt" "artifacts/SHA256SUMS.txt"
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
           name: release-assets
@@ -83,7 +84,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           $version = $env:TAG.Substring(1)
-          $sumPath = "artifacts/$version.SHA256SUMS.txt"
+          $sumPath = "artifacts/SHA256SUMS.txt"
           $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
           $line = Get-Content $sumPath | Where-Object { $_ -match "^([0-9a-f]{64})  ModAVDManager-$version-win-x64\.zip$" }
           $expected = $Matches[1]
@@ -98,5 +99,5 @@ jobs:
         run: |
           $version = $env:TAG.Substring(1)
           $zip = "artifacts/ModAVDManager-$version-win-x64.zip"
-          $sumPath = "artifacts/$version.SHA256SUMS.txt"
+          $sumPath = "artifacts/SHA256SUMS.txt"
           gh release create $env:TAG --draft --verify-tag --notes-file "release/$version.md" $zip $sumPath
