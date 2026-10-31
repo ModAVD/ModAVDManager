@@ -35,7 +35,7 @@ const (
 	// createStopTimeout bounds the shutdown at the end of the setup, also after the setup's own deadline passed.
 	createStopTimeout = 3 * time.Minute
 
-	interruptedCreation = "新建时的初始化没做完就被打断了（新建它的程序退出了）"
+	interruptedCreation = "新建它的程序中途退出了"
 )
 
 // Hooks for the tests (a setup without an emulator).
@@ -106,7 +106,11 @@ func (m *Manager) notCreated(i int, what string) error {
 		if logFile != "" {
 			advice += "；日志见 " + logFile
 		}
-		return errs.Newf(errs.NotReady, "魔改 AVD 实例 %d 新建时初始化失败（%s），%s", i, message, what).WithAdvice(advice)
+		if message == "" {
+			message = "初始化没做完"
+		}
+		// the reason last: a setup error has its own brackets
+		return errs.Newf(errs.NotReady, "魔改 AVD 实例 %d 新建时初始化失败，%s：%s", i, what, message).WithAdvice(advice)
 	}
 	return nil
 }

@@ -166,6 +166,10 @@ func TestCreateKilled(t *testing.T) {
 	if err != nil || info.Status != StatusCreateFailed || info.CreationError != interruptedCreation {
 		t.Fatalf("killed create: %+v %v", info, err)
 	}
+	if _, err := m.Start(ctx, 6, StartOptions{}); errs.CodeOf(err) != errs.NotReady ||
+		!strings.Contains(err.Error(), "新建时初始化失败，不能开机："+interruptedCreation+"。") {
+		t.Errorf("start after a killed create: %v", err)
+	}
 	// while somebody holds the lock it is creating
 	l, ok, err := win.TryLock(m.lockPath(6, "create"))
 	if err != nil || !ok {
