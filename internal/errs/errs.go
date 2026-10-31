@@ -22,8 +22,8 @@ const (
 	MetadataUnreadable = "metadata_unreadable" // mas-avd.json exists but cannot be read; never overwritten then
 	Unsupported        = "unsupported"         // not possible on this instance / host
 	Canceled           = "canceled"            // the caller canceled (Ctrl+C, MCP notifications/cancelled)
-	UpdateUnavailable  = "update_unavailable"  // self-update: GitHub cannot be asked now (offline, rate limited, HTTP error)
-	UpdateRejected     = "update_rejected"     // self-update: a download failed its checks (host, size, hash, contents)
+	UpdateUnavailable  = "update_unavailable"  // update: the update source cannot be asked now (offline, rate limited, HTTP error)
+	UpdateRejected     = "update_rejected"     // update: a download failed its checks (size, hash, contents)
 	Internal           = "internal"            // anything else
 	NotImplemented     = "not_implemented"
 )
