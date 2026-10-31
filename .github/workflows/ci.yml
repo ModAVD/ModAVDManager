@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  checks:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # go.mod's go line is "go 1.26", which setup-go resolves to the newest 1.26.x; build.ps1 wants the exact
+      # toolchain line.
+      - name: go version
+        id: go
+        shell: pwsh
+        run: |
+          $v = (Select-String -LiteralPath go.mod -Pattern '^toolchain\s+go(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $v) { throw 'go.mod has no toolchain line' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $bad = gofmt -l .
+          if ($bad) { $bad; throw 'gofmt required' }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: build
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File build.ps1
+          Get-FileHash out\tools\modavd.exe -Algorithm SHA256
+          Get-FileHash out\ModAVD.exe -Algorithm SHA256
+      - name: privacy scan
+        run: python -B -I -X utf8 scripts/privacy.py . --allowlist scripts/privacy-allowlist.json
+      - name: author check
+        shell: pwsh
+        env:
+          REPO_CHECK_BASE: ${{ github.event.pull_request.base.sha }}
+          REPO_CHECK_HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO_CHECK_EVENT: ${{ github.event_name }}
+        run: |
+          if ($env:REPO_CHECK_EVENT -eq 'workflow_dispatch') {
+            Remove-Item Env:REPO_CHECK_BASE -ErrorAction SilentlyContinue
+            Remove-Item Env:REPO_CHECK_HEAD -ErrorAction SilentlyContinue
+          }
+          python -B -I -X utf8 scripts/repo_checks.py
+      - name: script tests
+        run: python -B -I -X utf8 scripts/test_repo_checks.py

@@ -158,7 +158,7 @@ go test ./...
 
 - `internal/avd`、`internal/root`、`internal/jsonord` 有一部分测试用 Python 3 运行 AUTO-MAS 的原始逻辑（如 `internal/avd/testdata/instances_ref.py`），和 Go 的输出逐字节对照，所以要装 Python 3。
 - 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`。
-- CI（`.github/workflows/test.yml`）在 `windows-latest` 上跑 `go vet`、`go test` 和 `build.ps1`。
+- CI（`.github/workflows/ci.yml`）在 `windows-2025` 上跑格式检查、`go vet`、`go test`、`build.ps1`、隐私扫描和作者检查；只在 PR 或手动触发时运行。
 
 ## 参与
 
