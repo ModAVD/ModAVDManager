@@ -4,6 +4,7 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
+import { openDiagnostics } from './diagnostics.js';
 import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import * as A from './actions.js';
 
@@ -165,11 +166,15 @@ export function renderBanner(el) {
     h('div', { class: 'banner-main' },
       h('h2', { text: '这个目录现在还不能开机' }),
       first && h('p', { text: first.reason }),
-      first && first.advice && advice(first.advice),
+      first && first.advice && advice(first.id === 'components'
+        ? '请点下面的「补全组件」打开许可协议并下载；根目录里的旧批处理仅作为备选。'
+        : first.advice),
       missing.length && !(first && first.id === 'components') && h('div', { class: 'banner-missing' },
         h('span', { class: 'muted', text: '缺少的组件：' }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),
       blockers.length > 1 && h('p', { class: 'banner-more', text: `另外还有 ${blockers.length - 1} 项必需检查没通过，详情见电脑检查。` }),
-      h('div', { class: 'banner-actions' }, btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
+      h('div', { class: 'banner-actions' },
+        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), '补全组件'], openDiagnostics),
+        btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
 }
 
 // ---- activity

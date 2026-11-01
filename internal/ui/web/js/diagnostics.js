@@ -5,7 +5,7 @@ import { S, update, subscribe } from './store.js';
 import { api } from './api.js';
 import { openDialog, toast, toastError, copyText } from './ui.js';
 
-const PRIVACY = '隐私提示：问题包只在本机生成，不会自动上传。问题包可能含本机路径、Windows 用户名、截图和日志；summary.txt 和日志通常可以公开贴到 Issue，crash 文件夹含线程栈和少量内存片段，请私下发到 qiyinxi@foxmail.com，并写上 Issue 编号。上传前请先看一眼问题包内容。';
+const PRIVACY = '隐私提示：问题包只保存在本机，脚本不会上传。\r\n- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。\r\n- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。\r\n- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。';
 
 export function loadDiagnostics() {
   return api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch((e) => {
@@ -37,7 +37,7 @@ function openLicense(license, source) {
     d.close();
   });
   const d = openDialog({ title: 'Android 软件开发套件许可协议', sub: '请完整阅读后再决定是否下载组件', cls: 'dlg-update', body: box,
-    actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), ok: agree }, light: true });
+    actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), cancel: false, ok: agree }, light: true });
 }
 
 export function openDiagnostics() {
@@ -61,7 +61,7 @@ export function openDiagnostics() {
   const feedbackHead = h('div', { class: 'diag-head' }, h('strong', { text: '问题反馈' }), h('div', { class: 'diag-actions' }, collectBtn, configBtn));
   const privacy = h('p', { class: 'f-hint diag-privacy', text: PRIVACY });
 
-  ctl = openDialog({ title: '设置', sub: '组件、问题信息和配置信息', cls: 'dlg-update', light: true,
+  ctl = openDialog({ title: '组件与问题反馈', sub: '组件、问题信息和配置信息', cls: 'dlg-update', light: true,
     body: h('div', { class: 'dlg-body' }, compHead, compNote, componentError, componentBox, feedbackHead, privacy, collectBox) });
 
   const render = () => {
@@ -78,10 +78,22 @@ export function openDiagnostics() {
     const cj = active('collect-info');
     fetchBtn.disabled = !!fj;
     collectBtn.disabled = !!cj;
-    const p = (j) => j && j.progress ? `${j.progress.message || j.progress.step || '进行中'}${j.progress.total ? `（${j.progress.done || 0}/${j.progress.total}）` : ''}` : '';
+    const p = (j) => {
+      if (!j || !j.progress) return '';
+      const x = j.progress;
+      const bits = [x.message || x.step || '进行中'];
+      if (x.total) bits.push(`${x.done || 0}/${x.total}`);
+      if (x.speed > 0) bits.push(`${(x.speed / 1048576).toFixed(1)} MB/s`);
+      if (x.remaining > 0) bits.push(`剩余 ${Math.ceil(x.remaining)} 秒`);
+      return bits.join(' · ');
+    };
     const rows = [];
     if (fj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `补全组件：${p(fj)}`, btn('btn btn-ghost', '取消', () => cancel(fj.id))));
-    else if (latest('components')?.state === 'done') rows.push(h('p', { class: 'tone-ok', text: '组件补全完成。' }));
+    else if (latest('components')?.state === 'done') {
+      rows.push(h('p', { class: 'tone-ok', text: '组件补全完成，正在刷新组件状态…' }));
+      const doneID = latest('components')?.id;
+      if (doneID && ctl.lastComponentsJob !== doneID) { ctl.lastComponentsJob = doneID; loadDiagnostics(); }
+    }
     else if (latest('components')?.state === 'failed') rows.push(h('p', { class: 'tone-err', text: latest('components').error?.message || '组件补全失败。' }));
     if (cj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `收集问题信息：${p(cj)}`, btn('btn btn-ghost', '取消', () => cancel(cj.id))));
     const done = latest('collect-info');

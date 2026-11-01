@@ -50,7 +50,7 @@ export function openUpdate() {
     h('label', { class: 'f-label', for: 'upd-cdk', text: 'Mirror 酱 CDK' }),
     h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState));
   const note = h('p', { class: 'f-hint', text: '更新现在由 AUTO-MAS 发起（它调用 modavd update），会按这里选的更新源和 CDK 下载；这里先不能直接更新。' });
-  const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], openDiagnostics);
+  const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], () => { ctl.close(); openDiagnostics(); });
   const when = h('span', { class: 'foot-note' });
   const checkBtn = btn('btn btn-secondary', null, () => run(api.post('/api/update/check')));
   const installBtn = btn('btn btn-primary', [icon('download'), '更新'], null,

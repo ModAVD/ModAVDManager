@@ -1,14 +1,14 @@
 // Mock backend for design work: ?mock=normal|empty|notready|busy|many replaces fetch('/api/…') and EventSource with
 // an in-memory fake that follows internal/ui/API.md. Extra params: drop=1 (the event stream drops after 1.5 s and
-// stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500), proxyfail=1 (instance 0's
-// guest says its proxy does not answer). window.__mockShots counts screenshot requests per instance. Never used in
+// stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500), diag=components-error|components-fail
+// (component status request or fetch fails). window.__mockShots counts screenshot requests per instance. Never used in
 // production: the server does not serve /dev/.
 // Screens are drawn on a canvas: abstract shapes only, no real game content.
 
 const ROOT = 'X:\\ModAVD';
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MEM = [3072, 4096, 5120, 6144];
-const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true };
+const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true, diagMode: '', componentsReady: false };
 const now = () => Date.now();
 const iso = (t = now()) => {
   const d = new Date(t);
@@ -289,20 +289,27 @@ function run(j, steps) {
   next();
 }
 
-function runDiag(j) {
-  const collect = j.kind === 'collect-info';
-  step(j, collect ? 'collect' : 'download', collect ? '正在收集问题信息' : '正在补全组件', 100);
-  setTimeout(() => {
-    if (db.diagMode === (collect ? 'diag-fail' : 'components-fail')) {
-      failJob(j, 'internal', collect ? '收集问题信息失败（模拟）' : '组件下载失败（模拟）', '检查网络后重试');
-      return;
+function runDiag(j, kind = j.kind) {
+  const stages = kind === 'components'
+    ? [['license', '已取回许可协议', 80], ['download', '正在下载平台工具（adb）', 260], ['download', '正在下载系统镜像', 520], ['extract', '正在解压组件', 760], ['verify', '正在校验组件', 900], ['done', '组件补全完成', 1000]]
+    : [['collect', '正在收集目录与版本', 180], ['collect', '正在收集日志', 430], ['collect', '正在收集现场状态', 650], ['zip', '正在压缩问题包', 900], ['done', '问题包已生成', 1000]];
+  let n = 0;
+  const timer = setInterval(() => {
+    if (j.state !== 'running') { clearInterval(timer); return; }
+    const p = stages[Math.min(n, stages.length - 1)];
+    step(j, p[0], p[1], p[2]);
+    n++;
+    if (kind === 'components' && db.diagMode === 'components-fail' && n === 3) {
+      clearInterval(timer); failJob(j, 'internal', '模拟下载失败', '稍后再试'); return;
     }
-    step(j, collect ? 'collect' : 'download', collect ? '正在打包问题信息' : '正在下载组件', 650);
-    setTimeout(() => finishJob(j, collect ? {
-      zip_path: `${ROOT}\\reports\\modavd-diagnostic.zip`, zip_size: '1.2 MB',
-      privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true,
-    } : { root: ROOT, components: [], downloads: [] }), 500);
-  }, 450);
+    if (n >= stages.length) {
+      clearInterval(timer);
+      if (kind === 'components') {
+        db.componentsReady = true;
+        finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: checkResult().components, downloads: [] });
+      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true });
+    }
+  }, 500);
 }
 
 function startSeq(inst, j, window) {
@@ -696,12 +703,15 @@ async function handle(url, init) {
     return json(pub(inst), 201);
   }
   if (p === '/api/open') return json({});
-  if (p === '/api/components' && method === 'GET') return json({ root: ROOT, components: checkResult().components });
+  if (p === '/api/components' && method === 'GET') {
+    if (db.diagMode === 'components-error') return errResp('internal', '组件状态暂不可用', '稍后重试');
+    return json({ root: ROOT, components: checkResult().components });
+  }
   if (p === '/api/components/license' && method === 'GET') return json({ license: 'Android Software Development Kit License Agreement\n\n(mock)', license_source: 'mock' });
   if (p === '/api/components/fetch' && method === 'POST') {
     if (body.accept_license !== true) return errResp('usage', '补全组件必须明确同意许可协议');
     if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');
-    const j = newJob('components', -1); runDiag(j); return json(j, 202);
+    const j = newJob('components', -1); runDiag(j, 'components'); return json(j, 202);
   }
   if (p === '/api/diag/collect' && method === 'POST') {
     if (db.jobs.some((j) => j.kind === 'collect-info' && j.state === 'running')) return errResp('busy', '收集问题信息正在进行');
