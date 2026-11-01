@@ -289,15 +289,21 @@ function run(j, steps) {
   next();
 }
 
+function diagProgress(j, stages, done) {
+  if (j.state !== 'running') return;
+  const p = stages[Math.min(done, stages.length - 1)];
+  j.progress = { step: p[0], message: p[1], done: p[2] * 1048576, total: p[3] * 1048576, speed: p[4] * 1048576, remaining: p[5] };
+  emit('job', j); log('info', p[1], j.id); emit('instances', list());
+}
+
 function runDiag(j, kind = j.kind) {
   const stages = kind === 'components'
-    ? [['license', '已取回许可协议', 80], ['download', '正在下载平台工具（adb）', 260], ['download', '正在下载系统镜像', 520], ['extract', '正在解压组件', 760], ['verify', '正在校验组件', 900], ['done', '组件补全完成', 1000]]
-    : [['collect', '正在收集目录与版本', 180], ['collect', '正在收集日志', 430], ['collect', '正在收集现场状态', 650], ['zip', '正在压缩问题包', 900], ['done', '问题包已生成', 1000]];
+    ? [['license', '已取回许可协议', 80, 1491, 0, 0], ['download', '正在下载平台工具（adb）', 260, 1491, 72, 17], ['download', '正在下载系统镜像', 650, 1491, 96, 9], ['extract', '正在解压组件', 1120, 1491, 64, 6], ['verify', '正在校验组件', 1410, 1491, 20, 2], ['done', '组件补全完成', 1491, 1491, 0, 0]]
+    : [['collect', '正在收集目录与版本', 1, 12, 0.4, 28], ['collect', '正在收集日志', 4, 12, 0.8, 10], ['collect', '正在收集现场状态', 8, 12, 1.1, 4], ['zip', '正在压缩问题包', 11, 12, 1.4, 1], ['done', '问题包已生成', 12, 12, 0, 0]];
   let n = 0;
   const timer = setInterval(() => {
     if (j.state !== 'running') { clearInterval(timer); return; }
-    const p = stages[Math.min(n, stages.length - 1)];
-    step(j, p[0], p[1], p[2]);
+    diagProgress(j, stages, n);
     n++;
     if (kind === 'components' && db.diagMode === 'components-fail' && n === 3) {
       clearInterval(timer); failJob(j, 'internal', '模拟下载失败', '稍后再试'); return;
@@ -307,7 +313,7 @@ function runDiag(j, kind = j.kind) {
       if (kind === 'components') {
         db.componentsReady = true;
         finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: checkResult().components, downloads: [] });
-      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true });
+      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true, entries: ['summary.txt'] });
     }
   }, 500);
 }

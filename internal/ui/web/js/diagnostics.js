@@ -11,6 +11,7 @@ export function loadDiagnostics() {
   return api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch((e) => {
     S.componentsError = e;
     update();
+    throw e;
   });
 }
 
@@ -50,6 +51,7 @@ export function openDiagnostics() {
   const compHead = h('div', { class: 'diag-head' }, h('strong', { text: '组件' }), fetchBtn);
   const compNote = h('p', { class: 'f-hint', text: '缺少组件时先查看许可协议；只有亲手点“同意并下载”才会开始下载。' });
 
+  const componentProgressBox = h('div', { class: 'diag-result diag-component-progress' });
   const collectBox = h('div', { class: 'diag-result' });
   const collectBtn = btn('btn btn-secondary', [icon('file'), '收集问题信息'], () => startJob(api.post('/api/diag/collect', {})));
   const configBtn = btn('btn btn-ghost', [icon('copy'), '复制配置信息'], async () => {
@@ -62,7 +64,7 @@ export function openDiagnostics() {
   const privacy = h('p', { class: 'f-hint diag-privacy', text: PRIVACY });
 
   ctl = openDialog({ title: '组件与问题反馈', sub: '组件、问题信息和配置信息', cls: 'dlg-update', light: true,
-    body: h('div', { class: 'dlg-body' }, compHead, compNote, componentError, componentBox, feedbackHead, privacy, collectBox) });
+    body: h('div', { class: 'dlg-body' }, compHead, compNote, componentError, componentBox, componentProgressBox, feedbackHead, collectBox, privacy) });
 
   const render = () => {
     const c = S.components;
@@ -82,19 +84,37 @@ export function openDiagnostics() {
       if (!j || !j.progress) return '';
       const x = j.progress;
       const bits = [x.message || x.step || '进行中'];
-      if (x.total) bits.push(`${x.done || 0}/${x.total}`);
+      if (x.total > 0) {
+        const percent = Math.max(0, Math.min(100, Math.round((x.done || 0) * 100 / x.total)));
+        const doneMB = Math.round((x.done || 0) / 1048576);
+        const totalMB = Math.round(x.total / 1048576);
+        bits.push(`${percent}%（${doneMB} / ${totalMB} MB）`);
+      }
       if (x.speed > 0) bits.push(`${(x.speed / 1048576).toFixed(1)} MB/s`);
       if (x.remaining > 0) bits.push(`剩余 ${Math.ceil(x.remaining)} 秒`);
       return bits.join(' · ');
     };
-    const rows = [];
-    if (fj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `补全组件：${p(fj)}`, btn('btn btn-ghost', '取消', () => cancel(fj.id))));
-    else if (latest('components')?.state === 'done') {
-      rows.push(h('p', { class: 'tone-ok', text: '组件补全完成，正在刷新组件状态…' }));
-      const doneID = latest('components')?.id;
-      if (doneID && ctl.lastComponentsJob !== doneID) { ctl.lastComponentsJob = doneID; loadDiagnostics(); }
+    const componentRows = [];
+    const componentJob = latest('components');
+    if (fj) componentRows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `补全组件：${p(fj)}`, btn('btn btn-ghost', '取消', () => cancel(fj.id))));
+    else if (componentJob?.state === 'done') {
+      const doneID = componentJob.id;
+      if (ctl.refreshedComponentsJob !== doneID && ctl.refreshingComponentsJob !== doneID) {
+        ctl.refreshingComponentsJob = doneID;
+        loadDiagnostics().catch(() => {}).finally(() => {
+          if (ctl) {
+            ctl.refreshedComponentsJob = doneID;
+            update();
+          }
+        });
+      }
+      componentRows.push(h('p', { class: 'tone-ok', text: ctl.refreshedComponentsJob === doneID ? '组件补全完成' : '组件补全完成，正在刷新组件状态…' }));
     }
-    else if (latest('components')?.state === 'failed') rows.push(h('p', { class: 'tone-err', text: latest('components').error?.message || '组件补全失败。' }));
+    else if (componentJob?.state === 'failed') componentRows.push(h('p', { class: 'tone-err', text: componentJob.error?.message || '组件补全失败。' }));
+    else if (componentJob?.state === 'canceled') componentRows.push(h('p', { class: 'tone-idle', text: '已取消' }));
+    componentProgressBox.replaceChildren(...componentRows);
+
+    const rows = [];
     if (cj) rows.push(h('p', { class: 'diag-running' }, h('span', { class: 'spin' }), `收集问题信息：${p(cj)}`, btn('btn btn-ghost', '取消', () => cancel(cj.id))));
     const done = latest('collect-info');
     if (!cj && done?.state === 'done' && done.result) {
@@ -102,11 +122,12 @@ export function openDiagnostics() {
         h('div', { class: 'diag-actions' }, btn('btn btn-ghost', '在资源管理器里显示', () => api.post('/api/open', { what: 'path', path: done.result.zip_path }).then(() => toast({ title: '已打开资源管理器' })).catch(toastError))));
       if (done.result.sections?.length) rows.push(h('ul', { class: 'diag-sections' }, ...done.result.sections.map((x) => h('li', { class: x.error ? 'tone-err' : 'tone-ok', text: `${x.name}：${x.error || '完成'}` }))));
     } else if (!cj && done?.state === 'failed') rows.push(h('p', { class: 'tone-err', text: done.error?.message || '收集问题信息失败。' }));
+    else if (!cj && done?.state === 'canceled') rows.push(h('p', { class: 'tone-idle', text: '已取消' }));
     collectBox.replaceChildren(...rows);
   };
   const un = subscribe(render);
   ctl.onClose.push(() => { un(); ctl = null; });
-  loadDiagnostics();
+  loadDiagnostics().catch(() => {});
   render();
 }
 
