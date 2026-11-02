@@ -1,9 +1,7 @@
 # ModAVDManager
 
-[ModAVD（魔改 AVD）](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库，只支持 Windows x64。
+[ModAVD（魔改 AVD）](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库。目前只支持 Windows x64，平台相关的部分已经拆成平台层，其他平台的安排见 [ModAVD#27](https://github.com/ModAVD/ModAVD/issues/27)。
 
-> 这是非官方项目，与 Google 没有关联。
->
 > **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写。当前 `main` 的版本是 `0.3.0`，最新独立 Release 是 `v0.1.0`（对应 ModAVD `0.36.0`），`v0.2.0` 已起草、还没发布；`0.2.0` 起的新建后台初始化、`update` 命令和退出码 9 都不在 `v0.1.0` 下载包里。使用已发布包时，请以对应 Release 的说明和包内版本为准。
 
 使用说明和参与开发的说明在 ModAVD 文档站：[管理器和命令行](https://modavd.github.io/components/manager)、[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
@@ -20,7 +18,7 @@
 
 ## 这是什么
 
-- ModAVD 是面向 Windows、重点优化无人值守自动化的安卓模拟器（AOSP Android Emulator 加一批补丁）；也可以由管理器或命令行独立管理。本仓库是管理它的程序：新建、修改、删除实例，开机、关机，开机前的电脑检查，装 APK 和 arm64 执行桥，看画面和日志。
+- ModAVD 是基于 AOSP Android Emulator 加一批补丁的安卓模拟器，目前支持 Windows，以后计划支持更多平台。本仓库是管理它的程序：新建、修改、删除实例，开机、关机，开机前的电脑检查，装 APK 和 arm64 执行桥，看画面和日志。
 - 管的是一个 ModAVD 根目录，也就是 ModAVD Release 包解压出来的文件夹（里面有 `mas-avd.json`、`sdk\`、`avd\`）。实例文件和 `mas-avd.json` 的写法与 [AUTO-MAS](https://github.com/AUTO-MAS-Project/AUTO-MAS) 一致，测试里拿 AUTO-MAS 的代码逐字节对照。
 - 给人用的是管理器 `ModAVD.exe`；给脚本、AUTO-MAS 和 AI 助手用的是命令行 `modavd.exe` 和它的 MCP 服务。
 
