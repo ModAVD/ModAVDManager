@@ -166,7 +166,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		//    eth0 (the virtual Wi-Fi alone does about 6 MB/s). The Wi-Fi switch persists in /data: set every boot
 		func() { m.setupNetwork(ctx, i) },
 		// 8b) no vCPU halts while the data disk is busy with small requests (see the script's header)
-		func() { m.setupIdlepoll(ctx, i, idlepollCap(cores, spare, idlepollLoops())) },
+		func() { m.setupIdlepoll(ctx, i, idlepollCap(cores, spare)) },
 		func() {
 			// 9) guest log: 16 MB buffers (persistent), streamed to <root>\logs from now on
 			m.shell(ctx, i, "su 0 setprop persist.logd.size "+logcatBufferSize+"; logcat -G "+logcatBufferSize, 0)
@@ -514,25 +514,25 @@ func fastpathReport(i int, status string) (warn bool, msg string) {
 	return true, fmt.Sprintf("实例 %d fastpath 没起来: %s", i, tail(status, 300))
 }
 
-// idlepollMaxLoops is the most busy loops one instance gets by default (ModAVD#34: one per vCPU made three
-// downloading instances 18 saturated host threads on the 16 logical processors they were pinned to). TBD by A/B.
-const idlepollMaxLoops = 2
-
-// idlepollLoopsEnv overrides idlepollMaxLoops (0: the watcher runs but never spins), for measuring.
+// idlepollLoopsEnv caps the busy loops per instance below its vCPU count (0: the watcher runs but never spins), for
+// measuring. Unset: one loop per vCPU, as far as the host has room.
 const idlepollLoopsEnv = "MODAVD_IDLEPOLL_LOOPS"
 
-func idlepollLoops() int {
+func idlepollLoops(cores int) int {
 	if n, err := strconv.Atoi(os.Getenv(idlepollLoopsEnv)); err == nil && n >= 0 {
 		return n
 	}
-	return idlepollMaxLoops
+	return cores
 }
 
-// idlepollCap is how many busy loops an instance with cores vCPUs may start: at most loops and its vCPU count, and no
-// more than the logical processors left after every qemu's vCPUs (spare, see hostPlan). Fixed at boot: instances
-// starting later see more load and get less, so the loops of all running instances stay within what was spare.
-func idlepollCap(cores, spare, loops int) int {
-	return max(0, min(cores, loops, spare))
+// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU (ModAVD#34 A/B, one 6-vCPU
+// instance: fewer loops lose the gain in proportion, 1-2 loops almost all of it), but no more than the logical
+// processors left after every qemu's vCPUs, this instance's included (spare, see hostPlan: in its L3 group when pinned).
+// Fixed at boot: instances starting later see more load and get fewer, so the loops of all running instances stay
+// within what was spare (#34: one loop per vCPU on three instances pinned to the same 16 processors made 18 saturated
+// host threads).
+func idlepollCap(cores, spare int) int {
+	return max(0, min(cores, spare, idlepollLoops(cores)))
 }
 
 // setupIdlepoll starts the watcher with at most limit busy loops per burst.

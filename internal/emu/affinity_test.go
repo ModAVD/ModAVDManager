@@ -123,32 +123,43 @@ func TestPlanHostOrdinary(t *testing.T) {
 }
 
 func TestIdlepollCap(t *testing.T) {
-	cases := []struct{ cores, spare, loops, want int }{
-		{6, 10, 2, 2}, // alone in a group of 16
-		{6, 4, 2, 2},  // second in the group
-		{6, 1, 2, 1},  // one processor left
-		{6, 0, 2, 0},  // none left
-		{6, -4, 2, 0}, // over-committed
-		{1, 10, 2, 1}, // never more loops than vCPUs
-		{6, 10, 0, 0}, // override: off
-		{6, 26, 99, 6},
+	t.Setenv(idlepollLoopsEnv, "")
+	cases := []struct{ cores, spare, want int }{
+		{6, 10, 6}, // alone in a group of 16: one loop per vCPU
+		{6, 6, 6},
+		{6, 4, 4},  // second in the group: what is left
+		{6, 1, 1},  // one processor left
+		{6, 0, 0},  // none left
+		{6, -4, 0}, // over-committed
+		{4, 26, 4}, // never more loops than vCPUs
 	}
 	for _, c := range cases {
-		if got := idlepollCap(c.cores, c.spare, c.loops); got != c.want {
-			t.Errorf("idlepollCap(%d, %d, %d) = %d, want %d", c.cores, c.spare, c.loops, got, c.want)
+		if got := idlepollCap(c.cores, c.spare); got != c.want {
+			t.Errorf("idlepollCap(%d, %d) = %d, want %d", c.cores, c.spare, got, c.want)
 		}
+	}
+	// the override only lowers it
+	t.Setenv(idlepollLoopsEnv, "2")
+	if got := idlepollCap(6, 10); got != 2 {
+		t.Errorf("override 2: %d", got)
+	}
+	if got := idlepollCap(6, 1); got != 1 {
+		t.Errorf("override 2, spare 1: %d", got)
+	}
+	t.Setenv(idlepollLoopsEnv, "0")
+	if got := idlepollCap(6, 10); got != 0 {
+		t.Errorf("override 0: %d", got)
 	}
 }
 
 func TestIdlepollLoops(t *testing.T) {
-	for env, want := range map[string]int{"": idlepollMaxLoops, "1": 1, "0": 0, "-1": idlepollMaxLoops, "x": idlepollMaxLoops} {
+	for env, want := range map[string]int{"": 6, "1": 1, "0": 0, "9": 9, "-1": 6, "x": 6} {
 		t.Setenv(idlepollLoopsEnv, env)
-		if got := idlepollLoops(); got != want {
+		if got := idlepollLoops(6); got != want {
 			t.Errorf("%q: %d, want %d", env, got, want)
 		}
 	}
 }
-
 func TestCPURanges(t *testing.T) {
 	for mask, want := range map[uint64]string{0xFFFF: "0–15", 0xFFFF0000: "16–31", 0x5: "0,2", 0xFF00F: "0–3,12–19", 1: "0"} {
 		if got := cpuRanges(mask); got != want {
