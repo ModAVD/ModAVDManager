@@ -118,9 +118,9 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 		}
 		return m.finishBridge(ctx, i, opt, res)
 	}
-	// The bridge is installed, but its files are not this package's payload (the package was updated since): updated
-	// the same way, on a boot this start launched only. `modavd bridge <i> install` (bridgeLocked) updates by itself.
-	if bridge && res.Launched && !opt.bridgeLocked && m.bridgeOutdated(ctx, i) {
+	// The bridge is installed: its files are updated when they are not this package's payload (the package was updated
+	// since), also only on a boot this start launched. `modavd bridge <i> install` (bridgeLocked) updates by itself.
+	if bridge && res.Launched && !opt.bridgeLocked {
 		return m.updateBridge(ctx, i, opt, res)
 	}
 	return res, nil

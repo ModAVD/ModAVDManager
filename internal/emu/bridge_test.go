@@ -112,7 +112,7 @@ func TestPayloadHashes(t *testing.T) {
 
 // TestBridgeGuestHashScript: the guest script names every installed file.
 func TestBridgeGuestHashScript(t *testing.T) {
-	s := bridgeGuestHashScript()
+	s := bridgeGuestHashScript(bridgePayloadTargets())
 	for _, f := range bridgePayload {
 		if !strings.Contains(s, " "+f.target) {
 			t.Errorf("%s not in %q", f.target, s)
@@ -120,8 +120,10 @@ func TestBridgeGuestHashScript(t *testing.T) {
 	}
 }
 
+func targetOf(k int) string { return bridgePayload[k].target }
+
 // TestPayloadStale: the guest's answer to bridgeGuestHashScript against the package's payload. A file that differs
-// or is not there makes the bridge outdated; an answer that does not name every file decides nothing.
+// or is not there makes the bridge outdated; an answer without a hash or "-" for every file decides nothing.
 func TestPayloadStale(t *testing.T) {
 	want := map[string]string{}
 	var lines []string
@@ -138,9 +140,17 @@ func TestPayloadStale(t *testing.T) {
 	}{
 		{"current", current, false, true},
 		{"LF", strings.ReplaceAll(current, "\r\n", "\n"), false, true},
+		{"upper case", strings.ToUpper(lines[0][:64]) + lines[0][64:] + "\n" + lines[1] + "\n" + lines[2] + "\n",
+			false, true},
 		{"one differs", strings.Replace(current, strings.Repeat("b", 64), strings.Repeat("f", 64), 1), true, true},
 		{"one not installed", strings.Replace(current, strings.Repeat("c", 64), "-", 1), true, true},
+		{"none installed", "- " + targetOf(0) + "\n- " + targetOf(1) + "\n- " + targetOf(2) + "\n", true, true},
+		{"one not hashable", strings.Replace(current, strings.Repeat("c", 64), "?", 1), false, false},
+		{"empty hash", strings.Replace(current, strings.Repeat("c", 64), "", 1), false, false},
+		{"not a hash", strings.Replace(current, strings.Repeat("c", 64), "sha256sum:", 1), false, false},
+		{"short hex", strings.Replace(current, strings.Repeat("c", 64), "abcdef", 1), false, false},
 		{"cut short", lines[0] + "\n" + lines[1] + "\n", false, false},
+		{"last line cut", current[:len(current)-20], false, false},
 		{"empty", "", false, false},
 		{"adb error", "error: device offline\n", false, false},
 	} {

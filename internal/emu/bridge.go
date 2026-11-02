@@ -184,19 +184,25 @@ func payloadHashes(dir string) (map[string]string, bool) {
 	return sums, true
 }
 
-// bridgeGuestHashScript prints "<sha256> <target>" for each installed payload file, "- <target>" for one that is not
-// there.
-func bridgeGuestHashScript() string {
+// bridgePayloadTargets are the guest paths of the payload files.
+func bridgePayloadTargets() []string {
 	targets := make([]string, len(bridgePayload))
 	for k, f := range bridgePayload {
 		targets[k] = f.target
 	}
-	return "for f in " + strings.Join(targets, " ") + `; do s=$(sha256sum "$f" 2>/dev/null) || s=-; echo "${s%% *} $f"; done`
+	return targets
+}
+
+// bridgeGuestHashScript prints, for each of targets, "<sha256> <target>", "- <target>" when it is not there and
+// "? <target>" when it is there but cannot be hashed (POSIX sh: the guest's mksh, sh in the tests).
+func bridgeGuestHashScript(targets []string) string {
+	return "for f in " + strings.Join(targets, " ") + `; do if [ ! -e "$f" ]; then echo "- $f"; ` +
+		`elif s=$(sha256sum "$f" 2>/dev/null); then echo "${s%% *} $f"; else echo "? $f"; fi; done`
 }
 
 // payloadStale compares the guest's answer to bridgeGuestHashScript (out) with the package's payload (want, by
-// target): stale when a file is missing in the guest or differs. known=false when out does not name every file (adb
-// failed or cut it short): nothing is decided then.
+// target): stale when a file is not there in the guest or differs. known=false when out does not give a hash or "-"
+// for every file (adb failed or cut it short, a file could not be hashed): nothing is decided then.
 func payloadStale(want map[string]string, out string) (stale, known bool) {
 	got := map[string]string{}
 	for _, line := range outputLines(out) {
@@ -205,8 +211,8 @@ func payloadStale(want map[string]string, out string) (stale, known bool) {
 		}
 	}
 	for target, sum := range want {
-		g, ok := got[target]
-		if !ok {
+		g := got[target]
+		if g != "-" && !isSHA256Hex(g) {
 			return false, false
 		}
 		if g != sum {
@@ -214,6 +220,19 @@ func payloadStale(want map[string]string, out string) (stale, known bool) {
 		}
 	}
 	return stale, true
+}
+
+// isSHA256Hex: s is 64 lowercase hex digits.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // bridgeOutdated: the booted guest runs the bridge, and its files are not those of the package's payload (missing or
@@ -224,9 +243,10 @@ func (m *Manager) bridgeOutdated(ctx context.Context, i int) bool {
 	}
 	want, ok := payloadHashes(m.bridgePayloadDir())
 	if !ok {
+		m.Log.Debugf("实例 %d：执行桥载荷 %s 不全，不比对", i, m.bridgePayloadDir())
 		return false
 	}
-	res := m.shell(ctx, i, bridgeGuestHashScript(), bridgeGuestHashTimeout)
+	res := m.shell(ctx, i, bridgeGuestHashScript(bridgePayloadTargets()), bridgeGuestHashTimeout)
 	if res.Code != 0 {
 		return false
 	}
@@ -256,7 +276,8 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 	call := []string{"&", quote(script), action, "-Serial", quote(root.Serial(i)),
-		"-AdbPort", strconv.Itoa(m.Root.AdbServerPort()), "-Adb", quote(m.Root.AdbExe()), "-Payload", quote(m.bridgePayloadDir())}
+		"-AdbPort", strconv.Itoa(m.Root.AdbServerPort()), "-Adb", quote(m.Root.AdbExe()),
+		"-Payload", quote(m.bridgePayloadDir())}
 	if reboot {
 		call = append(call, "-Reboot")
 	}
@@ -384,15 +405,19 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 	return res, nil
 }
 
-// updateBridge is the last step of a start that launched an instance whose bridge is installed but whose files are
-// not the package's payload (bridgeOutdated): the script's install, which replaces the files that differ (each is
-// pushed under a temporary name, checked against the payload's hash and renamed into place), then one cold boot (same
-// window and timeout, without the bridge step) so the guest loads them. A script that fails is only a warning, as in
-// finishBridge: the instance keeps running on the files it has, and the next start tries again.
+// updateBridge is the last step of a start that launched an instance with the bridge (Start calls it when the install
+// step had nothing to do). When the guest's files are not the package's payload (bridgeOutdated: the package was
+// updated since), the script's install replaces the files that differ (each is pushed under a temporary name, checked
+// against the payload's hash and renamed into place), and one cold boot (same window and timeout, without the bridge
+// step) loads them. Decided under the bridge lock: another modavd holding it is installing or updating already.
+//
+// The files the guest has keep working, so the update waits for a later start while an install holds the guest lock
+// or an app is in the foreground (someone began to use the instance during this start's setup; the update restarts
+// adbd and boots cold), and a script that fails is only a warning, as in finishBridge.
 func (m *Manager) updateBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
 	lock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
 	if err != nil || !ok {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥正由另一次 modavd 在装，这次不更新", i))
+		m.Log.Debugf("实例 %d 的执行桥锁拿不到（%v），这次不看执行桥要不要更新", i, err)
 		return res, nil
 	}
 	r, err := m.updateBridgeLocked(ctx, i, opt, res)
@@ -404,12 +429,27 @@ func (m *Manager) updateBridge(ctx context.Context, i int, opt StartOptions, res
 	return r, err
 }
 
-func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
+func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOptions,
+	res *StartResult) (*StartResult, error) {
+	if !m.bridgeOutdated(ctx, i) {
+		return res, nil
+	}
 	col := &logx.Collector{}
 	mm := m.withLog(col.Sink())
-	mm.Log.Infof("魔改 AVD 实例 %d 的执行桥文件和这个包里的不一样（包更新过）：现在更新，之后冷启动一次", i)
+	if b, blocked := mm.bridgeUpdateBlocked(ctx, i); blocked {
+		detail := ""
+		if b.detail != "" {
+			detail = "（" + b.detail + "）"
+		}
+		mm.Log.Warnf("实例 %d 的执行桥文件和根目录里的载荷不一样，但%s%s；更新要冷启动一次，这次先不更新，下次由 modavd 或管理器开机时再更新",
+			i, b.what, detail)
+		res.Warnings = append(res.Warnings, col.Messages()...)
+		return res, nil
+	}
+	mm.Log.Infof("魔改 AVD 实例 %d 的执行桥文件和根目录里的载荷不一样（多半是更新过 ModAVD 包）：现在更新，之后冷启动一次", i)
 	if opt.Progress != nil {
-		opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 更新 arm64 执行桥", i), Done: 0, Total: progressTotal})
+		opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 更新 arm64 执行桥", i), Done: 0,
+			Total: progressTotal})
 	}
 	run, err := mm.runBridgeScript(ctx, i, "install", false)
 	switch {
@@ -426,7 +466,9 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 		r2, err := m.bridgeRestart(ctx, i, opt)
 		if err != nil {
 			res.Warnings = append(res.Warnings, col.Messages()...)
-			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 更新执行桥后关机再开机失败: %v", i, err))
+			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 更新执行桥后关机再开机失败: %v", i, err)).
+				WithAdvice(fmt.Sprintf("要是新的执行桥让实例开不了机：先 modavd stop %d，删掉 %s，再用 modavd start %d "+
+					"--no-bridge 开机，就是不带执行桥的原版系统；执行桥脚本的日志 %s", i, bridgeMarker(m.Root, i), i, run.LogFile))
 		}
 		r2.Warnings = append(res.Warnings, r2.Warnings...)
 		res = r2
@@ -438,6 +480,20 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 	}
 	res.Warnings = append(res.Warnings, col.Messages()...)
 	return res, nil
+}
+
+// bridgeUpdateBlocked: an install holds the guest lock or an app is in the foreground (the rules of owedMountGate,
+// checked once; nothing stays held), so the update, which restarts adbd and boots cold, waits.
+func (m *Manager) bridgeUpdateBlocked(ctx context.Context, i int) (mountBlocker, bool) {
+	l, free, err := win.TryLock(m.guestLockPath(i))
+	if err != nil || !free {
+		return installBlocker(err), true
+	}
+	l.Unlock()
+	if allowed, front := vulkanFixMountAllowed(m.shell(ctx, i, foregroundProbeScript, 0).Out); !allowed {
+		return foregroundBlocker(front), true
+	}
+	return mountBlocker{}, false
 }
 
 // bridgeRestart shuts instance i down and boots it cold, without the bridge step (the caller does that).
