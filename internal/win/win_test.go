@@ -762,18 +762,17 @@ func TestBigL3Parse(t *testing.T) {
 }
 
 var (
-	procGetPriorityClass       = modkernel32.NewProc("GetPriorityClass")
-	procGetProcessAffinityMask = modkernel32.NewProc("GetProcessAffinityMask")
-	procGetModuleHandleW       = modkernel32.NewProc("GetModuleHandleW")
-	procRegisterClassExW       = moduser32.NewProc("RegisterClassExW")
-	procUnregisterClassW       = moduser32.NewProc("UnregisterClassW")
-	procCreateWindowExW        = moduser32.NewProc("CreateWindowExW")
-	procDestroyWindow          = moduser32.NewProc("DestroyWindow")
-	procDefWindowProcW         = moduser32.NewProc("DefWindowProcW")
-	procIsWindowVisible        = moduser32.NewProc("IsWindowVisible")
-	procPeekMessageW           = moduser32.NewProc("PeekMessageW")
-	procTranslateMessage       = moduser32.NewProc("TranslateMessage")
-	procDispatchMessageW       = moduser32.NewProc("DispatchMessageW")
+	procGetPriorityClass = modkernel32.NewProc("GetPriorityClass")
+	procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
+	procRegisterClassExW = moduser32.NewProc("RegisterClassExW")
+	procUnregisterClassW = moduser32.NewProc("UnregisterClassW")
+	procCreateWindowExW  = moduser32.NewProc("CreateWindowExW")
+	procDestroyWindow    = moduser32.NewProc("DestroyWindow")
+	procDefWindowProcW   = moduser32.NewProc("DefWindowProcW")
+	procIsWindowVisible  = moduser32.NewProc("IsWindowVisible")
+	procPeekMessageW     = moduser32.NewProc("PeekMessageW")
+	procTranslateMessage = moduser32.NewProc("TranslateMessage")
+	procDispatchMessageW = moduser32.NewProc("DispatchMessageW")
 )
 
 func TestPriorityAndAffinity(t *testing.T) {

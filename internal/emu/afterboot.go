@@ -3,6 +3,10 @@ package emu
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/bits"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -79,13 +83,17 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	i := inst.Index
 	port := root.ConsolePort(i)
 	var imeDefault bool
+	cores, ok := inst.CPU()
+	if !ok || cores <= 0 {
+		cores = avd.DefaultCPU
+	}
 
 	steps := []func(){
 		func() {
 			prog.emit("tune", fmt.Sprintf("实例 %d 开机后调优", i), progressTune)
 			// 1) host scheduling: priority, X3D pinning
 			if p, ok := m.findQemu(i); ok {
-				m.Log.Infof("实例 %d 宿主调度: %s", i, tuneHostScheduling(p))
+				m.Log.Infof("实例 %d 宿主调度: %s", i, tuneHostScheduling(p, cores))
 			}
 		},
 		func() {
@@ -196,24 +204,153 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	return r, ctxErr(ctx)
 }
 
-// tuneHostScheduling raises qemu to above normal priority and, on X3D parts, pins it to the big-L3 cores (09-28 on a
-// 7950X3D, Honkai: qemu CPU -20%, the game's main thread CPU per frame -25%; the high-clock CCD was no better than
-// default). Only pinned when the L3 sizes differ; otherwise Windows decides. Returns the note for the log.
-func tuneHostScheduling(p win.Process) string {
+// affinityLockWait is how long tuneHostScheduling waits for the machine-wide lock around read-choose-pin.
+const affinityLockWait = 10 * time.Second
+
+// affinityLockPath is that lock: instances booting at the same time (one modavd process each, or several roots) must not
+// all read the same load and pick the same group.
+func affinityLockPath() string {
+	return filepath.Join(os.TempDir(), "modavd-affinity.lock")
+}
+
+// tuneHostScheduling raises qemu to above normal priority and, on X3D parts, pins it to one of the L3 groups (09-28 on
+// a 7950X3D, Honkai: qemu CPU -20%, the game's main thread CPU per frame -25%; the high-clock CCD was no better than
+// default). Only pinned when the L3 sizes differ; otherwise Windows decides. Which group: the one with the most free
+// logical processors (vCPUs of the qemu already pinned there subtracted), the bigger L3 on a tie; when neither has
+// room for cores vCPUs the instance is not pinned and Windows spreads it (ModAVD#34: pinning every instance to the big
+// group left the other CCD idle). Returns the note for the log.
+func tuneHostScheduling(p win.Process, cores int) string {
 	var notes []string
 	if err := win.SetAboveNormalPriority(p); err != nil {
 		notes = append(notes, fmt.Sprintf("设优先级失败（%v）", err))
 	} else {
 		notes = append(notes, "优先级高于正常")
 	}
-	if mask, cpus, ok := win.BigL3CPUs(); ok && len(cpus) > 0 {
-		if err := win.SetAffinity(p, mask); err != nil {
+	groups := win.L3Groups()
+	if !hasBigL3(groups) {
+		return strings.Join(notes, "，")
+	}
+	lock, ok, err := win.Lock(affinityLockPath(), affinityLockWait)
+	if err != nil || !ok {
+		return strings.Join(append(notes, "拿不到绑核锁，不绑核"), "，")
+	}
+	defer lock.Unlock()
+	c := chooseAffinity(groups, otherQemuAffinities(p), cores)
+	switch {
+	case c.Group < 0:
+		notes = append(notes, fmt.Sprintf("各组 L3 剩余核数 %v 都不够 %d 个 vCPU，不绑核", c.Free, cores))
+	default:
+		if err := win.SetAffinity(p, c.Mask); err != nil {
 			notes = append(notes, fmt.Sprintf("绑核失败（%v）", err))
 		} else {
-			notes = append(notes, fmt.Sprintf("绑定大 L3 核心 %d–%d", cpus[0], cpus[len(cpus)-1]))
+			notes = append(notes, fmt.Sprintf("绑定 L3 %d MB 的核心 %s（各组剩余核数 %v，需要 %d）", groups[c.Group].Size>>20,
+				cpuRanges(c.Mask), c.Free, cores))
 		}
 	}
 	return strings.Join(notes, "，")
+}
+
+// otherQemuAffinities lists the affinity of every other qemu on the host (this root's or another's, production
+// included: they share the cores). Their vCPU count is not known (it is in the AVD config, not on the command line),
+// so each counts as the cores of the instance being tuned.
+func otherQemuAffinities(self win.Process) []uint64 {
+	procs, err := win.ListProcesses()
+	if err != nil {
+		return nil
+	}
+	var masks []uint64
+	for _, q := range procs {
+		if q.PID == self.PID || !isQemuName(q.Name) {
+			continue
+		}
+		mask, err := win.GetAffinity(q)
+		if err != nil {
+			mask = 0 // not readable (e.g. started elevated): counts as unpinned
+		}
+		masks = append(masks, mask)
+	}
+	return masks
+}
+
+// hasBigL3 is true when the L3 groups differ in size (AMD X3D).
+func hasBigL3(groups []win.L3Group) bool {
+	if len(groups) < 2 {
+		return false
+	}
+	lo, hi := groups[0].Size, groups[0].Size
+	for _, g := range groups {
+		lo, hi = min(lo, g.Size), max(hi, g.Size)
+	}
+	return hi > lo
+}
+
+// affinityChoice: Group is the index in the group list (-1: none has room), Mask its processors, Free the free
+// logical processors per group before this instance.
+type affinityChoice struct {
+	Group int
+	Mask  uint64
+	Free  []int
+}
+
+// chooseAffinity is the pure decision. others are the affinity masks of the other qemu, each counting as cores vCPUs
+// spread over the groups in proportion to the logical processors its mask has in each (a mask inside one group loads
+// that group only; 0, unreadable, or one covering everything spreads over all groups by their size). Max free wins,
+// ties go to the bigger L3, then to the lower mask. A group with fewer free processors than cores is not an option.
+func chooseAffinity(groups []win.L3Group, others []uint64, cores int) affinityChoice {
+	total := make([]int, len(groups))
+	var all uint64
+	for k, g := range groups {
+		total[k] = bits.OnesCount64(g.Mask)
+		all |= g.Mask
+	}
+	load := make([]float64, len(groups))
+	for _, m := range others {
+		m &= all
+		if m == 0 {
+			m = all
+		}
+		n := bits.OnesCount64(m)
+		for k, g := range groups {
+			load[k] += float64(cores) * float64(bits.OnesCount64(m&g.Mask)) / float64(n)
+		}
+	}
+	free := make([]int, len(groups))
+	for k := range groups {
+		free[k] = total[k] - int(math.Round(load[k]))
+	}
+	choice := affinityChoice{Group: -1, Free: free}
+	for k, g := range groups {
+		if free[k] < cores {
+			continue
+		}
+		if choice.Group < 0 || free[k] > free[choice.Group] ||
+			free[k] == free[choice.Group] && (g.Size > groups[choice.Group].Size ||
+				g.Size == groups[choice.Group].Size && g.Mask < groups[choice.Group].Mask) {
+			choice.Group, choice.Mask = k, g.Mask
+		}
+	}
+	return choice
+}
+
+// cpuRanges renders a mask as "0–15" / "0–7,16–23".
+func cpuRanges(mask uint64) string {
+	var parts []string
+	for c := 0; c < 64; c++ {
+		if mask>>c&1 == 0 {
+			continue
+		}
+		e := c
+		for e+1 < 64 && mask>>(e+1)&1 == 1 {
+			e++
+		}
+		if e == c {
+			parts = append(parts, strconv.Itoa(c))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d–%d", c, e))
+		}
+		c = e
+	}
+	return strings.Join(parts, ",")
 }
 
 // setupGuestWriteback sets the guest dirty_expire / dirty_writeback to 200 / 100 cs and reads them back (10-04 hard

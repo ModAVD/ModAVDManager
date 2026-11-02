@@ -50,7 +50,36 @@ func SetAffinity(p Process, mask uint64) error {
 	return nil
 }
 
-// l3Group is one L3 cache: its size in bytes and the processors sharing it.
+// GetAffinity is the process affinity mask (processor group 0).
+func GetAffinity(p Process) (uint64, error) {
+	h, err := p.openRunning(processQueryLimitedInformation, "读取绑核")
+	if err != nil {
+		return 0, err
+	}
+	defer syscall.CloseHandle(h)
+	var proc, sys uintptr
+	if r, err := call(procGetProcessAffinityMask, uintptr(h), uintptr(unsafe.Pointer(&proc)), uintptr(unsafe.Pointer(&sys))); r == 0 {
+		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("读取%s的绑核失败: %v", p.label(), err))
+	}
+	return uint64(proc), nil
+}
+
+// L3Group is one L3 cache: its size in bytes and the logical processors sharing it (processor group 0).
+type L3Group struct {
+	Size uint32
+	Mask uint64
+}
+
+// L3Groups lists the L3 caches of the host, nil when the topology is unreadable.
+func L3Groups() []L3Group {
+	var out []L3Group
+	for _, g := range parseL3Groups(cacheTopology()) {
+		out = append(out, L3Group{Size: g.size, Mask: g.mask})
+	}
+	return out
+}
+
+// l3Group is the parsed form of L3Group.
 type l3Group struct {
 	size uint32
 	mask uint64
