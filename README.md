@@ -1,5 +1,9 @@
 # ModAVDManager
 
+**简体中文** | [English](README.en.md)
+
+<!-- README.md 和 README.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
 [ModAVD（魔改 AVD）](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库。目前只支持 Windows x64，平台相关的部分已经拆成平台层，其他平台的安排见 [ModAVD#27](https://github.com/ModAVD/ModAVD/issues/27)。
 
 > **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写。当前 `main` 的版本是 `0.3.0`，最新独立 Release 是 `v0.1.0`（对应 ModAVD `0.36.0`），`v0.2.0` 已起草、还没发布；`0.2.0` 起的新建后台初始化、`update` 命令和退出码 9 都不在 `v0.1.0` 下载包里。使用已发布包时，请以对应 Release 的说明和包内版本为准。
@@ -217,6 +221,7 @@ go test ./...
 - 只有一个维护者，回复可能要几天。改代码前先开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
 - 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义或删了字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
 - 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
