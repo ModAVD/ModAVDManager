@@ -6,6 +6,11 @@ package emu
 // tools\modavd-bridge.ps1 install once its setup is done. The script stays the one implementation of the install:
 // remount, push the three payload files, edit vendor build.prop, set the GL transport to asg, verify.
 //
+// The package carries the payload (sdk\emulator\resources\modavd), so an update of the package brings new files the
+// instances that have the bridge do not have yet (a fix in the companion library, say). A start that launched such an
+// instance and finds the guest's files differing from the payload runs the same install, which replaces only the files
+// that differ, and boots cold once so the guest loads them (bridgeOutdated, updateBridge).
+//
 // It runs without -Reboot: where the script would reboot the guest (the first remount only turns verity off; the new
 // build.prop line is read at boot) modavd shuts the instance down and boots it cold instead. A guest reboot under
 // WHPX can leave one vCPU deaf to IPIs, and the guest then spins in smp_call_function forever (10-30 bridge-default
@@ -17,6 +22,8 @@ package emu
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -145,6 +152,88 @@ func (m *Manager) bridgePending(ctx context.Context, i int) bool {
 	return b != "" && b != bridgeProp
 }
 
+// bridgePayload are the payload files (as named in the package's payload directory) and where the script installs
+// them in the guest (modavd-bridge.ps1 $script:Items).
+var bridgePayload = []struct{ name, target string }{
+	{"libmodavd_bridge.so", "/system/lib64/libmodavd_bridge.so"},
+	{"libmodavd_gate.so", "/system/lib64/libmodavd_gate.so"},
+	{"modavd_bridge.rc", "/system/etc/init/modavd_bridge.rc"},
+}
+
+// bridgeGuestHashTimeout bounds the guest's sha256sum of the three installed files (a few MB).
+const bridgeGuestHashTimeout = 15 * time.Second
+
+// bridgePayloadDir is the payload of the SDK the instance runs on (the script's default is <root>\sdk, the same in a
+// package root).
+func (m *Manager) bridgePayloadDir() string {
+	return filepath.Join(m.Root.RuntimeSDK(), "emulator", "resources", "modavd")
+}
+
+// payloadHashes is the SHA-256 (lowercase hex) of each payload file in dir, by its guest target; ok=false when one
+// is missing or unreadable (the script then refuses to install anyway).
+func payloadHashes(dir string) (map[string]string, bool) {
+	sums := map[string]string{}
+	for _, f := range bridgePayload {
+		b, err := os.ReadFile(filepath.Join(dir, f.name))
+		if err != nil {
+			return nil, false
+		}
+		sum := sha256.Sum256(b)
+		sums[f.target] = hex.EncodeToString(sum[:])
+	}
+	return sums, true
+}
+
+// bridgeGuestHashScript prints "<sha256> <target>" for each installed payload file, "- <target>" for one that is not
+// there.
+func bridgeGuestHashScript() string {
+	targets := make([]string, len(bridgePayload))
+	for k, f := range bridgePayload {
+		targets[k] = f.target
+	}
+	return "for f in " + strings.Join(targets, " ") + `; do s=$(sha256sum "$f" 2>/dev/null) || s=-; echo "${s%% *} $f"; done`
+}
+
+// payloadStale compares the guest's answer to bridgeGuestHashScript (out) with the package's payload (want, by
+// target): stale when a file is missing in the guest or differs. known=false when out does not name every file (adb
+// failed or cut it short): nothing is decided then.
+func payloadStale(want map[string]string, out string) (stale, known bool) {
+	got := map[string]string{}
+	for _, line := range outputLines(out) {
+		if f := strings.Fields(line); len(f) == 2 {
+			got[f[1]] = strings.ToLower(f[0])
+		}
+	}
+	for target, sum := range want {
+		g, ok := got[target]
+		if !ok {
+			return false, false
+		}
+		if g != sum {
+			stale = true
+		}
+	}
+	return stale, true
+}
+
+// bridgeOutdated: the booted guest runs the bridge, and its files are not those of the package's payload (missing or
+// different). false when anything is unknown: the payload incomplete, adb not answering.
+func (m *Manager) bridgeOutdated(ctx context.Context, i int) bool {
+	if !regularFile(bridgeMarker(m.Root, i)) || m.guestBridge(ctx, i) != bridgeProp {
+		return false
+	}
+	want, ok := payloadHashes(m.bridgePayloadDir())
+	if !ok {
+		return false
+	}
+	res := m.shell(ctx, i, bridgeGuestHashScript(), bridgeGuestHashTimeout)
+	if res.Code != 0 {
+		return false
+	}
+	stale, known := payloadStale(want, res.Out)
+	return known && stale
+}
+
 // bridgeRun is one run of modavd-bridge.ps1.
 type bridgeRun struct {
 	Code    int    // the script's exit code (-1: it did not run to the end)
@@ -166,10 +255,8 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 			WithAdvice("用完整的新包覆盖解压一次")
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-	// the payload of the SDK the instance runs on (the script's default is <root>\sdk, the same in a package root)
-	payload := filepath.Join(m.Root.RuntimeSDK(), "emulator", "resources", "modavd")
 	call := []string{"&", quote(script), action, "-Serial", quote(root.Serial(i)),
-		"-AdbPort", strconv.Itoa(m.Root.AdbServerPort()), "-Adb", quote(m.Root.AdbExe()), "-Payload", quote(payload)}
+		"-AdbPort", strconv.Itoa(m.Root.AdbServerPort()), "-Adb", quote(m.Root.AdbExe()), "-Payload", quote(m.bridgePayloadDir())}
 	if reboot {
 		call = append(call, "-Reboot")
 	}
@@ -292,6 +379,62 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 		mm.Log.Infof("实例 %d 已装好执行桥", i)
 	} else {
 		mm.Log.Warnf("实例 %d 没装上执行桥，下次开机再试；日志见 logs 里的 modavd-bridge-%d-*.log", i, i)
+	}
+	res.Warnings = append(res.Warnings, col.Messages()...)
+	return res, nil
+}
+
+// updateBridge is the last step of a start that launched an instance whose bridge is installed but whose files are
+// not the package's payload (bridgeOutdated): the script's install, which replaces the files that differ (each is
+// pushed under a temporary name, checked against the payload's hash and renamed into place), then one cold boot (same
+// window and timeout, without the bridge step) so the guest loads them. A script that fails is only a warning, as in
+// finishBridge: the instance keeps running on the files it has, and the next start tries again.
+func (m *Manager) updateBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
+	lock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	if err != nil || !ok {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥正由另一次 modavd 在装，这次不更新", i))
+		return res, nil
+	}
+	r, err := m.updateBridgeLocked(ctx, i, opt, res)
+	lock.Unlock()
+	// the instance in the result was read under this lock: the update is over now
+	if r != nil && r.Instance.Busy == "bridging" {
+		r.Instance.Busy = busyOf(m.stopping(i), false, false)
+	}
+	return r, err
+}
+
+func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
+	col := &logx.Collector{}
+	mm := m.withLog(col.Sink())
+	mm.Log.Infof("魔改 AVD 实例 %d 的执行桥文件和这个包里的不一样（包更新过）：现在更新，之后冷启动一次", i)
+	if opt.Progress != nil {
+		opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 更新 arm64 执行桥", i), Done: 0, Total: progressTotal})
+	}
+	run, err := mm.runBridgeScript(ctx, i, "install", false)
+	switch {
+	case err != nil && errs.As(err).Code == errs.Canceled:
+		res.Warnings = append(res.Warnings, col.Messages()...)
+		return nil, err
+	case err != nil:
+		mm.Log.Warnf("实例 %d 没更新上执行桥，下次开机再试: %v", i, err)
+	case run.Code != 0:
+		mm.Log.Warnf("实例 %d 没更新上执行桥（退出码 %d：%s），下次开机再试；日志 %s", i, run.Code, run.Last, run.LogFile)
+	case strings.Contains(run.Last, "什么都没改"):
+		// the script found the files current after all (mode and label included): nothing to load
+	default:
+		r2, err := m.bridgeRestart(ctx, i, opt)
+		if err != nil {
+			res.Warnings = append(res.Warnings, col.Messages()...)
+			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 更新执行桥后关机再开机失败: %v", i, err))
+		}
+		r2.Warnings = append(res.Warnings, r2.Warnings...)
+		res = r2
+		if mm.bridgeOutdated(ctx, i) {
+			mm.Log.Warnf("实例 %d 更新执行桥后冷启动，客体里的文件还是旧的；日志 %s", i, run.LogFile)
+		} else {
+			mm.Log.Infof("实例 %d 的执行桥已更新", i)
+		}
 	}
 	res.Warnings = append(res.Warnings, col.Messages()...)
 	return res, nil

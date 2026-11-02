@@ -4,6 +4,8 @@ package emu
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +76,76 @@ func TestBridgeLockExcludes(t *testing.T) {
 	for _, kind := range []string{"start", "stop", "bridge"} {
 		if fileOrDirExists(m.lockPath(i, kind)) {
 			t.Errorf("%s lock file left after delete", kind)
+		}
+	}
+}
+
+// TestPayloadHashes: the payload's SHA-256 by guest target, as the guest's sha256sum prints it; a missing file means
+// no answer (the script would not install from that payload either).
+func TestPayloadHashes(t *testing.T) {
+	dir := t.TempDir()
+	want := map[string]string{}
+	for k, f := range bridgePayload {
+		data := []byte(strings.Repeat(f.name, k+1))
+		if err := os.WriteFile(filepath.Join(dir, f.name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		want[f.target] = hex.EncodeToString(sum[:])
+	}
+	got, ok := payloadHashes(dir)
+	if !ok || len(got) != len(bridgePayload) {
+		t.Fatalf("payloadHashes = %v, %v", got, ok)
+	}
+	for target, sum := range want {
+		if got[target] != sum {
+			t.Errorf("%s: %s, want %s", target, got[target], sum)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, bridgePayload[1].name)); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := payloadHashes(dir); ok {
+		t.Fatalf("a file missing: %v, %v", got, ok)
+	}
+}
+
+// TestBridgeGuestHashScript: the guest script names every installed file.
+func TestBridgeGuestHashScript(t *testing.T) {
+	s := bridgeGuestHashScript()
+	for _, f := range bridgePayload {
+		if !strings.Contains(s, " "+f.target) {
+			t.Errorf("%s not in %q", f.target, s)
+		}
+	}
+}
+
+// TestPayloadStale: the guest's answer to bridgeGuestHashScript against the package's payload. A file that differs
+// or is not there makes the bridge outdated; an answer that does not name every file decides nothing.
+func TestPayloadStale(t *testing.T) {
+	want := map[string]string{}
+	var lines []string
+	for k, f := range bridgePayload {
+		sum := strings.Repeat(string(rune('a'+k)), 64)
+		want[f.target] = sum
+		lines = append(lines, sum+" "+f.target)
+	}
+	current := strings.Join(lines, "\r\n") + "\r\n"
+	for _, c := range []struct {
+		name         string
+		out          string
+		stale, known bool
+	}{
+		{"current", current, false, true},
+		{"LF", strings.ReplaceAll(current, "\r\n", "\n"), false, true},
+		{"one differs", strings.Replace(current, strings.Repeat("b", 64), strings.Repeat("f", 64), 1), true, true},
+		{"one not installed", strings.Replace(current, strings.Repeat("c", 64), "-", 1), true, true},
+		{"cut short", lines[0] + "\n" + lines[1] + "\n", false, false},
+		{"empty", "", false, false},
+		{"adb error", "error: device offline\n", false, false},
+	} {
+		if stale, known := payloadStale(want, c.out); stale != c.stale || known != c.known {
+			t.Errorf("%s: stale=%v known=%v, want %v %v", c.name, stale, known, c.stale, c.known)
 		}
 	}
 }
