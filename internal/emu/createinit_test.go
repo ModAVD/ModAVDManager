@@ -23,6 +23,7 @@ type createHooks struct {
 	check   error
 	stopped int
 	stopErr error
+	onStop  func(m *Manager, i int)
 	running bool     // a qemu of the instance runs (until a stop)
 	order   []string // "stop" / "start", as called
 	opts    []StartOptions
@@ -43,9 +44,12 @@ func (h *createHooks) install(t *testing.T) {
 		return &StartResult{HostIME: true, LogFile: `D:\r\logs\mas_6-boot.log`}, nil
 	}
 	createCheck = func(*Manager, context.Context, int, bool, *StartResult) error { return h.check }
-	createStop = func(*Manager, context.Context, int) error {
+	createStop = func(m *Manager, _ context.Context, i int) error {
 		h.stopped++
 		h.order = append(h.order, "stop")
+		if h.onStop != nil {
+			h.onStop(m, i)
+		}
 		if h.stopErr != nil {
 			return h.stopErr
 		}
@@ -87,6 +91,50 @@ func TestCreateResumeStopsLeftover(t *testing.T) {
 	}
 	if !slices.Equal(h.order, []string{"stop", "start", "stop"}) {
 		t.Fatalf("calls %v, want the leftover stopped first", h.order)
+	}
+}
+
+// TestCreateResumeDropsOldProgress: --resume of a killed setup does not show the percentage that setup left on disk
+// while it shuts the leftover emulator down: from the moment it holds the lock, status reads creating at 0%.
+func TestCreateResumeDropsOldProgress(t *testing.T) {
+	m, _ := opsTestManager(t)
+	other := New(m.Root, nil)
+	ctx := context.Background()
+	i := 6
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, filesOnly: true}); err != nil {
+		opsSkipIfNotImplemented(t, err)
+		t.Fatal(err)
+	}
+	// killed at 63%: "creating" recorded, its progress file and its emulator left behind
+	if err := m.Root.EditInstanceMeta(6, func(meta *jsonord.Obj) error {
+		meta.Set("creationState", jsonord.NewString("creating"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.writeCreateProgress(6, Progress{Step: "boot", Done: 630, Total: progressTotal})
+	if got, _ := other.Info(ctx, 6); got == nil || got.Status != StatusCreateFailed {
+		t.Fatalf("killed: %+v", got)
+	}
+	var h createHooks
+	var during []*InstanceInfo
+	h.running = true
+	h.onStop = func(*Manager, int) {
+		info, _ := other.Info(ctx, 6)
+		during = append(during, info)
+	}
+	h.install(t)
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, Resume: true, NoBridge: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(h.order, []string{"stop", "start", "stop"}) {
+		t.Fatalf("calls %v", h.order)
+	}
+	if left := during[0]; left == nil || left.Status != StatusCreating || left.CreationProgress != 0 {
+		t.Fatalf("while the leftover shuts down: %+v", left)
+	}
+	if fileOrDirExists(m.createProgressPath(6)) {
+		t.Fatal("progress file left")
 	}
 }
 

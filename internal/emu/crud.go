@@ -158,6 +158,9 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	if err != nil {
 		return nil, err
 	}
+	// a killed setup left its progress behind; from here status reads "creating" (our lock), so drop it before the
+	// leftover shutdown below, or that shows the old percentage until the setup starts over
+	m.removeCreateProgress(i)
 	// with the lock in hand, a recorded "creating" is one that was killed (creation() would see our own lock)
 	if state := m.creationRecorded(i); state != creationFailed && state != creationCreating {
 		lock.Unlock()
