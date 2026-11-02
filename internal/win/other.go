@@ -129,9 +129,6 @@ type L3Group struct {
 // L3Groups lists the L3 caches of the host.
 func L3Groups() []L3Group { return nil }
 
-// BigL3CPUs uses GetLogicalProcessorInformationEx to find large shared L3 caches.
-func BigL3CPUs() (uint64, []int, bool) { return 0, nil, false }
-
 // SharedMemoryExists calls OpenFileMappingW for the Windows named mapping.
 func SharedMemoryExists(string) bool { return false }
 

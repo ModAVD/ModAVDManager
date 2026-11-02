@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -123,42 +122,6 @@ func parseL3Groups(raw []byte) []l3Group {
 		off += size
 	}
 	return groups
-}
-
-// bigL3 picks the largest L3 group when the L3 groups differ in size (AUTO-MAS host.big_l3_cpus: sort by (size,
-// mask) descending, compare the first with the last).
-func bigL3(groups []l3Group) (uint64, []int, bool) {
-	if len(groups) < 2 {
-		return 0, nil, false
-	}
-	sorted := append([]l3Group(nil), groups...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].size != sorted[j].size {
-			return sorted[i].size > sorted[j].size
-		}
-		return sorted[i].mask > sorted[j].mask
-	})
-	if sorted[0].size <= sorted[len(sorted)-1].size {
-		return 0, nil, false
-	}
-	mask := sorted[0].mask
-	var cpus []int
-	for cpu := 0; cpu < 64; cpu++ {
-		if mask>>cpu&1 == 1 {
-			cpus = append(cpus, cpu)
-		}
-	}
-	if len(cpus) == 0 { // AUTO-MAS tune_host_scheduling binds only `if cpus`
-		return 0, nil, false
-	}
-	return mask, cpus, true
-}
-
-// BigL3CPUs is the processor mask and list of the largest L3 cache group on parts whose L3 groups differ in size
-// (AMD X3D); ok=false on ordinary CPUs (all L3 the same, or a single L3). GetLogicalProcessorInformationEx(
-// RelationCache), CACHE_RELATIONSHIP Level at +8, CacheSize at +12, GroupMask.Mask at +40, entry size at +4.
-func BigL3CPUs() (mask uint64, cpus []int, ok bool) {
-	return bigL3(parseL3Groups(cacheTopology()))
 }
 
 // SharedMemoryExists: OpenFileMappingW(FILE_MAP_READ, FALSE, name) succeeds (e.g. "SHM_videmulator20000").
