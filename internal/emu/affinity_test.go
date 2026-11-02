@@ -144,3 +144,22 @@ func TestCPURanges(t *testing.T) {
 		}
 	}
 }
+
+// qemuCores without an instance of this root: "-cores N" on the command line, else the default.
+func TestQemuCoresCommandLine(t *testing.T) {
+	m := &Manager{}
+	for _, c := range []struct {
+		cmdline []string
+		want    int
+	}{
+		{[]string{"qemu.exe", "-avd", "mas_3", "-cores", "4"}, 4},
+		{[]string{"qemu.exe", "-avd", "mas_3"}, 6},
+		{[]string{"qemu.exe", "-cores", "x"}, 6},
+		{[]string{"qemu.exe", "-cores", "0"}, 6},
+		{[]string{"qemu.exe", "-cores"}, 6},
+	} {
+		if got := m.qemuCores(win.Process{}, c.cmdline, nil, 6); got != c.want {
+			t.Errorf("%v: %d, want %d", c.cmdline, got, c.want)
+		}
+	}
+}
