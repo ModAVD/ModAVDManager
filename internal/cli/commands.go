@@ -68,7 +68,7 @@ var (
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）"}
 	optTimeout       = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
 	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
-	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的；其他选项不用）"}
+	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的，它开的模拟器还开着就先正常关机；其他选项不用）"}
 	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}

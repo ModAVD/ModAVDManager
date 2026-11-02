@@ -17,27 +17,77 @@ import (
 	"modavd/internal/win"
 )
 
-// createHooks replaces the setup's boot, check and shutdown for one test.
+// createHooks replaces the setup's boot, check and shutdown (and the qemu scan of resume) for one test.
 type createHooks struct {
 	start   func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error)
 	check   error
 	stopped int
+	stopErr error
+	running bool     // a qemu of the instance runs (until a stop)
+	order   []string // "stop" / "start", as called
 	opts    []StartOptions
 }
 
 func (h *createHooks) install(t *testing.T) {
 	t.Helper()
-	savedStart, savedStop, savedCheck := createStart, createStop, createCheck
-	t.Cleanup(func() { createStart, createStop, createCheck = savedStart, savedStop, savedCheck })
+	savedStart, savedStop, savedCheck, savedRunning := createStart, createStop, createCheck, createRunning
+	t.Cleanup(func() {
+		createStart, createStop, createCheck, createRunning = savedStart, savedStop, savedCheck, savedRunning
+	})
 	createStart = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
 		h.opts = append(h.opts, opt)
+		h.order = append(h.order, "start")
 		if h.start != nil {
 			return h.start(m, ctx, i, opt)
 		}
 		return &StartResult{HostIME: true, LogFile: `D:\r\logs\mas_6-boot.log`}, nil
 	}
 	createCheck = func(*Manager, context.Context, int, bool, *StartResult) error { return h.check }
-	createStop = func(*Manager, context.Context, int) error { h.stopped++; return nil }
+	createStop = func(*Manager, context.Context, int) error {
+		h.stopped++
+		h.order = append(h.order, "stop")
+		if h.stopErr != nil {
+			return h.stopErr
+		}
+		h.running = false
+		return nil
+	}
+	createRunning = func(*Manager, int) bool { return h.running }
+}
+
+// TestCreateResumeStopsLeftover: --resume shuts down (normally) the emulator the failed setup left running, then sets
+// the instance up; when that shutdown fails it changes nothing.
+func TestCreateResumeStopsLeftover(t *testing.T) {
+	m, _ := opsTestManager(t)
+	ctx := context.Background()
+	var h createHooks
+	h.check = errs.New(errs.NotReady, "没做完：宿主输入法")
+	h.install(t)
+	i := 6
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, NoBridge: true}); errs.CodeOf(err) != errs.NotReady {
+		opsSkipIfNotImplemented(t, err)
+		t.Fatalf("create: %v", err)
+	}
+	h.check, h.running, h.order = nil, true, nil
+	h.stopErr = errs.New(errs.Timeout, "关机超时")
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, Resume: true}); errs.CodeOf(err) != errs.Timeout ||
+		!strings.Contains(err.Error(), "modavd stop 6") {
+		t.Fatalf("resume with a qemu that does not stop: %v", err)
+	}
+	if !slices.Equal(h.order, []string{"stop"}) {
+		t.Fatalf("calls %v", h.order)
+	}
+	if info, _ := m.Info(ctx, 6); info == nil || info.Status != StatusCreateFailed {
+		t.Fatalf("after a resume that could not stop: %+v", info)
+	}
+	h.stopErr, h.order = nil, nil
+	info, err := m.Create(ctx, CreateRequest{Index: &i, Resume: true})
+	if err != nil || info.Status != StatusOffline || info.Creation != "" {
+		t.Fatalf("resume: %+v %v", info, err)
+	}
+	if !slices.Equal(h.order, []string{"stop", "start", "stop"}) {
+		t.Fatalf("calls %v, want the leftover stopped first", h.order)
+	}
 }
 
 // TestCreateSetsUp: create sets the instance up before it returns; meanwhile it is "creating" and every other

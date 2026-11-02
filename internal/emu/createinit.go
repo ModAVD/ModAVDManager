@@ -5,7 +5,8 @@ package emu
 // --no-bridge), then a normal shutdown (sync first) and a wait until qemu is gone. Its first start afterwards is as
 // fast as any other. Until the setup is done the instance is "creating": status / list / info say so; start, set,
 // bridge, delete and create on its index are refused as busy. A setup that fails leaves it "create_failed" with the
-// reason and that boot's log; `create --resume <i>` runs the setup again, delete removes it. Instances created
+// reason and that boot's log; `create --resume <i>` runs the setup again (shutting down normally an emulator the
+// failed one left running), delete removes it. Instances created
 // before 0.2.0 have no creation state and keep doing that setup on their first start.
 //
 // State: instances.<i>.creationState ("creating" / "failed"), creationError, creationLog in mas-avd.json (removed
@@ -50,9 +51,10 @@ const (
 
 // Hooks for the tests (a setup without an emulator).
 var (
-	createStart = (*Manager).Start
-	createStop  = (*Manager).stopAndWait
-	createCheck = (*Manager).checkCreated
+	createStart   = (*Manager).Start
+	createStop    = (*Manager).stopAndWait
+	createCheck   = (*Manager).checkCreated
+	createRunning = func(m *Manager, i int) bool { _, ok := m.findQemu(i); return ok }
 )
 
 // creation is the creation state of instance i: "" (ready, or made before 0.2.0), "creating" or "failed", with the
