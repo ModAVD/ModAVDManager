@@ -120,6 +120,24 @@ func TestBridgeGuestHashScript(t *testing.T) {
 	}
 }
 
+// TestBridgeUpdateRecovery: the advice after a failed cold boot leads to a lasting way back (uninstall records the
+// opt-out, so no later start writes the marker again), names the marker, and does not end in an empty log path.
+func TestBridgeUpdateRecovery(t *testing.T) {
+	marker := `C:\ModAVD\avd\mas_3.avd\` + bridgeMarkerName
+	s := bridgeUpdateRecovery(3, marker, "")
+	for _, want := range []string{"modavd stop 3", marker, "modavd bridge 3 uninstall", "modavd bridge 3 install"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("%q not in %q", want, s)
+		}
+	}
+	if strings.Contains(s, "日志") {
+		t.Errorf("no log file, yet: %q", s)
+	}
+	if s := bridgeUpdateRecovery(3, marker, `C:\ModAVD\logs\b.log`); !strings.HasSuffix(s, `C:\ModAVD\logs\b.log`) {
+		t.Errorf("log file not named: %q", s)
+	}
+}
+
 func targetOf(k int) string { return bridgePayload[k].target }
 
 // TestPayloadStale: the guest's answer to bridgeGuestHashScript against the package's payload. A file that differs

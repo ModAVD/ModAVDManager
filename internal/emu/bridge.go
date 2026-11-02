@@ -412,12 +412,16 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 // step) loads them. Decided under the bridge lock: another modavd holding it is installing or updating already.
 //
 // The files the guest has keep working, so the update waits for a later start while an install holds the guest lock
-// or an app is in the foreground (someone began to use the instance during this start's setup; the update restarts
-// adbd and boots cold), and a script that fails is only a warning, as in finishBridge.
+// or an app is in the foreground once the setup is done (someone began to use the instance meanwhile; the update
+// restarts adbd and boots cold), and a script that fails is only a warning, as in finishBridge.
 func (m *Manager) updateBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
 	lock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
-	if err != nil || !ok {
-		m.Log.Debugf("实例 %d 的执行桥锁拿不到（%v），这次不看执行桥要不要更新", i, err)
+	if err != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥锁文件打不开，这次不看执行桥要不要更新: %v", i, err))
+		return res, nil
+	}
+	if !ok {
+		m.Log.Debugf("实例 %d 的执行桥锁在别的 modavd 手里（它在装或在更新），这次不看执行桥要不要更新", i)
 		return res, nil
 	}
 	r, err := m.updateBridgeLocked(ctx, i, opt, res)
@@ -441,8 +445,8 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 		if b.detail != "" {
 			detail = "（" + b.detail + "）"
 		}
-		mm.Log.Warnf("实例 %d 的执行桥文件和根目录里的载荷不一样，但%s%s；更新要冷启动一次，这次先不更新，下次由 modavd 或管理器开机时再更新",
-			i, b.what, detail)
+		mm.Log.Warnf("实例 %d 的执行桥文件和根目录里的载荷不一样，但%s%s；更新要冷启动一次，这次先不更新，"+
+			"下次由 modavd 或管理器开机时再更新", i, b.what, detail)
 		res.Warnings = append(res.Warnings, col.Messages()...)
 		return res, nil
 	}
@@ -467,8 +471,7 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 		if err != nil {
 			res.Warnings = append(res.Warnings, col.Messages()...)
 			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 更新执行桥后关机再开机失败: %v", i, err)).
-				WithAdvice(fmt.Sprintf("要是新的执行桥让实例开不了机：先 modavd stop %d，删掉 %s，再用 modavd start %d "+
-					"--no-bridge 开机，就是不带执行桥的原版系统；执行桥脚本的日志 %s", i, bridgeMarker(m.Root, i), i, run.LogFile))
+				WithAdvice(bridgeUpdateRecovery(i, bridgeMarker(m.Root, i), run.LogFile))
 		}
 		r2.Warnings = append(res.Warnings, r2.Warnings...)
 		res = r2
@@ -480,6 +483,20 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 	}
 	res.Warnings = append(res.Warnings, col.Messages()...)
 	return res, nil
+}
+
+// bridgeUpdateRecovery is the advice of a cold boot that failed after an update, in case the new files keep the
+// instance from booting. Without the marker the instance boots the stock system, where the bridge's files are not
+// there; uninstall then records that the instance wants no bridge (bridgeMetaKey), so no later start writes the
+// marker again (it still ends in one more cold boot, the script finding the system not writable). logFile is the
+// script's output ("" when it could not be written).
+func bridgeUpdateRecovery(i int, marker, logFile string) string {
+	s := fmt.Sprintf("要是新的执行桥让实例开不了机：先 modavd stop %d，删掉 %s，再跑 modavd bridge %d uninstall，"+
+		"以后就以不带执行桥的原版系统开机；等修好的 ModAVD 包出来，再 modavd bridge %d install", i, marker, i, i)
+	if logFile != "" {
+		s += "。执行桥脚本的日志：" + logFile
+	}
+	return s
 }
 
 // bridgeUpdateBlocked: an install holds the guest lock or an app is in the foreground (the rules of owedMountGate,
