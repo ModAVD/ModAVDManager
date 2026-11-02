@@ -514,14 +514,18 @@ func fastpathReport(i int, status string) (warn bool, msg string) {
 	return true, fmt.Sprintf("实例 %d fastpath 没起来: %s", i, tail(status, 300))
 }
 
-// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU (ModAVD#34 A/B on one
-// 6-vCPU instance, 8 KB write + fsync: 15 MB/s with 6 loops, 14 with 4, 12.5 with 3, 11 with 1 or 2 and with none),
-// but no more than the logical processors left after every qemu's vCPUs, this instance's included (spare, see
-// hostPlan: in its L3 group when pinned). Fixed at boot: instances starting later see more load and get fewer, so the
-// loops of all running instances stay within what was spare (#34: one loop per vCPU on three instances pinned to the
-// same 16 processors made 18 saturated host threads).
+// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU when its vCPUs fit in what the
+// host has left (spare, see hostPlan: in its L3 group when pinned, on the whole host otherwise), none when they do not.
+// Fewer loops lose the gain in proportion (ModAVD#34 A/B on one 6-vCPU instance, 8 KB write + fsync: 15 MB/s with 6
+// loops, 14 with 4, 12.5 with 3, 11 with 1 or 2 and with none), and loops on vCPUs that fit over-commit nothing: the
+// load already counts every vCPU as one busy processor. #34 itself was one loop per vCPU on three instances pinned to
+// the same 16 processors, 18 saturated host threads. Fixed at boot: an instance starting later sees the load and gets
+// none when it would over-commit; the earlier ones keep theirs, which fit.
 func idlepollCap(cores, spare int) int {
-	return max(0, min(cores, spare))
+	if spare < 0 {
+		return 0
+	}
+	return cores
 }
 
 // setupIdlepoll starts the watcher with at most limit busy loops per burst.

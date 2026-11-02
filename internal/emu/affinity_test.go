@@ -125,11 +125,10 @@ func TestPlanHostOrdinary(t *testing.T) {
 func TestIdlepollCap(t *testing.T) {
 	cases := []struct{ cores, spare, want int }{
 		{6, 10, 6}, // alone in a group of 16: one loop per vCPU
-		{6, 6, 6},
-		{6, 4, 4},  // second in the group: what is left
-		{6, 1, 1},  // one processor left
-		{6, 0, 0},  // none left
-		{6, -4, 0}, // over-committed
+		{6, 4, 6},  // second in the group: its vCPUs still fit
+		{6, 0, 6},  // exactly full
+		{6, -1, 0}, // one vCPU too many: none
+		{6, -6, 0}, // over-committed
 		{4, 26, 4}, // never more loops than vCPUs
 	}
 	for _, c := range cases {
