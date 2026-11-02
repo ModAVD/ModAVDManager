@@ -1,6 +1,7 @@
 package emu
 
 import (
+	"slices"
 	"testing"
 
 	"modavd/internal/win"
@@ -9,8 +10,10 @@ import (
 var (
 	x3dBig   = win.L3Group{Size: 96 << 20, Mask: 0x0000FFFF}
 	x3dSmall = win.L3Group{Size: 32 << 20, Mask: 0xFFFF0000}
-	x3d      = []win.L3Group{x3dBig, x3dSmall}
+	x3d      = []win.L3Group{x3dBig, x3dSmall} // 7950X3D: two groups of 16 logical processors
 )
+
+func pinned(mask uint64, cores int) otherQemu { return otherQemu{Mask: mask, Cores: cores} }
 
 func TestHasBigL3(t *testing.T) {
 	cases := map[string]struct {
@@ -29,62 +32,120 @@ func TestHasBigL3(t *testing.T) {
 	}
 }
 
-func TestChooseAffinityX3D(t *testing.T) {
-	// 6-vCPU instances starting one after another on a 7950X3D (two groups of 16).
-	var pinned []uint64
-	want := []uint64{x3dBig.Mask, x3dSmall.Mask, x3dBig.Mask, x3dSmall.Mask}
-	for k, w := range want {
-		c := chooseAffinity(x3d, pinned, 6)
-		if c.Group < 0 || c.Mask != w {
-			t.Fatalf("instance %d: got group %d mask 0x%x free %v, want mask 0x%x", k+1, c.Group, c.Mask, c.Free, w)
+// Instances of 6 vCPUs starting one after another on a 7950X3D alternate between the groups; once 24 of the 32
+// processors are taken (4 free in each group) a fifth is not pinned.
+func TestPlanHostX3DSequence(t *testing.T) {
+	var others []otherQemu
+	wantMask := []uint64{x3dBig.Mask, x3dSmall.Mask, x3dBig.Mask, x3dSmall.Mask}
+	wantSpare := []int{10, 10, 4, 4}
+	for k := range wantMask {
+		p := planHost(x3d, 32, others, 6)
+		if p.Group < 0 || p.Mask != wantMask[k] || p.Spare != wantSpare[k] {
+			t.Fatalf("instance %d: %+v, want mask 0x%x spare %d", k+1, p, wantMask[k], wantSpare[k])
 		}
-		pinned = append(pinned, c.Mask)
+		others = append(others, pinned(p.Mask, 6))
 	}
-	// 24 of 32 vCPUs placed (12 per group): 4 free in each group, 6 do not fit anywhere.
-	if c := chooseAffinity(x3d, pinned, 6); c.Group != -1 || c.Free[0] != 4 || c.Free[1] != 4 {
-		t.Errorf("both groups full: %+v", c)
+	p := planHost(x3d, 32, others, 6)
+	if p.Group != -1 || !slices.Equal(p.Free, []int{4, 4}) || p.Spare != 32-30 {
+		t.Errorf("both groups full: %+v", p)
+	}
+	// a sixth: not pinned either, and the host is over-committed
+	if p := planHost(x3d, 32, append(others, otherQemu{Mask: 0xFFFFFFFF, Cores: 6}), 6); p.Group != -1 || p.Spare != 32-36 {
+		t.Errorf("sixth: %+v", p)
 	}
 }
 
-func TestChooseAffinityProduction(t *testing.T) {
-	// Production instances pinned to 0-15 by AUTO-MAS: the new one goes to the other group.
-	prod := []uint64{0xFFFF, 0xFFFF}
-	if c := chooseAffinity(x3d, prod, 6); c.Mask != x3dSmall.Mask {
-		t.Errorf("mask 0x%x free %v", c.Mask, c.Free)
+// What the instances of #34 met: production qemu pinned to 0-15 by AUTO-MAS.
+func TestPlanHostProductionPinned(t *testing.T) {
+	prod := []otherQemu{pinned(0xFFFF, 6), pinned(0xFFFF, 6)}
+	if p := planHost(x3d, 32, prod, 6); p.Mask != x3dSmall.Mask || !slices.Equal(p.Free, []int{4, 16}) || p.Spare != 10 {
+		t.Errorf("%+v", p)
 	}
-	// One that could not be read (0) or is not pinned (all cores) is spread over both groups: 6 vCPUs -> 3 each.
-	for _, m := range []uint64{0, 0xFFFFFFFF} {
-		c := chooseAffinity(x3d, []uint64{m}, 6)
-		if c.Free[0] != 13 || c.Free[1] != 13 || c.Mask != x3dBig.Mask {
-			t.Errorf("mask 0x%x: %+v", m, c)
-		}
+	// Unreadable affinity counts as the big L3, not spread: spread, 6 each and a tie, the new one would join them on
+	// 0-15 (18 vCPUs on 16 processors).
+	unread := []otherQemu{{Cores: 6}, {Cores: 6}}
+	if p := planHost(x3d, 32, unread, 6); p.Mask != x3dSmall.Mask || p.Unread != 2 || !slices.Equal(p.Free, []int{4, 16}) {
+		t.Errorf("unreadable: %+v", p)
 	}
-	// Tie goes to the big L3 whichever order the list has.
+	// Also when the big group comes second in the list.
 	rev := []win.L3Group{x3dSmall, x3dBig}
-	if c := chooseAffinity(rev, nil, 6); c.Mask != x3dBig.Mask {
-		t.Errorf("reversed list: 0x%x", c.Mask)
+	if p := planHost(rev, 32, unread, 6); p.Mask != x3dSmall.Mask || !slices.Equal(p.Free, []int{16, 4}) {
+		t.Errorf("unreadable, reversed list: %+v", p)
 	}
 }
 
-func TestChooseAffinityEdges(t *testing.T) {
-	// Exactly fitting counts as room; one less does not.
-	if c := chooseAffinity(x3d, []uint64{0xFFFF, 0xFFFF}, 4); c.Mask != x3dSmall.Mask {
-		t.Errorf("fits exactly: %+v", c)
+func TestPlanHostSpreadAndTies(t *testing.T) {
+	// Not pinned (all processors): 6 vCPUs spread 3 + 3; a tie goes to the big L3.
+	if p := planHost(x3d, 32, []otherQemu{pinned(0xFFFFFFFF, 6)}, 6); p.Mask != x3dBig.Mask || !slices.Equal(p.Free, []int{13, 13}) {
+		t.Errorf("unpinned other: %+v", p)
 	}
-	full := []uint64{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF0000, 0xFFFF0000, 0xFFFF0000} // 4 free in each group at 4 vCPUs
-	if c := chooseAffinity(x3d, full, 4); c.Mask != x3dBig.Mask {
-		t.Errorf("4 free, 4 needed: %+v", c)
+	// Big L3 wins a tie whichever order the list has.
+	if p := planHost([]win.L3Group{x3dSmall, x3dBig}, 32, nil, 6); p.Mask != x3dBig.Mask || p.Group != 1 {
+		t.Errorf("reversed list: %+v", p)
 	}
-	if c := chooseAffinity(x3d, full, 5); c.Group != -1 {
-		t.Errorf("4 free, 5 needed: %+v", c)
+	// A mask over parts of both groups loads them by overlap: 8 processors in the big one, 4 in the small one.
+	if p := planHost(x3d, 32, []otherQemu{pinned(0x000F0FF0, 12)}, 4); !slices.Equal(p.Free, []int{16 - 8, 16 - 4}) {
+		t.Errorf("partial overlap: %+v", p)
 	}
-	if c := chooseAffinity(x3d, []uint64{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, 17); c.Group != -1 {
-		t.Errorf("17 vCPUs fit nowhere: %+v", c)
+	// Each qemu counts its own vCPUs: 8 + 4 on the big one, 6 on the small one.
+	if p := planHost(x3d, 32, []otherQemu{pinned(0xFFFF, 8), pinned(0xFFFF, 4), pinned(0xFFFF0000, 6)}, 4); p.Mask != x3dSmall.Mask || !slices.Equal(p.Free, []int{4, 10}) {
+		t.Errorf("mixed cores: %+v", p)
 	}
-	// A mask over both groups (not all of them) is spread by overlap: 8 cpus in the big group, 4 in the small.
-	c := chooseAffinity(x3d, []uint64{0x0000_0FF0 | 0x000F_0000<<0}, 12)
-	if c.Free[0] != 16-8 || c.Free[1] != 16-4 {
-		t.Errorf("partial overlap: %+v", c)
+}
+
+func TestPlanHostFit(t *testing.T) {
+	// 4 free in each group: 4 vCPUs fit (exactly), 5 do not.
+	full := []otherQemu{pinned(0xFFFF, 4), pinned(0xFFFF, 4), pinned(0xFFFF, 4),
+		pinned(0xFFFF0000, 4), pinned(0xFFFF0000, 4), pinned(0xFFFF0000, 4)}
+	if p := planHost(x3d, 32, full, 4); p.Mask != x3dBig.Mask || p.Spare != 0 {
+		t.Errorf("4 free, 4 needed: %+v", p)
+	}
+	if p := planHost(x3d, 32, full, 5); p.Group != -1 || p.Spare != 32-24-5 {
+		t.Errorf("4 free, 5 needed: %+v", p)
+	}
+}
+
+// Ordinary CPUs (one L3, or all L3 the same size) are never pinned, whatever runs; only Spare is computed, over the
+// whole host.
+func TestPlanHostOrdinary(t *testing.T) {
+	cases := map[string][]win.L3Group{
+		"single": {{Size: 32 << 20, Mask: 0xFFFF}},
+		"equal":  {{Size: 32 << 20, Mask: 0xFF}, {Size: 32 << 20, Mask: 0xFF00}},
+		"none":   nil,
+	}
+	others := []otherQemu{pinned(0xFF, 6), {Cores: 4}}
+	for name, groups := range cases {
+		p := planHost(groups, 16, others, 6)
+		if p.Group != -1 || p.Mask != 0 || p.Free != nil || p.Spare != 16-16 {
+			t.Errorf("%s: %+v", name, p)
+		}
+	}
+}
+
+func TestIdlepollCap(t *testing.T) {
+	cases := []struct{ cores, spare, loops, want int }{
+		{6, 10, 2, 2}, // alone in a group of 16
+		{6, 4, 2, 2},  // second in the group
+		{6, 1, 2, 1},  // one processor left
+		{6, 0, 2, 0},  // none left
+		{6, -4, 2, 0}, // over-committed
+		{1, 10, 2, 1}, // never more loops than vCPUs
+		{6, 10, 0, 0}, // override: off
+		{6, 26, 99, 6},
+	}
+	for _, c := range cases {
+		if got := idlepollCap(c.cores, c.spare, c.loops); got != c.want {
+			t.Errorf("idlepollCap(%d, %d, %d) = %d, want %d", c.cores, c.spare, c.loops, got, c.want)
+		}
+	}
+}
+
+func TestIdlepollLoops(t *testing.T) {
+	for env, want := range map[string]int{"": idlepollMaxLoops, "1": 1, "0": 0, "-1": idlepollMaxLoops, "x": idlepollMaxLoops} {
+		t.Setenv(idlepollLoopsEnv, env)
+		if got := idlepollLoops(); got != want {
+			t.Errorf("%q: %d, want %d", env, got, want)
+		}
 	}
 }
 
