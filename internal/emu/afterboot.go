@@ -400,8 +400,8 @@ func planHost(groups []win.L3Group, hostCPUs int, others []otherQemu, cores int)
 		if plan.Free[k] < cores {
 			continue
 		}
-		if c := plan.Group; c < 0 || plan.Free[k] > plan.Free[c] ||
-			plan.Free[k] == plan.Free[c] && (g.Size > groups[c].Size || g.Size == groups[c].Size && g.Mask < groups[c].Mask) {
+		if c := plan.Group; c < 0 || plan.Free[k] > plan.Free[c] || plan.Free[k] == plan.Free[c] &&
+			(g.Size > groups[c].Size || g.Size == groups[c].Size && g.Mask < groups[c].Mask) {
 			plan.Group, plan.Mask = k, g.Mask
 		}
 	}
@@ -515,18 +515,16 @@ func fastpathReport(i int, status string) (warn bool, msg string) {
 	return true, fmt.Sprintf("实例 %d fastpath 没起来: %s", i, tail(status, 300))
 }
 
-// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU when its vCPUs fit in
-// what the host has left (spare, see hostPlan: in its L3 group when pinned, on the whole host otherwise), none when
-// they do not. Fewer loops lose the gain in proportion (ModAVD#34 A/B on one 6-vCPU instance, 8 KB write + fsync:
-// 15 MB/s with 6 loops, 14 with 4, 12.5 with 3, 11 with 1 or 2 and with none), and loops on vCPUs that fit
-// over-commit nothing: the load already counts every vCPU as one busy processor. #34 itself was one loop per vCPU on
-// three instances pinned to the same 16 processors, 18 saturated host threads. Fixed at boot: an instance starting
-// later sees the load and gets none when it would over-commit; the earlier ones keep theirs, which fit.
+// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU, but no more than the logical
+// processors left after every qemu's vCPUs, this instance's included (spare, see hostPlan: in its L3 group when
+// pinned, on the whole host otherwise), so the host keeps room for qemu's own threads and everything else on it.
+// ModAVD#34 A/B on a 7950X3D, 8 KB write + fsync: one 6-vCPU instance does 15 MB/s with 6 loops, 14 with 4, 12.5 with
+// 3, 11 with 1 or 2 and with none; four of them with one loop per vCPU whenever the vCPUs fit made each no faster
+// while production ran beside them, with the host at 91-94% CPU instead of 67-88%. #34 itself was one loop per vCPU
+// on three instances pinned to the same 16 processors, 18 saturated host threads. Fixed at boot: an instance starting
+// later sees more load and gets fewer, so the loops of all running instances stay within what was spare.
 func idlepollCap(cores, spare int) int {
-	if spare < 0 {
-		return 0
-	}
-	return cores
+	return max(0, min(cores, spare))
 }
 
 // setupIdlepoll starts the watcher with at most limit busy loops per burst.

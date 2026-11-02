@@ -23,8 +23,8 @@
 # would otherwise be idle, so they take no time from real work; the cost is
 # host CPU: every vCPU with a loop is a busy host thread for as long as the
 # burst lasts. Several instances bursting together over-commit the host that
-# way (ModAVD#34), so modavd passes N = 0 when this instance's vCPUs do not
-# fit in what the host has left.
+# way (ModAVD#34), so modavd passes as N what the host has left after every
+# qemu's vCPUs (0 when nothing).
 ON=400
 OFF=200
 TAG=mas-idlepoll
