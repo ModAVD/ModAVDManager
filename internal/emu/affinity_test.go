@@ -93,6 +93,77 @@ func TestPlanHostSpreadAndTies(t *testing.T) {
 	}
 }
 
+// Groups of different processor counts (Ryzen AI 300: 4 Zen5 cores / 8 threads with 16 MB L3, 8 Zen5c cores / 16
+// threads with 8 MB): the first instance gets the big L3 as before the split by load, later ones go by free share.
+func TestPlanHostUnequalGroups(t *testing.T) {
+	zen5 := win.L3Group{Size: 16 << 20, Mask: 0x0000FF}
+	zen5c := win.L3Group{Size: 8 << 20, Mask: 0xFFFF00}
+	groups := []win.L3Group{zen5c, zen5}
+	var others []otherQemu
+	wantMask := []uint64{zen5.Mask, zen5c.Mask, zen5c.Mask}
+	wantFree := [][]int{{16, 8}, {16, 2}, {10, 2}}
+	wantSpare := []int{2, 10, 4}
+	for k := range wantMask {
+		p := planHost(groups, 24, others, 6)
+		if p.Mask != wantMask[k] || !slices.Equal(p.Free, wantFree[k]) || p.Spare != wantSpare[k] {
+			t.Fatalf("instance %d: %+v, want mask 0x%x free %v spare %d", k+1, p, wantMask[k], wantFree[k], wantSpare[k])
+		}
+		others = append(others, pinned(p.Mask, 6))
+	}
+	// a fourth fits in neither group (4 and 2 free): not pinned, the whole host is spoken for
+	if p := planHost(groups, 24, others, 6); p.Group != -1 || !slices.Equal(p.Free, []int{4, 2}) || p.Spare != 0 {
+		t.Errorf("fourth: %+v", p)
+	}
+}
+
+// On groups of equal processor count (7950X3D) the free share orders like the free count: the choice is the one of
+// "most free processors, the big L3 on a tie" for any mix of pinned, unpinned and unreadable qemu.
+func TestPlanHostEqualGroupsUnchanged(t *testing.T) {
+	old := func(free []int, cores int) int {
+		best := -1
+		for k := range x3d {
+			if free[k] < cores {
+				continue
+			}
+			if best < 0 || free[k] > free[best] || free[k] == free[best] && x3d[k].Size > x3d[best].Size {
+				best = k
+			}
+		}
+		return best
+	}
+	n := 0
+	for big := 0; big <= 3; big++ {
+		for small := 0; small <= 3; small++ {
+			for spread := 0; spread <= 2; spread++ {
+				for unread := 0; unread <= 1; unread++ {
+					for _, cores := range []int{2, 4, 6, 8} {
+						var others []otherQemu
+						for range big {
+							others = append(others, pinned(x3dBig.Mask, 4))
+						}
+						for range small {
+							others = append(others, pinned(x3dSmall.Mask, 6))
+						}
+						for range spread {
+							others = append(others, pinned(0xFFFFFFFF, 4))
+						}
+						for range unread {
+							others = append(others, otherQemu{Cores: 6})
+						}
+						p := planHost(x3d, 32, others, cores)
+						if want := old(p.Free, cores); p.Group != want {
+							t.Fatalf("big %d small %d spread %d unread %d cores %d: group %d, want %d (free %v)",
+								big, small, spread, unread, cores, p.Group, want, p.Free)
+						}
+						n++
+					}
+				}
+			}
+		}
+	}
+	t.Logf("%d cases", n)
+}
+
 func TestPlanHostFit(t *testing.T) {
 	// 4 free in each group: 4 vCPUs fit (exactly), 5 do not.
 	full := []otherQemu{pinned(0xFFFF, 4), pinned(0xFFFF, 4), pinned(0xFFFF, 4),

@@ -357,9 +357,11 @@ type hostPlan struct {
 // planHost is the pure decision. Without differing L3 groups nothing is pinned. Otherwise each other qemu loads the
 // groups with its vCPUs in proportion to the processors its mask has in each (a mask inside one group loads that
 // group only, one covering all of them spreads by group size); one whose mask could not be read counts as pinned to
-// the big L3, as AUTO-MAS and older modavd pin. The instance goes to the group with the most free processors, the
-// bigger L3 on a tie, then the lower mask; a group with fewer free processors than cores is no option, and when none
-// is left it is not pinned and Windows spreads it.
+// the big L3, as AUTO-MAS and older modavd pin. The instance goes to the group with the largest free share (free
+// processors over the group's processors), the bigger L3 on a tie, then the lower mask: alone it gets the big L3 as
+// before, also where the groups differ in processor count (Ryzen AI 300: 8 Zen5 threads with 16 MB, 16 Zen5c threads
+// with 8 MB), and on equal groups (7950X3D) the share orders like the free count. A group with fewer free processors
+// than cores is no option, and when none is left the instance is not pinned and Windows spreads it.
 func planHost(groups []win.L3Group, hostCPUs int, others []otherQemu, cores int) hostPlan {
 	plan := hostPlan{Group: -1, Spare: hostCPUs - cores}
 	for _, o := range others {
@@ -393,14 +395,23 @@ func planHost(groups []win.L3Group, hostCPUs int, others []otherQemu, cores int)
 		}
 	}
 	plan.Free = make([]int, len(groups))
+	total := make([]int, len(groups))
 	for k, g := range groups {
-		plan.Free[k] = bits.OnesCount64(g.Mask) - int(math.Round(load[k]))
+		total[k] = bits.OnesCount64(g.Mask)
+		plan.Free[k] = total[k] - int(math.Round(load[k]))
 	}
 	for k, g := range groups {
 		if plan.Free[k] < cores {
 			continue
 		}
-		if c := plan.Group; c < 0 || plan.Free[k] > plan.Free[c] || plan.Free[k] == plan.Free[c] &&
+		c := plan.Group
+		if c < 0 {
+			plan.Group, plan.Mask = k, g.Mask
+			continue
+		}
+		// free share: Free[k]/total[k] against Free[c]/total[c], without division
+		share, other := plan.Free[k]*total[c], plan.Free[c]*total[k]
+		if share > other || share == other &&
 			(g.Size > groups[c].Size || g.Size == groups[c].Size && g.Mask < groups[c].Mask) {
 			plan.Group, plan.Mask = k, g.Mask
 		}
