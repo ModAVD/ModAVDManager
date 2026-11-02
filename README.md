@@ -4,7 +4,7 @@
 
 > 这是非官方项目，与 Google 没有关联。
 >
-> **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写。当前 `main` 的版本是 `0.2.0`，最新独立 Release 是 `v0.1.0`（对应 ModAVD `0.36.0`）；`0.2.0` 的新建后台初始化、`update` 命令和退出码 9 尚未包含在 `v0.1.0` 下载包中。使用已发布包时，请以对应 Release 的说明和包内版本为准。
+> **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写。当前 `main` 的版本是 `0.3.0`，最新独立 Release 是 `v0.1.0`（对应 ModAVD `0.36.0`），`v0.2.0` 已起草、还没发布；`0.2.0` 起的新建后台初始化、`update` 命令和退出码 9 都不在 `v0.1.0` 下载包里。使用已发布包时，请以对应 Release 的说明和包内版本为准。
 
 使用说明和参与开发的说明在 ModAVD 文档站：[管理器和命令行](https://modavd.github.io/components/manager)、[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
@@ -224,7 +224,7 @@ go test ./...
 
 ## 许可证
 
-- 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)；与 AUTO-MAS 使用相同的许可证不表示双方存在正式合作或共同维护关系。Copyright 2026 qiyinxi。
+- 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)。Copyright 2026 qiyinxi。
 - 分发本程序（改没改都算），或者把改过的版本放到网上给别人用，都要按同样的许可证提供对应源码。别的程序只是调用 `modavd.exe`、MCP 服务或管理器的本地接口，不受影响。
 - 例外见 [NOTICE](NOTICE)：
   - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是《明日方舟》艾雅法拉的同人图，角色版权归上海鹰角网络所有，不在本仓库的许可范围内；
