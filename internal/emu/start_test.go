@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -447,5 +448,86 @@ func TestPollUntil(t *testing.T) {
 	n = 0
 	if pollUntil(cctx, time.Second, time.Millisecond, func() bool { n++; return true }) || n != 0 {
 		t.Fatalf("canceled: probed %d times", n)
+	}
+}
+
+// TestPoweringOff: only a power-off makes a start wait for qemu to exit; a reboot keeps qemu.
+func TestPoweringOff(t *testing.T) {
+	for v, want := range map[string]bool{
+		"shutdown": true, "shutdown\r\n": true, "shutdown,userrequested": true, " shutdown,thermal\n": true,
+		"": false, "reboot": false, "reboot,shutdown": false, "reboot,userspace": false, "shutdownx": false,
+	} {
+		if got := poweringOff(v); got != want {
+			t.Errorf("poweringOff(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// startSleeper runs this test binary as a process that sleeps a minute (TestBootWatchHelperSleeper) and returns it;
+// kill ends it (also at cleanup).
+func startSleeper(t *testing.T) (q win.Process, kill func()) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestBootWatchHelperSleeper$")
+	cmd.Env = append(os.Environ(), "MODAVD_TEST_BOOTWATCH_SLEEPER=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	kill = func() { cmd.Process.Kill(); <-exited }
+	t.Cleanup(kill)
+	q, ok := win.FindProcess(uint32(cmd.Process.Pid))
+	if !ok {
+		t.Fatal("child not found")
+	}
+	return q, kill
+}
+
+// TestWaitShutdown: a start waits for the qemu of a guest that is powering off to exit and then boots; Busy when it
+// is still there after shutdownExitWait, Canceled on a cancel.
+func TestWaitShutdown(t *testing.T) {
+	saved := shutdownExitWait
+	t.Cleanup(func() { shutdownExitWait = saved })
+	m, _ := opsTestManager(t)
+	q, kill := startSleeper(t)
+
+	shutdownExitWait = 300 * time.Millisecond
+	if _, _, err := m.waitShutdown(context.Background(), 3, q, &progressor{}); errs.CodeOf(err) != errs.Busy {
+		t.Fatalf("qemu still running: %v, want busy", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := m.waitShutdown(ctx, 3, q, &progressor{}); errs.CodeOf(err) != errs.Canceled {
+		t.Fatalf("canceled: %v", err)
+	}
+
+	shutdownExitWait = 30 * time.Second
+	time.AfterFunc(300*time.Millisecond, kill)
+	t0 := time.Now()
+	if _, found, err := m.waitShutdown(context.Background(), 3, q, &progressor{}); err != nil || found {
+		t.Fatalf("qemu exited: found=%v err=%v", found, err)
+	}
+	if d := time.Since(t0); d > 10*time.Second {
+		t.Fatalf("returned %v after the exit", d)
+	}
+}
+
+// TestWaitBootAdoptedGone: an adopted qemu that exits during the boot wait is errAdoptedGone (the start then boots the
+// instance once more); an emulator.exe this start launched that exits is a plain launch failure.
+func TestWaitBootAdoptedGone(t *testing.T) {
+	m, _ := opsTestManager(t)
+	q, kill := startSleeper(t)
+	kill()
+	_, err := m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil)
+	if !errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed {
+		t.Fatalf("adopted qemu gone: %v", err)
+	}
+	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, &q, nil, "", &progressor{}, nil)
+	if errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed {
+		t.Fatalf("launched emulator gone: %v", err)
 	}
 }

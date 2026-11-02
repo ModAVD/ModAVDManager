@@ -160,6 +160,8 @@ type StartOptions struct {
 	bridgeLocked bool
 	// creating: create's own first boot (crud.go), which may boot an instance whose metadata says creating.
 	creating bool
+	// bridgeMarker: Start wants the execution bridge on this instance, so a launch places its boot marker first.
+	bridgeMarker bool
 }
 
 type Progress struct {
