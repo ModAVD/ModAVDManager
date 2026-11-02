@@ -111,6 +111,17 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 - After a successful start, each instance also gets a boot guardian that is likewise outside the process tree and exits when qemu exits. After the guest restarts on its own (qemu keeps running), the guardian redoes the post-boot tuning and the Vulkan patch, and never launches a new emulator.
 - Starts and shutdowns of the same instance queue on `<root>\avd\.mas_<i>.{start,boot,stop}.lock`: a start waits for the previous start and shutdown to finish; a shutdown can interrupt an instance that is starting.
 
+**Host scheduling in the post-boot tuning**:
+
+- qemu runs at above-normal priority.
+- Pinning only happens on processors whose L3 caches come in groups of different sizes (X3D parts such as the 7950X3D, Ryzen AI 300, and so on); other processors are not pinned:
+  - The group with the largest free share (free logical processors ÷ the group's logical processors) is chosen, the bigger L3 on a tie; a single instance gets the big-L3 group.
+  - When no group has room for the instance's vCPUs, it is not pinned.
+  - "Free" means after the vCPUs of every qemu on the machine, including those of other root folders and those started by AUTO-MAS. Those processes are only read, never changed.
+- While the guest does many small disk writes (downloads, for example), it runs one busy loop per vCPU (`mas-idlepoll.sh`) so the vCPUs do not halt, which makes downloads faster.
+  - The number of loops never exceeds what the host has left: logical processors minus the vCPUs of every qemu (this instance's included; counted within its group when pinned).
+  - So on machines with fewer than twice as many logical processors as the instance has vCPUs, even a single instance gets fewer loops: a default 6-core instance gets 2 on an 8-thread machine and none on 6 threads or fewer, and downloads are slower than with all loops (measured on a 7950X3D, 1–2 loops do about as well as none).
+  - This is a deliberate trade-off: it leaves processors for qemu's own threads, Windows and other programs.
 ## MCP
 
 ```
