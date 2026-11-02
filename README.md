@@ -65,9 +65,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
-| `start <i> [--window] [--timeout 300] [--no-bridge]` | 开机，等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装 |
+| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force]`、`stop --all` | 关机：先让安卓正常关机，不成再 sync + kill；`--force` 是 sync + 强杀 |
-| `restart <i> [--window] [--timeout 300] [--force] [--no-bridge]` | 关机再开机，选项同 `stop`、`start` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
@@ -79,12 +78,13 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 - `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 30 / 60。
 - 根目录：`--root`，没给就用环境变量 `MODAVD_ROOT`，再没有就用 `modavd.exe` 所在目录或它的上一级。
+- 0.3.0 起没有 `restart`：先 `stop` 再 `start`。旧的调用报用法错误（退出码 2），提示改用这两步。
 
 **arm64 执行桥**：
 
 - 只对内置名单里的游戏生效，其余应用照旧走原来的转译层。桥装在实例自己的 system / vendor 覆盖层里，要 0.36 起的模拟器。
 - modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次。只在这次是它拉起的模拟器时装；接管已经在运行的实例时不装。装不上只是警告，实例照常运行，下次开机再试。
-- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` / `restart` 的 `--no-bridge` 只管这一次。
+- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` 的 `--no-bridge` 只管这一次。
 - `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉。`verify`：只读核对，实例要开着。
 - `info` / `list` / `status` 的 `bridge`：`off`（记了不要桥）、`pending`（下次由 modavd 拉起的开机会装）、`installed`（开着的客体里桥在）、`unknown`。只问已经开完机的客体；关着或还在开机的实例，开机标记在桥装好后一直留着，装失败时也在，所以首次开机做过、标记也在时是 `unknown`，要知道确切结果就开机后再查。
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
@@ -95,7 +95,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
-- 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
+- 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。
   - 失败（含新建的进程被结束）是 `create_failed`，`creation_error` 写原因、`creation_log` 是那次开机的日志；这时 `start`、`set`、`bridge` 返回 `not_ready`（退出码 4）。用 `create --resume N` 重做初始化，或者 `delete N --yes` 删掉。
@@ -135,7 +135,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。
 
-- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
+- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度；开机一律带窗口，无头开机只走命令行；不提供重启，也不提供显示 / 隐藏窗口）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
 - 关掉窗口后，等正在跑的任务做完再退出。

@@ -196,11 +196,13 @@ func TestStartHelpTellsWhatCancelDoes(t *testing.T) {
 			t.Errorf("start details lack %q: %s", s, start.Details)
 		}
 	}
-	if opt := start.Options[1]; opt.Flag != "--timeout 秒" || !strings.Contains(opt.Help, "模拟器不会被结束") {
+	if opt := start.Options[2]; opt.Flag != "--timeout 秒" || !strings.Contains(opt.Help, "模拟器不会被结束") {
 		t.Errorf("timeout option = %+v", opt)
 	}
-	if d := entryOf(findCommand("restart")).Details; !strings.Contains(d, "等 qemu 进程退出（最多 15 秒") {
-		t.Errorf("restart details: %s", d)
+	// no switch between window and headless while it runs
+	if !strings.Contains(start.Details, "运行中不能换") || !strings.Contains(start.Details, "要换先 stop 再 start") ||
+		!strings.Contains(start.Usage, "[--window | --headless]") {
+		t.Errorf("start help on the window: %+v", start)
 	}
 	if d := entryOf(findCommand("stop")).Details; !strings.Contains(d, "按进程表找出") {
 		t.Errorf("stop details: %s", d)

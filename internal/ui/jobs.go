@@ -17,7 +17,6 @@ import (
 const (
 	kindStart   = "start"
 	kindStop    = "stop"
-	kindRestart = "restart"
 	kindInstall = "install"
 	kindCreate  = "create"
 
@@ -27,7 +26,7 @@ const (
 	stateCanceled = "canceled"
 
 	maxJobs = 50
-	// progressTotal matches emu's start progress scale, so a restart (stop, then start) stays on one scale.
+	// progressTotal matches emu's start progress scale.
 	progressTotal = 1000
 )
 
@@ -37,8 +36,6 @@ func kindLabel(kind string) string {
 		return "开机"
 	case kindStop:
 		return "关机"
-	case kindRestart:
-		return "重启"
 	case kindInstall:
 		return "安装 APK"
 	case kindCreate:

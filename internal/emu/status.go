@@ -134,6 +134,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	}
 	if p != nil {
 		info.Running = true
+		info.Window, _ = qemuWindowed(*p)
 		info.PID = int(p.PID)
 		if t := p.StartedAt(); !t.IsZero() {
 			info.StartedAt = t.Format(time.RFC3339)

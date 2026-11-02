@@ -191,6 +191,15 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				return nil, err
 			}
 		}
+		// no switch between window and headless while it runs (StartOptions.Window); when that cannot be told, it is
+		// adopted as it runs
+		if running && opt.watchQemu == nil {
+			if windowed, known := qemuWindowed(p); known {
+				if err := windowConflict(i, opt, windowed); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if running {
 			m.Log.Infof("魔改 AVD 实例 %d 已在运行（pid %d）", i, p.PID)
 			prog.emit("launch", fmt.Sprintf("实例 %d 已在运行（pid %d），不重新开机", i, p.PID), progressLaunch)

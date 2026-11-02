@@ -72,20 +72,20 @@ export function viewState(inst) {
   if (kind === 'create' || kind === 'resume' || inst.status === 'creating') key = 'creating';
   else if (inst.status === 'create_failed') key = 'createfail';
   else if (kind === 'stop' || inst.busy === 'stopping') key = 'stopping';
-  else if (kind === 'start' || kind === 'restart' || inst.status === 'starting' || inst.busy === 'starting') key = 'starting';
+  else if (kind === 'start' || inst.status === 'starting' || inst.busy === 'starting') key = 'starting';
   else if (inst.status === 'online') key = 'online';
   let failed = null;
   if (!kind) {
     const lj = lastJob(i);
     if (lj && lj.state === 'failed' && !S.dismissed.has(lj.id)) failed = lj;
   }
-  if (failed && key === 'offline' && (failed.kind === 'start' || failed.kind === 'restart')) key = 'error';
+  if (failed && key === 'offline' && failed.kind === 'start') key = 'error';
   return { key, job, kind, failed };
 }
 
 const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
   creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
-const FAIL = { start: '开机失败', restart: '重启失败', stop: '关机失败', install: '安装失败', create: '新建失败' };
+const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败' };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -182,7 +182,6 @@ function updateCard(c, inst) {
   setText(c.cfg, cfgText(inst.config));
 
   let [pt, tone] = PILL[v.key];
-  if (v.key === 'starting' && v.kind === 'restart') pt = '重启中';
   if (v.key === 'error') pt = FAIL[v.failed.kind];
   setText(c.pillText, pt);
   attr(c.pill, 'class', 'pill tone-' + tone);
@@ -277,15 +276,11 @@ function menuItems(c) {
   const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating';
   const running = inst.running || v.key === 'starting';
   const fresh = v.key === 'creating' || v.key === 'createfail'; // create's setup is not done
-  const vis = !!S.win[i];
-  const blocked = rootBlocked();
+  // no 带窗口开机 (开机 is with the window), no 重启 and no 显示 / 隐藏窗口: the manager never switches how an instance runs
   return [
-    { label: '带窗口开机', icon: 'window', disabled: running || busy || blocked || fresh, hint: blocked && !running ? '目录未就绪' : '', run: () => A.start(i, true) },
-    { label: '重启', icon: 'refresh', disabled: !inst.running || busy || blocked, hint: blocked && inst.running ? '目录未就绪' : '', run: () => A.restart(i) },
     v.key === 'starting' && { label: '关机', icon: 'power', run: () => A.stop(i) },
     { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
-    { label: vis ? '隐藏窗口' : '显示窗口', icon: vis ? 'eyeOff' : 'window', disabled: !inst.running, run: () => A.setWindow(i, !vis) },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },

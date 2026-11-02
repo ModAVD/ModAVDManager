@@ -215,10 +215,6 @@ func (b fakeBackend) Check(ctx context.Context, opt emu.CheckOptions) (*emu.Chec
 	return &emu.CheckResult{RootInfo: fakeRoot, Ready: true, Items: []emu.CheckItem{}, Components: []emu.ComponentStatus{}}, nil
 }
 
-func (b fakeBackend) SetWindowVisible(ctx context.Context, i int, visible bool) (*emu.WindowResult, error) {
-	return &emu.WindowResult{Index: i, Visible: visible, Windows: 2}, nil
-}
-
 func (b fakeBackend) Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error) {
 	b.f.mu.Lock()
 	defer b.f.mu.Unlock()
