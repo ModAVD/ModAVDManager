@@ -5,6 +5,9 @@ package emu
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -221,32 +224,228 @@ func TestCreateTimeout(t *testing.T) {
 	}
 }
 
-// TestCreateProgress: the boots of the setup (the first one, then a cold boot per bridge round) make one bar that
-// never goes back and stays below the shutdown step.
-func TestCreateProgress(t *testing.T) {
+// oneBoot is what Start reports for one boot of the setup: the boot wait (polled by the clock), then the steps after
+// it. firstBoot adds the first-boot setup.
+func oneBoot(firstBoot bool) []Progress {
+	evs := []Progress{{Step: "launch", Done: progressLaunch}, {Step: "boot", Done: 150}, {Step: "boot", Done: 200},
+		{Step: "boot", Done: progressBooted}, {Step: "tune", Done: progressTune}, {Step: "ime", Done: progressIme}}
+	if firstBoot {
+		evs = append(evs, Progress{Step: "first_boot", Done: progressFirstBoot})
+	}
+	return append(evs, Progress{Step: "vulkan_fix", Done: progressVulkanFix},
+		Progress{Step: "done", Message: "实例 6 已就绪（共 45.7 秒）", Done: progressTotal})
+}
+
+// runCreateProgress feeds a setup's events into a createProgress with plan and returns what it sent. bridgeRounds
+// cold boots follow the first boot.
+func runCreateProgress(plan []createStage, bridgeRounds int, bootLog func() string) []Progress {
 	var got []Progress
-	p := &createProgress{fn: func(e Progress) { got = append(got, e) }}
-	p.emit("create", "开始", 20)
-	for _, ev := range []Progress{{Step: "launch", Done: progressLaunch}, {Step: "boot", Done: progressBooted},
-		{Step: "first_boot", Done: progressFirstBoot}, {Step: "done", Done: progressTotal},
-		{Step: "bridge", Done: 0}, {Step: "launch", Done: progressLaunch}, {Step: "done", Done: progressTotal},
-		{Step: "bridge", Done: 0}, {Step: "launch", Done: progressLaunch}, {Step: "done", Done: progressTotal},
-		{Step: "bridge", Done: 0}, {Step: "launch", Done: progressLaunch}, {Step: "done", Done: progressTotal}} {
+	p := &createProgress{i: 6, plan: plan, bootLog: bootLog, fn: func(e Progress) { got = append(got, e) }}
+	p.stage("create", "开始")
+	for _, ev := range oneBoot(true) {
 		p.boot(ev)
 	}
-	p.emit("create_stop", "关机", 930)
-	p.emit("done", "完成", progressTotal)
+	for range bridgeRounds {
+		p.boot(Progress{Step: "bridge", Total: progressTotal})
+		for _, ev := range oneBoot(false) {
+			p.boot(ev)
+		}
+	}
+	p.stage("create_stop", "关机")
+	p.stage("done", "完成")
+	return got
+}
+
+// checkBar: Done never goes back, stays below 100 % until the last event, which is done at 100 %; the setup's own
+// boots never say ready.
+func checkBar(t *testing.T, got []Progress) {
+	t.Helper()
 	last := -1
 	for k, e := range got {
-		if e.Done <= last || e.Total != progressTotal {
-			t.Fatalf("step %d went back or wrong total: %+v", k, got)
+		if e.Done < last || e.Total != progressTotal {
+			t.Fatalf("event %d went back or has the wrong total: %+v", k, got)
 		}
-		if k > 0 && k < len(got)-2 && (e.Done < 20 || e.Done > 900 || e.Step == "done") {
-			t.Fatalf("boot step %d out of 20–900 or named done: %+v", k, e)
+		if k < len(got)-1 && (e.Done >= progressTotal-9 || e.Step == "done") {
+			t.Fatalf("event %d at %d before the end: %+v", k, e.Done, e)
+		}
+		if strings.Contains(e.Message, "已就绪") {
+			t.Fatalf("event %d says ready while creating: %+v", k, e)
 		}
 		last = e.Done
 	}
-	if got[len(got)-1].Done != progressTotal || got[len(got)-1].Step != "done" {
-		t.Fatalf("end %+v", got[len(got)-1])
+	if end := got[len(got)-1]; end.Done != progressTotal || end.Step != "done" || end.Percent() != 100 {
+		t.Fatalf("end %+v", end)
+	}
+}
+
+// doneAt is the Done of the first event of step.
+func doneAt(t *testing.T, got []Progress, step string) int {
+	t.Helper()
+	for _, e := range got {
+		if e.Step == step {
+			return e.Done
+		}
+	}
+	t.Fatalf("no %s in %+v", step, got)
+	return 0
+}
+
+// TestCreateProgress: the bar counts the steps done, weighted by what they take; the boot wait does not move it by
+// the clock.
+func TestCreateProgress(t *testing.T) {
+	got := runCreateProgress(createPlan(true, false), 0, nil)
+	checkBar(t, got)
+	// the shares follow the stage weights: the boot is about half of a create without the bridge
+	total := stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot + stageVulkanFix + stageShutdown
+	for _, c := range []struct {
+		step string
+		want float64 // seconds done when it starts
+	}{
+		{"launch", stagePrepare},
+		{"tune", stagePrepare + stageBoot},
+		{"vulkan_fix", stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot},
+		{"create_stop", total - stageShutdown},
+	} {
+		if d, want := doneAt(t, got, c.step), int(float64(progressTotal)*c.want/total); d != want {
+			t.Errorf("%s starts at %d, want %d", c.step, d, want)
+		}
+	}
+	// the boot wait events (Start counts them by the clock) leave the bar where the launch put it
+	for _, e := range got {
+		if e.Step == "boot" && e.Done != doneAt(t, got, "launch") {
+			t.Errorf("the clock moved the bar: %+v", e)
+		}
+	}
+	if d := doneAt(t, got, "setup"); d != doneAt(t, got, "create_stop") {
+		t.Errorf("the end of the boot (%d) is not where the shutdown starts (%d)", d, doneAt(t, got, "create_stop"))
+	}
+}
+
+// TestCreateProgressBridge: a planned bridge round is part of the bar; an unplanned one leaves it where it is; a
+// planned one that does not happen is passed over.
+func TestCreateProgressBridge(t *testing.T) {
+	planned := runCreateProgress(createPlan(true, true), 1, nil)
+	checkBar(t, planned)
+	if d := doneAt(t, planned, "bridge"); d < 300 || d > 700 {
+		t.Errorf("the bridge round starts at %d", d)
+	}
+	// its cold boot moves the bar like the first boot
+	var cold []int
+	for _, e := range planned[slices.IndexFunc(planned, func(e Progress) bool { return e.Step == "bridge" }):] {
+		if e.Step == "launch" || e.Step == "tune" || e.Step == "vulkan_fix" {
+			cold = append(cold, e.Done)
+		}
+	}
+	if len(cold) != 3 || cold[0] >= cold[1] || cold[1] >= cold[2] {
+		t.Errorf("the cold boot of the bridge round: %v", cold)
+	}
+	checkBar(t, runCreateProgress(createPlan(true, false), 2, nil)) // two rounds, none planned
+	checkBar(t, runCreateProgress(createPlan(true, true), 3, nil))  // three, one planned
+	skipped := runCreateProgress(createPlan(true, true), 0, nil)
+	checkBar(t, skipped)
+	if d := doneAt(t, skipped, "create_stop"); d < 900 {
+		t.Errorf("the shutdown after a bridge round that never came starts at %d", d)
+	}
+	// a resume of an instance that is initialized plans no first-boot setup
+	if plan := createPlan(false, false); slices.ContainsFunc(plan, func(s createStage) bool { return s.step == "first_boot" }) {
+		t.Errorf("plan %+v", plan)
+	}
+}
+
+// TestCreateProgressBootLog: within the boot wait the emulator's log moves the bar, milestone by milestone, and
+// only there.
+func TestCreateProgressBootLog(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "mas_6.log")
+	write := func(s string) {
+		if err := os.WriteFile(log, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("INFO | Android emulator version 37.2.10.0\n")
+	var got []Progress
+	p := &createProgress{i: 6, plan: createPlan(true, false), bootLog: func() string { return log },
+		fn: func(e Progress) { got = append(got, e) }}
+	p.stage("create", "开始")
+	p.boot(Progress{Step: "launch", Done: progressLaunch})
+	launched := got[len(got)-1].Done
+	wait := func() int {
+		p.boot(Progress{Step: "boot", Done: 150})
+		return got[len(got)-1].Done
+	}
+	if d := wait(); d != launched {
+		t.Fatalf("no milestone yet, the bar moved to %d", d)
+	}
+	write("Windows Hypervisor Platform accelerator is operational\nINFO | Advertising in: x\n")
+	mid := wait()
+	if mid <= launched {
+		t.Fatalf("console up: %d", mid)
+	}
+	write("x is operational\nAdvertising in: x\nINFO | Initialized handle: videmulator20060\nINFO | Boot completed in 19637 ms\n")
+	late := wait()
+	total := stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot + stageVulkanFix + stageShutdown
+	booted := int(float64(progressTotal) * (stagePrepare + stageBoot) / total)
+	if late <= mid || late >= booted {
+		t.Fatalf("boot completed in the log: %d (console %d, booted %d)", late, mid, booted)
+	}
+	// a log that cannot be read for a moment takes nothing back
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	if d := wait(); d != late {
+		t.Fatalf("unreadable log: %d, was %d", d, late)
+	}
+	write("x is operational\nAdvertising in: x\nINFO | Initialized handle: videmulator20060\nINFO | Boot completed in 19637 ms\n")
+	// the log is only read in the boot wait: the tuning starts its own stage
+	p.boot(Progress{Step: "tune", Done: progressTune})
+	p.boot(Progress{Step: "boot", Done: 150})
+	if d := got[len(got)-1].Done; d != booted {
+		t.Fatalf("after the boot: %d, want %d", d, booted)
+	}
+	if bootLogShare(filepath.Join(t.TempDir(), "missing.log")) != 0 || bootLogShare("") != 0 {
+		t.Fatal("a missing log has milestones")
+	}
+}
+
+// TestCreateProgressOnDisk: while the setup runs, status / list of another process (another Manager on the root)
+// read its percentage; afterwards the file is gone and the field is 0.
+func TestCreateProgressOnDisk(t *testing.T) {
+	m, _ := opsTestManager(t)
+	other := New(m.Root, nil)
+	var h createHooks
+	var during *InstanceInfo
+	var sent []Progress
+	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+		for _, ev := range oneBoot(true) {
+			opt.Progress(ev)
+		}
+		during, _ = other.Info(ctx, i)
+		return &StartResult{HostIME: true}, nil
+	}
+	h.install(t)
+	i := 6
+	info, err := m.Create(context.Background(), CreateRequest{Index: &i, NoBridge: true,
+		Progress: func(p Progress) { sent = append(sent, p) }})
+	opsSkipIfNotImplemented(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkBar(t, sent)
+	if during == nil || during.Status != StatusCreating || during.CreationProgress < 50 || during.CreationProgress > 95 {
+		t.Fatalf("seen from another process during the setup: %+v", during)
+	}
+	if info.CreationProgress != 0 || fileOrDirExists(m.createProgressPath(6)) {
+		t.Fatalf("after: %d, file left: %v", info.CreationProgress, fileOrDirExists(m.createProgressPath(6)))
+	}
+	// a failed setup removes it too
+	h.check = errs.New(errs.NotReady, "没做完：宿主输入法")
+	j := 7
+	if _, err := m.Create(context.Background(), CreateRequest{Index: &j, NoBridge: true}); err == nil {
+		t.Fatal("create did not fail")
+	}
+	if fileOrDirExists(m.createProgressPath(7)) {
+		t.Fatal("progress file left after a failure")
+	}
+	if got, _ := m.Info(context.Background(), 7); got == nil || got.Status != StatusCreateFailed || got.CreationProgress != 0 {
+		t.Fatalf("failed: %+v", got)
 	}
 }

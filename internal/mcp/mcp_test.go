@@ -32,10 +32,11 @@ type fake struct {
 	shells  []string
 	timeout time.Duration
 
-	start func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
-	del   func(ctx context.Context, i int) (*emu.DeleteResult, error)
-	wait  func(timeout time.Duration)
-	waits []time.Duration
+	start  func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
+	create func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	del    func(ctx context.Context, i int) (*emu.DeleteResult, error)
+	wait   func(timeout time.Duration)
+	waits  []time.Duration
 }
 
 func (f *fake) Wait(timeout time.Duration) {
@@ -113,6 +114,9 @@ func (f *fake) Create(ctx context.Context, req emu.CreateRequest) (*emu.Instance
 	f.creates = append(f.creates, req)
 	f.mu.Unlock()
 	f.record("create")
+	if f.create != nil {
+		return f.create(ctx, req)
+	}
 	i := 2
 	if req.Index != nil {
 		i = *req.Index
@@ -997,6 +1001,34 @@ func TestStartProgress(t *testing.T) {
 	values, _ = h2.progressUntilResult(float64(8))
 	if want := []float64{1, 2, 4}; !reflect.DeepEqual(values, want) {
 		t.Fatalf("throttled progress %v, want %v", values, want)
+	}
+}
+
+// TestCreateProgressMessages: create_instance's progress says 新建中 with the percentage until the setup is done.
+func TestCreateProgressMessages(t *testing.T) {
+	f := &fake{create: func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
+		for _, p := range []emu.Progress{{Step: "create", Message: "实例 3：后台无头开机", Done: 0, Total: 1000},
+			{Step: "ime", Message: "实例 3 宿主输入法", Done: 357, Total: 1000},
+			{Step: "done", Message: "实例 3 新建完成", Done: 1000, Total: 1000}} {
+			req.Progress(p)
+		}
+		in := sampleInstance(3)
+		return &in, nil
+	}}
+	h := newHarness(t, f, func(s *server) { s.progressEvery = 0 })
+	h.sendJSON(map[string]any{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": modernParams(
+		map[string]any{"name": "create_instance", "arguments": map[string]any{"index": 3}},
+		map[string]any{"progressToken": "create-9"})})
+	var msgs []string
+	for {
+		m := h.recv()
+		if m["method"] != "notifications/progress" {
+			break
+		}
+		msgs = append(msgs, m["params"].(map[string]any)["message"].(string))
+	}
+	if want := []string{"新建中 0%：实例 3：后台无头开机", "新建中 35%：实例 3 宿主输入法", "实例 3 新建完成"}; !reflect.DeepEqual(msgs, want) {
+		t.Fatalf("messages %q, want %q", msgs, want)
 	}
 }
 

@@ -1094,13 +1094,17 @@ func TestCreateFlags(t *testing.T) {
 		got = append(got, req)
 		if req.Progress != nil {
 			req.Progress(emu.Progress{Step: "create", Message: "后台无头开机", Done: 20, Total: 1000})
+			req.Progress(emu.Progress{Step: "ime", Message: "实例 6 宿主输入法", Done: 357, Total: 1000})
+			req.Progress(emu.Progress{Step: "done", Message: "实例 6 新建完成", Done: 1000, Total: 1000})
 		}
 		in := sampleInstance(1)
 		return &in, nil
 	}
 	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge")
 	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge ||
-		got[0].Resume || !strings.Contains(r.stderr, "后台无头开机") {
+		got[0].Resume || !strings.Contains(r.stderr, "新建中 2%：后台无头开机") ||
+		!strings.Contains(r.stderr, "新建中 35%：实例 6 宿主输入法") || strings.Contains(r.stderr, "新建中 100%") ||
+		!strings.Contains(r.stderr, "实例 6 新建完成") {
 		t.Fatalf("create: exit %d, %+v, stderr %s", r.code, got, r.stderr)
 	}
 	r = h.run(t, nil, "create", "--resume", "6", "--json")
@@ -1126,15 +1130,30 @@ func TestStatusSubset(t *testing.T) {
 		return &in, nil
 	}
 	r := h.run(t, nil, "status", "3", "--json")
-	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":""}}` + "\n"
+	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)
 	}
 	h.fake.info = nil
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":""}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("offline stdout = %s", r.stdout)
+	}
+	// create's setup: AUTO-MAS reads status creating (its boot shows as running and booted) and may read the percentage
+	h.fake.info = func(i int) (*emu.InstanceInfo, error) {
+		in := sampleInstance(i)
+		in.Status, in.Running, in.Booted, in.PID, in.Busy = emu.StatusCreating, true, true, 4242, "creating"
+		in.Creation, in.CreationProgress = "creating", 35
+		return &in, nil
+	}
+	r = h.run(t, nil, "status", "3", "--json")
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35}}` + "\n"
+	if r.stdout != want {
+		t.Errorf("creating stdout = %s", r.stdout)
+	}
+	if r = h.run(t, nil, "status", "3"); r.stdout != "实例 3：新建中 35%（PID 4242）\n" {
+		t.Errorf("creating text = %q", r.stdout)
 	}
 }
 

@@ -118,8 +118,9 @@ func init() {
 		},
 		{
 			name: "status", args: "<i>", summary: "一台实例的状态",
-			details: "status：offline 已关机 / starting 开机中 / online 运行中；running 是 qemu 进程在不在，booted 是 Android 开完没有；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它。",
+			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
+				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},
@@ -128,8 +129,9 @@ func init() {
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
-				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印；之后第一次开机和平常一样快。" +
-				"这期间实例的状态是 creating，不能开机、修改或删除；失败（或被打断）是 create_failed，" +
+				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
+				"之后第一次开机和平常一样快。" +
+				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
 				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
 			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optNoBridge, optCreateTimeout, optResume},
 			final: true,
@@ -339,6 +341,8 @@ type StatusResult struct {
 	Creation      string     `json:"creation"`
 	CreationError string     `json:"creation_error"`
 	CreationLog   string     `json:"creation_log"`
+	// CreationProgress: 0–100 while status is creating (emu.InstanceInfo.CreationProgress)
+	CreationProgress int `json:"creation_progress"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
@@ -491,7 +495,8 @@ func intPtrOpt(inv *invocation, name string) *int {
 
 func statusOf(in *emu.InstanceInfo) *StatusResult {
 	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted,
-		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog}
+		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
+		CreationProgress: in.CreationProgress}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------
@@ -554,12 +559,20 @@ func runCreate(c *cmdCtx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Progress = func(p emu.Progress) { c.log.Infof("%s", p.Message) }
+	req.Progress = func(p emu.Progress) { c.log.Infof("%s", createProgressLine(p)) }
 	in, err := m.Create(c.ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return in, nil
+}
+
+// createProgressLine is one progress line of create: "新建中 35%：…" until the setup is done.
+func createProgressLine(p emu.Progress) string {
+	if p.Step == "done" {
+		return p.Message
+	}
+	return fmt.Sprintf("新建中 %d%%：%s", p.Percent(), p.Message)
 }
 
 func runSet(c *cmdCtx) (any, error) {

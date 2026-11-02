@@ -182,6 +182,9 @@ function updateCard(c, inst) {
   setText(c.cfg, cfgText(inst.config));
 
   let [pt, tone] = PILL[v.key];
+  // create's setup: our own job's progress, else what the process doing it (CLI, AUTO-MAS) left in the instance
+  const cp = v.key === 'creating' ? (pct(v.job && v.job.progress) ?? (inst.status === 'creating' ? inst.creation_progress : null)) : null;
+  if (cp != null) pt = `新建中 ${Math.floor(cp)}%`;
   if (v.key === 'starting' && v.kind === 'restart') pt = '重启中';
   if (v.key === 'error') pt = FAIL[v.failed.kind];
   setText(c.pillText, pt);
@@ -211,7 +214,7 @@ function updateCard(c, inst) {
     const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
-    const n = pct(p);
+    const n = cp ?? pct(p);
     for (const [bar, fill] of [[c.progBar, c.progFill], [c.lbar, c.lfill]]) {
       bar.classList.toggle('indet', n == null);
       fill.style.width = n == null ? '' : n.toFixed(1) + '%';

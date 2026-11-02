@@ -155,6 +155,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	switch info.Creation {
 	case creationCreating:
 		info.Status, info.Busy = StatusCreating, "creating"
+		info.CreationProgress = m.createPercent(i)
 	case creationFailed:
 		info.Status = StatusCreateFailed
 	}

@@ -77,7 +77,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 		return nil, err
 	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
-		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps,
+		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps, Creating: !req.filesOnly,
 	})
 	if err != nil {
 		lock.Unlock()
