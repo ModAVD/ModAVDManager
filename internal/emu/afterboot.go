@@ -99,7 +99,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 				spare = planHost(nil, hostCPUs(win.L3Groups()), m.otherQemus(p, cores), cores).Spare
 				return
 			}
-			note, plan := m.tuneHostScheduling(i, p, cores)
+			note, plan := m.tuneHostScheduling(p, cores)
 			spare = plan.Spare
 			m.Log.Infof("实例 %d 宿主调度: %s", i, note)
 		},
@@ -225,13 +225,13 @@ func affinityLockPath() string {
 	return filepath.Join(base, "ModAVD", "affinity.lock")
 }
 
-// tuneHostScheduling raises instance i's qemu p to above normal priority and, on X3D parts, pins it to one of the L3
+// tuneHostScheduling raises the instance's qemu p to above normal priority and, on X3D parts, pins it to one of the L3
 // groups (09-28 on a 7950X3D, Honkai: qemu CPU -20%, the game's main thread CPU per frame -25%; the high-clock CCD was
 // no better than default). Only pinned when the L3 sizes differ; otherwise Windows decides. Which group: see planHost
 // (ModAVD#34: pinning every instance to the big group left the other CCD idle). Only p is changed; every other qemu
 // on the host, production's included, is only read. Returns the note for the log and the plan (its Spare sizes the
 // busy loops of setupIdlepoll).
-func (m *Manager) tuneHostScheduling(i int, p win.Process, cores int) (string, hostPlan) {
+func (m *Manager) tuneHostScheduling(p win.Process, cores int) (string, hostPlan) {
 	var notes []string
 	if err := win.SetAboveNormalPriority(p); err != nil {
 		notes = append(notes, fmt.Sprintf("设优先级失败（%v）", err))
