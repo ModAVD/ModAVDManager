@@ -514,25 +514,14 @@ func fastpathReport(i int, status string) (warn bool, msg string) {
 	return true, fmt.Sprintf("实例 %d fastpath 没起来: %s", i, tail(status, 300))
 }
 
-// idlepollLoopsEnv caps the busy loops per instance below its vCPU count (0: the watcher runs but never spins), for
-// measuring. Unset: one loop per vCPU, as far as the host has room.
-const idlepollLoopsEnv = "MODAVD_IDLEPOLL_LOOPS"
-
-func idlepollLoops(cores int) int {
-	if n, err := strconv.Atoi(os.Getenv(idlepollLoopsEnv)); err == nil && n >= 0 {
-		return n
-	}
-	return cores
-}
-
-// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU (ModAVD#34 A/B, one 6-vCPU
-// instance: fewer loops lose the gain in proportion, 1-2 loops almost all of it), but no more than the logical
-// processors left after every qemu's vCPUs, this instance's included (spare, see hostPlan: in its L3 group when pinned).
-// Fixed at boot: instances starting later see more load and get fewer, so the loops of all running instances stay
-// within what was spare (#34: one loop per vCPU on three instances pinned to the same 16 processors made 18 saturated
-// host threads).
+// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU (ModAVD#34 A/B on one
+// 6-vCPU instance, 8 KB write + fsync: 15 MB/s with 6 loops, 14 with 4, 12.5 with 3, 11 with 1 or 2 and with none),
+// but no more than the logical processors left after every qemu's vCPUs, this instance's included (spare, see
+// hostPlan: in its L3 group when pinned). Fixed at boot: instances starting later see more load and get fewer, so the
+// loops of all running instances stay within what was spare (#34: one loop per vCPU on three instances pinned to the
+// same 16 processors made 18 saturated host threads).
 func idlepollCap(cores, spare int) int {
-	return max(0, min(cores, spare, idlepollLoops(cores)))
+	return max(0, min(cores, spare))
 }
 
 // setupIdlepoll starts the watcher with at most limit busy loops per burst.

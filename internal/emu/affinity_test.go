@@ -123,7 +123,6 @@ func TestPlanHostOrdinary(t *testing.T) {
 }
 
 func TestIdlepollCap(t *testing.T) {
-	t.Setenv(idlepollLoopsEnv, "")
 	cases := []struct{ cores, spare, want int }{
 		{6, 10, 6}, // alone in a group of 16: one loop per vCPU
 		{6, 6, 6},
@@ -136,27 +135,6 @@ func TestIdlepollCap(t *testing.T) {
 	for _, c := range cases {
 		if got := idlepollCap(c.cores, c.spare); got != c.want {
 			t.Errorf("idlepollCap(%d, %d) = %d, want %d", c.cores, c.spare, got, c.want)
-		}
-	}
-	// the override only lowers it
-	t.Setenv(idlepollLoopsEnv, "2")
-	if got := idlepollCap(6, 10); got != 2 {
-		t.Errorf("override 2: %d", got)
-	}
-	if got := idlepollCap(6, 1); got != 1 {
-		t.Errorf("override 2, spare 1: %d", got)
-	}
-	t.Setenv(idlepollLoopsEnv, "0")
-	if got := idlepollCap(6, 10); got != 0 {
-		t.Errorf("override 0: %d", got)
-	}
-}
-
-func TestIdlepollLoops(t *testing.T) {
-	for env, want := range map[string]int{"": 6, "1": 1, "0": 0, "9": 9, "-1": 6, "x": 6} {
-		t.Setenv(idlepollLoopsEnv, env)
-		if got := idlepollLoops(6); got != want {
-			t.Errorf("%q: %d, want %d", env, got, want)
 		}
 	}
 }
