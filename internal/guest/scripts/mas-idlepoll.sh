@@ -8,8 +8,8 @@
 #           never spin); it is stored in $MAXFILE and read at every burst, so
 #           a later "daemon N" changes a running watcher
 #   watch   loop: every 0.2 s count the data disk's completed requests; at
-#           >= ON per second start one SCHED_IDLE busy loop per CPU, below
-#           OFF per second for 1 s stop them
+#           >= ON per second start one SCHED_IDLE busy loop per CPU (at most
+#           N), below OFF per second for 1 s stop them
 #   off     stop the watcher and the loops
 #   status  print current state
 #
@@ -21,7 +21,10 @@
 # 7-9 MB/s here, 7-11 MB/s on MuMu, 10-11 MB/s with the loops (10-21 A/B,
 # 457 MB update: 49-62 s -> 38-47 s). SCHED_IDLE tasks only run when a CPU
 # would otherwise be idle, so they take no time from real work; the cost is
-# host CPU, about two cores for as long as the burst lasts.
+# host CPU: every vCPU with a loop is a busy host thread for as long as the
+# burst lasts. Several instances bursting together over-commit the host that
+# way (ModAVD#34), so modavd passes N = 0 when this instance's vCPUs do not
+# fit in what the host has left.
 ON=400
 OFF=200
 TAG=mas-idlepoll
