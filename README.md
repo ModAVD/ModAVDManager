@@ -94,7 +94,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
-- `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
+- `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。
@@ -220,7 +220,7 @@ go test ./...
 
 - 只有一个维护者，回复可能要几天。改代码前先开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
-- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义或删了字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义、删了命令或字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
 - README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
 - 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。

@@ -1,6 +1,6 @@
 // Package cli is the command line of modavd: a thin layer over emu.Manager, plus mcp.Serve for `modavd mcp`.
 //
-// Contract (also printed by `modavd help`; part of buildinfo.Protocol):
+// Contract (also printed by `modavd help`; part of buildinfo.Protocol, 2 since 0.3.0: what changed is listed there):
 //
 //	modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 //
@@ -31,7 +31,7 @@
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
 //
-// restart went away in 0.3.0 (no restart: stop, then start); calling it is a usage error that says so
+// restart went away in 0.3.0 (Protocol 2; no restart: stop, then start); calling it is a usage error that says so
 // (removedCommands).
 //
 // <i> is 3 or mas_3. --memory takes what avd.ParseMemoryMB takes (6144, 6144M, 6G ...). The root is
