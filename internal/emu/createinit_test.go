@@ -509,7 +509,8 @@ func TestCreateProgressBridge(t *testing.T) {
 }
 
 // TestCreatePlanOfSetup: the setup plans the boot of a new instance as its first boot, the boot of a resume as a
-// later one, and the first-boot setup only while the instance is not initialized.
+// later one, and the first-boot setup only while the instance is not initialized. A setup that fails leaves the bar
+// where it got to for its shutdown.
 func TestCreatePlanOfSetup(t *testing.T) {
 	m, _ := opsTestManager(t)
 	ctx := context.Background()
@@ -530,6 +531,9 @@ func TestCreatePlanOfSetup(t *testing.T) {
 			opsSkipIfNotImplemented(t, err)
 			t.Fatalf("create %+v: %v", req, err)
 		}
+		if stop := doneAt(t, sent, "create_stop"); stop != doneAt(t, sent, "setup") {
+			t.Errorf("the shutdown of a failed setup moved the bar to %d", stop)
+		}
 		return doneAt(t, sent, "tune")
 	}
 	want := func(boot, firstBoot float64) int {
@@ -548,6 +552,18 @@ func TestCreatePlanOfSetup(t *testing.T) {
 	}
 	if d, w := tuneAt(CreateRequest{Index: &i, Resume: true}), want(stageColdBoot, 0); d != w {
 		t.Errorf("resume of an initialized instance: the boot ends at %d, want %d", d, w)
+	}
+	// a boot that fails in its wait (canceled from the manager: a normal shutdown)
+	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+		opt.Progress(Progress{Step: "launch", Done: progressLaunch})
+		return nil, errs.New(errs.LaunchFailed, "emulator.exe 退出码 1")
+	}
+	var sent []Progress
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, Resume: true, Progress: func(p Progress) { sent = append(sent, p) }}); errs.CodeOf(err) != errs.LaunchFailed {
+		t.Fatalf("resume with a failing boot: %v", err)
+	}
+	if stop, launch := doneAt(t, sent, "create_stop"), doneAt(t, sent, "launch"); stop != launch {
+		t.Errorf("the shutdown after a boot that failed moved the bar from %d to %d", launch, stop)
 	}
 }
 

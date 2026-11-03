@@ -363,7 +363,12 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	}
 	// Shut down whatever happened (a failed or timed-out boot leaves qemu running by design): the instance must end
 	// stopped, normally, sync first; on its own deadline, since the setup's may be over.
-	prog.stage("create_stop", fmt.Sprintf("实例 %d 初始化%s，先 sync 再正常关机", i, map[bool]string{true: "做完", false: "没做完"}[err == nil]))
+	if err == nil {
+		prog.stage("create_stop", fmt.Sprintf("实例 %d 初始化做完，先 sync 再正常关机", i))
+	} else {
+		// what the failed setup did not get to was not done: the bar stays where it got to
+		prog.send("create_stop", fmt.Sprintf("实例 %d 初始化没做完，先 sync 再正常关机", i))
+	}
 	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), createStopTimeout)
 	stopErr := createStop(m, sctx, i)
 	scancel()
