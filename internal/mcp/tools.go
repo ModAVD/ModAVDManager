@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/appproxy"
 	"modavd/internal/avd"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
@@ -438,6 +439,78 @@ func toolDefs() []*toolDef {
 				}
 				return b.InstallAPK(ctx, i, *path)
 			})),
+
+		newTool("get_app_proxy", "Get per-app proxy",
+			"Get an instance's per-app proxy: whether it is on, the proxy (socks5:// or http://, as the guest reaches "+
+				"it: 10.0.2.2 is the host) and the listed packages, which go through it while every other app goes "+
+				"direct. While the instance runs, guest has the guest daemon's state (rules, whether the proxy "+
+				"answers over TCP and UDP, which listed packages are installed). To see the installed packages, use "+
+				"shell with pm list packages -3.",
+			readOnly(), reflect.TypeFor[emu.AppProxyResult](), []prop{indexProp(true)},
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+				i, err := a.reqInt("index")
+				if err != nil {
+					return nil, err
+				}
+				return b.AppProxy(ctx, i)
+			}),
+
+		finishing(newTool("set_app_proxy", "Set per-app proxy",
+			"Change an instance's per-app proxy: the listed packages go through the proxy, every other app direct. "+
+				"While the proxy is down the listed apps have no network (they never fall back to direct). A running "+
+				"instance takes it at once (applied=now), a stopped one at its next boot through modavd "+
+				"(applied=next_boot). server \"auto\" takes the host's proxy setting and probes its kind; the first "+
+				"enabled=true without a server does the same. SOCKS5 (best a proxy program's mixed port) also carries "+
+				"UDP; an HTTP proxy only TCP. Overseas games that sign in with Google also need com.google.android.gms "+
+				"listed.",
+			mutating(false, true), reflect.TypeFor[emu.AppProxyResult](), []prop{
+				indexProp(true),
+				{"enabled", false, map[string]any{"type": "boolean", "description": "Turn it on or off (off keeps " +
+					"the server and the list)."}},
+				{"server", false, map[string]any{"type": "string", "description": "socks5://IP:port or " +
+					"http://IP:port; 127.0.0.1 / localhost are stored as the guest's 10.0.2.2; \"auto\": the host's " +
+					"proxy setting."}},
+				{"apps", false, map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+					"maxItems": appproxy.MaxApps, "description": "The whole list of package names (replaces it)."}},
+				{"add_apps", false, map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+					"description": "Package names to add to the list."}},
+				{"remove_apps", false, map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+					"description": "Package names to remove from the list."}},
+			},
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+				i, err := a.reqInt("index")
+				if err != nil {
+					return nil, err
+				}
+				var c appproxy.Change
+				if c.Enabled, err = a.optBool("enabled"); err != nil {
+					return nil, err
+				}
+				if c.Server, err = a.optString("server"); err != nil {
+					return nil, err
+				}
+				if c.Apps, err = a.optStrings("apps"); err != nil {
+					return nil, err
+				}
+				add, err := a.optStrings("add_apps")
+				if err != nil {
+					return nil, err
+				}
+				remove, err := a.optStrings("remove_apps")
+				if err != nil {
+					return nil, err
+				}
+				if add != nil {
+					c.Add = *add
+				}
+				if remove != nil {
+					c.Remove = *remove
+				}
+				if c.Empty() {
+					return nil, errs.New(errs.Usage, "没有要改的：enabled、server、apps、add_apps、remove_apps 至少给一项")
+				}
+				return b.SetAppProxy(ctx, i, c)
+			})),
 	}
 }
 
@@ -515,6 +588,21 @@ func (a args) optString(name string) (*string, error) {
 	var s string
 	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte(`"`)) || json.Unmarshal(raw, &s) != nil {
 		return nil, errs.Newf(errs.Usage, "参数 %s 必须是字符串", name)
+	}
+	return &s, nil
+}
+
+func (a args) optStrings(name string) (*[]string, error) {
+	raw, ok := a[name]
+	if !ok || isNull(raw) {
+		return nil, nil
+	}
+	var s []string
+	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte(`[`)) || json.Unmarshal(raw, &s) != nil {
+		return nil, errs.Newf(errs.Usage, "参数 %s 必须是字符串数组", name)
+	}
+	if s == nil {
+		s = []string{}
 	}
 	return &s, nil
 }

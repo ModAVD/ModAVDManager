@@ -86,6 +86,8 @@ type InstanceInfo struct {
 	// SoftwareRenderer: the first boot found SwiftShader (no usable GPU driver).
 	SoftwareRenderer bool   `json:"software_renderer"`
 	Path             string `json:"path"` // <root>\avd\mas_<i>.avd
+	// AppProxy is the per-app proxy as set (mas-avd.json only; `modavd proxy <i>` asks the guest); null when never set.
+	AppProxy *AppProxySummary `json:"app_proxy"`
 }
 
 // RootInfo describes the root a command worked on.

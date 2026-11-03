@@ -186,6 +186,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		info.Launcher = metaText(meta.Get("launcher"))
 		info.Renderer = metaText(meta.Get("renderer"))
 		info.SoftwareRenderer = metaTruthy(meta.Get("softwareRenderer"))
+		info.AppProxy = appProxySummary(meta)
 	}
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info

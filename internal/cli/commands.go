@@ -147,6 +147,7 @@ func init() {
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
 		},
+		proxyCommand(),
 		{
 			name: "delete", args: "<i> --yes", summary: "删除一台已关机的实例（连同游戏数据）",
 			details:  "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。",

@@ -35,6 +35,11 @@ const (
 	ComponentsRejected    = "components_rejected"    // a download failed its checks (SHA-1 on every mirror; files, pins, version unpacked)
 )
 
+// Code of the per-app proxy (modavd proxy).
+const (
+	ProxyUnavailable = "proxy_unavailable" // the proxy does not answer, or not as SOCKS5 / HTTP; none set on the host for auto
+)
+
 type Error struct {
 	Code    string
 	Message string
@@ -97,7 +102,7 @@ func As(err error) *Error {
 // ExitCode maps an error to the process exit code (part of the contract, see README):
 // 0 ok, 1 internal / other, 2 usage / invalid argument / license declined, 3 not found, 4 not ready / precheck
 // failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update or
-// components unavailable / rejected.
+// components unavailable / rejected, proxy unavailable.
 func ExitCode(err error) int {
 	switch CodeOf(err) {
 	case "":
@@ -116,7 +121,7 @@ func ExitCode(err error) int {
 		return 7
 	case Canceled:
 		return 8
-	case UpdateUnavailable, UpdateRejected, ComponentsUnavailable, ComponentsRejected:
+	case UpdateUnavailable, UpdateRejected, ComponentsUnavailable, ComponentsRejected, ProxyUnavailable:
 		return 9
 	default:
 		return 1

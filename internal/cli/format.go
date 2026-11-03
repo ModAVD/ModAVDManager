@@ -271,6 +271,13 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		}
 		kv("渲染器", r)
 	}
+	if p := in.AppProxy; p != nil {
+		state := "关"
+		if p.Enabled {
+			state = fmt.Sprintf("开，%d 个应用 → %s", p.Apps, p.Server)
+		}
+		kv("按应用走代理", state)
+	}
 	kv("路径", in.Path)
 }
 

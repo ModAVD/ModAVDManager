@@ -91,6 +91,8 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	spare := 0 // set by step 1
 
 	steps := []func(){
+		// 0) per-app proxy (appproxy.go): first, so the listed apps meet its rules from their first connection
+		func() { m.setupAppProxy(ctx, i) },
 		func() {
 			prog.emit("tune", fmt.Sprintf("实例 %d 开机后调优", i), progressTune)
 			// 1) host scheduling: priority, X3D pinning; what the host has left sizes the busy loops of 8b

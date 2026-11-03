@@ -12,6 +12,8 @@
 //	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress}
 //	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb N] [--fps 30|60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
+//	proxy <i> [on|off] [--server URL|auto] [--add P] [--remove P] [--apps P]   emu.AppProxyResult
+//	proxy <i> test                                        emu.AppProxyTestResult
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)
 //	start <i> [--window|--headless] [--timeout 300]       emu.StartResult (running the other way than asked: busy)
 //	stop <i> [--force]                                    emu.StopResult
@@ -46,12 +48,12 @@
 //
 // Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument / license declined, 3 not found, 4 not
 // ready / precheck failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8
-// canceled, 9 update or components unavailable / rejected), except:
+// canceled, 9 update or components unavailable / rejected, proxy unavailable), except:
 // shell without --json exits with the guest command's exit code, adb with adb's, and stop --all with the code of its
 // first failure (its envelope still says ok and lists both results and failed). Ctrl+C cancels the context
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
 // context ended fails with errs.Canceled even when the command returned a result, unless the command is final (its
-// result reports a change that was made: create, set, delete, start, stop, window, install, components fetch;
+// result reports a change that was made: create, set, proxy, delete, start, stop, window, install, components fetch;
 // or does not depend on the context: version, help, components status): a query whose adb calls were killed half way
 // would report what it saw by then, an online instance as starting. components fetch stops at Ctrl+C with
 // errs.Canceled itself, between two reads of a download or an unpack and before the next component.
@@ -72,6 +74,7 @@ import (
 	"syscall"
 	"time"
 
+	"modavd/internal/appproxy"
 	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
@@ -97,6 +100,9 @@ type manager interface {
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
 	EnsureServers(ctx context.Context) (*emu.ServersResult, error)
+	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
+	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
+	TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTestResult, error)
 	// Running is the indexes whose qemu runs, from the process table only (no adb).
 	Running(ctx context.Context) ([]int, error)
 	// Wait waits up to timeout for the manager's background work.
