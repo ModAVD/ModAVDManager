@@ -165,6 +165,11 @@ func (f *fakeManager) Bridge(ctx context.Context, i int, action string) (*emu.Br
 	return &emu.BridgeResult{Index: i, Action: action, Installed: action == "install", Warnings: []string{}}, nil
 }
 
+func (f *fakeManager) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	f.record("disk-trim " + itoa(i))
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2147483648}, nil
+}
+
 func (f *fakeManager) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
 	f.record("install " + itoa(i) + " " + apkPath)
 	if f.install != nil {
@@ -992,6 +997,30 @@ func TestInstallMakesPathAbsolute(t *testing.T) {
 	got := h.fake.callList()[0]
 	if !strings.HasPrefix(got, "install 3 ") || !strings.HasSuffix(got, `\pkg\game.apk`) || !strings.Contains(got, ":\\") {
 		t.Errorf("call = %q", got)
+	}
+}
+
+func TestDiskTrim(t *testing.T) {
+	h := newHarness()
+	r := h.run(t, nil, "disk", "3", "trim")
+	if r.code != 0 || r.stdout != "实例 3 已触发磁盘回收（trim）\n" {
+		t.Errorf("text: code %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if got := h.fake.callList(); len(got) != 1 || got[0] != "disk-trim 3" {
+		t.Errorf("calls = %q", got)
+	}
+	r = h.run(t, nil, "--json", "disk", "mas_3", "TRIM")
+	if m := envelope(t, r.stdout); m["ok"] != true {
+		t.Errorf("json: %s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, `"discardMaxBytes":2147483648`) {
+		t.Errorf("json data: %s", r.stdout)
+	}
+	// anything but trim is a usage error and reaches no manager
+	h = newHarness()
+	r = h.run(t, nil, "disk", "3", "compact")
+	if r.code != 2 || len(h.fake.callList()) != 0 {
+		t.Errorf("bad action: code %d calls %q stderr %q", r.code, h.fake.callList(), r.stderr)
 	}
 }
 

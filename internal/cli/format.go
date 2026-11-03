@@ -590,6 +590,10 @@ func formatBridge(w io.Writer, r *emu.BridgeResult) {
 	}
 }
 
+func formatDisk(w io.Writer, r *emu.DiskTrimResult) {
+	fmt.Fprintf(w, "实例 %d 已触发磁盘回收（trim）\n", r.Index)
+}
+
 func formatShell(w io.Writer, r *emu.ShellResult) {
 	if r.Output == "" {
 		return

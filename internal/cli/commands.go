@@ -237,6 +237,15 @@ func init() {
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
 		},
 		{
+			name: "disk", args: "<i> trim", summary: "磁盘回收：把客体里已删文件占的空间还给宿主",
+			details: "trim：在客体的数据盘（/data）上触发一次回收（FITRIM，经 vold 空闲维护），" +
+				"让模拟器释放已删除文件在数据盘镜像里占着的空间。实例要开着并已开机完成；" +
+				"模拟器版本太旧、数据盘不支持回收时返回不支持（退出码 4），不会白跑。",
+			posNames: []string{"实例编号", "trim"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runDisk, human: humanOf(formatDisk),
+		},
+		{
 			name: "install", args: "<i> <apk>", summary: "在已开机的实例上安装 APK（adb install -r）",
 			details:  "最多等 900 秒（游戏安装包有 1–3 GB）。",
 			posNames: []string{"实例编号", "APK 路径"}, minPos: 2, maxPos: 2,
@@ -990,6 +999,30 @@ func runBridge(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return m.Bridge(c.ctx, i, action)
+}
+
+// runDisk dispatches `disk <i> <action>`; only trim exists so far, add a case per new action.
+func runDisk(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "trim":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 trim，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("disk").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	switch action {
+	case "trim":
+		return m.DiskTrim(c.ctx, i)
+	}
+	return nil, errs.Newf(errs.Internal, "disk 动作 %s 没有实现", action)
 }
 
 // exitBridge: 1 when the bridge did not end up as asked (installed after install, gone after uninstall), the script's

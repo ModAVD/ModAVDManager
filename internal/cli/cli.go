@@ -22,6 +22,7 @@
 //	report-config [--no-clipboard]                        read-only configuration and installed-game report
 //	collect-info [--out-dir D] [--stage-dir D] ...        read-only diagnostics zip
 //	window <i> show|hide                                  emu.WindowResult
+//	disk <i> trim                                         emu.DiskTrimResult {index,discardMaxBytes}
 //	install <i> <apk>                                     emu.InstallResult
 //	shell <i> [--timeout S] <command...>                  emu.ShellResult
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
@@ -52,7 +53,7 @@
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
 // context ended fails with errs.Canceled even when the command returned a result, unless the command is final (its
 // result reports a change that was made: create, set, delete, start, stop, window, install, components fetch;
-// or does not depend on the context: version, help, components status): a query whose adb calls were killed half way
+// or does not depend on the context: version, help, components status; also bridge and disk trim): a query whose adb calls were killed half way
 // would report what it saw by then, an online instance as starting. components fetch stops at Ctrl+C with
 // errs.Canceled itself, between two reads of a download or an unpack and before the next component.
 //
@@ -96,6 +97,7 @@ type manager interface {
 	AdbPassthrough(ctx context.Context, i int, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
 	EnsureServers(ctx context.Context) (*emu.ServersResult, error)
 	// Running is the indexes whose qemu runs, from the process table only (no adb).
 	Running(ctx context.Context) ([]int, error)
