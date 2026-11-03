@@ -90,8 +90,9 @@ func python(t *testing.T, script string, input any) []byte {
 // ---- ports -------------------------------------------------------------------------------------------------------
 
 func TestPortsAndNames(t *testing.T) {
-	if ConsolePort(3) != 20030 || AdbPort(3) != 20031 || GrpcPort(3) != 20032 || AvdName(3) != "mas_3" ||
-		Serial(3) != "emulator-20030" {
+	def := PortPlan{DefaultPortBase}
+	if def.Console(3) != 20030 || def.Adb(3) != 20031 || def.Grpc(3) != 20032 || AvdName(3) != "mas_3" ||
+		def.Serial(3) != "emulator-20030" {
 		t.Fatal("port plan")
 	}
 	for i, want := range []bool{true, true, true, true, true, false, true, true, true, true, false} {
@@ -102,17 +103,107 @@ func TestPortsAndNames(t *testing.T) {
 	if ValidIndex(-1) {
 		t.Error("ValidIndex(-1)")
 	}
-	if i, ok := IndexOfConsolePort(20090); !ok || i != 9 {
+	if i, ok := def.IndexOfConsole(20090); !ok || i != 9 {
 		t.Error("20090")
 	}
 	for _, p := range []int{19990, 20001, 20100, 5554} {
-		if _, ok := IndexOfConsolePort(p); ok {
-			t.Errorf("IndexOfConsolePort(%d)", p)
+		if _, ok := def.IndexOfConsole(p); ok {
+			t.Errorf("IndexOfConsole(%d)", p)
 		}
 	}
-	ports := InstancePorts()
+	ports := def.InstancePorts()
 	if len(ports) != 27 || !ports[20000] || !ports[20092] || ports[20050] || ports[20051] || ports[20049] {
 		t.Fatalf("InstancePorts: %d", len(ports))
+	}
+}
+
+// TestPortPlan: another base moves every port and the serial, and the index set (0-9 without 5) stays.
+func TestPortPlan(t *testing.T) {
+	def, dev := PortPlan{DefaultPortBase}, PortPlan{21000}
+	if dev.Console(6) != 21060 || dev.Adb(6) != 21061 || dev.Grpc(6) != 21062 || dev.Serial(6) != "emulator-21060" ||
+		dev.Last() != 21092 || def.Last() != 20092 {
+		t.Fatal("plan 21000")
+	}
+	if i, ok := dev.IndexOfConsole(21090); !ok || i != 9 {
+		t.Error("21090")
+	}
+	for _, p := range []int{20000, 20060, 21001, 21100, 20990} {
+		if _, ok := dev.IndexOfConsole(p); ok {
+			t.Errorf("plan 21000: IndexOfConsole(%d)", p)
+		}
+	}
+	ports := dev.InstancePorts()
+	if len(ports) != 27 || !ports[21000] || !ports[21092] || ports[21050] || ports[20000] {
+		t.Fatalf("plan 21000: InstancePorts %d", len(ports))
+	}
+}
+
+// TestPortBase: mas-avd.json portBase, read as the adb server ports are; the instance ports the server ports must
+// avoid are the root's own plan's; CheckPorts refuses an invalid portBase, and a plan of one's own that still shares
+// an adb server port with the default root.
+func TestPortBase(t *testing.T) {
+	r := newRoot(t)
+	if r.Ports().Base != DefaultPortBase || r.CheckPorts() != nil {
+		t.Fatal("no mas-avd.json")
+	}
+	const servers = `, "adbServerPort": 20089, "scriptAdbServerPort": 20088`
+	for _, c := range []struct {
+		value string
+		base  int
+		ok    bool
+	}{
+		{`20000`, 20000, true}, {`21000`, 21000, true}, {`"21000"`, 21000, true}, {`21000.0`, 21000, true},
+		{`1100`, 1100, true}, {`65400`, 65400, true}, {`19900`, 19900, true}, {`20100`, 20100, true},
+		{`21050`, 20000, false}, {`21010`, 20000, false}, {`1000`, 20000, false}, {`65500`, 20000, false},
+		{`-21000`, 20000, false}, {`"abc"`, 20000, false}, {`null`, 20000, false}, {`true`, 20000, false},
+		{`[21000]`, 20000, false}, {`{}`, 20000, false}, {`""`, 20000, false},
+	} {
+		writeFile(t, r.MetadataPath(), []byte(`{"portBase": `+c.value+servers+`}`))
+		if got := r.Ports().Base; got != c.base {
+			t.Errorf("portBase %s: base %d, want %d", c.value, got, c.base)
+		}
+		err := r.CheckPorts()
+		if c.ok != (err == nil) {
+			t.Errorf("portBase %s: CheckPorts %v", c.value, err)
+		}
+		if err != nil && (err.Code != errs.InvalidArgument || !strings.Contains(err.Message, "portBase 不合规（"+c.value+"）")) {
+			t.Errorf("portBase %s: %s %q", c.value, err.Code, err.Message)
+		}
+	}
+
+	// the server ports must avoid the root's own instance ports: 21011 is one with portBase 21000, 20011 is not
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 21000, "adbServerPort": 21011, "scriptAdbServerPort": 20011}`))
+	if r.AdbServerPort() != DefaultAdbServerPort || r.ScriptAdbServerPort() != 20011 {
+		t.Fatalf("server ports %d %d", r.AdbServerPort(), r.ScriptAdbServerPort())
+	}
+	writeFile(t, r.MetadataPath(), []byte(`{"adbServerPort": 21011, "scriptAdbServerPort": 20011}`))
+	if r.AdbServerPort() != 21011 || r.ScriptAdbServerPort() != DefaultScriptAdbServerPort {
+		t.Fatalf("default plan: server ports %d %d", r.AdbServerPort(), r.ScriptAdbServerPort())
+	}
+
+	// a plan of one's own with an adb server port of the default root's: refused, naming the key
+	for _, c := range []struct{ meta, key string }{
+		{`{"portBase": 21000}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089}`, "scriptAdbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20049, "scriptAdbServerPort": 20088}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20050}`, "scriptAdbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20011, "scriptAdbServerPort": 20088}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20092}`, "scriptAdbServerPort"},
+	} {
+		writeFile(t, r.MetadataPath(), []byte(c.meta))
+		err := r.CheckPorts()
+		if err == nil || err.Code != errs.InvalidArgument || !strings.Contains(err.Message, c.key+" 却是") {
+			t.Errorf("%s: %v", c.meta, err)
+		}
+	}
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 21000`+servers+`}`))
+	if err := r.CheckPorts(); err != nil {
+		t.Fatal(err)
+	}
+	// the default plan keeps the default servers, as every root has them today
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 20000}`))
+	if err := r.CheckPorts(); err != nil {
+		t.Fatal(err)
 	}
 }
 

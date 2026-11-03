@@ -13,7 +13,6 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/jsonord"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -126,15 +125,15 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 // already known boot state (skips the getprop).
 func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Process, booted *bool) InstanceInfo {
 	i := in.Index
-	console := root.ConsolePort(i)
+	ports := m.Root.Ports()
 	info := InstanceInfo{
 		Index:      i,
 		Name:       in.Name,
 		Title:      in.Title,
-		Serial:     root.Serial(i),
-		AdbAddress: fmt.Sprintf("127.0.0.1:%d", root.AdbPort(i)),
-		Ports:      Ports{Console: console, Adb: root.AdbPort(i), Grpc: root.GrpcPort(i)},
-		Screencap:  Screencap{Shm: shmName(i)},
+		Serial:     ports.Serial(i),
+		AdbAddress: fmt.Sprintf("127.0.0.1:%d", ports.Adb(i)),
+		Ports:      Ports{Console: ports.Console(i), Adb: ports.Adb(i), Grpc: ports.Grpc(i)},
+		Screencap:  Screencap{Shm: shmName(ports, i)},
 		Path:       in.Dir,
 	}
 	// create's setup (createinit.go) is read before the getprop, which may wait up to statusAdbTimeout: its shutdown

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"modavd/internal/errs"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -46,6 +45,10 @@ func windowConflict(i int, opt StartOptions, windowed bool) error {
 	return nil
 }
 
+// setEmulatorWindowsVisible is win.SetEmulatorWindowsVisible; a test replaces it (the window title it is given names
+// the console port, "mas_<i>:<port>").
+var setEmulatorWindowsVisible = win.SetEmulatorWindowsVisible
+
 // SetWindowVisible shows / hides the window of an instance booted with one (AUTO-MAS setVisible): the main window
 // and the side toolbar get SW_SHOW / SW_HIDE. Hiding does not stop rendering or the screenshot channel (10-04: the
 // shared-memory frame counter kept going at ~51 fps while hidden). A headless instance has no window and cannot get
@@ -65,7 +68,7 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 	if visible {
 		verb = "显示"
 	}
-	n, err := win.SetEmulatorWindowsVisible(p.PID, fmt.Sprintf("%s:%d", in.Name, root.ConsolePort(i)), visible)
+	n, err := setEmulatorWindowsVisible(p.PID, fmt.Sprintf("%s:%d", in.Name, m.Root.Ports().Console(i)), visible)
 	if err != nil {
 		m.Log.Warnf("魔改 AVD 实例 %d %s窗口失败: %v", i, verb, err)
 		return res, nil

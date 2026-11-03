@@ -783,31 +783,42 @@ func TestFreeIndex(t *testing.T) {
 		}
 		return nil
 	}
-	i, err := FreeIndex(map[int]bool{0: true, 2: true}, busy)
+	def := root.PortPlan{Base: root.DefaultPortBase}
+	i, err := FreeIndex(def, map[int]bool{0: true, 2: true}, busy)
 	if err != nil || i != 4 {
 		t.Fatalf("FreeIndex = %d %v", i, err)
 	}
 	if fmt.Sprint(asked) != "[[20010 20011 20012] [20030 20031 20032] [20040 20041 20042]]" {
 		t.Fatalf("asked %v", asked)
 	}
-	if i, err := FreeIndex(nil, nil); err != nil || i != 0 {
+	if i, err := FreeIndex(def, nil, nil); err != nil || i != 0 {
 		t.Fatalf("empty: %d %v", i, err)
 	}
 	all := map[int]bool{}
 	for k := 0; k <= 9; k++ {
 		all[k] = k != 7
 	}
-	if i, err := FreeIndex(all, nil); err != nil || i != 7 {
+	if i, err := FreeIndex(def, all, nil); err != nil || i != 7 {
 		t.Fatalf("only 7 free: %d %v", i, err)
 	}
-	_, err = FreeIndex(all, func(ports []int) []int { return ports })
+	_, err = FreeIndex(def, all, func(ports []int) []int { return ports })
 	wantCode(t, err, errs.Busy)
 	if err.Error() != "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" {
 		t.Fatalf("message %v", err)
 	}
+	// another plan: the ports asked about and the message are the plan's
+	asked = nil
+	if i, err := FreeIndex(root.PortPlan{Base: 21000}, map[int]bool{0: true}, busy); err != nil || i != 1 ||
+		fmt.Sprint(asked) != "[[21010 21011 21012]]" {
+		t.Fatalf("plan 21000: FreeIndex = %d %v, asked %v", i, err, asked)
+	}
+	_, err = FreeIndex(root.PortPlan{Base: 21000}, all, func(ports []int) []int { return ports })
+	if err == nil || err.Error() != "魔改 AVD 实例已满（端口段 21000–21100 最多 9 台）" {
+		t.Fatalf("plan 21000: message %v", err)
+	}
 	all[7] = true
 	all[5] = false // 5 is never free
-	_, err = FreeIndex(all, nil)
+	_, err = FreeIndex(def, all, nil)
 	wantCode(t, err, errs.Busy)
 }
 

@@ -38,6 +38,10 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 	if _, err := m.Root.EnsureMetadata(); err != nil {
 		return nil, err
 	}
+	// before any file is written: the setup boot would refuse these ports anyway (prepareLaunch)
+	if err := m.Root.CheckPorts(); err != nil {
+		return nil, err
+	}
 	insts, err := avd.List(m.Root)
 	if err != nil {
 		return nil, err
@@ -116,8 +120,12 @@ func (m *Manager) FreeIndex() (int, error) {
 	return m.freeIndex(existing)
 }
 
-// freeIndex is the smallest index that is not in existing, has no leftovers and whose ports are free.
+// freeIndex is the smallest index that is not in existing, has no leftovers and whose ports (in the root's plan) are
+// free; an errs.InvalidArgument error when mas-avd.json's ports are not ones to start with (root.CheckPorts).
 func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
+	if err := m.Root.CheckPorts(); err != nil {
+		return 0, err
+	}
 	// Leftovers of a half-deleted instance (an .ini or a directory without the other) do not count as instances, but
 	// avd.Create refuses their index: skip them here instead of failing with "already exists" (Delete clears them).
 	for k := 0; k <= root.MaxIndex; k++ {
@@ -126,7 +134,7 @@ func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
 		}
 	}
 	var busyErr error
-	i, err := avd.FreeIndex(existing, func(ports []int) []int {
+	i, err := avd.FreeIndex(m.Root.Ports(), existing, func(ports []int) []int {
 		busy, err := win.BusyPorts(ports)
 		if err != nil {
 			busyErr = err

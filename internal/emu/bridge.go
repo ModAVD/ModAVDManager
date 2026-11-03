@@ -275,7 +275,7 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 			WithAdvice("用完整的新包覆盖解压一次")
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-	call := []string{"&", quote(script), action, "-Serial", quote(root.Serial(i)),
+	call := []string{"&", quote(script), action, "-Serial", quote(m.Root.Ports().Serial(i)),
 		"-AdbPort", strconv.Itoa(m.Root.AdbServerPort()), "-Adb", quote(m.Root.AdbExe()),
 		"-Payload", quote(m.bridgePayloadDir())}
 	if reboot {

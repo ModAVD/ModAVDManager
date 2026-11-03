@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -230,7 +231,7 @@ func TestQemuCoresCommandLine(t *testing.T) {
 		{[]string{"qemu.exe", "-cores", "0"}, 6},
 		{[]string{"qemu.exe", "-cores"}, 6},
 	} {
-		if got := m.qemuCores(win.Process{}, c.cmdline, nil, 6); got != c.want {
+		if got := m.qemuCores(win.Process{}, c.cmdline, nil, root.PortPlan{}, 6); got != c.want {
 			t.Errorf("%v: %d, want %d", c.cmdline, got, c.want)
 		}
 	}

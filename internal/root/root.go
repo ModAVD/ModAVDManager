@@ -3,7 +3,8 @@
 // The on-disk contract is shared with AUTO-MAS (app/utils/common/emulator2/avd/{constants,components}.py), which
 // manages the same roots today. Every rule here must stay identical to it, or the two would disagree about the
 // same instance: index 0-9 without 5, ports 20000 + 10*i (+1 adb, +2 gRPC), private adb server 20050, mas-avd.json
-// read with a BOM allowed and written atomically without one.
+// read with a BOM allowed and written atomically without one. The one addition is mas-avd.json's portBase (a
+// development root's own port plan), which AUTO-MAS does not read: a root that sets it is not one for AUTO-MAS.
 //
 //	<root>\
 //	  sdk\emulator\emulator.exe        ModAVD's own emulator (the package)
@@ -65,31 +66,128 @@ var NoLocalScanEnv = map[string]string{"ADB_LOCAL_TRANSPORT_MAX_PORT": "5554"}
 
 func ValidIndex(i int) bool { return i >= 0 && i <= MaxIndex && i != ReservedIndex }
 
-func ConsolePort(i int) int { return PortBase + PortStep*i }
-func AdbPort(i int) int     { return ConsolePort(i) + 1 }
-func GrpcPort(i int) int    { return ConsolePort(i) + 2 }
-func AvdName(i int) string  { return AvdNamePrefix + strconv.Itoa(i) }
-func Serial(i int) string   { return "emulator-" + strconv.Itoa(ConsolePort(i)) }
+func AvdName(i int) string { return AvdNamePrefix + strconv.Itoa(i) }
 
-// IndexOfConsolePort maps 20000 + 10*i back to i; ok=false for any other port.
-func IndexOfConsolePort(port int) (int, bool) {
-	if port < PortBase || (port-PortBase)%PortStep != 0 {
+// The ports of an instance depend on its root (portBase): ask the root, r.Ports().Console(i) and so on. There is
+// deliberately no package-level ConsolePort / Serial, so that nothing silently counts from 20000.
+
+// ---- a root's own port plan (ModAVD/ModAVD#75)--------------------------------------------------------------------
+
+// MetadataPortBase is the mas-avd.json key of a root's own port plan. Development and test roots set it, so that their
+// instances never take the ports of the production root's instance of the same number: AUTO-MAS tells instances
+// apart by port and would take one for the other. AUTO-MAS does not read it (its PORT_BASE is a constant), so a root
+// that sets it is not one to add to AUTO-MAS.
+const MetadataPortBase = "portBase"
+
+const (
+	// DefaultPortBase is the plan of every root without portBase: AUTO-MAS's PORT_BASE.
+	DefaultPortBase = PortBase
+	// A portBase other than DefaultPortBase is a multiple of 100 in minPortBase-maxPortBase: each plan then has a
+	// segment of 100 ports of its own (it uses 93 of them), which never overlaps DefaultPortBase's 20000-20099, and
+	// stays above the privileged ports and below 65536.
+	minPortBase = 1100
+	maxPortBase = 65400
+)
+
+// PortPlan is the ports of a root's instances: console Base + PortStep*i, adb +1, gRPC +2. The emulator names its
+// screenshot shared memory after the console port (SHM_videmulator<console>), so that follows too.
+type PortPlan struct{ Base int }
+
+func (p PortPlan) Console(i int) int   { return p.Base + PortStep*i }
+func (p PortPlan) Adb(i int) int       { return p.Console(i) + 1 }
+func (p PortPlan) Grpc(i int) int      { return p.Console(i) + 2 }
+func (p PortPlan) Serial(i int) string { return "emulator-" + strconv.Itoa(p.Console(i)) }
+
+// Last is the highest port of the plan: the gRPC port of MaxIndex.
+func (p PortPlan) Last() int { return p.Grpc(MaxIndex) }
+
+// IndexOfConsole maps Base + PortStep*i back to i; ok=false for any other port.
+func (p PortPlan) IndexOfConsole(port int) (int, bool) {
+	if port < p.Base || (port-p.Base)%PortStep != 0 {
 		return 0, false
 	}
-	i := (port - PortBase) / PortStep
+	i := (port - p.Base) / PortStep
 	return i, i <= MaxIndex
 }
 
-// InstancePorts is every console / adb / gRPC port of every valid index; configured server ports must avoid them.
-func InstancePorts() map[int]bool {
+// InstancePorts is every console / adb / gRPC port of every valid index. Index 5 stays out of every plan, as in
+// AUTO-MAS's, although outside the default plan its ports no longer meet the default private adb server.
+func (p PortPlan) InstancePorts() map[int]bool {
 	ports := map[int]bool{}
 	for i := 0; i <= MaxIndex; i++ {
 		if ValidIndex(i) {
-			c := ConsolePort(i)
+			c := p.Console(i)
 			ports[c], ports[c+1], ports[c+2] = true, true, true
 		}
 	}
 	return ports
+}
+
+// Ports is the root's port plan: mas-avd.json's portBase when valid, else DefaultPortBase. Read each time, like
+// AdbServerPort: change portBase only while none of the root's instances runs. An invalid portBase reads as
+// DefaultPortBase, so that status still finds what runs (an instance is matched by its AVD directory, never by its
+// ports alone); CheckPorts keeps anything from being started with it.
+func (r *Root) Ports() PortPlan {
+	p, _ := portPlan(r.MetadataLoose().Obj())
+	return p
+}
+
+// PortPlanOf is Ports for a mas-avd.json read already (o nil: none), for the reports, which read the file themselves;
+// problem says why portBase is not valid ("" when it is, or is not there).
+func PortPlanOf(o *jsonord.Obj) (plan PortPlan, problem string) { return portPlan(o) }
+
+// CheckPorts is nil when instances of this root may be started, else an errs.InvalidArgument error saying what to fix
+// in mas-avd.json:
+//   - portBase is there but not valid (DefaultPortBase, or a multiple of 100 in minPortBase-maxPortBase);
+//   - portBase moves the instances off the default plan while the private or the script adb server is still on a
+//     default port (20050, 20049), or on a port of the default plan's instances: those are the production root's, and
+//     the point of a plan of one's own is to share nothing with it.
+func (r *Root) CheckPorts() *errs.Error {
+	o := r.MetadataLoose().Obj()
+	p, problem := portPlan(o)
+	if problem != "" {
+		return errs.New(errs.InvalidArgument, problem).WithAdvice(fmt.Sprintf(
+			"改成 %d（和 AUTO-MAS 一样），或者 %d–%d 之间 100 的整数倍（开发和测试用的根目录用 21000），再试",
+			DefaultPortBase, minPortBase, maxPortBase))
+	}
+	if p.Base == DefaultPortBase {
+		return nil
+	}
+	production := PortPlan{DefaultPortBase}.InstancePorts()
+	for _, s := range []struct {
+		key  string
+		port int
+	}{{"adbServerPort", adbServerPort(o)}, {"scriptAdbServerPort", scriptAdbServerPort(o)}} {
+		if s.port == DefaultAdbServerPort || s.port == DefaultScriptAdbServerPort || production[s.port] {
+			return errs.Newf(errs.InvalidArgument,
+				"mas-avd.json 设了 %s %d（开发、测试用的端口段），%s 却是 %d：默认的根目录（生产）也用这个端口",
+				MetadataPortBase, p.Base, s.key, s.port).WithAdvice(fmt.Sprintf(
+				"在 mas-avd.json 里把 adbServerPort 和 scriptAdbServerPort 都设成别的端口：不是 %d、%d，也不在 %d–%d 的实例端口上",
+				DefaultAdbServerPort, DefaultScriptAdbServerPort, DefaultPortBase, PortPlan{DefaultPortBase}.Last()))
+		}
+	}
+	return nil
+}
+
+// portPlan is the plan o's portBase gives and, when portBase is there but not valid, why (the plan is then
+// DefaultPortBase's). Read as the adb server ports are (Python's int(): "21000" and 21000.0 count too).
+func portPlan(o *jsonord.Obj) (PortPlan, string) {
+	if !o.Has(MetadataPortBase) {
+		return PortPlan{DefaultPortBase}, ""
+	}
+	v := o.Get(MetadataPortBase)
+	if b, ok := pyIntOfValue(v); ok && (b == DefaultPortBase || (b%100 == 0 && b >= minPortBase && b <= maxPortBase)) {
+		return PortPlan{int(b)}, ""
+	}
+	return PortPlan{DefaultPortBase}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：要 %d，或者 %d–%d 之间 100 的整数倍",
+		MetadataPortBase, jsonOneLine(v), DefaultPortBase, minPortBase, maxPortBase)
+}
+
+var jsonBreak = regexp.MustCompile(`\r?\n\s*`)
+
+// jsonOneLine is v as mas-avd.json would hold it, on one line (for messages): a string never holds a raw line break.
+func jsonOneLine(v *jsonord.Value) string {
+	return jsonBreak.ReplaceAllString(string(v.MarshalPython()), "")
 }
 
 // ---- layout ------------------------------------------------------------------------------------------------------
@@ -559,7 +657,17 @@ func (r *Root) AdbServerPort() int {
 // ScriptAdbServerPort is mas-avd.json scriptAdbServerPort when valid and different from AdbServerPort, else
 // DefaultScriptAdbServerPort, or FallbackScriptAdbServerPort when that equals the private port.
 func (r *Root) ScriptAdbServerPort() int {
-	o := r.MetadataLoose().Obj()
+	return scriptAdbServerPort(r.MetadataLoose().Obj())
+}
+
+func adbServerPort(o *jsonord.Obj) int {
+	if port, ok := metadataPort(o, "adbServerPort"); ok {
+		return port
+	}
+	return DefaultAdbServerPort
+}
+
+func scriptAdbServerPort(o *jsonord.Obj) int {
 	private := adbServerPort(o)
 	if port, ok := metadataPort(o, "scriptAdbServerPort"); ok && port != private {
 		return port
@@ -570,18 +678,14 @@ func (r *Root) ScriptAdbServerPort() int {
 	return FallbackScriptAdbServerPort
 }
 
-func adbServerPort(o *jsonord.Obj) int {
-	if port, ok := metadataPort(o, "adbServerPort"); ok {
-		return port
-	}
-	return DefaultAdbServerPort
-}
-
 // metadataPort is AUTO-MAS _metadata_port: int(raw) (so "20089" and 20089.0 count too), then 1024-65535, not 5037,
-// not an instance port.
+// not a port of the root's instances (its own plan's, see portPlan; AUTO-MAS knows only the default plan).
 func metadataPort(o *jsonord.Obj, key string) (int, bool) {
 	port, ok := pyIntOfValue(o.Get(key))
-	if !ok || port < 1024 || port > 65535 || port == 5037 || InstancePorts()[int(port)] {
+	if !ok || port < 1024 || port > 65535 || port == 5037 {
+		return 0, false
+	}
+	if plan, _ := portPlan(o); plan.InstancePorts()[int(port)] {
 		return 0, false
 	}
 	return int(port), true

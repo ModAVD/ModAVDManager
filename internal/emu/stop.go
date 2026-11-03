@@ -42,7 +42,6 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -296,8 +295,8 @@ func stopCanceled(ctx context.Context, i int) error {
 
 // stopOpsFor are the real side effects on qemu process p of instance i.
 func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps {
-	console := root.ConsolePort(i)
-	serial := root.Serial(i)
+	ports := m.Root.Ports()
+	console, serial := ports.Console(i), ports.Serial(i)
 	closeRun := func(timeout time.Duration, args ...string) adb.Result {
 		return m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: timeout, Reregister: false, TotalTimeout: true}, args...)
 	}

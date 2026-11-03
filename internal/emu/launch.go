@@ -75,17 +75,23 @@ type launchPlan struct {
 	memoryMB int
 }
 
-// prepareLaunch is AUTO-MAS _launch up to the Popen: components, host checks against the memory -memory will get,
-// free ports, the private adb server, the fixed 720p display, old logs, the log file name. Errors stop the start.
+// prepareLaunch is AUTO-MAS _launch up to the Popen: the root's ports, components, another root's instance on our
+// ports, host checks against the memory -memory will get, then launchPlanFor. Errors stop the start.
 func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window bool) (*launchPlan, error) {
 	i := inst.Index
+	// mas-avd.json's portBase and adb server ports (root.CheckPorts): nothing is started on ports that are not this
+	// root's to use. Every boot comes through here: start, create's setup, the bridge's cold boot.
+	if err := m.Root.CheckPorts(); err != nil {
+		return nil, err
+	}
 	if missing := m.Root.Missing(); len(missing) > 0 {
 		return nil, m.Root.MissingError(missing)
 	}
-	// The same-numbered instance of another root (production D:\ModAVD next to a test root) runs on exactly our
-	// ports. Said before the host checks, which would otherwise fail first (it takes the memory) with a message that
-	// does not name the real cause.
-	if p, where, found := m.otherRootInstance(i); found {
+	ports := m.Root.Ports()
+	// The same-numbered instance of another root without a port plan of its own (production D:\ModAVD next to a test
+	// root that sets no portBase) runs on exactly our ports. Said before the host checks, which would otherwise fail
+	// first (it takes the memory) with a message that does not name the real cause.
+	if p, where, found := m.otherRootInstance(ports, i); found {
 		return nil, otherRootBusy(i, p, where)
 	}
 	// the host check uses exactly the memory -memory passes below: the instance's own, not one guessed per game
@@ -96,8 +102,14 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
+	return m.launchPlanFor(ctx, inst, memoryMB, window)
+}
 
-	port := root.ConsolePort(i)
+// launchPlanFor is the rest of prepareLaunch, once the checks passed: the instance's ports in the root's plan (free?),
+// the private adb server, the fixed 720p display, old logs, the log file name, the emulator's arguments.
+func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryMB int, window bool) (*launchPlan, error) {
+	i := inst.Index
+	port := m.Root.Ports().Console(i)
 	busy, err := win.BusyPorts([]int{port, port + 1, port + 2})
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
@@ -149,14 +161,14 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	return &launchPlan{args: args, logPath: logPath, memoryMB: memoryMB}, nil
 }
 
-// otherRootInstance is the process listening on one of instance i's ports (console, adb, gRPC) when it is the
-// same-numbered instance of another root: a qemu-system* whose command line has "-avd mas_<i>" and "-ports
-// <console>,..." (cmdlineMatches) that adb.QemuBelongsTo does not give to m.Root. where names that instance: the
-// avd.dir of its emulator runtime file (in adb.EmulatorDiscoveryDir, where qemu writes it and adb.QemuBelongsTo
+// otherRootInstance is the process listening on one of instance i's ports in plan (console, adb, gRPC) when it is the
+// same-numbered instance of another root on the same ports: a qemu-system* whose command line has "-avd mas_<i>" and
+// "-ports <console>,..." (cmdlineMatches) that adb.QemuBelongsTo does not give to m.Root. where names that instance:
+// the avd.dir of its emulator runtime file (in adb.EmulatorDiscoveryDir, where qemu writes it and adb.QemuBelongsTo
 // reads it), else its executable. found=false also when the listener table or a process cannot be read: the port
 // check after the host checks still reports busy ports.
-func (m *Manager) otherRootInstance(i int) (p win.Process, where string, found bool) {
-	console := root.ConsolePort(i)
+func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p win.Process, where string, found bool) {
+	console := plan.Console(i)
 	ls, err := win.Listeners()
 	if err != nil {
 		return win.Process{}, "", false
@@ -175,17 +187,17 @@ func (m *Manager) otherRootInstance(i int) (p win.Process, where string, found b
 		if err != nil {
 			continue
 		}
-		if otherRootQemu(q, cmdline, i, func(q win.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
+		if otherRootQemu(q, cmdline, i, console, func(q win.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
 			return q, qemuWhere(runtimeAvdDir(adb.EmulatorDiscoveryDir(), q), cmdline), true
 		}
 	}
 	return win.Process{}, "", false
 }
 
-// otherRootQemu: q (with its command line) is instance i of some root by name and ports, and ours says it is not
-// m.Root's.
-func otherRootQemu(q win.Process, cmdline []string, i int, ours func(win.Process) bool) bool {
-	return isQemuName(q.Name) && cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i)) && !ours(q)
+// otherRootQemu: q (with its command line) is instance i of some root by name and console port, and ours says it is
+// not m.Root's.
+func otherRootQemu(q win.Process, cmdline []string, i, console int, ours func(win.Process) bool) bool {
+	return isQemuName(q.Name) && cmdlineMatches(cmdline, root.AvdName(i), console) && !ours(q)
 }
 
 // otherRootBusy is the error of a start whose ports the same-numbered instance of another root holds.

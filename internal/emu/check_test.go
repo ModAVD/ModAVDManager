@@ -11,6 +11,23 @@ import (
 	"modavd/internal/root"
 )
 
+// TestPortsItem: no item for a root on the default plan; a plan of its own shows its range; what CheckPorts refuses
+// blocks, with its message and advice.
+func TestPortsItem(t *testing.T) {
+	if _, ok := portsItem(root.PortPlan{Base: root.DefaultPortBase}, nil); ok {
+		t.Error("an item for the default plan")
+	}
+	it, ok := portsItem(root.PortPlan{Base: 21000}, nil)
+	if !ok || it.ID != "ports" || it.OK == nil || !*it.OK || !it.Blocking || it.Reason != "21000–21092（mas-avd.json 的 portBase）" {
+		t.Errorf("plan 21000: %+v", it)
+	}
+	bad := errs.New(errs.InvalidArgument, "mas-avd.json 的 portBase 不合规").WithAdvice("改成 21000")
+	it, ok = portsItem(root.PortPlan{Base: root.DefaultPortBase}, bad)
+	if !ok || it.OK == nil || *it.OK || !it.Blocking || it.Reason != bad.Message || it.Advice != bad.Advice {
+		t.Errorf("refused: %+v", it)
+	}
+}
+
 func TestAccelSummaryAndOKText(t *testing.T) {
 	// What emulator.exe -accel-check prints on a WHPX host (frame lines around the explanation).
 	out := "accel:\r\n0\r\nWHPX(10.0.26200) is installed and usable.\r\naccel\r\n"

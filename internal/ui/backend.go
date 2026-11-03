@@ -25,6 +25,8 @@ type backend interface {
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
+	// Serial is instance i's adb serial in the root's port plan.
+	Serial(i int) string
 	// RootInfo describes the root without asking any instance (GET /api/info).
 	RootInfo() emu.RootInfo
 }
@@ -38,6 +40,8 @@ func (b managerBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...
 	return b.ADB.Run(ctx, opt, args...)
 }
 
+func (b managerBackend) Serial(i int) string { return b.Root.Ports().Serial(i) }
+
 // RootInfo is what emu fills into ListResult / CheckResult (emu's own helper is unexported); List would cost an adb
 // call per running instance.
 func (b managerBackend) RootInfo() emu.RootInfo {
@@ -49,6 +53,7 @@ func (b managerBackend) RootInfo() emu.RootInfo {
 		AdbExe:              r.AdbExe(),
 		AdbServerPort:       r.AdbServerPort(),
 		ScriptAdbServerPort: r.ScriptAdbServerPort(),
+		PortBase:            r.Ports().Base,
 		Version:             r.VersionText(),
 	}
 	if n, ok := r.ModBuild(); ok {

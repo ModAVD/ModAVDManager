@@ -159,7 +159,7 @@ func (m *Manager) installLauncher(ctx context.Context, i int) string {
 	if !regularFile(apkPath) {
 		return "pixel"
 	}
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: installLauncherTimeout, Reregister: true},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: installLauncherTimeout, Reregister: true},
 		"install", "-r", apkPath)
 	if res.Code != 0 || !strings.Contains(res.Out, "Success") {
 		m.Log.Warnf("实例 %d 安装轻量桌面失败: %s", i, res.Out)
