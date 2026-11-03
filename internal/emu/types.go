@@ -96,6 +96,7 @@ type RootInfo struct {
 	AdbExe              string `json:"adb_exe"`
 	AdbServerPort       int    `json:"adb_server_port"`        // the private server modavd and the emulator use
 	ScriptAdbServerPort int    `json:"script_adb_server_port"` // the server scripts should use for these instances
+	PortBase            int    `json:"port_base"`              // console port of instance i = PortBase + 10*i (portBase)
 	Version             string `json:"version"`                // "0.35.0"; "" when the emulator's build is unknown
 	Build               int    `json:"build"`                  // N of mas-N; 0 when unknown
 }
@@ -232,7 +233,7 @@ type StopResult struct {
 }
 
 // CheckItem is one host check (AUTO-MAS precheck.PrecheckItem). ID: path / components / emulator / acceleration /
-// vulkan / disk / memory.
+// vulkan / disk / memory; ports (modavd's own) only for a root whose mas-avd.json sets portBase.
 type CheckItem struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`

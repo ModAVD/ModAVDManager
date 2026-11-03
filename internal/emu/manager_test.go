@@ -164,10 +164,11 @@ func TestScanQemuRealInstances(t *testing.T) {
 		}
 		base := filepath.Base(avdDir)
 		i, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(base, root.AvdNamePrefix), ".avd"))
-		if err != nil || !strings.HasPrefix(base, root.AvdNamePrefix) || !cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i)) {
+		owner := &root.Root{Dir: filepath.Dir(filepath.Dir(avdDir))} // <root>\avd\mas_<i>.avd
+		if err != nil || !strings.HasPrefix(base, root.AvdNamePrefix) ||
+			!cmdlineMatches(cmdline, root.AvdName(i), owner.Ports().Console(i)) {
 			continue
 		}
-		owner := &root.Root{Dir: filepath.Dir(filepath.Dir(avdDir))} // <root>\avd\mas_<i>.avd
 		if !adb.QemuBelongsTo(owner, p, i) {
 			t.Errorf("qemu %d (%s) does not belong to its own root %s", p.PID, avdDir, owner.Dir)
 		}

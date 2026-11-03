@@ -352,6 +352,11 @@ type StatusResult struct {
 	CreationLog   string     `json:"creation_log"`
 	// CreationProgress: 0–100 while status is creating (emu.InstanceInfo.CreationProgress)
 	CreationProgress int `json:"creation_progress"`
+	// Where to reach the instance, in its root's port plan (mas-avd.json portBase): take these rather than counting
+	// from 20000 (ModAVD/ModAVD#75).
+	Serial     string    `json:"serial"`
+	AdbAddress string    `json:"adb_address"`
+	Ports      emu.Ports `json:"ports"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
@@ -508,7 +513,7 @@ func intPtrOpt(inv *invocation, name string) *int {
 func statusOf(in *emu.InstanceInfo) *StatusResult {
 	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted, Window: in.Window,
 		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
-		CreationProgress: in.CreationProgress}
+		CreationProgress: in.CreationProgress, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------

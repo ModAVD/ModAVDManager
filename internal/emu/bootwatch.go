@@ -71,7 +71,7 @@ func (m *Manager) guestBoot(ctx context.Context, i int, reregister bool) (booted
 	if guestBootRead != nil {
 		return guestBootRead(i, reregister)
 	}
-	serial := root.Serial(i)
+	serial := m.Root.Ports().Serial(i)
 	res := m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: guestBootTimeout, Reregister: reregister}, "shell",
 		guestBootScript)
 	booted, bootID = parseGuestBoot(res.Out)

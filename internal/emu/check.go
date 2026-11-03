@@ -74,6 +74,9 @@ func (m *Manager) Check(ctx context.Context, opt CheckOptions) (*CheckResult, er
 		m.diskItemNow(),
 		memoryItemNow(memoryMB),
 	}
+	if it, ok := portsItem(m.Root.Ports(), m.Root.CheckPorts()); ok {
+		items = append(items[:1], append([]CheckItem{it}, items[1:]...)...)
+	}
 	res := &CheckResult{RootInfo: m.rootInfo(), Ready: true, Items: items, Components: ComponentStatuses(comps)}
 	if _, failed := firstBlockingFailure(items); failed {
 		res.Ready = false
@@ -205,6 +208,22 @@ func pathItem(dir string) CheckItem {
 		Reason: fmt.Sprintf("模拟器目录路径里有中文等非英文字符（%s），模拟器在这类路径下不可靠", dir),
 		Advice: "把模拟器目录放到不含中文的路径下",
 	}
+}
+
+// portsItem is the root's own port plan (ModAVD/ModAVD#75), right after the path; only for a root whose mas-avd.json
+// sets one (a portBase other than 20000, or one that is not valid), so a root without it checks as before. bad is
+// root.CheckPorts: a boot refuses those ports, so the item blocks.
+func portsItem(plan root.PortPlan, bad *errs.Error) (CheckItem, bool) {
+	if bad == nil && plan.Base == root.DefaultPortBase {
+		return CheckItem{}, false
+	}
+	it := CheckItem{ID: "ports", Title: "端口段", Blocking: true}
+	if bad != nil {
+		it.OK, it.Reason, it.Advice = checkOK(false), bad.Message, bad.Advice
+	} else {
+		it.OK, it.Reason = checkOK(true), fmt.Sprintf("%d–%d（mas-avd.json 的 portBase）", plan.Base, plan.Last())
+	}
+	return it, true
 }
 
 // requiredComponents are the components of the components item: required ones except the emulator, which has its

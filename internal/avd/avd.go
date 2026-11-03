@@ -685,20 +685,21 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-// FreeIndex is the smallest valid index that has no instance and whose three ports busy() reports free.
-// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" when there is none. A nil busy skips the port check.
-func FreeIndex(existing map[int]bool, busy func(ports []int) []int) (int, error) {
+// FreeIndex is the smallest valid index that has no instance and whose three ports in plan busy() reports free.
+// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" (the root's plan) when there is none. A nil busy skips
+// the port check.
+func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int) []int) (int, error) {
 	for i := 0; i <= root.MaxIndex; i++ {
 		if !root.ValidIndex(i) || existing[i] {
 			continue
 		}
-		c := root.ConsolePort(i)
+		c := plan.Console(i)
 		if busy != nil && len(busy([]int{c, c + 1, c + 2})) > 0 {
 			continue
 		}
 		return i, nil
 	}
-	return 0, errs.New(errs.Busy, "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）")
+	return 0, errs.Newf(errs.Busy, "魔改 AVD 实例已满（端口段 %d–%d 最多 9 台）", plan.Base, plan.Base+100)
 }
 
 type UpdateOptions struct {

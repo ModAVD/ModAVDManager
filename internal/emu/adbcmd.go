@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"modavd/internal/errs"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -51,7 +50,7 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	if !up {
 		return 1, errs.Newf(errs.Internal, "私有 adb server（端口 %d）%.0f 秒内没起来", m.Root.AdbServerPort(), passthroughServerWait.Seconds())
 	}
-	serial := root.Serial(i)
+	serial := m.Root.Ports().Serial(i)
 	// What adb.Run does on "device not found": bring a running instance back onto a restarted private server.
 	if _, running := m.qemuOf(i); running && m.ADB.GetState(ctx, serial, statusAdbTimeout) != "device" {
 		m.ADB.Reregister(ctx, serial)

@@ -11,7 +11,6 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/apk"
 	"modavd/internal/errs"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -61,7 +60,7 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 	}
 
 	m.Log.Infof("魔改 AVD 实例 %d 安装 APK: %s", i, path)
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: apkInstallTimeout, Reregister: true},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: apkInstallTimeout, Reregister: true},
 		"install", "-r", path)
 	// The guest is done with the install: a waiting start may restart zygote now (reading the manifest below is local).
 	guestLock.Unlock()

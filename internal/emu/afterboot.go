@@ -82,7 +82,8 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	prog *progressor) (afterBootResult, error) {
 	var r afterBootResult
 	i := inst.Index
-	port := root.ConsolePort(i)
+	ports := m.Root.Ports()
+	port := ports.Console(i)
 	var imeDefault bool
 	cores, ok := inst.CPU()
 	if !ok || cores <= 0 {
@@ -115,11 +116,11 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			// 3) disk and screenshot channel state into the log (write_cache is root-only)
 			wc := m.su(ctx, i, "cat /sys/block/vd*/queue/write_cache | sort -u", 0)
 			shm := "缺失"
-			if win.SharedMemoryExists(shmName(i)) {
+			if win.SharedMemoryExists(shmName(ports, i)) {
 				shm = "在"
 			}
 			m.Log.Infof("实例 %d 磁盘缓存: %s；截图共享内存 %s: %s", i, orText(joinNonEmptyLines(wc.Out, " / "), "读不到"),
-				shmName(i), shm)
+				shmName(ports, i), shm)
 		},
 		// 3b) data partition raised by `set --data-gb`: the emulator grew the disk, grow the file system (online)
 		func() { m.growData(ctx, i) },
@@ -290,8 +291,10 @@ func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
 		return nil
 	}
 	var insts []*avd.Instance
+	var plan root.PortPlan
 	if m.Root != nil {
 		insts, _ = avd.List(m.Root)
+		plan = m.Root.Ports()
 	}
 	var out []otherQemu
 	for _, q := range procs {
@@ -303,17 +306,17 @@ func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
 			o.Mask = mask
 		}
 		if cmdline, err := q.CommandLine(); err == nil {
-			o.Cores = m.qemuCores(q, cmdline, insts, cores)
+			o.Cores = m.qemuCores(q, cmdline, insts, plan, cores)
 		}
 		out = append(out, o)
 	}
 	return out
 }
 
-// qemuCores is the vCPU count of qemu q (see otherQemus).
-func (m *Manager) qemuCores(q win.Process, cmdline []string, insts []*avd.Instance, def int) int {
+// qemuCores is the vCPU count of qemu q (see otherQemus); insts are this root's instances, plan its port plan.
+func (m *Manager) qemuCores(q win.Process, cmdline []string, insts []*avd.Instance, plan root.PortPlan, def int) int {
 	for _, in := range insts {
-		if cmdlineMatches(cmdline, root.AvdName(in.Index), root.ConsolePort(in.Index)) &&
+		if cmdlineMatches(cmdline, root.AvdName(in.Index), plan.Console(in.Index)) &&
 			adb.QemuBelongsTo(m.Root, q, in.Index) {
 			if n, ok := in.CPU(); ok && n > 0 {
 				return n

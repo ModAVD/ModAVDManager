@@ -65,8 +65,9 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	if created.Config != want {
 		t.Fatalf("config = %+v, want %+v", created.Config, want)
 	}
-	if created.Serial != root.Serial(i) || created.AdbAddress != "127.0.0.1:"+strconv.Itoa(root.AdbPort(i)) ||
-		created.Ports.Grpc != root.GrpcPort(i) || created.Screencap.Shm != shmName(i) || created.Screencap.ShmReady {
+	def := root.PortPlan{Base: root.DefaultPortBase}
+	if created.Serial != def.Serial(i) || created.AdbAddress != "127.0.0.1:"+strconv.Itoa(def.Adb(i)) ||
+		created.Ports.Grpc != def.Grpc(i) || created.Screencap.Shm != shmName(def, i) || created.Screencap.ShmReady {
 		t.Fatalf("addresses = %+v", created)
 	}
 	if created.Initialized || !fileOrDirExists(created.Path) {

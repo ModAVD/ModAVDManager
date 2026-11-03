@@ -59,10 +59,11 @@ func (f *fakeManager) callList() []string {
 }
 
 func sampleInstance(i int) emu.InstanceInfo {
+	p := root.PortPlan{Base: root.DefaultPortBase}
 	return emu.InstanceInfo{
 		Index: i, Name: root.AvdName(i), Title: root.AvdName(i), Status: emu.StatusOffline,
-		Serial: root.Serial(i), AdbAddress: "127.0.0.1:" + itoa(root.AdbPort(i)),
-		Ports:  emu.Ports{Console: root.ConsolePort(i), Adb: root.AdbPort(i), Grpc: root.GrpcPort(i)},
+		Serial: p.Serial(i), AdbAddress: "127.0.0.1:" + itoa(p.Adb(i)),
+		Ports:  emu.Ports{Console: p.Console(i), Adb: p.Adb(i), Grpc: p.Grpc(i)},
 		Config: emu.InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Width: 1280, Height: 720, DPI: 240},
 		Path:   `D:\r\avd\` + root.AvdName(i) + ".avd",
 	}
@@ -953,13 +954,15 @@ func TestStatusSubset(t *testing.T) {
 		return &in, nil
 	}
 	r := h.run(t, nil, "status", "3", "--json")
-	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
+	// where to reach it comes along (ModAVD/ModAVD#75): a root with portBase is not on 20000 + 10 * i
+	const at = `"serial":"emulator-20030","adb_address":"127.0.0.1:20031","ports":{"console":20030,"adb":20031,"grpc":20032}`
+	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0,` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)
 	}
 	h.fake.info = nil
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"window":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"window":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0,` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("offline stdout = %s", r.stdout)
 	}
@@ -971,7 +974,7 @@ func TestStatusSubset(t *testing.T) {
 		return &in, nil
 	}
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"window":false,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"window":false,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35,` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("creating stdout = %s", r.stdout)
 	}

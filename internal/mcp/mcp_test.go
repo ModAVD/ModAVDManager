@@ -1523,7 +1523,7 @@ func TestSchemaOf(t *testing.T) {
 	p := jsonRoundTrip(t, schemaOf(reflect.TypeFor[schemaProbe]())).(map[string]any)
 	pp := p["properties"].(map[string]any)
 	if !reflect.DeepEqual(p["required"], []any{"root", "sdk", "local_sdk", "adb_exe", "adb_server_port",
-		"script_adb_server_port", "version", "build", "a", "c", "d", "e", "nested"}) {
+		"script_adb_server_port", "port_base", "version", "build", "a", "c", "d", "e", "nested"}) {
 		t.Fatalf("required %v", p["required"])
 	}
 	for _, k := range []string{"G", "h", "RootInfo"} {

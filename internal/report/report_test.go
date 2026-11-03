@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"modavd/internal/jsonord"
+	"modavd/internal/root"
 )
 
 func TestFormatN(t *testing.T) {
@@ -62,12 +63,19 @@ func TestScriptPort(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ok := scriptPort(v)
+		got, ok := scriptPort(root.PortPlan{Base: root.DefaultPortBase}, v)
 		if !ok {
 			got = 0
 		}
 		if got != want {
 			t.Errorf("%s: %d, want %d", raw, got, want)
+		}
+	}
+	// a root with portBase 21000: its own instance ports are refused, the default plan's are not (ModAVD/ModAVD#75)
+	for raw, want := range map[string]int{`20010`: 20010, `21010`: 0, `21092`: 0, `21093`: 21093} {
+		v, _ := jsonord.Parse([]byte(raw))
+		if got, ok := scriptPort(root.PortPlan{Base: 21000}, v); (ok && got != want) || (!ok && want != 0) {
+			t.Errorf("plan 21000: %s: %d %v, want %d", raw, got, ok, want)
 		}
 	}
 	for raw, want := range map[string]string{`"5037"`: `"5037"`, `5037`: `5037`, `1.5e3`: `1500`, `[1]`: `1`,

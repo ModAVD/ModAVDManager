@@ -542,9 +542,9 @@ func psDouble(v *jsonord.Value) (float64, bool) {
 var scriptPortText = regexp.MustCompile(`^[+-]?[0-9]+$`)
 
 // scriptPort is collect-info.ps1's Resolve-MetadataPort: an integer (fractions truncated, a numeric string, a
-// boolean as 0 / 1) of 1024-65535 that is not 5037 and not a console / adb / gRPC port of instances 0-9 (5 is
-// reserved).
-func scriptPort(v *jsonord.Value) (int, bool) {
+// boolean as 0 / 1) of 1024-65535 that is not 5037 and not a console / adb / gRPC port of instances 0-9 in plan (5 is
+// reserved; the script knows only the default plan).
+func scriptPort(plan root.PortPlan, v *jsonord.Value) (int, bool) {
 	var port int64
 	switch v.Kind() {
 	case jsonord.Bool:
@@ -582,7 +582,7 @@ func scriptPort(v *jsonord.Value) (int, bool) {
 		if i == root.ReservedIndex {
 			continue
 		}
-		if c := int64(root.ConsolePort(i)); port >= c && port <= c+2 {
+		if c := int64(plan.Console(i)); port >= c && port <= c+2 {
 			return 0, false
 		}
 	}

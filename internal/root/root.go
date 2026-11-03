@@ -3,7 +3,8 @@
 // The on-disk contract is shared with AUTO-MAS (app/utils/common/emulator2/avd/{constants,components}.py), which
 // manages the same roots today. Every rule here must stay identical to it, or the two would disagree about the
 // same instance: index 0-9 without 5, ports 20000 + 10*i (+1 adb, +2 gRPC), private adb server 20050, mas-avd.json
-// read with a BOM allowed and written atomically without one.
+// read with a BOM allowed and written atomically without one. The one addition is mas-avd.json's portBase (a
+// development root's own port plan), which AUTO-MAS does not read: a root that sets it is not one for AUTO-MAS.
 //
 //	<root>\
 //	  sdk\emulator\emulator.exe        ModAVD's own emulator (the package)
@@ -65,25 +66,12 @@ var NoLocalScanEnv = map[string]string{"ADB_LOCAL_TRANSPORT_MAX_PORT": "5554"}
 
 func ValidIndex(i int) bool { return i >= 0 && i <= MaxIndex && i != ReservedIndex }
 
-func ConsolePort(i int) int { return PortBase + PortStep*i }
-func AdbPort(i int) int     { return ConsolePort(i) + 1 }
-func GrpcPort(i int) int    { return ConsolePort(i) + 2 }
-func AvdName(i int) string  { return AvdNamePrefix + strconv.Itoa(i) }
-func Serial(i int) string   { return "emulator-" + strconv.Itoa(ConsolePort(i)) }
+func AvdName(i int) string { return AvdNamePrefix + strconv.Itoa(i) }
 
-// IndexOfConsolePort maps 20000 + 10*i back to i; ok=false for any other port.
-func IndexOfConsolePort(port int) (int, bool) {
-	if port < PortBase || (port-PortBase)%PortStep != 0 {
-		return 0, false
-	}
-	i := (port - PortBase) / PortStep
-	return i, i <= MaxIndex
-}
+// The ports of an instance depend on its root (portBase): ask the root, r.Ports().Console(i) and so on. There is
+// deliberately no package-level ConsolePort / Serial, so that nothing silently counts from 20000.
 
-// InstancePorts is every console / adb / gRPC port of every valid index; configured server ports must avoid them.
-func InstancePorts() map[int]bool { return PortPlan{PortBase}.InstancePorts() }
-
-// ---- a root's own port plan (ModAVDManager#20) --------------------------------------------------------------------
+// ---- a root's own port plan (ModAVD/ModAVD#75)--------------------------------------------------------------------
 
 // MetadataPortBase is the mas-avd.json key of a root's own port plan. Development and test roots set it, so that their
 // instances never take the ports of the production root's instance of the same number: AUTO-MAS tells instances
@@ -143,6 +131,10 @@ func (r *Root) Ports() PortPlan {
 	p, _ := portPlan(r.MetadataLoose().Obj())
 	return p
 }
+
+// PortPlanOf is Ports for a mas-avd.json read already (o nil: none), for the reports, which read the file themselves;
+// problem says why portBase is not valid ("" when it is, or is not there).
+func PortPlanOf(o *jsonord.Obj) (plan PortPlan, problem string) { return portPlan(o) }
 
 // CheckPorts is nil when instances of this root may be started, else an errs.InvalidArgument error saying what to fix
 // in mas-avd.json:

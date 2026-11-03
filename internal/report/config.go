@@ -306,6 +306,9 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 	}
 
 	// ---- games of the running instances (only those)
+	// The index from a serial is counted in this root's plan (mas-avd.json portBase), so that the production
+	// root's instances, also listed by its servers 20050 / 20049, are not taken for this root's.
+	plan, _ := root.PortPlanOf(cfg)
 	var ports []int
 	cfgPort := 0
 	if v := getCI(cfg, "adbServerPort"); truthy(v) {
@@ -344,7 +347,7 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 			if cport < 0 {
 				continue
 			}
-			off := cport - root.PortBase
+			off := cport - plan.Base
 			if off < 0 || off%root.PortStep != 0 {
 				continue
 			}

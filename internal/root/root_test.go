@@ -90,8 +90,9 @@ func python(t *testing.T, script string, input any) []byte {
 // ---- ports -------------------------------------------------------------------------------------------------------
 
 func TestPortsAndNames(t *testing.T) {
-	if ConsolePort(3) != 20030 || AdbPort(3) != 20031 || GrpcPort(3) != 20032 || AvdName(3) != "mas_3" ||
-		Serial(3) != "emulator-20030" {
+	def := PortPlan{DefaultPortBase}
+	if def.Console(3) != 20030 || def.Adb(3) != 20031 || def.Grpc(3) != 20032 || AvdName(3) != "mas_3" ||
+		def.Serial(3) != "emulator-20030" {
 		t.Fatal("port plan")
 	}
 	for i, want := range []bool{true, true, true, true, true, false, true, true, true, true, false} {
@@ -102,15 +103,15 @@ func TestPortsAndNames(t *testing.T) {
 	if ValidIndex(-1) {
 		t.Error("ValidIndex(-1)")
 	}
-	if i, ok := IndexOfConsolePort(20090); !ok || i != 9 {
+	if i, ok := def.IndexOfConsole(20090); !ok || i != 9 {
 		t.Error("20090")
 	}
 	for _, p := range []int{19990, 20001, 20100, 5554} {
-		if _, ok := IndexOfConsolePort(p); ok {
-			t.Errorf("IndexOfConsolePort(%d)", p)
+		if _, ok := def.IndexOfConsole(p); ok {
+			t.Errorf("IndexOfConsole(%d)", p)
 		}
 	}
-	ports := InstancePorts()
+	ports := def.InstancePorts()
 	if len(ports) != 27 || !ports[20000] || !ports[20092] || ports[20050] || ports[20051] || ports[20049] {
 		t.Fatalf("InstancePorts: %d", len(ports))
 	}
@@ -119,9 +120,6 @@ func TestPortsAndNames(t *testing.T) {
 // TestPortPlan: another base moves every port and the serial, and the index set (0-9 without 5) stays.
 func TestPortPlan(t *testing.T) {
 	def, dev := PortPlan{DefaultPortBase}, PortPlan{21000}
-	if def.Console(3) != ConsolePort(3) || def.Adb(3) != AdbPort(3) || def.Grpc(3) != GrpcPort(3) || def.Serial(3) != Serial(3) {
-		t.Fatal("the default plan is not the package's")
-	}
 	if dev.Console(6) != 21060 || dev.Adb(6) != 21061 || dev.Grpc(6) != 21062 || dev.Serial(6) != "emulator-21060" ||
 		dev.Last() != 21092 || def.Last() != 20092 {
 		t.Fatal("plan 21000")

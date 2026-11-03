@@ -9,7 +9,7 @@
 //
 //	list                                                  emu.ListResult
 //	info <i>                                              emu.InstanceInfo
-//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress}
+//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,serial,adb_address,ports}
 //	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb N] [--fps 30|60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)

@@ -284,7 +284,7 @@ var logcatMu sync.Mutex
 func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
-	serial := root.Serial(i)
+	serial := m.Root.Ports().Serial(i)
 	running, err := m.findLogcatProcesses(serial)
 	if err != nil {
 		m.Log.Warnf("实例 %d 读不出宿主进程表，这次不起客体日志落盘（免得起两份）: %v", i, err)
@@ -354,7 +354,7 @@ func (m *Manager) logcatAfterReregister(serial string) {
 	if !ok {
 		return
 	}
-	i, ok := root.IndexOfConsolePort(port)
+	i, ok := m.Root.Ports().IndexOfConsole(port)
 	if !ok || !root.ValidIndex(i) {
 		return
 	}

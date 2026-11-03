@@ -140,15 +140,23 @@ func TestDeviceMissing(t *testing.T) {
 }
 
 func TestConsolePortOf(t *testing.T) {
+	def, dev := root.PortPlan{Base: root.DefaultPortBase}, root.PortPlan{Base: 21000}
 	ok := map[string]int{"emulator-20000": 20000, "emulator-20040": 20040, "emulator-20090": 20090}
 	for serial, want := range ok {
-		if got, found := consolePortOf(serial); !found || got != want {
+		if got, found := consolePortOf(def, serial); !found || got != want {
 			t.Errorf("consolePortOf(%q) = %d, %v; want %d", serial, got, found, want)
 		}
+		// another root's plan: the production root's serials are not this root's
+		if got, found := consolePortOf(dev, serial); found {
+			t.Errorf("plan 21000: consolePortOf(%q) = %d, want not ours", serial, got)
+		}
+	}
+	if got, found := consolePortOf(dev, "emulator-21060"); !found || got != 21060 {
+		t.Errorf("plan 21000: consolePortOf(emulator-21060) = %d, %v", got, found)
 	}
 	for _, serial := range []string{"emulator-", "emulator-5554", "emulator-20001", "emulator-20100", "emulator-2000x",
 		"emulator-+20000", "127.0.0.1:20001", "EMULATOR-20000", "emulator-0000000020000"} {
-		if got, found := consolePortOf(serial); found {
+		if got, found := consolePortOf(def, serial); found {
 			t.Errorf("consolePortOf(%q) = %d, want not ours", serial, got)
 		}
 	}
@@ -192,8 +200,8 @@ func TestQemuOnAdbPortNotOurs(t *testing.T) {
 		if !root.ValidIndex(i) {
 			continue
 		}
-		if p, ok := QemuOnAdbPort(r, root.ConsolePort(i)); ok {
-			t.Errorf("QemuOnAdbPort(%d) on a fresh root = pid %d", root.ConsolePort(i), p.PID)
+		if p, ok := QemuOnAdbPort(r, r.Ports().Console(i)); ok {
+			t.Errorf("QemuOnAdbPort(%d) on a fresh root = pid %d", r.Ports().Console(i), p.PID)
 		}
 	}
 }

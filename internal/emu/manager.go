@@ -82,7 +82,7 @@ func New(r *root.Root, log *logx.Logger) *Manager {
 		if !ok {
 			return false
 		}
-		i, ok := root.IndexOfConsolePort(port)
+		i, ok := m.Root.Ports().IndexOfConsole(port)
 		return ok && m.booting(i)
 	}
 	m.ADB.OnReregistered = m.logcatAfterReregister
@@ -123,14 +123,17 @@ func consolePortOfSerial(serial string) (int, bool) {
 	return port, true
 }
 
-func shmName(i int) string { return emulatorShmNamePrefix + strconv.Itoa(root.ConsolePort(i)) }
+// shmName is the screenshot shared memory of instance i: the emulator names it after its console port.
+func shmName(plan root.PortPlan, i int) string {
+	return emulatorShmNamePrefix + strconv.Itoa(plan.Console(i))
+}
 
 // ---- qemu processes ----------------------------------------------------------------------------------------------
 
 // cmdlineMatches: "-avd <name>" and "-ports <console>,..." both present (AUTO-MAS _cmdline_matches). Neither alone
 // is enough (an emulator started by another tool may use our ports under another name, or a mas_<i> name on other
-// ports), and both together still do not tell roots apart: every root has the same names and the same port plan.
-// adb.QemuBelongsTo does that.
+// ports), and both together still do not tell roots apart: every root has the same names, and roots without portBase
+// the same port plan. adb.QemuBelongsTo does that.
 func cmdlineMatches(cmdline []string, avdName string, console int) bool {
 	hasAvd, hasPort := false, false
 	want := strconv.Itoa(console)
@@ -157,8 +160,9 @@ func isQemuName(name string) bool {
 }
 
 // scanQemuOf finds, with one process snapshot, the qemu process (qemu-system-x86_64[-headless].exe) of each of the
-// indexes whose command line matches and that adb.QemuBelongsTo one of roots. The same-numbered instance of another
-// root is not found: it is not ours to stop, re-register or adopt (a start then fails on its busy ports).
+// indexes whose command line matches (in the port plan of the root it belongs to) and that adb.QemuBelongsTo one of
+// roots. The same-numbered instance of another root is not found: it is not ours to stop, re-register or adopt (a
+// start then fails on its busy ports).
 func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
 	found := map[int]win.Process{}
 	if len(indexes) == 0 || len(roots) == 0 {
@@ -167,6 +171,10 @@ func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
 	procs, err := win.ListProcesses()
 	if err != nil {
 		return found
+	}
+	plans := make([]root.PortPlan, len(roots))
+	for k, r := range roots {
+		plans[k] = r.Ports()
 	}
 	for _, p := range procs {
 		if !isQemuName(p.Name) {
@@ -177,11 +185,8 @@ func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
 			continue
 		}
 		for _, i := range indexes {
-			if !cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i)) {
-				continue
-			}
-			for _, r := range roots {
-				if adb.QemuBelongsTo(r, p, i) {
+			for k, r := range roots {
+				if cmdlineMatches(cmdline, root.AvdName(i), plans[k].Console(i)) && adb.QemuBelongsTo(r, p, i) {
 					found[i] = p
 					break
 				}
@@ -208,7 +213,7 @@ func (m *Manager) findQemu(i int) (win.Process, bool) {
 // bootCompleted: `getprop sys.boot_completed` says 1. reregister=false while the instance is booting (it has not
 // registered with the private server yet, which is normal then).
 func (m *Manager) bootCompleted(ctx context.Context, i int, timeout time.Duration, reregister bool) bool {
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: timeout, Reregister: reregister},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: timeout, Reregister: reregister},
 		"shell", "getprop", "sys.boot_completed")
 	return res.Code == 0 && strings.TrimSpace(res.Out) == "1"
 }
@@ -219,7 +224,7 @@ func (m *Manager) shell(ctx context.Context, i int, command string, timeout time
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return m.ADB.Shell(ctx, root.Serial(i), command, timeout)
+	return m.ADB.Shell(ctx, m.Root.Ports().Serial(i), command, timeout)
 }
 
 // su runs a guest script as root. These userdebug images allow `su 0` without `adb root` (which restarts adbd and
@@ -233,7 +238,7 @@ func (m *Manager) su(ctx context.Context, i int, script string, timeout time.Dur
 
 // push copies a host file into the guest; a failure is logged as a warning.
 func (m *Manager) push(ctx context.Context, i int, local, remote string) bool {
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: 60 * time.Second, Reregister: true},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: 60 * time.Second, Reregister: true},
 		"push", local, remote)
 	if res.Code != 0 {
 		m.Log.Warnf("实例 %d 推送 %s 失败: %s", i, filepath.Base(local), tail(res.Out, 300))
@@ -364,6 +369,7 @@ func (m *Manager) rootInfo() RootInfo {
 		AdbExe:              m.Root.AdbExe(),
 		AdbServerPort:       m.Root.AdbServerPort(),
 		ScriptAdbServerPort: m.Root.ScriptAdbServerPort(),
+		PortBase:            m.Root.Ports().Base,
 		Version:             m.Root.VersionText(),
 	}
 	if b, ok := m.Root.ModBuild(); ok {

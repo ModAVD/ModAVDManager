@@ -155,7 +155,7 @@ func TestFileContains(t *testing.T) {
 
 // TestOtherRootQemu: only a qemu that is instance i by name and ports and that the root check gives to another root.
 func TestOtherRootQemu(t *testing.T) {
-	c := root.ConsolePort(3)
+	c := root.PortPlan{Base: root.DefaultPortBase}.Console(3)
 	ports := strconv.Itoa(c) + "," + strconv.Itoa(c+1)
 	qemu := win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe", Created: 1}
 	exe := `D:\ModAVD\sdk\emulator\qemu\windows-x86_64\qemu-system-x86_64-headless.exe`
@@ -178,9 +178,13 @@ func TestOtherRootQemu(t *testing.T) {
 		{"no arguments", qemu, nil, notOurs, false},
 	}
 	for _, k := range cases {
-		if got := otherRootQemu(k.q, k.cmdline, 3, k.ours); got != k.want {
+		if got := otherRootQemu(k.q, k.cmdline, 3, c, k.ours); got != k.want {
 			t.Errorf("%s: otherRootQemu = %v, want %v", k.name, got, k.want)
 		}
+	}
+	// a root with a plan of its own: the default root's mas_3 is not on its ports
+	if otherRootQemu(qemu, args, 3, root.PortPlan{Base: 21000}.Console(3), notOurs) {
+		t.Error("plan 21000: the default root's mas_3 counted as on our ports")
 	}
 }
 
@@ -278,13 +282,14 @@ func TestOtherRootInstanceFreshRoot(t *testing.T) {
 		t.Skip("set MODAVD_TEST_LIVE=1 to run tests that look at live emulators or start a real adb server")
 	}
 	m := markerTestManager(t)
+	plan := m.Root.Ports()
 	for _, i := range []int{0, 1, 2, 3, 4, 6, 7, 8, 9} {
-		p, where, found := m.otherRootInstance(i)
+		p, where, found := m.otherRootInstance(plan, i)
 		if !found {
 			continue
 		}
 		cmdline, err := p.CommandLine()
-		if !isQemuName(p.Name) || where == "" || (err == nil && !cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i))) {
+		if !isQemuName(p.Name) || where == "" || (err == nil && !cmdlineMatches(cmdline, root.AvdName(i), plan.Console(i))) {
 			t.Errorf("instance %d: reported %+v (%s)", i, p, where)
 		}
 		t.Logf("instance %d: another root's qemu pid %d at %s", i, p.PID, where)

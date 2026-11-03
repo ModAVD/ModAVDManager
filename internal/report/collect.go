@@ -112,6 +112,7 @@ type collector struct {
 	sdkDir            string   // as mas-avd.json / the root gives it (shown)
 	sdkSource         string
 	adbPort           int
+	plan              root.PortPlan // mas-avd.json's portBase (ModAVD/ModAVD#75); the script's PORT_BASE otherwise
 	running           []liveTarget
 	cmdlineUnreadable bool
 	masFound          bool
@@ -315,10 +316,20 @@ func (c *collector) rootAndVersions() error {
 		c.L(msg)
 	}
 
+	// the port plan: modavd's mas-avd.json portBase (the scripts know only PORT_BASE 20000, so nothing is said for it)
+	plan, problem := root.PortPlanOf(cfg)
+	c.plan = plan
+	if problem != "" {
+		c.L(fmt.Sprintf("端口段：%d（%s；看状态时按 %d 算，modavd 不让开机）", plan.Base, problem, plan.Base))
+	} else if plan.Base != root.DefaultPortBase {
+		c.L(fmt.Sprintf("端口段：%d–%d（mas-avd.json 的 portBase；实例 i 的控制台端口是 %d + 10 × i）", plan.Base,
+			plan.Last(), plan.Base))
+	}
+
 	// the adb server port: the backend's adb_server_port(), back to 20050 when not valid; never 5037
 	raw := getCI(cfg, "adbServerPort")
 	hasPort := hasCI(cfg, "adbServerPort")
-	if port, ok := scriptPort(raw); ok {
+	if port, ok := scriptPort(c.plan, raw); ok {
 		c.adbPort = port
 		c.L(fmt.Sprintf("adb server 端口：%d（mas-avd.json 的 adbServerPort）", port))
 	} else {
@@ -1202,14 +1213,18 @@ func (c *collector) live() error {
 				if known {
 					continue
 				}
-				off := cport - root.PortBase
+				off := cport - c.plan.Base
 				if off < 0 || off%root.PortStep != 0 {
-					c.L(fmt.Sprintf("  emulator-%d：端口不符合 PORT_BASE=%d、PORT_STEP=%d，推算不出实例，跳过", cport, root.PortBase, root.PortStep))
+					c.L(fmt.Sprintf("  emulator-%d：端口不符合 PORT_BASE=%d、PORT_STEP=%d，推算不出实例，跳过", cport, c.plan.Base, root.PortStep))
 					continue
 				}
 				name := root.AvdNamePrefix + strconv.Itoa(off/root.PortStep)
-				c.L(fmt.Sprintf("  emulator-%[1]d（%[2]s）→ %[3]s：按 (%[1]d - %[4]d) / %[5]d 推算（PORT_BASE、PORT_STEP 是后端 constants.py 的常量）",
-					cport, state, name, root.PortBase, root.PortStep))
+				source := "PORT_BASE、PORT_STEP 是后端 constants.py 的常量"
+				if c.plan.Base != root.DefaultPortBase {
+					source = "PORT_BASE 是 mas-avd.json 的 portBase，PORT_STEP 是后端 constants.py 的常量"
+				}
+				c.L(fmt.Sprintf("  emulator-%[1]d（%[2]s）→ %[3]s：按 (%[1]d - %[4]d) / %[5]d 推算（%[6]s）",
+					cport, state, name, c.plan.Base, root.PortStep, source))
 				if state != "device" {
 					c.L("    状态不是 device，跳过")
 					continue

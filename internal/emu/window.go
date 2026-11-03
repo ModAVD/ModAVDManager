@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"modavd/internal/errs"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -65,7 +64,7 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 	if visible {
 		verb = "显示"
 	}
-	n, err := win.SetEmulatorWindowsVisible(p.PID, fmt.Sprintf("%s:%d", in.Name, root.ConsolePort(i)), visible)
+	n, err := win.SetEmulatorWindowsVisible(p.PID, fmt.Sprintf("%s:%d", in.Name, m.Root.Ports().Console(i)), visible)
 	if err != nil {
 		m.Log.Warnf("魔改 AVD 实例 %d %s窗口失败: %v", i, verb, err)
 		return res, nil

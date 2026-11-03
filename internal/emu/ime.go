@@ -13,7 +13,6 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/apk"
-	"modavd/internal/root"
 )
 
 // The host input method org.modavd.ime: the guest half of the emulator's modavd_ime channel; what the user types
@@ -224,7 +223,8 @@ func (m *Manager) guestIO(ctx context.Context, i int) guestIO {
 	return guestIO{
 		shell: func(command string, timeout time.Duration) adb.Result { return m.shell(ctx, i, command, timeout) },
 		adb: func(timeout time.Duration, args ...string) adb.Result {
-			return m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: timeout, Reregister: true}, args...)
+			return m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: timeout, Reregister: true},
+				args...)
 		},
 	}
 }

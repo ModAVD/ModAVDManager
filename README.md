@@ -95,6 +95,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
+- **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。`stop` 不拦，等于中止新建（记为失败）。
@@ -107,6 +108,11 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 **约定**（和 AUTO-MAS 一致）：
 
 - adb 只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050），不碰 5037。
+- 端口：实例 i 的控制台端口是 20000 + 10 × i，adb 加 1、gRPC 加 2，编号 0–9、不含 5。
+  - 开发、测试用的根目录可以在 `mas-avd.json` 里写 `"portBase": 21000`，换一段端口（这是 modavd 自己的键，AUTO-MAS 不认）。这样它的实例不会和同一台电脑上日常用的根目录（比如 AUTO-MAS 管的那个）里同编号的实例抢端口，也不会被认成那一台。
+  - `portBase` 只能是 20000，或者 1100–65400 之间 100 的整数倍。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。
+  - 不合规时，`status`、`list`、`info` 照常按 20000 段看，开机和新建都拒绝（`invalid_argument`），`check` 多一行「端口段」说明原因。
+  - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。
 - 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和 Vulkan 补丁，绝不拉起新的模拟器。
 - 同一实例的开机、关机按 `<根>\avd\.mas_<i>.{start,boot,stop}.lock` 排队：开机等前一次开机和关机做完；关机可以打断正在开机的实例。
