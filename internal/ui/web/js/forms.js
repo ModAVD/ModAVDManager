@@ -74,10 +74,12 @@ export function openCreate() {
   const idx = h('select', { class: 'select', id: 'c-index' }, h('option', { value: '', text: `自动（编号 ${free[0]}）` }),
     free.map((i) => h('option', { value: String(i), text: `编号 ${i}` })));
   const idxHint = hint('');
+  // the root's port plan (mas-avd.json portBase); a manager without port_base only knows 20000
+  const base = S.list.port_base || 20000;
   const sync = () => {
     const i = idx.value === '' ? free[0] : Number(idx.value);
     titleHint.textContent = `不填就显示 mas_${i}，以后可以随时改`;
-    idxHint.replaceChildren('编号决定端口，脚本连 ', h('b', { text: `127.0.0.1:${20001 + 10 * i}` }));
+    idxHint.replaceChildren('编号决定端口，脚本连 ', h('b', { text: `127.0.0.1:${base + 1 + 10 * i}` }));
   };
   idx.addEventListener('change', sync);
   sync();

@@ -13,7 +13,6 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
-	"modavd/internal/root"
 )
 
 const (
@@ -133,7 +132,7 @@ func (s *server) captureOnce(ctx context.Context, i int) ([]byte, error) {
 	if in, ok := s.hub.cachedInstance(i, statusMaxAge); ok && !in.Running {
 		return nil, notBooted(i)
 	}
-	res := s.mgr.AdbRun(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: shotTimeout, Raw: true},
+	res := s.mgr.AdbRun(ctx, adb.RunOptions{Serial: s.mgr.Serial(i), Timeout: shotTimeout, Raw: true},
 		"exec-out", "screencap", "-p")
 	if res.Code == 0 && bytes.HasPrefix(res.Stdout, pngSignature) {
 		return res.Stdout, nil

@@ -306,6 +306,9 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 	}
 
 	// ---- games of the running instances (only those)
+	// The index from a serial is counted in this root's plan (mas-avd.json portBase), so that the production
+	// root's instances, also listed by its servers 20050 / 20049, are not taken for this root's.
+	plan, _ := root.PortPlanOf(cfg)
 	var ports []int
 	cfgPort := 0
 	if v := getCI(cfg, "adbServerPort"); truthy(v) {
@@ -344,11 +347,10 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 			if cport < 0 {
 				continue
 			}
-			off := cport - root.PortBase
-			if off < 0 || off%root.PortStep != 0 {
+			idx, ok := configIndex(plan, cport)
+			if !ok {
 				continue
 			}
-			idx := strconv.Itoa(off / root.PortStep)
 			if _, ok := seen[idx]; ok {
 				continue
 			}
@@ -393,6 +395,16 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 }
 
 var microsoftPrefix = regexp.MustCompile(`(?i)^Microsoft[\s\p{Z}]+`)
+
+// configIndex is the instance index report-config.ps1 infers from a device's console port, counted in the root's
+// plan (the script knows only PORT_BASE 20000); ok=false when cport is not on it.
+func configIndex(plan root.PortPlan, cport int) (string, bool) {
+	off := cport - plan.Base
+	if off < 0 || off%root.PortStep != 0 {
+		return "", false
+	}
+	return strconv.Itoa(off / root.PortStep), true
+}
 
 // gamesOf asks one running instance for its third-party packages and their versions.
 func gamesOf(ctx context.Context, t configTarget) []string {

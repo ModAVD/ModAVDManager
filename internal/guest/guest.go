@@ -1,14 +1,17 @@
 // Package guest holds the scripts modavd pushes into the guest after boot. They are copies of AUTO-MAS
 // res/avd/guest/*.sh (the product versions). Until AUTO-MAS calls modavd for booting, changes go into both places.
+// It also carries the guest daemon of the per-app proxy (ProxyDaemon), which build.ps1 builds and puts in proxyd/.
 package guest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,6 +22,37 @@ import (
 
 //go:embed scripts/*.sh
 var scripts embed.FS
+
+//go:embed proxyd
+var proxyd embed.FS
+
+// ProxyDaemonName is the daemon's file name, on the host and in the guest.
+const ProxyDaemonName = "modavd-proxyd"
+
+// ErrNoProxyDaemon: this modavd was built without build.ps1, so it carries no guest daemon.
+var ErrNoProxyDaemon = errors.New("这个 modavd 编的时候没带按应用走代理的客体程序（要用 build.ps1 编）")
+
+// ProxyDaemon is cmd/modavd-proxyd for linux/amd64, as build.ps1 embedded it.
+func ProxyDaemon() ([]byte, error) {
+	z, err := proxyd.ReadFile("proxyd/" + ProxyDaemonName + ".gz")
+	if err != nil {
+		return nil, ErrNoProxyDaemon
+	}
+	r, err := gzip.NewReader(bytes.NewReader(z))
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(r)
+}
+
+// LocalProxyDaemon is LocalFile for the daemon.
+func LocalProxyDaemon(dir string) (string, error) {
+	b, err := ProxyDaemon()
+	if err != nil {
+		return "", err
+	}
+	return localCopy(dir, ProxyDaemonName, b)
+}
 
 const (
 	CPUInfoBind  = "cpuinfo-bind.sh"
@@ -56,6 +90,11 @@ func LocalFile(dir, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return localCopy(dir, name, b)
+}
+
+// localCopy is LocalFile for any bytes.
+func localCopy(dir, name string, b []byte) (string, error) {
 	sum := sha256.Sum256(b)
 	sub := filepath.Join(dir, hex.EncodeToString(sum[:])[:12])
 	path := filepath.Join(sub, name)
@@ -78,8 +117,7 @@ func LocalFile(dir, name string) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
-	err = moveNoReplace(tmp, path)
-	if err != nil {
+	if err := moveNoReplace(tmp, path); err != nil {
 		os.Remove(tmp)
 		// another writer got there first: its file is just as good when it holds these bytes
 		if old, rerr := readStable(path); rerr == nil && bytes.Equal(old, b) {

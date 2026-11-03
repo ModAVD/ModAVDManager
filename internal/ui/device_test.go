@@ -21,7 +21,28 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/root"
 )
+
+// TestManagerBackendSerial: the real backend counts the serial of the screenshot from the root's port plan.
+func TestManagerBackendSerial(t *testing.T) {
+	dir := t.TempDir()
+	meta := `{"portBase": 21000, "adbServerPort": 21099, "scriptAdbServerPort": 21098}`
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := root.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := managerBackend{emu.New(r, nil)}
+	if got := b.Serial(6); got != "emulator-21060" {
+		t.Errorf("Serial(6) = %s", got)
+	}
+	if got := b.RootInfo().PortBase; got != 21000 {
+		t.Errorf("RootInfo().PortBase = %d", got)
+	}
+}
 
 func TestScreenshot(t *testing.T) {
 	h := newHarness(t, nil)
@@ -54,6 +75,13 @@ func TestScreenshot(t *testing.T) {
 	}
 	if n := h.f.adbCalls.Load(); n != 1 {
 		t.Fatalf("%d captures for five concurrent requests", n)
+	}
+	// the serial is the root's (portBase 21000 in the fake), never counted from 20000 here
+	h.f.mu.Lock()
+	serials := append([]string(nil), h.f.shotSerials...)
+	h.f.mu.Unlock()
+	if len(serials) != 1 || serials[0] != "emulator-21030" {
+		t.Fatalf("captured serials %q", serials)
 	}
 	// a capture younger than 300 ms is served again
 	expect(t, h.do("GET", "/api/instances/3/screenshot", nil), 200, nil)

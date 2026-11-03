@@ -112,6 +112,7 @@ type collector struct {
 	sdkDir            string   // as mas-avd.json / the root gives it (shown)
 	sdkSource         string
 	adbPort           int
+	plan              root.PortPlan // mas-avd.json's portBase (ModAVD/ModAVD#75); the script's PORT_BASE otherwise
 	running           []liveTarget
 	cmdlineUnreadable bool
 	masFound          bool
@@ -315,10 +316,20 @@ func (c *collector) rootAndVersions() error {
 		c.L(msg)
 	}
 
+	// the port plan: modavd's mas-avd.json portBase (the scripts know only PORT_BASE 20000, so nothing is said for it)
+	plan, problem := root.PortPlanOf(cfg)
+	c.plan = plan
+	if problem != "" {
+		c.L(fmt.Sprintf("端口段：%d（%s；看状态时按 %d 算，modavd 不让开机）", plan.Base, problem, plan.Base))
+	} else if plan.Base != root.DefaultPortBase {
+		c.L(fmt.Sprintf("端口段：%d–%d（mas-avd.json 的 portBase；实例 i 的控制台端口是 %d + 10 × i）", plan.Base,
+			plan.Last(), plan.Base))
+	}
+
 	// the adb server port: the backend's adb_server_port(), back to 20050 when not valid; never 5037
 	raw := getCI(cfg, "adbServerPort")
 	hasPort := hasCI(cfg, "adbServerPort")
-	if port, ok := scriptPort(raw); ok {
+	if port, ok := scriptPort(c.plan, raw); ok {
 		c.adbPort = port
 		c.L(fmt.Sprintf("adb server 端口：%d（mas-avd.json 的 adbServerPort）", port))
 	} else {
@@ -651,6 +662,17 @@ var (
 	portsArg = regexp.MustCompile(`(?i)(?:^|\s)-ports?\s+"?([0-9]+)`)
 )
 
+// otherRootsInstance: a qemu of instance avd on console port is another root's. Only with a plan of its own
+// (portBase): then the same-named instance of another root can run at the same time, on that root's ports. Without
+// one, as the script: two such instances could not run at once (they would share ports).
+func otherRootsInstance(plan root.PortPlan, avd string, port int) bool {
+	if plan.Base == root.DefaultPortBase {
+		return false
+	}
+	i, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(avd), root.AvdNamePrefix))
+	return err == nil && port != plan.Console(i)
+}
+
 func (c *collector) runningAndAdb() error {
 	c.section("正在运行的 qemu-system 进程")
 	qs, err := c.h.Processes(func(name string) bool { return hasPrefixFold(name, "qemu-system") })
@@ -683,6 +705,10 @@ func (c *collector) runningAndAdb() error {
 			port, _ = strconv.Atoi(m[1])
 		}
 		if avd != "" && containsFold(c.instances, avd) {
+			if otherRootsInstance(c.plan, avd, port) {
+				c.L(fmt.Sprintf("  端口 %d 不是本目录 %s 的（端口段 %d），是别的根目录的同名实例，跳过", port, avd, c.plan.Base))
+				continue
+			}
 			running = append(running, liveTarget{name: avd, pid: q.PID, consolePort: port})
 		}
 	}
@@ -1202,14 +1228,18 @@ func (c *collector) live() error {
 				if known {
 					continue
 				}
-				off := cport - root.PortBase
+				off := cport - c.plan.Base
 				if off < 0 || off%root.PortStep != 0 {
-					c.L(fmt.Sprintf("  emulator-%d：端口不符合 PORT_BASE=%d、PORT_STEP=%d，推算不出实例，跳过", cport, root.PortBase, root.PortStep))
+					c.L(fmt.Sprintf("  emulator-%d：端口不符合 PORT_BASE=%d、PORT_STEP=%d，推算不出实例，跳过", cport, c.plan.Base, root.PortStep))
 					continue
 				}
 				name := root.AvdNamePrefix + strconv.Itoa(off/root.PortStep)
-				c.L(fmt.Sprintf("  emulator-%[1]d（%[2]s）→ %[3]s：按 (%[1]d - %[4]d) / %[5]d 推算（PORT_BASE、PORT_STEP 是后端 constants.py 的常量）",
-					cport, state, name, root.PortBase, root.PortStep))
+				source := "PORT_BASE、PORT_STEP 是后端 constants.py 的常量"
+				if c.plan.Base != root.DefaultPortBase {
+					source = "PORT_BASE 是 mas-avd.json 的 portBase，PORT_STEP 是后端 constants.py 的常量"
+				}
+				c.L(fmt.Sprintf("  emulator-%[1]d（%[2]s）→ %[3]s：按 (%[1]d - %[4]d) / %[5]d 推算（%[6]s）",
+					cport, state, name, c.plan.Base, root.PortStep, source))
 				if state != "device" {
 					c.L("    状态不是 device，跳过")
 					continue

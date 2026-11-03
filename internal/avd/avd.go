@@ -556,6 +556,9 @@ type CreateOptions struct {
 	CPU             int
 	DataPartitionGB int
 	FPS             int
+	// Creating also sets instances.<i>.creationState = "creating" (emu's create setup), in the same write as the other
+	// keys: the instance is never listed without it.
+	Creating bool
 }
 
 // Create writes mas_<i>.ini and mas_<i>.avd\config.ini exactly like AUTO-MAS create_instance_files (template +
@@ -567,8 +570,9 @@ type CreateOptions struct {
 //
 // "Appended" is a dict update: hw.lcd.vsync is already in the template, so it keeps its place there. The options are
 // checked again anyway (same rules as ValidateOptions / ValidateFPS; zero values fail). Before writing anything
-// mas-avd.json must be readable, and when it cannot be updated at the end the new files are removed again, so a
-// failed Create leaves nothing behind (AUTO-MAS would keep the files, or overwrite an unreadable mas-avd.json).
+// mas-avd.json must be readable, and when it cannot be updated (or the .ini written after it fails) the new files
+// are removed again, so a failed Create leaves nothing behind (AUTO-MAS would keep the files, or overwrite an
+// unreadable mas-avd.json).
 func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	if !root.ValidIndex(i) {
 		return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
@@ -649,19 +653,25 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		rollback()
 		return nil, err
 	}
-	if err := WriteIni(iniPath, ini); err != nil {
-		rollback()
-		return nil, err
-	}
+	// instances.<i> before mas_<i>.ini, which makes the instance listed: a list in between must not find it without
+	// its metadata (a create's "creating" in particular).
 	createdAt := nowISO()
 	err = r.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
 		meta.Set("memoryMb", jsonord.NewInt(int64(memory)))
 		meta.Set("initialized", jsonord.NewBool(false))
 		meta.Set("createdAt", jsonord.NewString(createdAt))
+		if opt.Creating {
+			meta.Set("creationState", jsonord.NewString("creating"))
+		}
 		return nil
 	})
 	if err != nil {
 		rollback()
+		return nil, err
+	}
+	if err := WriteIni(iniPath, ini); err != nil {
+		rollback()
+		r.RemoveInstanceMeta(i)
 		return nil, err
 	}
 	if in, err := Get(r, i); err == nil {
@@ -675,20 +685,21 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-// FreeIndex is the smallest valid index that has no instance and whose three ports busy() reports free.
-// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" when there is none. A nil busy skips the port check.
-func FreeIndex(existing map[int]bool, busy func(ports []int) []int) (int, error) {
+// FreeIndex is the smallest valid index that has no instance and whose three ports in plan busy() reports free.
+// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" (the root's plan) when there is none. A nil busy skips
+// the port check.
+func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int) []int) (int, error) {
 	for i := 0; i <= root.MaxIndex; i++ {
 		if !root.ValidIndex(i) || existing[i] {
 			continue
 		}
-		c := root.ConsolePort(i)
+		c := plan.Console(i)
 		if busy != nil && len(busy([]int{c, c + 1, c + 2})) > 0 {
 			continue
 		}
 		return i, nil
 	}
-	return 0, errs.New(errs.Busy, "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）")
+	return 0, errs.Newf(errs.Busy, "魔改 AVD 实例已满（端口段 %d–%d 最多 9 台）", plan.Base, plan.Base+100)
 }
 
 type UpdateOptions struct {

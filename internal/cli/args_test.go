@@ -364,7 +364,7 @@ func TestCommandTable(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"list", "info", "status", "create", "set", "delete", "start", "stop", "restart",
+	for _, name := range []string{"list", "info", "status", "create", "set", "delete", "start", "stop",
 		"check", "report-config", "collect-info", "window", "install", "shell", "adb", "servers", "version", "mcp", "help"} {
 		if !seen[name] {
 			t.Errorf("command %s missing", name)

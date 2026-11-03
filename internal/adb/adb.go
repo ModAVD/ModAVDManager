@@ -276,7 +276,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // the port, and waits up to timeout until it listens (polling the listener table every 100 ms, not waiting for the
 // start-server client, which takes ~2.1 s; a client that exits non-zero while the port is still closed = failed).
 // Returns whether it listens. A listener whose process name is not adb.exe is errs.PortConflict with the AUTO-MAS
-// message (change adbServerPort in mas-avd.json); an unreadable owner name counts as adb.
+// message (change adbServerPort in mas-avd.json); an unreadable owner name counts as adb. A root whose mas-avd.json
+// ports root.CheckPorts refuses gets that errs.InvalidArgument error, before anything is looked at or started.
 func (c *Client) EnsureServer(ctx context.Context, timeout time.Duration) (bool, error) {
 	return c.ensure(ctx, privateServer, c.Root.AdbServerPort(), timeout)
 }
@@ -287,6 +288,12 @@ func (c *Client) EnsureScriptServer(ctx context.Context, timeout time.Duration) 
 }
 
 func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout time.Duration) (bool, error) {
+	// Every adb run of this root comes through here first (Run, servers, the adb passthrough, status). A root with a
+	// port plan of its own whose servers are left on the production ones (20050 / 20049, the defaults) must neither
+	// start nor use those (ModAVD/ModAVD#75); a root without portBase always passes.
+	if err := c.Root.CheckPorts(); err != nil {
+		return false, err
+	}
 	up, pid, name, err := listener(port)
 	if err != nil {
 		return false, err
@@ -534,8 +541,8 @@ func serialLock(serial string) chan struct{} {
 	return l.(chan struct{})
 }
 
-// consolePortOf maps emulator-<console> to the console port when it is one of our port plan.
-func consolePortOf(serial string) (int, bool) {
+// consolePortOf maps emulator-<console> to the console port when it is one of plan's.
+func consolePortOf(plan root.PortPlan, serial string) (int, bool) {
 	rest, ok := strings.CutPrefix(serial, "emulator-")
 	if !ok || rest == "" || len(rest) > 6 {
 		return 0, false
@@ -549,18 +556,21 @@ func consolePortOf(serial string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	if _, ok := root.IndexOfConsolePort(port); !ok {
+	if _, ok := plan.IndexOfConsole(port); !ok {
 		return 0, false
 	}
 	return port, true
 }
 
 // Reregister brings serial back onto the private server (AUTO-MAS reregister_emulator): only for emulator-<console>
-// serials of our port plan, not while Booting(serial), only when QemuOnAdbPort finds the instance's own qemu (of this
-// root) and it is at least 60 s old; then get-state, Register, and up to 5 s of get-state == "device". Serialized per
-// serial within this process. Starts OnReregistered on success.
+// serials of the root's port plan, not while Booting(serial), only when QemuOnAdbPort finds the instance's own qemu (of
+// this root) and it is at least 60 s old; then get-state, Register, and up to 5 s of get-state == "device".
+// Serialized per serial within this process. Starts OnReregistered on success.
 func (c *Client) Reregister(ctx context.Context, serial string) bool {
-	console, ok := consolePortOf(serial)
+	if c.Root == nil {
+		return false // no root, no instance of its own (QemuOnAdbPort says so too)
+	}
+	console, ok := consolePortOf(c.Root.Ports(), serial)
 	if !ok || (c.Booting != nil && c.Booting(serial)) {
 		return false
 	}
@@ -709,14 +719,18 @@ func (c *Client) registerForClose(ctx context.Context, console int, started time
 var qemuOnAdbPort = QemuOnAdbPort
 
 // QemuOnAdbPort is the process listening on console+1 when it is qemu-system* with "-ports <console>,<console+1>"
-// and "-avd mas_<i>" (i from the console port) on its command line, and QemuBelongsTo says it is instance i of r.
+// and "-avd mas_<i>" (i from the console port, in r's port plan) on its command line, and QemuBelongsTo says it is
+// instance i of r.
 //
 // Somebody listening is not enough: the port may belong to another program, and registering it would hand that
 // program's port to the private server. Nor are the arguments: the same-numbered instance of another root has the
 // same ones, and registering it would put one emulator on two private servers.
 func QemuOnAdbPort(r *root.Root, console int) (win.Process, bool) {
-	i, ok := root.IndexOfConsolePort(console)
-	if !ok || r == nil {
+	if r == nil {
+		return win.Process{}, false
+	}
+	i, ok := r.Ports().IndexOfConsole(console)
+	if !ok {
 		return win.Process{}, false
 	}
 	pid, up, err := win.ListenerPID(console + 1)

@@ -13,7 +13,6 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/jsonord"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -23,6 +22,11 @@ import (
 // %LOCALAPPDATA%\Temp\avd\running, before it exists the run lock in the instance directory), but a test should not
 // depend on what runs on the machine either.
 var qemuScan func(indexes []int) map[int]win.Process
+
+// statusBooted is the getprop of instanceInfo; a test replaces it.
+var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
+	return m.bootCompleted(ctx, i, statusAdbTimeout, true)
+}
 
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
 func (m *Manager) qemus(indexes []int) map[int]win.Process {
@@ -121,19 +125,27 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 // already known boot state (skips the getprop).
 func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Process, booted *bool) InstanceInfo {
 	i := in.Index
-	console := root.ConsolePort(i)
+	ports := m.Root.Ports()
 	info := InstanceInfo{
 		Index:      i,
 		Name:       in.Name,
 		Title:      in.Title,
-		Serial:     root.Serial(i),
-		AdbAddress: fmt.Sprintf("127.0.0.1:%d", root.AdbPort(i)),
-		Ports:      Ports{Console: console, Adb: root.AdbPort(i), Grpc: root.GrpcPort(i)},
-		Screencap:  Screencap{Shm: shmName(i)},
+		Serial:     ports.Serial(i),
+		AdbAddress: fmt.Sprintf("127.0.0.1:%d", ports.Adb(i)),
+		Ports:      Ports{Console: ports.Console(i), Adb: ports.Adb(i), Grpc: ports.Grpc(i)},
+		Screencap:  Screencap{Shm: shmName(ports, i)},
 		Path:       in.Dir,
+	}
+	// create's setup (createinit.go) is read before the getprop, which may wait up to statusAdbTimeout: its shutdown
+	// is what makes the getprop wait, and a setup that ends meanwhile would leave the qemu of the snapshot with no
+	// creation state, read as "starting"
+	info.Creation, info.CreationError, info.CreationLog = m.creation(i)
+	if info.Creation == creationCreating {
+		info.CreationProgress = m.createPercent(i)
 	}
 	if p != nil {
 		info.Running = true
+		info.Window, _ = qemuWindowed(*p)
 		info.PID = int(p.PID)
 		if t := p.StartedAt(); !t.IsZero() {
 			info.StartedAt = t.Format(time.RFC3339)
@@ -142,7 +154,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		if booted != nil {
 			info.Booted = *booted
 		} else {
-			info.Booted = m.bootCompleted(ctx, i, statusAdbTimeout, true)
+			info.Booted = statusBooted(m, ctx, i)
 		}
 		// Only for a running instance: the name is per console port, not per root, so an offline instance would
 		// report another root's mapping on the same port.
@@ -150,8 +162,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
-	// create's setup (createinit.go): "creating" overrides what the boots of that setup look like from outside
-	info.Creation, info.CreationError, info.CreationLog = m.creation(i)
+	// "creating" overrides what the boots of that setup look like from outside
 	switch info.Creation {
 	case creationCreating:
 		info.Status, info.Busy = StatusCreating, "creating"

@@ -1,6 +1,6 @@
 // Package cli is the command line of modavd: a thin layer over emu.Manager, plus mcp.Serve for `modavd mcp`.
 //
-// Contract (also printed by `modavd help`; part of buildinfo.Protocol):
+// Contract (also printed by `modavd help`; part of buildinfo.Protocol, 2 since 0.3.0: what changed is listed there):
 //
 //	modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 //
@@ -9,14 +9,13 @@
 //
 //	list                                                  emu.ListResult
 //	info <i>                                              emu.InstanceInfo
-//	status <i>                                            StatusResult {index,name,status,running,booted,busy,pid,creation,creation_error,creation_log}
+//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,serial,adb_address,ports}
 //	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb N] [--fps 30|60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)
-//	start <i> [--window] [--timeout 300]                  emu.StartResult
+//	start <i> [--window|--headless] [--timeout 300]       emu.StartResult (running the other way than asked: busy)
 //	stop <i> [--force]                                    emu.StopResult
 //	stop --all [--force]                                  StopAllResult {"results":[StopResult],"failed":[{index,error}]}
-//	restart <i> [--window] [--timeout 300] [--force]      emu.StartResult (stop, wait for qemu to exit, then start)
 //	check [--memory M]                                    emu.CheckResult (exit 0 even when not ready: see "ready")
 //	components [status]                                   ComponentsStatusResult {"root","components":[emu.ComponentStatus]}
 //	components fetch [--accept-license] [--mirror ID] [--mirror-url URL]... [--keep-downloads]   components.Result
@@ -31,6 +30,9 @@
 //	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
+//
+// restart went away in 0.3.0 (Protocol 2; no restart: stop, then start); calling it is a usage error that says so
+// (removedCommands).
 //
 // <i> is 3 or mas_3. --memory takes what avd.ParseMemoryMB takes (6144, 6144M, 6G ...). The root is
 // root.Resolve(--root), looked up only by commands that need it, after their arguments were checked.
@@ -49,7 +51,7 @@
 // first failure (its envelope still says ok and lists both results and failed). Ctrl+C cancels the context
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
 // context ended fails with errs.Canceled even when the command returned a result, unless the command is final (its
-// result reports a change that was made: create, set, delete, start, stop, restart, window, install, components fetch;
+// result reports a change that was made: create, set, delete, start, stop, window, install, components fetch;
 // or does not depend on the context: version, help, components status): a query whose adb calls were killed half way
 // would report what it saw by then, an online instance as starting. components fetch stops at Ctrl+C with
 // errs.Canceled itself, between two reads of a download or an unpack and before the next component.

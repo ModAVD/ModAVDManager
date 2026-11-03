@@ -447,7 +447,7 @@ func (m *Manager) patchedVulkanLibrary(ctx context.Context, i int) string {
 
 	original := filepath.Join(dir, fmt.Sprintf("libvulkan_enc-%d.orig.so", i))
 	defer os.Remove(original)
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: 60 * time.Second, Reregister: true},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: 60 * time.Second, Reregister: true},
 		"pull", vkfix.GuestPath, original)
 	if res.Code != 0 || !regularFile(original) {
 		m.Log.Warnf("实例 %d 客体 Vulkan 驱动补丁没挂: 从客体拉 %s 失败: %s", i, vkfix.GuestPath, tail(res.Out, 200))

@@ -65,9 +65,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
-| `start <i> [--window] [--timeout 300] [--no-bridge]` | 开机，等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例还没有执行桥时接着装上，`--no-bridge` 这次不装 |
-| `stop <i> [--force]`、`stop --all` | 关机：先让安卓正常关机，不成再 sync + kill；`--force` 是 sync + 强杀 |
-| `restart <i> [--window] [--timeout 300] [--force] [--no-bridge]` | 关机再开机，选项同 `stop`、`start` |
+| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
+| `stop <i> [--force]`、`stop --all` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀 |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
@@ -79,13 +78,14 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 - `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 30 / 60。
 - 根目录：`--root`，没给就用环境变量 `MODAVD_ROOT`，再没有就用 `modavd.exe` 所在目录或它的上一级。
+- 0.3.0 起没有 `restart`：先 `stop` 再 `start`。旧的调用报用法错误（退出码 2），提示改用这两步。
 
 **arm64 执行桥**：
 
 - 只对内置名单里的游戏生效，其余应用照旧走原来的转译层。桥装在实例自己的 system / vendor 覆盖层里，要 0.36 起的模拟器。
-- modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次。只在这次是它拉起的模拟器时装；接管已经在运行的实例时不装。装不上只是警告，实例照常运行，下次开机再试。
-- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` / `restart` 的 `--no-bridge` 只管这一次。
-- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉。`verify`：只读核对，实例要开着。
+- modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次；已经有桥、但桥的文件和这个包里的不一样（更新过 ModAVD 包），就同样在设置做完后换上新的，再冷启动一次。只在这次是它拉起的模拟器时装或更新；接管已经在运行的实例时不动。更新要冷启动，所以开机后的设置做完时已经有应用在前台、或者正在装 APK，这次就先不更新。装不上、更新不上都只是警告，实例照常运行，下次开机再试。AUTO-MAS 自己开机的实例不经过这一步：要换新文件，先关掉实例，再用 ModAVD.exe 或 `modavd start` 开一次机，或者跑 `bridge <i> install`。
+- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` 的 `--no-bridge` 只管这一次。
+- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉；开着的，中间冷启动后照原来的方式开回来，带窗口的还带窗口，无头的还无头。`verify`：只读核对，实例要开着。
 - `info` / `list` / `status` 的 `bridge`：`off`（记了不要桥）、`pending`（下次由 modavd 拉起的开机会装）、`installed`（开着的客体里桥在）、`unknown`。只问已经开完机的客体；关着或还在开机的实例，开机标记在桥装好后一直留着，装失败时也在，所以首次开机做过、标记也在时是 `unknown`，要知道确切结果就开机后再查。
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
@@ -94,23 +94,40 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
-- `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
-- 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
+- `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
+- **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
+- 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
-  - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。
-  - 失败（含新建的进程被结束）是 `create_failed`，`creation_error` 写原因、`creation_log` 是那次开机的日志；这时 `start`、`set`、`bridge` 返回 `not_ready`（退出码 4）。用 `create --resume N` 重做初始化，或者 `delete N --yes` 删掉。
+  - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。`stop` 不拦，等于中止新建（记为失败）。
+  - 失败（含新建的进程被结束）是 `create_failed`，`creation_error` 写原因、`creation_log` 是那次开机的日志；这时 `start`、`set`、`bridge` 返回 `not_ready`（退出码 4）。用 `create --resume N` 重做初始化（上次留下的模拟器还开着就先正常关掉），或者 `delete N --yes` 删掉。
   - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
-  - 进度：命令行逐步打印到 stderr；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示进度条，关掉窗口会在后台做完。
+  - 进度：命令行逐步打印到 stderr，每行带「新建中 NN%」；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示「新建中 NN%」和进度条（别处发起的新建也显示），「更多」里可以取消新建，关掉窗口会在后台做完。
 
 **退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 
 - adb 只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050），不碰 5037。
+- 端口：实例 i 的控制台端口是 20000 + 10 × i，adb 加 1、gRPC 加 2，编号 0–9、不含 5。
+  - 开发、测试用的根目录可以在 `mas-avd.json` 里写 `"portBase": 21000`，换一段端口（这是 modavd 自己的键，AUTO-MAS 不认）。这样它的实例不会和同一台电脑上日常用的根目录（比如 AUTO-MAS 管的那个）里同编号的实例抢端口，也不会被认成那一台。
+  - `portBase` 只能是 20000，或者 1100–65400 之间 100 的整数倍。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。
+  - 不合规时，`status`、`list`、`info` 照常按 20000 段看，开机和新建都拒绝（`invalid_argument`），`check` 多一行「端口段」说明原因。
+  - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。
 - 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和 Vulkan 补丁，绝不拉起新的模拟器。
 - 同一实例的开机、关机按 `<根>\avd\.mas_<i>.{start,boot,stop}.lock` 排队：开机等前一次开机和关机做完；关机可以打断正在开机的实例。
 
+**开机后调优里的宿主调度**：
+
+- qemu 设为「高于正常」优先级。
+- 绑核只在 L3 分大小几组的处理器（7950X3D 这类 X3D、Ryzen AI 300 等）上做，别的处理器不绑：
+  - 选空余比例（空余核数 ÷ 这组的核数）最大的一组，一样时选 L3 大的；只开一台时就是 L3 大的那组。
+  - 各组都放不下本实例的 vCPU 就不绑。
+  - 空余是扣掉整台机器上所有 qemu 的 vCPU 以后算的，包括别的根目录和 AUTO-MAS 起的。那些进程只读、不改。
+- 下载这类小块密集写盘时，客体里每个 vCPU 起一个忙等循环（`mas-idlepoll.sh`），不让 vCPU 停机，下载更快。
+  - 循环数不超过宿主的余量：逻辑核数减去所有 qemu 的 vCPU 数（含本实例；绑了核就按那一组算）。
+  - 所以逻辑核数不到本实例 vCPU 两倍的电脑上，只开一台也会少开：默认 6 核的实例在 8 线程的电脑上只开 2 个，6 线程及以下不开，下载会比开满时慢（在 7950X3D 上实测，1–2 个循环和不开差不多）。
+  - 这是有意的取舍：给 qemu 自己的线程、Windows 和别的程序留出核。
 ## MCP
 
 ```
@@ -135,7 +152,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。
 
-- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
+- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度；开机一律带窗口，无头开机只走命令行；不提供重启，也不提供显示 / 隐藏窗口）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
 - 关掉窗口后，等正在跑的任务做完再退出。
@@ -154,7 +171,8 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。管理器里暂时只能改设置和检查更新，「更新」按钮不可用。
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
 - `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
-- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。Go 不读 Windows 的系统代理，只认 `HTTPS_PROXY` / `NO_PROXY`。
+- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。
+- 代理和 `components fetch` 是同一套规则，见下一节的「代理」。
 
 ## 补全 Google 组件
 
@@ -218,9 +236,10 @@ go test ./...
 
 ## 参与
 
-- 只有一个维护者，回复可能要几天。改代码前先开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
+- 报问题、提建议都到 ModAVD 仓库的 [Issues](https://github.com/ModAVD/ModAVD/issues)，选上「管理器和命令行」；本仓库只收 PR。
+- 只有一个维护者，回复可能要几天。改代码前先在 ModAVD 仓库开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
-- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义或删了字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义、删了命令或字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
 - README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
 - 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。

@@ -1,30 +1,31 @@
 //go:build windows
 
-package components
+package hostproxy
 
 import (
 	"syscall"
 	"unsafe"
 )
 
-// systemProxy reads the static proxy of the current user's Internet settings (HKCU\Software\Microsoft\Windows\
-// CurrentVersion\Internet Settings: ProxyEnable, ProxyServer, ProxyOverride), read only. ok=false when none is on.
-func systemProxy() (server, override string, ok bool) {
+// readSystem reads the current user's Internet settings (HKCU\Software\Microsoft\Windows\CurrentVersion\Internet
+// Settings: ProxyEnable, ProxyServer, ProxyOverride, AutoConfigURL), read only.
+func readSystem() settings {
 	path, err := syscall.UTF16PtrFromString(`Software\Microsoft\Windows\CurrentVersion\Internet Settings`)
 	if err != nil {
-		return "", "", false
+		return settings{}
 	}
 	var k syscall.Handle
 	if syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, path, 0, syscall.KEY_READ, &k) != nil {
-		return "", "", false
+		return settings{}
 	}
 	defer syscall.RegCloseKey(k)
+	s := settings{autoConfig: regString(k, "AutoConfigURL") != ""}
 	var enable uint32
-	if !regValue(k, "ProxyEnable", syscall.REG_DWORD, unsafe.Slice((*byte)(unsafe.Pointer(&enable)), 4)) || enable == 0 {
-		return "", "", false
+	if regValue(k, "ProxyEnable", syscall.REG_DWORD, unsafe.Slice((*byte)(unsafe.Pointer(&enable)), 4)) && enable != 0 {
+		s.server, s.override = regString(k, "ProxyServer"), regString(k, "ProxyOverride")
+		s.enabled = s.server != ""
 	}
-	server, override = regString(k, "ProxyServer"), regString(k, "ProxyOverride")
-	return server, override, server != ""
+	return s
 }
 
 // regValue reads a value of type want into buf (exactly filled for a DWORD).

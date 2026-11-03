@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -788,11 +789,27 @@ func TestFetchJSONNeedsAcceptLicense(t *testing.T) {
 	}
 }
 
-// TestFetchUsesSystemProxy: the download client really goes through the proxy requestProxy picks. The mirror's host
-// does not resolve, so the fetch can only succeed when every request (manifest and zip) is sent to the proxy, in
-// proxy form.
-func TestFetchUsesSystemProxy(t *testing.T) {
-	for _, k := range proxyEnv {
+// TestFetchUsesProxy: every request of a fetch (manifest and zip) really goes through the proxy hostproxy picks, here
+// one named by HTTP_PROXY. net/http reads the proxy variables once per process, so the fetch runs in a child
+// (TestFetchUsesProxyChild) whose first request is that fetch's.
+func TestFetchUsesProxy(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFetchUsesProxyChild$", "-test.v", "-test.count=1")
+	cmd.Env = append(os.Environ(), fetchProxyChildEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestFetchUsesProxyChild") {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+const fetchProxyChildEnv = "MODAVD_TEST_FETCH_PROXY_CHILD"
+
+// TestFetchUsesProxyChild is TestFetchUsesProxy's child. The mirror's host does not resolve, so the fetch can only
+// succeed when every request is sent to the proxy, in proxy form.
+func TestFetchUsesProxyChild(t *testing.T) {
+	if os.Getenv(fetchProxyChildEnv) == "" {
+		t.Skip("run by TestFetchUsesProxy")
+	}
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, "")
 	}
 	pt := ptZip(t, adbBody)
@@ -807,9 +824,7 @@ func TestFetchUsesSystemProxy(t *testing.T) {
 		m.ServeHTTP(w, r)
 	}))
 	t.Cleanup(proxy.Close)
-	old := readSystemProxy
-	t.Cleanup(func() { readSystemProxy = old })
-	readSystemProxy = func() (string, string, bool) { return proxy.Listener.Addr().String(), "", true }
+	t.Setenv("HTTP_PROXY", proxy.URL) // before the first request of this process
 
 	r := tempRoot(t)
 	out := fetch(t, nil, r, Options{AcceptLicense: true, MirrorURLs: []string{"http://mirror.invalid/repo/"}})

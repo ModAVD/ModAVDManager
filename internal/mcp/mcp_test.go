@@ -32,10 +32,11 @@ type fake struct {
 	shells  []string
 	timeout time.Duration
 
-	start func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
-	del   func(ctx context.Context, i int) (*emu.DeleteResult, error)
-	wait  func(timeout time.Duration)
-	waits []time.Duration
+	start  func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
+	create func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	del    func(ctx context.Context, i int) (*emu.DeleteResult, error)
+	wait   func(timeout time.Duration)
+	waits  []time.Duration
 }
 
 func (f *fake) Wait(timeout time.Duration) {
@@ -113,6 +114,9 @@ func (f *fake) Create(ctx context.Context, req emu.CreateRequest) (*emu.Instance
 	f.creates = append(f.creates, req)
 	f.mu.Unlock()
 	f.record("create")
+	if f.create != nil {
+		return f.create(ctx, req)
+	}
 	i := 2
 	if req.Index != nil {
 		i = *req.Index
@@ -733,6 +737,7 @@ func TestToolCalls(t *testing.T) {
 		{"delete_instance", map[string]any{"index": 2, "confirm": true}, "delete 2"},
 		{"start_instance", map[string]any{"index": 1, "window": true, "timeout_s": 120}, "start 1"},
 		{"start_instance", map[string]any{"index": 1}, "start 1"},
+		{"start_instance", map[string]any{"index": 1, "window": false}, "start 1"},
 		{"stop_instance", map[string]any{"index": 1, "force": true}, "stop 1"},
 		{"stop_instance", map[string]any{"index": 1}, "stop 1"},
 		{"set_window_visible", map[string]any{"index": 1, "visible": false}, "window 1 false"},
@@ -778,11 +783,15 @@ func TestToolCalls(t *testing.T) {
 	if u := f.updates[0]; *u.MemoryMB != 5120 || u.Title != nil || u.CPU != nil || u.FPS != nil {
 		t.Fatalf("update request %+v", u)
 	}
-	if s := f.starts[0]; !s.Window || s.Timeout != 120*time.Second || s.Progress != nil {
+	if s := f.starts[0]; !s.Window || s.Headless || s.Timeout != 120*time.Second || s.Progress != nil {
 		t.Fatalf("start options %+v (no progressToken: no Progress)", s)
 	}
-	if s := f.starts[1]; s.Window || s.Timeout != 0 {
+	// window omitted: neither (a running instance is adopted as it runs); false: headless asked for
+	if s := f.starts[1]; s.Window || s.Headless || s.Timeout != 0 {
 		t.Fatalf("start defaults %+v", s)
+	}
+	if s := f.starts[2]; s.Window || !s.Headless {
+		t.Fatalf("window=false %+v", s)
 	}
 	if !f.stops[0].Force || f.stops[1].Force {
 		t.Fatalf("stop options %+v", f.stops)
@@ -997,6 +1006,34 @@ func TestStartProgress(t *testing.T) {
 	values, _ = h2.progressUntilResult(float64(8))
 	if want := []float64{1, 2, 4}; !reflect.DeepEqual(values, want) {
 		t.Fatalf("throttled progress %v, want %v", values, want)
+	}
+}
+
+// TestCreateProgressMessages: create_instance's progress says 新建中 with the percentage until the setup is done.
+func TestCreateProgressMessages(t *testing.T) {
+	f := &fake{create: func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
+		for _, p := range []emu.Progress{{Step: "create", Message: "实例 3：后台无头开机", Done: 0, Total: 1000},
+			{Step: "ime", Message: "实例 3 宿主输入法", Done: 357, Total: 1000},
+			{Step: "done", Message: "实例 3 新建完成", Done: 1000, Total: 1000}} {
+			req.Progress(p)
+		}
+		in := sampleInstance(3)
+		return &in, nil
+	}}
+	h := newHarness(t, f, func(s *server) { s.progressEvery = 0 })
+	h.sendJSON(map[string]any{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": modernParams(
+		map[string]any{"name": "create_instance", "arguments": map[string]any{"index": 3}},
+		map[string]any{"progressToken": "create-9"})})
+	var msgs []string
+	for {
+		m := h.recv()
+		if m["method"] != "notifications/progress" {
+			break
+		}
+		msgs = append(msgs, m["params"].(map[string]any)["message"].(string))
+	}
+	if want := []string{"新建中 0%：实例 3：后台无头开机", "新建中 35%：实例 3 宿主输入法", "实例 3 新建完成"}; !reflect.DeepEqual(msgs, want) {
+		t.Fatalf("messages %q, want %q", msgs, want)
 	}
 }
 
@@ -1349,9 +1386,10 @@ func TestStartDescriptionTellsWhatCancelDoes(t *testing.T) {
 		if tool.Name != "start_instance" {
 			continue
 		}
-		for _, s := range []string{"Cancelling the call or reaching timeout_s only stops waiting",
-			"not killed and keeps booting", "Calling start_instance again adopts it and finishes the setup of that boot",
-			"guest Vulkan fix", "setup_pending=true"} {
+		for _, s := range []string{"Cancelling or reaching timeout_s only stops waiting",
+			"the emulator keeps booting", "calling start_instance again before the deadline",
+			"finishes that boot's setup", "guest Vulkan fix", "setup_pending=true",
+			"window naming the other way fails with busy (no switch while it runs: stop it first)"} {
 			if !strings.Contains(tool.Description, s) {
 				t.Errorf("description lacks %q: %s", s, tool.Description)
 			}
@@ -1485,7 +1523,7 @@ func TestSchemaOf(t *testing.T) {
 	p := jsonRoundTrip(t, schemaOf(reflect.TypeFor[schemaProbe]())).(map[string]any)
 	pp := p["properties"].(map[string]any)
 	if !reflect.DeepEqual(p["required"], []any{"root", "sdk", "local_sdk", "adb_exe", "adb_server_port",
-		"script_adb_server_port", "version", "build", "a", "c", "d", "e", "nested"}) {
+		"script_adb_server_port", "port_base", "version", "build", "a", "c", "d", "e", "nested"}) {
 		t.Fatalf("required %v", p["required"])
 	}
 	for _, k := range []string{"G", "h", "RootInfo"} {
