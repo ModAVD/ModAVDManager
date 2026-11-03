@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/hostproxy"
 	"modavd/internal/root"
 )
 
@@ -67,7 +68,7 @@ func (f *fetcher) httpClient() *http.Client {
 		d := f.o.ConnectTimeout
 		f.client = &http.Client{
 			Transport: &http.Transport{
-				Proxy:                 requestProxy,
+				Proxy:                 hostproxy.ForRequest,
 				DialContext:           (&net.Dialer{Timeout: d}).DialContext,
 				TLSHandshakeTimeout:   d,
 				ResponseHeaderTimeout: d,
@@ -190,7 +191,7 @@ func (f *fetcher) license(ctx context.Context) (text, from string, err error) {
 	if text == "" {
 		f.where = "获取许可协议清单 " + licenseManifest + "，试过的镜像都不行"
 		return "", "", errs.New(errs.ComponentsUnavailable, "取不到《Android SDK 许可协议》全文，什么也没有下载（各镜像的情况："+
-			strings.Join(reasons, "；")+"）").WithAdvice("请检查网络后重试")
+			strings.Join(reasons, "；")+"）").WithAdvice(netAdvice("请检查网络后重试"))
 	}
 	if len(failed) > 0 {
 		var names []string
@@ -397,11 +398,20 @@ func (f *fetcher) download(ctx context.Context, c root.SDKComponent) (string, er
 		return zipFile, nil
 	}
 	f.where = "下载 " + c.URL
-	code := errs.ComponentsUnavailable
+	code, advice := errs.ComponentsUnavailable, netAdvice("检查网络后再运行一次")
 	if rejected {
-		code = errs.ComponentsRejected
+		code, advice = errs.ComponentsRejected, "检查网络后再运行一次"
 	}
-	return "", errs.New(code, "所有镜像都没下成："+strings.Join(reasons, "；")).WithAdvice("检查网络后再运行一次")
+	return "", errs.New(code, "所有镜像都没下成："+strings.Join(reasons, "；")).WithAdvice(advice)
+}
+
+// netAdvice is the advice for mirrors that could not be reached: the HTTPS_PROXY hint when the Internet settings use
+// an auto-config script (hostproxy.Advice), else base.
+func netAdvice(base string) string {
+	if a := hostproxy.Advice(); a != "" {
+		return a
+	}
+	return base
 }
 
 // downloadOne is one try (the script's Invoke-Download): it resumes part from its size, checks status and headers
