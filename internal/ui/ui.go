@@ -57,6 +57,7 @@ type Options struct {
 	web        fs.FS
 	openPath   func(path string) error
 	launch     func(url string) (*Window, error)
+	removeOld  func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
 }
 
 const (
@@ -88,6 +89,7 @@ type server struct {
 	files      map[string]*staticFile
 	openPath   func(path string) error
 	launch     func(url string) (*Window, error)
+	removeOld  func(log *logx.Logger)
 	mux        *http.ServeMux
 
 	pollEvery, pingEvery, exitEvery, idleExit, closeGrace, stopWait time.Duration
@@ -155,6 +157,7 @@ func newServer(opt Options) (*server, error) {
 		files:      files,
 		openPath:   opt.openPath,
 		launch:     opt.launch,
+		removeOld:  opt.removeOld,
 		pollEvery:  pollInterval,
 		pingEvery:  pingInterval,
 		exitEvery:  exitTick,
@@ -168,6 +171,9 @@ func newServer(opt Options) (*server, error) {
 	}
 	if s.launch == nil {
 		s.launch = LaunchWindow
+	}
+	if s.removeOld == nil {
+		s.removeOld = func(l *logx.Logger) { removeOldEdgeProfile(AppDataDir(), l) }
 	}
 	s.upd = &updatePanel{}
 	s.mgr = newBackend(lg.Tee(s.eventLogSink("")))
@@ -231,6 +237,8 @@ func Run(ctx context.Context, opt Options) error {
 		} else {
 			s.log.Infof("没找到 Edge，已用默认浏览器打开管理器")
 		}
+		// after the window is up, and never in its way: a failure is only logged
+		go s.removeOld(s.log)
 	}
 
 	s.waitForExit(ctx, w)
