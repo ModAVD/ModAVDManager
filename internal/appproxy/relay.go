@@ -39,9 +39,7 @@ type Core struct {
 	c    *counters
 	log  *log.Logger
 	tcpN chan struct{}
-	// listen is the daemon's own TCP and UDP address: traffic sent there directly, not by the kernel, is refused.
-	listen netip.AddrPort
-	warn   throttle // proxy failures, which come in floods when it is down
+	warn throttle // proxy failures, which come in floods when it is down
 }
 
 // throttle lets a log line through at most every 10 s, saying how many it held back.
@@ -72,8 +70,7 @@ func newCore(cfg *Config, c *counters, health *Health, lg *log.Logger, reply Rep
 	srv, _ := ParseServer(cfg.Server)
 	res, _ := cfg.Resolver()
 	up := &Upstream{Server: srv, Health: health}
-	co := &Core{up: up, c: c, log: lg, tcpN: make(chan struct{}, maxTCP),
-		listen: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), TCPPort)}
+	co := &Core{up: up, c: c, log: lg, tcpN: make(chan struct{}, maxTCP)}
 	co.dns = newDNSEngine(up, res, c)
 	co.udp = newUDPTable(co, reply)
 	return co
@@ -85,11 +82,11 @@ func (co *Core) Close() {
 	co.dns.close()
 }
 
-// refused: the destination is not one the kernel would have handed over (loopback, our own listener, private
-// addresses), so the daemon is not an open proxy into the guest or the host's loopback.
+// refused: the destination is not one the kernel would have handed over (loopback, our own listener on 127.0.0.1,
+// private addresses), so the daemon is not an open proxy into the guest or the host's loopback.
 func (co *Core) refused(dst netip.AddrPort) bool {
 	a := dst.Addr().Unmap()
-	return !a.Is4() || dst == co.listen || dst.Port() == 0 || (!publicAddr(a) && dst.Port() != 53)
+	return !a.Is4() || dst.Port() == 0 || (!publicAddr(a) && dst.Port() != 53)
 }
 
 // HandleTCP serves one connection of a listed app; orig is where the app connected to. It owns c.

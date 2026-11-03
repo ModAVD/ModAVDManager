@@ -117,8 +117,7 @@ func localCopy(dir, name string, b []byte) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
-	err = moveNoReplace(tmp, path)
-	if err != nil {
+	if err := moveNoReplace(tmp, path); err != nil {
 		os.Remove(tmp)
 		// another writer got there first: its file is just as good when it holds these bytes
 		if old, rerr := readStable(path); rerr == nil && bytes.Equal(old, b) {
