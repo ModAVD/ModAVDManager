@@ -394,11 +394,11 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 		return nil, errs.Wrap(errs.NotReady, err, err.Error())
 	}
 	sum := sha256.Sum256(b)
-	have := m.shell(ctx, i, "mkdir -p "+appproxy.GuestDir+" && sha256sum "+proxyExe+" 2>/dev/null", 0)
-	if have.Code != 0 && strings.Contains(have.Out, "Permission denied") {
-		return nil, errs.Newf(errs.Internal, "实例 %d 里建不了 %s：%s", i, appproxy.GuestDir, tail(have.Out, 200))
+	want := hex.EncodeToString(sum[:])
+	if r := m.shell(ctx, i, "mkdir -p "+appproxy.GuestDir, 0); r.Code != 0 {
+		return nil, errs.Newf(errs.Internal, "实例 %d 里建不了 %s：%s", i, appproxy.GuestDir, tail(r.Out, 200))
 	}
-	if !strings.HasPrefix(strings.TrimSpace(have.Out), hex.EncodeToString(sum[:])) {
+	if m.guestDaemonSum(ctx, i) != want {
 		local, err := guest.LocalProxyDaemon(filepath.Join(os.TempDir(), "modavd-guest"))
 		if err != nil {
 			return nil, errs.Wrap(errs.Internal, err, "写不了客体程序的本机副本: "+err.Error())
@@ -431,6 +431,12 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 	if r := m.shell(ctx, i, "mv -f "+conf+".new "+conf, 0); r.Code != 0 {
 		return nil, errs.Newf(errs.Internal, "实例 %d 换不了代理设置：%s", i, tail(r.Out, 200))
 	}
+	// right before root runs it, whether it was pushed now or found there: the guest's file is the one this modavd
+	// carries (the execution bridge checks its payload the same way)
+	if got := m.guestDaemonSum(ctx, i); got != want {
+		return nil, errs.Newf(errs.Internal, "实例 %d 里的 %s 和这个 modavd 带的不一样（SHA-256 %s），不以 root 运行它", i,
+			guest.ProxyDaemonName, orText(got, "读不出"))
+	}
 	st, err := m.proxyDaemon(ctx, i, "start", proxyGuestWait)
 	if err != nil {
 		return st, err
@@ -444,6 +450,20 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 			WithAdvice("这个系统镜像可能不支持按应用走代理；modavd collect-info 收集信息后反馈")
 	}
 	return st, nil
+}
+
+// guestDaemonSum is the SHA-256 of the guest's daemon, "" when it is not there or cannot be read.
+func (m *Manager) guestDaemonSum(ctx context.Context, i int) string {
+	return sumOf(m.shell(ctx, i, "sha256sum "+proxyExe+" 2>/dev/null", 0).Out)
+}
+
+// sumOf is the hash of `sha256sum <file>`'s output: 64 lower-case hex digits, else "".
+func sumOf(out string) string {
+	f := strings.Fields(out)
+	if len(f) == 0 || len(f[0]) != 64 || strings.Trim(f[0], "0123456789abcdef") != "" {
+		return ""
+	}
+	return f[0]
 }
 
 // replaceDaemonScript puts the pushed daemon in place of the old one (root; no single quotes, see Manager.su). The

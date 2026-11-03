@@ -186,6 +186,22 @@ func TestSettingValueKeepsOtherKeys(t *testing.T) {
 	}
 }
 
+func TestSumOf(t *testing.T) {
+	h := strings.Repeat("0123456789abcdef", 4)
+	for out, want := range map[string]string{
+		h + "  /data/local/tmp/modavd-proxy/modavd-proxyd\n": h,
+		"": "",
+		"sha256sum: /data/local/tmp/modavd-proxy/modavd-proxyd: No such file or directory": "",
+		strings.ToUpper(h) + "  f": "",
+		h[:63] + "  f":             "",
+		"error: device offline":    "",
+	} {
+		if got := sumOf(out); got != want {
+			t.Errorf("%q: %q", out, got)
+		}
+	}
+}
+
 func TestGuestSummary(t *testing.T) {
 	s := appproxy.Setting{Enabled: true, Server: "socks5://10.0.2.2:7890", Apps: []string{"a.b", "c.d"}}
 	st := &appproxy.Status{Rules: appproxy.RulesOK, Server: appproxy.ServerStatus{UDP: "ok"},
