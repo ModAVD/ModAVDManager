@@ -31,7 +31,7 @@ const (
 	ConfigName = "config.json"
 	StateName  = "state.json"
 	LogName    = "proxyd.log"
-	lockName   = "proxyd.lock"
+	LockName   = "proxyd.lock" // holds the running daemon's pid
 
 	// ConfigVersion is Config.Version.
 	ConfigVersion = 1

@@ -14,6 +14,9 @@ type Suggestion struct {
 	Addr netip.AddrPort
 	Kind string
 	From string // where it was found: the variable's name, or "Windows 代理设置"
+	// AuthDropped: the setting had a user name or password, which Addr leaves out (the per-app proxy has no
+	// authentication).
+	AuthDropped bool
 }
 
 // GuestSuggestion looks where ForRequest does, with the guest's needs first: ALL_PROXY (often socks5://, which the
@@ -65,9 +68,10 @@ func fromProxyServer(server string) (Suggestion, bool) {
 	return Suggestion{}, false
 }
 
-// parseSuggestion reads "[scheme://]host:port"; kind is used when there is no scheme.
+// parseSuggestion reads "[scheme://][user:password@]host:port"; kind is used when there is no scheme.
 func parseSuggestion(v, kind string) (Suggestion, bool) {
 	v = strings.TrimSpace(v)
+	auth := false
 	if strings.Contains(v, "://") {
 		u, err := url.Parse(v)
 		if err != nil {
@@ -81,7 +85,7 @@ func parseSuggestion(v, kind string) (Suggestion, bool) {
 		default:
 			return Suggestion{}, false
 		}
-		v = u.Host
+		v, auth = u.Host, u.User != nil
 	}
 	host, port, ok := strings.Cut(v, ":")
 	if !ok || strings.Contains(port, ":") {
@@ -94,5 +98,5 @@ func parseSuggestion(v, kind string) (Suggestion, bool) {
 	if err != nil || !ap.Addr().Is4() || ap.Port() == 0 || ap.Addr().IsUnspecified() {
 		return Suggestion{}, false
 	}
-	return Suggestion{Addr: ap, Kind: kind}, true
+	return Suggestion{Addr: ap, Kind: kind, AuthDropped: auth}, true
 }

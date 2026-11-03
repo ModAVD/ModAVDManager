@@ -125,6 +125,9 @@ func fakeAdbClientMain(args []string) int {
 		f.Write(append(line, '\n'))
 		f.Close()
 	}
+	if handled, code := fakeProxyGuest(args); handled {
+		return code
+	}
 	all := strings.Join(args, " ")
 	switch {
 	case strings.Contains(all, "get-state"):

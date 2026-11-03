@@ -188,6 +188,9 @@ func formatAppProxyTest(w io.Writer, r *emu.AppProxyTestResult) {
 	if r.UDP != "failed" && r.UDPError != "" {
 		fmt.Fprintln(w, "提示："+r.UDPError)
 	}
+	for _, n := range r.Notes {
+		fmt.Fprintln(w, "提示："+n)
+	}
 	if r.Guest != nil {
 		formatProxyGuest(w, r.Guest)
 	}

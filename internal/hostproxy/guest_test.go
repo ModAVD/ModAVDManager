@@ -36,9 +36,14 @@ func TestGuestSuggestion(t *testing.T) {
 		t.Errorf("Windows: %+v %v", s, ok)
 	}
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:3128")
-	if s, ok := GuestSuggestion(); !ok || s.Kind != "http" || s.From != "HTTPS_PROXY" {
+	if s, ok := GuestSuggestion(); !ok || s.Kind != "http" || s.From != "HTTPS_PROXY" || s.AuthDropped {
 		t.Errorf("HTTPS_PROXY: %+v", s)
 	}
+	t.Setenv("HTTPS_PROXY", "http://user:secret@127.0.0.1:3128") // the address without them, and it says so
+	if s, ok := GuestSuggestion(); !ok || s.Addr.String() != "127.0.0.1:3128" || !s.AuthDropped {
+		t.Errorf("HTTPS_PROXY with a password: %+v", s)
+	}
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:3128")
 	t.Setenv("all_proxy", "socks5h://localhost:1080")
 	if s, ok := GuestSuggestion(); !ok || s.Kind != "socks5" || s.Addr.String() != "127.0.0.1:1080" || s.From != "ALL_PROXY" {
 		t.Errorf("all_proxy: %+v", s)

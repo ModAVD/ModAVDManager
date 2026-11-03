@@ -83,12 +83,10 @@ func cmdStart(dir string) int {
 		st := waitState(dir, func(s Status) bool { return s.PID == pid && s.ConfigSHA256 == sum && s.Rules != "" })
 		return printStatus(st, exitFor(st))
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return printStatus(Status{Error: err.Error()}, 1)
-	}
 	since := time.Now().Add(-time.Second)
-	cmd := exec.Command(self, "run")
+	// the file this process runs, not whatever its path holds by now: modavd checked this one's hash just before it
+	// ran it as root (emu/appproxy.go)
+	cmd := exec.Command("/proc/self/exe", "run")
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // stdio is /dev/null: adb shell does not wait for it
 	if err := cmd.Start(); err != nil {
@@ -205,7 +203,7 @@ func writeState(dir string, s Status) error {
 
 // runningPID is the daemon's pid when one runs (it holds the lock), else 0.
 func runningPID(dir string) int {
-	f, err := os.OpenFile(filepath.Join(dir, lockName), os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, LockName), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return 0
 	}
@@ -255,7 +253,7 @@ func runDaemon(dir string) int {
 	// first, so that a reload (SIGHUP) arriving while it starts does not end it
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
-	lock, err := os.OpenFile(filepath.Join(dir, lockName), os.O_RDWR|os.O_CREATE, 0o644)
+	lock, err := os.OpenFile(filepath.Join(dir, LockName), os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return fail("打不开锁文件：%v", err)
 	}

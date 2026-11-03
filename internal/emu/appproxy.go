@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,6 +62,7 @@ type AppProxyTestResult struct {
 	HostAddr string `json:"host_addr"` // where the host probed it (10.0.2.2 is the host's 127.0.0.1)
 	appproxy.ProbeResult
 	Guest *appproxy.Status `json:"guest"` // as for AppProxyResult
+	Notes []string         `json:"notes"` // never null; as for AppProxyResult
 }
 
 const (
@@ -148,7 +150,7 @@ func (m *Manager) AppProxy(ctx context.Context, i int) (*AppProxyResult, error) 
 	}
 	res := newAppProxyResult(i, s)
 	if m.guestUp(ctx, i) {
-		res.Guest, _ = m.proxyDaemon(ctx, i, "status", proxyStatusWait)
+		res.Guest = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil
 }
@@ -289,7 +291,7 @@ func (m *Manager) TestAppProxy(ctx context.Context, i int) (*AppProxyTestResult,
 	}
 	cfg := s.GuestConfig()
 	resolver, _ := cfg.Resolver()
-	res := &AppProxyTestResult{Index: i, Server: s.Server, HostAddr: hostAddr(srv.Addr).String()}
+	res := &AppProxyTestResult{Index: i, Server: s.Server, HostAddr: hostAddr(srv.Addr).String(), Notes: []string{}}
 	if res.ProbeResult, err = appproxy.Probe(ctx, hostAddr(srv.Addr), true, resolver); err != nil {
 		return nil, errs.New(errs.ProxyUnavailable, err.Error())
 	}
@@ -297,7 +299,7 @@ func (m *Manager) TestAppProxy(ctx context.Context, i int) (*AppProxyTestResult,
 		res.UDPError = strings.TrimSpace(res.UDPError + fmt.Sprintf("（设的是 %s，那个端口说的是 %s）", srv.Scheme, res.Kind))
 	}
 	if m.guestUp(ctx, i) {
-		res.Guest, _ = m.proxyDaemon(ctx, i, "status", proxyStatusWait)
+		res.Guest = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil
 }
@@ -320,6 +322,9 @@ func autoServer(ctx context.Context) (string, string, error) {
 			WithAdvice("用 --server 给出代理地址，比如 socks5://127.0.0.1:7890（代理软件里 SOCKS5 或混合端口的地址）")
 	}
 	note := "代理地址取自" + sg.From + "：" + sg.Addr.String()
+	if sg.AuthDropped {
+		note += "（去掉了设置里的账号密码：按应用走代理不支持要认证的代理，名单里的应用会连不上）"
+	}
 	kind := sg.Kind
 	if kind != "socks5" {
 		r, err := appproxy.Probe(ctx, sg.Addr, false, netip.AddrPort{})
@@ -389,29 +394,12 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 	if !s.Active() {
 		return m.stopAppProxy(ctx, i)
 	}
-	b, err := guest.ProxyDaemon()
+	d, err := daemonFile()
 	if err != nil {
-		return nil, errs.Wrap(errs.NotReady, err, err.Error())
+		return nil, err
 	}
-	sum := sha256.Sum256(b)
-	want := hex.EncodeToString(sum[:])
-	if r := m.shell(ctx, i, "mkdir -p "+appproxy.GuestDir, 0); r.Code != 0 {
-		return nil, errs.Newf(errs.Internal, "实例 %d 里建不了 %s：%s", i, appproxy.GuestDir, tail(r.Out, 200))
-	}
-	if m.guestDaemonSum(ctx, i) != want {
-		local, err := guest.LocalProxyDaemon(filepath.Join(os.TempDir(), "modavd-guest"))
-		if err != nil {
-			return nil, errs.Wrap(errs.Internal, err, "写不了客体程序的本机副本: "+err.Error())
-		}
-		if !m.push(ctx, i, local, proxyExe+".new") {
-			return nil, errs.Newf(errs.Internal, "实例 %d 推送 %s 失败", i, guest.ProxyDaemonName)
-		}
-		// another version may be running: it is killed, not stopped, so its rules stay and the listed apps have no
-		// network for the moment until the new one replaces them (a stop would let them go direct meanwhile)
-		r := m.su(ctx, i, replaceDaemonScript(proxyExe), proxyGuestWait)
-		if r.Code != 0 {
-			return nil, suError(i, r.Out)
-		}
+	if err := m.ensureDaemon(ctx, i, d); err != nil {
+		return nil, err
 	}
 	cfg := s.GuestConfig().Marshal()
 	f, err := os.CreateTemp("", "modavd-proxy-config-*.json")
@@ -431,13 +419,7 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 	if r := m.shell(ctx, i, "mv -f "+conf+".new "+conf, 0); r.Code != 0 {
 		return nil, errs.Newf(errs.Internal, "实例 %d 换不了代理设置：%s", i, tail(r.Out, 200))
 	}
-	// right before root runs it, whether it was pushed now or found there: the guest's file is the one this modavd
-	// carries (the execution bridge checks its payload the same way)
-	if got := m.guestDaemonSum(ctx, i); got != want {
-		return nil, errs.Newf(errs.Internal, "实例 %d 里的 %s 和这个 modavd 带的不一样（SHA-256 %s），不以 root 运行它", i,
-			guest.ProxyDaemonName, orText(got, "读不出"))
-	}
-	st, err := m.proxyDaemon(ctx, i, "start", proxyGuestWait)
+	st, err := m.proxyDaemon(ctx, i, d.sum, "start", proxyGuestWait)
 	if err != nil {
 		return st, err
 	}
@@ -450,6 +432,44 @@ func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*
 			WithAdvice("这个系统镜像可能不支持按应用走代理；modavd collect-info 收集信息后反馈")
 	}
 	return st, nil
+}
+
+// carried is the guest daemon this modavd carries: a host copy to push and its SHA-256.
+type carried struct {
+	local, sum string
+}
+
+// daemonFile is the daemon of this modavd (a variable for the tests: a test build carries none).
+var daemonFile = func() (carried, error) {
+	b, err := guest.ProxyDaemon()
+	if err != nil {
+		return carried{}, errs.Wrap(errs.NotReady, err, err.Error())
+	}
+	local, err := guest.LocalProxyDaemon(filepath.Join(os.TempDir(), "modavd-guest"))
+	if err != nil {
+		return carried{}, errs.Wrap(errs.Internal, err, "写不了客体程序的本机副本: "+err.Error())
+	}
+	sum := sha256.Sum256(b)
+	return carried{local: local, sum: hex.EncodeToString(sum[:])}, nil
+}
+
+// ensureDaemon makes the guest's daemon the one d is, pushing it when the guest's copy differs. Another version may
+// be running then: it is killed, not stopped, so its rules stay and the listed apps have no network for the moment
+// until the new one replaces them (a stop would let them go direct meanwhile).
+func (m *Manager) ensureDaemon(ctx context.Context, i int, d carried) error {
+	if r := m.shell(ctx, i, "mkdir -p "+appproxy.GuestDir, 0); r.Code != 0 {
+		return errs.Newf(errs.Internal, "实例 %d 里建不了 %s：%s", i, appproxy.GuestDir, tail(r.Out, 200))
+	}
+	if m.guestDaemonSum(ctx, i) == d.sum {
+		return nil
+	}
+	if !m.push(ctx, i, d.local, proxyExe+".new") {
+		return errs.Newf(errs.Internal, "实例 %d 推送 %s 失败", i, guest.ProxyDaemonName)
+	}
+	if r := m.su(ctx, i, replaceDaemonScript(proxyExe), proxyGuestWait); r.Code != 0 {
+		return suError(i, r.Out)
+	}
+	return nil
 }
 
 // guestDaemonSum is the SHA-256 of the guest's daemon, "" when it is not there or cannot be read.
@@ -466,28 +486,68 @@ func sumOf(out string) string {
 	return f[0]
 }
 
-// replaceDaemonScript puts the pushed daemon in place of the old one (root; no single quotes, see Manager.su). The
-// pid comes from the old one's status, which reads its lock: a pid file left by a dead daemon could name another
-// process by now.
+// replaceDaemonScript puts the pushed daemon in place of the old one (root; no single quotes, see Manager.su),
+// without running the old file (it is being replaced because its hash is not this modavd's): the running daemon's pid
+// is in its lock file, and it is killed only when /proc says that pid runs this path (a lock file left by a dead
+// daemon could name another process by now; an old daemon whose file was replaced before shows it deleted).
 func replaceDaemonScript(exe string) string {
-	return "chmod 755 " + exe + ".new && { p=$(" + exe + " status 2>/dev/null | " +
-		`sed -n "s/.*\"running\":true,\"pid\":\([0-9]*\).*/\1/p"); [ -z "$p" ] || kill -9 "$p"; } && ` +
+	lock := path.Dir(exe) + "/" + appproxy.LockName
+	return "chmod 755 " + exe + ".new && { p=$(cat " + lock + " 2>/dev/null); case \"$p\" in \"\"|*[!0-9]*) ;; *) " +
+		"case \"$(readlink /proc/$p/exe)\" in \"" + exe + "\"|\"" + exe + " (deleted)\") kill -9 \"$p\" ;; esac ;; esac; } && " +
 		"mv -f " + exe + ".new " + exe
 }
 
-// stopAppProxy stops the daemon and removes its rules, when the guest has it at all.
+// rootDaemonScript runs the guest's daemon with cmd as root (no single quotes, see Manager.su) only when the file
+// there is the one this modavd carries: the check and the run are one command, so nothing can be put in its place in
+// between (the execution bridge checks its payload the same way). Exit 126 when it is not.
+func rootDaemonScript(exe, sum, cmd string) string {
+	return "[ -x " + exe + " ] || exit 127; set -- $(sha256sum " + exe + " 2>/dev/null); [ \"$1\" = \"" + sum +
+		"\" ] || exit 126; exec " + exe + " " + cmd
+}
+
+// stopAppProxy stops the daemon and removes its rules, when the guest has it at all. A daemon of another version is
+// first replaced by this modavd's, as only that one is run as root.
 func (m *Manager) stopAppProxy(ctx context.Context, i int) (*appproxy.Status, error) {
 	if m.shell(ctx, i, "test -x "+proxyExe, 0).Code != 0 {
 		return nil, nil
 	}
-	return m.proxyDaemon(ctx, i, "stop", proxyGuestWait)
+	d, err := daemonFile()
+	if err != nil {
+		return nil, err
+	}
+	if err := m.ensureDaemon(ctx, i, d); err != nil {
+		return nil, err
+	}
+	return m.proxyDaemon(ctx, i, d.sum, "stop", proxyGuestWait)
 }
 
-// proxyDaemon runs `modavd-proxyd <cmd>` as root and reads the Status it prints (its last line).
-func (m *Manager) proxyDaemon(ctx context.Context, i int, cmd string, timeout time.Duration) (*appproxy.Status, error) {
-	r := m.su(ctx, i, "[ -x "+proxyExe+" ] || exit 127; "+proxyExe+" "+cmd, timeout)
-	if r.Code == 127 && !strings.Contains(r.Out, "{") {
+// guestStatus is the daemon's status for a query, nil when it cannot be asked; a daemon other than this modavd's is
+// not run (it is replaced the next time the setting is applied), which notes says.
+func (m *Manager) guestStatus(ctx context.Context, i int, notes *[]string) *appproxy.Status {
+	d, err := daemonFile()
+	if err != nil {
+		return nil
+	}
+	st, err := m.proxyDaemon(ctx, i, d.sum, "status", proxyStatusWait)
+	if errors.Is(err, errOtherDaemon) {
+		*notes = append(*notes, errs.As(err).Message+"；下次开机或改设置时换上")
+	}
+	return st
+}
+
+// errOtherDaemon: the guest's daemon is not the one this modavd carries, so it was not run.
+var errOtherDaemon = errors.New("the guest's modavd-proxyd is not this modavd's")
+
+// proxyDaemon runs `modavd-proxyd <cmd>` as root, after checking it is the daemon whose SHA-256 is sum, and reads the
+// Status it prints (its last line).
+func (m *Manager) proxyDaemon(ctx context.Context, i int, sum, cmd string, timeout time.Duration) (*appproxy.Status, error) {
+	r := m.su(ctx, i, rootDaemonScript(proxyExe, sum, cmd), timeout)
+	switch {
+	case r.Code == 127 && !strings.Contains(r.Out, "{"):
 		return nil, errs.Newf(errs.NotFound, "实例 %d 里没有按应用走代理的客体程序", i)
+	case r.Code == 126 && !strings.Contains(r.Out, "{"):
+		return nil, errs.Wrap(errs.Unsupported, errOtherDaemon, fmt.Sprintf("实例 %d 里的 %s 和这个 modavd 带的不一样，不以 root 运行它",
+			i, guest.ProxyDaemonName))
 	}
 	lines := strings.Split(strings.TrimSpace(r.Out), "\n")
 	var st appproxy.Status
