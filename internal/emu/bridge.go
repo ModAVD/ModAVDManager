@@ -522,8 +522,8 @@ func (m *Manager) bridgeRestart(ctx context.Context, i int, opt StartOptions) (*
 	if err := m.waitQemuGone(ctx, i); err != nil {
 		return nil, err
 	}
-	r, err := m.Start(ctx, i, StartOptions{Window: opt.Window, Timeout: opt.Timeout, Progress: opt.Progress, NoBridge: true,
-		creating: opt.creating})
+	r, err := bridgeStart(m, ctx, i, StartOptions{Window: opt.Window, Timeout: opt.Timeout, Progress: opt.Progress,
+		NoBridge: true, creating: opt.creating})
 	if err != nil {
 		return nil, err
 	}
@@ -544,8 +544,22 @@ type BridgeResult struct {
 	Warnings  []string `json:"warnings"`
 }
 
-// Bridge installs, uninstalls or verifies the execution bridge on instance i. Restarts are cold boots (headless when
-// the instance was off; a running one comes back headless too).
+// Hooks for the tests (Bridge without an emulator): how Bridge finds the instance's qemu at first, starts it (in
+// bridgeRestart too), reads the guest's native bridge and runs the script.
+var (
+	bridgeFindQemu = (*Manager).findQemu
+	bridgeStart    func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error)
+	bridgeGuest    = (*Manager).guestBridge
+	bridgeScript   = (*Manager).runBridgeScript
+)
+
+// bridgeStart is set here: Start reaches bridgeRestart (the bridge step of a boot), so an initializer would be an
+// initialization cycle.
+func init() { bridgeStart = (*Manager).Start }
+
+// Bridge installs, uninstalls or verifies the execution bridge on instance i. Restarts are cold boots: a running
+// instance comes back the way it ran, with its window or headless (a start never switches, StartOptions.Window;
+// headless when that cannot be told), and one that was off boots headless.
 //   - install: places the marker; a running instance without the bridge is restarted, an off one started, and the
 //     start installs (finishBridge). An instance that already has the bridge gets the script's install anyway, which
 //     only updates a payload that differs from this package's; then it is restarted so the new one is loaded.
@@ -588,16 +602,20 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
-	_, wasRunning := m.findQemu(i)
+	p, wasRunning := bridgeFindQemu(m, i)
+	windowed := false // how the cold boots below come back
+	if wasRunning {
+		windowed, _ = qemuWindowed(p)
+	}
 
 	switch action {
 	case "verify":
 		if !wasRunning {
 			return nil, errs.Newf(errs.Unsupported, "实例 %d 没开机", i).WithAdvice(fmt.Sprintf("先 modavd start %d", i))
 		}
-		run, err := m.runBridgeScript(ctx, i, "verify", false)
+		run, err := bridgeScript(m, ctx, i, "verify", false)
 		res.fill(run)
-		res.Installed = m.guestBridge(ctx, i) == bridgeProp
+		res.Installed = bridgeGuest(m, ctx, i) == bridgeProp
 		return res, err
 
 	case "install":
@@ -607,7 +625,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		if err := writeBridgeMarker(m.Root, i); err != nil {
 			return nil, err
 		}
-		if wasRunning && m.guestBridge(ctx, i) != bridgeProp {
+		if wasRunning && bridgeGuest(m, ctx, i) != bridgeProp {
 			// this boot may not be writable: boot again with the marker, the start installs
 			if err := m.bridgeStop(ctx, i, res); err != nil {
 				return nil, err
@@ -615,23 +633,23 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			res.Restarted = true
 		}
 		if !wasRunning || res.Restarted {
-			// this start installs (installBridge, under the lock held above)
-			sr, err := m.Start(ctx, i, StartOptions{bridgeLocked: true})
+			// this start installs (installBridge, under the lock held above; its cold boots keep the window)
+			sr, err := bridgeStart(m, ctx, i, StartOptions{Window: windowed, bridgeLocked: true})
 			if err != nil {
 				return nil, err
 			}
 			res.Warnings = append(res.Warnings, sr.Warnings...)
 		}
-		if m.guestBridge(ctx, i) == bridgeProp {
+		if bridgeGuest(m, ctx, i) == bridgeProp {
 			// Installed (now or before): the script's install once more updates a payload that differs from this
 			// package's and does nothing when it is the same ("什么都没改"); an update is loaded on a cold boot.
-			run, err := m.runBridgeScript(ctx, i, "install", false)
+			run, err := bridgeScript(m, ctx, i, "install", false)
 			res.fill(run)
 			if err != nil {
 				return res, err
 			}
 			if run.Code == 0 && !strings.Contains(run.Last, "什么都没改") {
-				sr, err := m.bridgeRestart(ctx, i, StartOptions{})
+				sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: windowed})
 				if err != nil {
 					return res, err
 				}
@@ -641,7 +659,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		} else {
 			res.Message = "开机后没装上执行桥，见警告和 logs 里的 modavd-bridge-*.log"
 		}
-		res.Installed = m.guestBridge(ctx, i) == bridgeProp
+		res.Installed = bridgeGuest(m, ctx, i) == bridgeProp
 		if !wasRunning {
 			if err := m.bridgeStop(ctx, i, res); err != nil {
 				return res, err
@@ -656,27 +674,27 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			return nil, err
 		}
 		if !wasRunning {
-			sr, err := m.Start(ctx, i, StartOptions{NoBridge: true})
+			sr, err := bridgeStart(m, ctx, i, StartOptions{NoBridge: true})
 			if err != nil {
 				return nil, err
 			}
 			res.Warnings = append(res.Warnings, sr.Warnings...)
 		}
-		installed := m.guestBridge(ctx, i) == bridgeProp
-		run, err := m.runBridgeScript(ctx, i, "uninstall", false)
+		installed := bridgeGuest(m, ctx, i) == bridgeProp
+		run, err := bridgeScript(m, ctx, i, "uninstall", false)
 		res.fill(run)
 		if err != nil {
 			return res, err
 		}
 		if run.Code == 3 {
 			// the first remount of this instance only turned verity off: boot cold and run it again
-			sr, err := m.bridgeRestart(ctx, i, StartOptions{})
+			sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: windowed})
 			if err != nil {
 				return res, err
 			}
 			res.Warnings = append(res.Warnings, sr.Warnings...)
 			res.Restarted = true
-			if run, err = m.runBridgeScript(ctx, i, "uninstall", false); err != nil {
+			if run, err = bridgeScript(m, ctx, i, "uninstall", false); err != nil {
 				res.fill(run)
 				return res, err
 			}
@@ -684,14 +702,14 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		}
 		if run.Code == 0 && installed {
 			// the property line is read at boot: a cold boot (the marker is gone, so not writable) back on stock
-			sr, err := m.bridgeRestart(ctx, i, StartOptions{})
+			sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: windowed})
 			if err != nil {
 				return res, err
 			}
 			res.Warnings = append(res.Warnings, sr.Warnings...)
 			res.Restarted = true
 		}
-		res.Installed = m.guestBridge(ctx, i) == bridgeProp
+		res.Installed = bridgeGuest(m, ctx, i) == bridgeProp
 		// An instance whose bridge was never installed (created by modavd, never booted by it) keeps the marker when
 		// the script stops early: drop it, or the next start installs after all.
 		if !res.Installed && regularFile(bridgeMarker(m.Root, i)) {

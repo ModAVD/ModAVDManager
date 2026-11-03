@@ -80,6 +80,80 @@ func TestBridgeLockExcludes(t *testing.T) {
 	}
 }
 
+// TestBridgeKeepsWindowMode: every cold boot of modavd bridge (the install's on an instance without the bridge, the one
+// after an update, both of an uninstall) brings a running instance back the way it ran, with its window or headless;
+// an instance that was off is started headless.
+func TestBridgeKeepsWindowMode(t *testing.T) {
+	m, i := opsTestInstance(t)
+	windowed, _ := startSleeper(t) // a readable command line without -no-window
+	headless := win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}
+	findQemu, start, guest, script := bridgeFindQemu, bridgeStart, bridgeGuest, bridgeScript
+	t.Cleanup(func() { bridgeFindQemu, bridgeStart, bridgeGuest, bridgeScript = findQemu, start, guest, script })
+	ctx := context.Background()
+	for _, c := range []struct {
+		name      string
+		action    string
+		installed bool  // the guest runs the bridge
+		codes     []int // the script's exit codes, in order (0 after them)
+		running   int   // the starts on a running instance (its cold boots)
+		off       int   // on one that was off (the first start, then the cold boots)
+	}{
+		{"install without the bridge", "install", false, nil, 1, 1},
+		{"install updating it", "install", true, []int{0}, 1, 2},
+		{"uninstall", "uninstall", true, []int{3, 0}, 2, 3},
+	} {
+		for _, run := range []struct {
+			mode   string
+			qemu   *win.Process
+			window bool
+		}{{"windowed", &windowed, true}, {"headless", &headless, false}, {"off", nil, false}} {
+			var starts []StartOptions
+			bridgeFindQemu = func(*Manager, int) (win.Process, bool) {
+				if run.qemu == nil {
+					return win.Process{}, false
+				}
+				return *run.qemu, true
+			}
+			// the instance's qemu is not really there: the stops before the boots find it offline
+			bridgeStart = func(_ *Manager, _ context.Context, _ int, opt StartOptions) (*StartResult, error) {
+				starts = append(starts, opt)
+				return &StartResult{}, nil
+			}
+			bridgeGuest = func(*Manager, context.Context, int) string {
+				if c.installed {
+					return bridgeProp
+				}
+				return ""
+			}
+			n := 0
+			bridgeScript = func(*Manager, context.Context, int, string, bool) (bridgeRun, error) {
+				code := 0
+				if n < len(c.codes) {
+					code = c.codes[n]
+				}
+				n++
+				return bridgeRun{Code: code, Last: "done"}, nil
+			}
+			if _, err := m.Bridge(ctx, i, c.action); err != nil {
+				t.Fatalf("%s, %s: %v", c.name, run.mode, err)
+			}
+			want := c.running
+			if run.qemu == nil {
+				want = c.off
+			}
+			if len(starts) != want {
+				t.Errorf("%s, %s: %d starts, want %d", c.name, run.mode, len(starts), want)
+			}
+			for k, opt := range starts {
+				if opt.Window != run.window || opt.Headless {
+					t.Errorf("%s, %s: start %d has Window %v Headless %v, want Window %v", c.name, run.mode, k+1,
+						opt.Window, opt.Headless, run.window)
+				}
+			}
+		}
+	}
+}
+
 // TestPayloadHashes: the payload's SHA-256 by guest target, as the guest's sha256sum prints it; a missing file means
 // no answer (the script would not install from that payload either).
 func TestPayloadHashes(t *testing.T) {

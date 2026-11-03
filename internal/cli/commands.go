@@ -230,7 +230,8 @@ func init() {
 			details: "用 modavd 或管理器开机时会自动装上，一般不用手动跑。调用包里的 tools\\modavd-bridge.ps1：" +
 				"install 需要时关机再开机，装上；已经装了的只在载荷有变时更新。uninstall 卸掉桥、开机标记和装桥时加的 asg，" +
 				"并记下以后开机不再自动装（退回更早的版本之前要先卸）；再 install 就恢复。" +
-				"实例原来关着的，做完再关掉。verify：只读核对，实例要开着。",
+				"实例原来关着的，做完再关掉；开着的，中间冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"verify：只读核对，实例要开着。",
 			posNames: []string{"实例编号", "install、uninstall 或 verify"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
