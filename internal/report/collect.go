@@ -20,8 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/appproxy"
 	"modavd/internal/buildinfo"
 	"modavd/internal/errs"
+	"modavd/internal/jsonord"
 	"modavd/internal/root"
 )
 
@@ -1260,6 +1262,7 @@ func (c *collector) live() error {
 		return nil
 	}
 
+	proxied := appProxyInstances(filepath.Join(c.root, root.MetadataFile))
 	for _, t := range targets {
 		if t.consolePort == 0 {
 			c.L(t.name + "：命令行里没有 -port / -ports，取不到序列号，跳过")
@@ -1279,8 +1282,42 @@ func (c *collector) live() error {
 				c.L(fmt.Sprintf("  %s 出错：%s", lc.tag, errText(err)))
 			}
 		}
+		// not in the script: the per-app proxy's guest state and log, for the instances that have one set
+		if proxied[strings.ToLower(t.name)] {
+			if err := c.liveCommand(liveDir, t.name, serial, "app-proxy", "shell", appProxyCommand); err != nil {
+				c.L("  app-proxy 出错：" + errText(err))
+			}
+		}
 	}
 	return nil
+}
+
+// appProxyCommand reads the per-app proxy daemon's state and the end of its log, as the shell user (the daemon writes
+// them 0644 into a directory modavd made as that user). One argument: adbLive joins a shell command's arguments as
+// they are.
+var appProxyCommand = []string{"cat " + appproxy.GuestDir + "/" + appproxy.StateName + "; echo; tail -n 200 " +
+	appproxy.GuestDir + "/" + appproxy.LogName}
+
+// appProxyInstances are the instances (lower-case names) that have instances.<i>.appProxy in mas-avd.json; none
+// when it cannot be read.
+func appProxyInstances(metadataPath string) map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return out
+	}
+	v, err := jsonord.Parse(b)
+	if err != nil {
+		return out
+	}
+	insts := v.Obj().Get("instances").Obj()
+	for _, k := range insts.Keys() {
+		i, err := strconv.Atoi(k)
+		if err == nil && root.ValidIndex(i) && insts.Get(k).Obj().Has(appproxy.MetaKey) {
+			out[strings.ToLower(root.AvdName(i))] = true
+		}
+	}
+	return out
 }
 
 // adbDevicesCommand is `adb -P <port> devices`: the list as adb.exe prints it.
