@@ -37,18 +37,25 @@ const (
 	startLockWait = DefaultBootTimeout + 300*time.Second
 	stopLockWait  = 60 * time.Second
 
-	// Shutdown (the caller in AUTO-MAS gives close 30 s in all, so the worst case stays under 28 s):
-	// graceful 4 + 15 = 19, falling back to sync 2 + console kill 5 + terminate wait 2 => 28;
+	// Shutdown (the caller in AUTO-MAS gives close 30 s in all, so the worst case stays under stopBudget, 28 s), counted
+	// from the first look for qemu:
+	// graceful: 4 + HOME 2 (+ homeWait 2 when an app was in front) + sync 2, and Android shuts down until
+	// gracefulDeadline (24 s; at least 14 s after the shutdown command, usually about 21 s after HOME and 23 s
+	// without), falling back to sync 2 + console kill (what the sync leaves of the 4 s, at least 1 s) + terminate
+	// wait 1 => 28 (fallbackKillTimeout);
 	// private adb unusable: 4 + console kill 3 + exit wait 12 + terminate wait 5 = 24; Force: 4 + sync 3 + 5 = 12.
 	adbServerStartOnClose  = 4 * time.Second
-	gracefulShutdown       = 15 * time.Second
+	homeTimeout            = 2 * time.Second
+	shutdownSyncTimeout    = 2 * time.Second
+	gracefulDeadline       = 24 * time.Second
 	syncTimeout            = 3 * time.Second
 	consoleKillTimeout     = 3 * time.Second
 	closeTimeout           = 12 * time.Second
 	forceKillWait          = 5 * time.Second
 	fallbackSyncTimeout    = 2 * time.Second
-	fallbackKillTimeout    = 5 * time.Second
-	fallbackForceKillWait  = 2 * time.Second
+	fallbackKillMin        = 1 * time.Second
+	fallbackKillMax        = 5 * time.Second
+	fallbackForceKillWait  = 1 * time.Second
 	hostMemoryOverheadMB   = 1536
 	minFreeDiskGBToBoot    = 8
 	accelCheckTimeout      = 60 * time.Second
