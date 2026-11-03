@@ -244,13 +244,13 @@ func (m *Manager) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*A
 		res.Applied = "booting"
 		return res, nil
 	}
-	st, err := m.applyAppProxy(ctx, i, next)
+	applied, st, err := m.applyAppProxy(ctx, i)
 	res.Guest = st
 	switch {
 	case err != nil:
 		res.Applied, res.Error = "failed", errs.As(err).Message
 		m.Log.Warnf("实例 %d 按应用走代理没生效：%s", i, res.Error)
-	case !next.Active():
+	case !applied.Active():
 		res.Applied = "off"
 	default:
 		res.Applied = "now"
@@ -367,14 +367,25 @@ func settingText(s appproxy.Setting) string {
 const proxyExe = appproxy.GuestDir + "/" + guest.ProxyDaemonName
 
 // applyAppProxy puts s into the running guest of instance i: the daemon (pushed when the guest's copy differs) and
-// config.json, then `start` (which reloads a running daemon); `stop` when s is not active. One at a time per
-// instance (the proxy lock), so a change while a boot applies it does not interleave with it.
-func (m *Manager) applyAppProxy(ctx context.Context, i int, s appproxy.Setting) (*appproxy.Status, error) {
+// config.json, then `start` (which reloads a running daemon); `stop` when it is not active. One at a time per
+// instance (the proxy lock), and the setting is read under that lock: when a change and a boot both apply it, the
+// later one puts in the newer setting, never the one the other read before it changed.
+func (m *Manager) applyAppProxy(ctx context.Context, i int) (appproxy.Setting, *appproxy.Status, error) {
 	l, err := m.lock(ctx, i, "proxy", proxyLockWait, "正在设置按应用走代理")
 	if err != nil {
-		return nil, err
+		return appproxy.Setting{}, nil, err
 	}
 	defer l.Unlock()
+	s, err := settingOf(m.Root.InstanceMeta(i))
+	if err != nil {
+		return s, nil, err
+	}
+	st, err := m.putAppProxy(ctx, i, s)
+	return s, st, err
+}
+
+// putAppProxy is applyAppProxy's work, under its lock.
+func (m *Manager) putAppProxy(ctx context.Context, i int, s appproxy.Setting) (*appproxy.Status, error) {
 	if !s.Active() {
 		return m.stopAppProxy(ctx, i)
 	}
@@ -395,9 +406,9 @@ func (m *Manager) applyAppProxy(ctx context.Context, i int, s appproxy.Setting) 
 		if !m.push(ctx, i, local, proxyExe+".new") {
 			return nil, errs.Newf(errs.Internal, "实例 %d 推送 %s 失败", i, guest.ProxyDaemonName)
 		}
-		// another version may be running: it goes first (its rules with it, for the moment until the new one is up)
-		r := m.su(ctx, i, "chmod 755 "+proxyExe+".new && { [ ! -x "+proxyExe+" ] || "+proxyExe+" stop >/dev/null; } && mv -f "+
-			proxyExe+".new "+proxyExe, proxyGuestWait)
+		// another version may be running: it is killed, not stopped, so its rules stay and the listed apps have no
+		// network for the moment until the new one replaces them (a stop would let them go direct meanwhile)
+		r := m.su(ctx, i, replaceDaemonScript(proxyExe), proxyGuestWait)
 		if r.Code != 0 {
 			return nil, suError(i, r.Out)
 		}
@@ -435,6 +446,15 @@ func (m *Manager) applyAppProxy(ctx context.Context, i int, s appproxy.Setting) 
 	return st, nil
 }
 
+// replaceDaemonScript puts the pushed daemon in place of the old one (root; no single quotes, see Manager.su). The
+// pid comes from the old one's status, which reads its lock: a pid file left by a dead daemon could name another
+// process by now.
+func replaceDaemonScript(exe string) string {
+	return "chmod 755 " + exe + ".new && { p=$(" + exe + " status 2>/dev/null | " +
+		`sed -n "s/.*\"running\":true,\"pid\":\([0-9]*\).*/\1/p"); [ -z "$p" ] || kill -9 "$p"; } && ` +
+		"mv -f " + exe + ".new " + exe
+}
+
 // stopAppProxy stops the daemon and removes its rules, when the guest has it at all.
 func (m *Manager) stopAppProxy(ctx context.Context, i int) (*appproxy.Status, error) {
 	if m.shell(ctx, i, "test -x "+proxyExe, 0).Code != 0 {
@@ -469,28 +489,23 @@ func suError(i int, out string) error {
 // earlier change left running (the guest kept running meanwhile) is stopped. Failures are warnings; the listed apps
 // then go direct until it is set again (a boot without rules is like one before the setting existed).
 func (m *Manager) setupAppProxy(ctx context.Context, i int) {
-	meta := m.Root.InstanceMeta(i)
-	if !meta.Has(appproxy.MetaKey) {
-		return
-	}
-	s, err := settingOf(meta)
-	if err != nil {
-		m.Log.Warnf("实例 %d 按应用走代理没设上：%s", i, errs.As(err).Message)
-		return
-	}
-	if !s.Active() {
-		if st, err := m.applyAppProxy(ctx, i, s); err == nil && st != nil {
-			m.Log.Infof("实例 %d 按应用走代理：已关，客体程序已停", i)
-		}
+	if !m.Root.InstanceMeta(i).Has(appproxy.MetaKey) {
 		return
 	}
 	t := time.Now()
-	st, err := m.applyAppProxy(ctx, i, s)
-	if err != nil {
+	s, st, err := m.applyAppProxy(ctx, i)
+	switch {
+	case err != nil && s.Active():
 		m.Log.Warnf("实例 %d 按应用走代理没生效（名单里的应用这次开机直连）：%s", i, errs.As(err).Message)
-		return
+	case err != nil:
+		m.Log.Warnf("实例 %d 按应用走代理没设上：%s", i, errs.As(err).Message)
+	case !s.Active():
+		if st != nil {
+			m.Log.Infof("实例 %d 按应用走代理：已关，客体程序已停", i)
+		}
+	default:
+		m.Log.Infof("实例 %d 按应用走代理：%s（%.1f 秒）", i, guestSummary(s, st), time.Since(t).Seconds())
 	}
-	m.Log.Infof("实例 %d 按应用走代理：%s（%.1f 秒）", i, guestSummary(s, st), time.Since(t).Seconds())
 }
 
 // guestSummary is "2 个应用（1 个已装）→ socks5://10.0.2.2:7890，UDP 可用，规则就位".

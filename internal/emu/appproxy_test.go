@@ -150,15 +150,24 @@ func TestAppProxySetting(t *testing.T) {
 		t.Fatalf("test: %+v %v", tr, err)
 	}
 
-	// a value that is not a setting is not overwritten
-	if err := m.Root.UpdateInstanceMeta(i, map[string]*jsonord.Value{appproxy.MetaKey: jsonord.NewString("x")}); err != nil {
+	// a value that is not a setting (not an object; an object with an address that is no proxy's) is not overwritten
+	bad, err := jsonord.Parse([]byte(`{"enabled": true, "server": "socks5://proxy.lan:1080", "apps": ["a.b"]}`))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.AppProxy(ctx, i); errs.CodeOf(err) != errs.MetadataUnreadable {
-		t.Fatalf("bad value read: %v", err)
-	}
-	if _, err := m.SetAppProxy(ctx, i, appproxy.Change{Enabled: ptr(false)}); errs.CodeOf(err) != errs.MetadataUnreadable {
-		t.Fatalf("bad value overwritten: %v", err)
+	for _, v := range []*jsonord.Value{jsonord.NewString("x"), bad} {
+		if err := m.Root.UpdateInstanceMeta(i, map[string]*jsonord.Value{appproxy.MetaKey: v}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.AppProxy(ctx, i); errs.CodeOf(err) != errs.MetadataUnreadable {
+			t.Fatalf("bad value read: %v", err)
+		}
+		if _, err := m.SetAppProxy(ctx, i, appproxy.Change{Enabled: ptr(false)}); errs.CodeOf(err) != errs.MetadataUnreadable {
+			t.Fatalf("bad value overwritten: %v", err)
+		}
+		if in, _ := m.Info(ctx, i); in.AppProxy == nil {
+			t.Error("a bad value: no summary at all")
+		}
 	}
 }
 

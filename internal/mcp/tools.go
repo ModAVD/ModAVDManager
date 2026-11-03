@@ -597,12 +597,9 @@ func (a args) optStrings(name string) (*[]string, error) {
 	if !ok || isNull(raw) {
 		return nil, nil
 	}
-	var s []string
+	var s []string // [] decodes to an empty slice, not nil: "clear the list" stays apart from "absent"
 	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte(`[`)) || json.Unmarshal(raw, &s) != nil {
 		return nil, errs.Newf(errs.Usage, "参数 %s 必须是字符串数组", name)
-	}
-	if s == nil {
-		s = []string{}
 	}
 	return &s, nil
 }
