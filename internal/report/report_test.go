@@ -71,6 +71,20 @@ func TestScriptPort(t *testing.T) {
 			t.Errorf("%s: %d, want %d", raw, got, want)
 		}
 	}
+	// running instances: with portBase 21000, the same-named qemu of another root (on its ports) is not this root's
+	for _, c := range []struct {
+		base, port int
+		avd        string
+		want       bool
+	}{
+		{root.DefaultPortBase, 20060, "mas_6", false}, {root.DefaultPortBase, 21060, "mas_6", false},
+		{21000, 21060, "mas_6", false}, {21000, 20060, "mas_6", true}, {21000, 20060, "MAS_6", true},
+		{21000, 0, "mas_6", true}, {21000, 20060, "mas_x", false},
+	} {
+		if got := otherRootsInstance(root.PortPlan{Base: c.base}, c.avd, c.port); got != c.want {
+			t.Errorf("otherRootsInstance(%d, %s, %d) = %v", c.base, c.avd, c.port, got)
+		}
+	}
 	// a root with portBase 21000: its own instance ports are refused, the default plan's are not (ModAVD/ModAVD#75)
 	for raw, want := range map[string]int{`20010`: 20010, `21010`: 0, `21092`: 0, `21093`: 21093} {
 		v, _ := jsonord.Parse([]byte(raw))

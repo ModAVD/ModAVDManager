@@ -662,6 +662,17 @@ var (
 	portsArg = regexp.MustCompile(`(?i)(?:^|\s)-ports?\s+"?([0-9]+)`)
 )
 
+// otherRootsInstance: a qemu of instance avd on console port is another root's. Only with a plan of its own
+// (portBase): then the same-named instance of another root can run at the same time, on that root's ports. Without
+// one, as the script: two such instances could not run at once (they would share ports).
+func otherRootsInstance(plan root.PortPlan, avd string, port int) bool {
+	if plan.Base == root.DefaultPortBase {
+		return false
+	}
+	i, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(avd), root.AvdNamePrefix))
+	return err == nil && port != plan.Console(i)
+}
+
 func (c *collector) runningAndAdb() error {
 	c.section("正在运行的 qemu-system 进程")
 	qs, err := c.h.Processes(func(name string) bool { return hasPrefixFold(name, "qemu-system") })
@@ -694,6 +705,10 @@ func (c *collector) runningAndAdb() error {
 			port, _ = strconv.Atoi(m[1])
 		}
 		if avd != "" && containsFold(c.instances, avd) {
+			if otherRootsInstance(c.plan, avd, port) {
+				c.L(fmt.Sprintf("  端口 %d 不是本目录 %s 的（端口段 %d），是别的根目录的同名实例，跳过", port, avd, c.plan.Base))
+				continue
+			}
 			running = append(running, liveTarget{name: avd, pid: q.PID, consolePort: port})
 		}
 	}
