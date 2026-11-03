@@ -229,7 +229,8 @@ Tests run on Windows only. Optional environment variables:
 
 ## Contributing
 
-- There is only one maintainer, and replies can take a few days. Open an issue before changing code, saying what you want to change and why; a large PR that was not discussed first may not be accepted.
+- Report problems and suggest features in the [Issues](https://github.com/ModAVD/ModAVD/issues) of the ModAVD repository, and pick "Manager and CLI"; this repository only takes PRs.
+- There is only one maintainer, and replies can take a few days. Open an issue in the ModAVD repository before changing code, saying what you want to change and why; a large PR that was not discussed first may not be accepted.
 - Commits carry your own name or a pseudonym, with your own GitHub noreply address as the email (`<id>+<login>@users.noreply.github.com`, shown in your GitHub email settings).
 - Machine-readable output (`--json`, exit codes, MCP tools) is a contract for callers such as AUTO-MAS: you may add fields; if you change a meaning or remove a command or a field, also increment `Protocol` in `internal/buildinfo`.
 - The README exists in Chinese (`README.md`) and English (`README.en.md`), matching section by section: if you change one, change the other in the same PR. If you can write only one language, say so in the PR and the maintainer will fill in the other.

@@ -229,7 +229,8 @@ go test ./...
 
 ## 参与
 
-- 只有一个维护者，回复可能要几天。改代码前先开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
+- 报问题、提建议都到 ModAVD 仓库的 [Issues](https://github.com/ModAVD/ModAVD/issues)，选上「管理器和命令行」；本仓库只收 PR。
+- 只有一个维护者，回复可能要几天。改代码前先在 ModAVD 仓库开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
 - 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义、删了命令或字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
 - README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
