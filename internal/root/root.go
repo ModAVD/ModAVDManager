@@ -315,6 +315,17 @@ func (r *Root) QemuHeadlessExe() string {
 	p := CurrentPlatform()
 	return filepath.Join(r.RuntimeSDK(), "emulator", "qemu", p.QemuDir, p.QEMUHeadless)
 }
+
+// QemuImgExe is the SDK's qemu-img (disk info / compact), errs.NotReady when it is not installed.
+func (r *Root) QemuImgExe() (string, error) {
+	exe := filepath.Join(r.RuntimeSDK(), "emulator", "qemu-img.exe")
+	if fi, err := os.Stat(exe); err != nil || fi.IsDir() {
+		return exe, errs.Newf(errs.NotReady, "找不到 qemu-img: %s", exe).
+			WithAdvice("魔改 AVD 的模拟器组件不完整，请更新组件后再试")
+	}
+	return exe, nil
+}
+
 func (r *Root) AvdHome() string        { return filepath.Join(r.Dir, AvdDir) }
 func (r *Root) LogsDir() string        { return filepath.Join(r.Dir, LogsDir) }
 func (r *Root) ShaderCacheDir() string { return filepath.Join(r.Dir, ShaderCacheDir) }

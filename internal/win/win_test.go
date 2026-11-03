@@ -703,6 +703,22 @@ func TestDiskFreeAndMemory(t *testing.T) {
 	t.Logf("available memory: %d MiB", mb)
 }
 
+func TestGetCompressedFileSize(t *testing.T) {
+	dir := workDir(t)
+	file := filepath.Join(dir, "sz.bin")
+	if err := os.WriteFile(file, make([]byte, 100000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := GetCompressedFileSize(file)
+	// a plain file takes at least its length (rounded up to the cluster); a compressed volume may report less
+	if err != nil || n == 0 || n > 1<<20 {
+		t.Errorf("GetCompressedFileSize = %d, %v", n, err)
+	}
+	if _, err := GetCompressedFileSize(filepath.Join(dir, "missing.bin")); errs.CodeOf(err) != errs.NotFound {
+		t.Errorf("missing file: %v", err)
+	}
+}
+
 func TestL3Groups(t *testing.T) {
 	raw := cacheTopology()
 	t.Logf("cache topology %d bytes, L3 groups %+v", len(raw), L3Groups())

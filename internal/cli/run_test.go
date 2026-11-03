@@ -170,6 +170,19 @@ func (f *fakeManager) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult,
 	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2147483648}, nil
 }
 
+func (f *fakeManager) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	f.record("disk-info " + itoa(i))
+	const gb = int64(1) << 30
+	if i == 4 { // running: no allocated / reclaimable
+		return &emu.DiskInfoResult{Index: i, Overlay: "x", Running: true, NeedsShutdown: true,
+			LogicalBytes: 8 * gb, OnDiskBytes: 3 * gb,
+			Warnings: []string{"实例在运行：已分配和可回收的大小要关机后才能算"}}, nil
+	}
+	alloc, rec := 2*gb, gb
+	return &emu.DiskInfoResult{Index: i, Overlay: "x", LogicalBytes: 8 * gb, OnDiskBytes: 3 * gb,
+		ClusterBytes: 65536, AllocatedBytes: &alloc, ReclaimableBytes: &rec}, nil
+}
+
 func (f *fakeManager) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
 	f.record("install " + itoa(i) + " " + apkPath)
 	if f.install != nil {
@@ -1021,6 +1034,41 @@ func TestDiskTrim(t *testing.T) {
 	r = h.run(t, nil, "disk", "3", "compact")
 	if r.code != 2 || len(h.fake.callList()) != 0 {
 		t.Errorf("bad action: code %d calls %q stderr %q", r.code, h.fake.callList(), r.stderr)
+	}
+}
+
+func TestDiskInfo(t *testing.T) {
+	h := newHarness()
+	r := h.run(t, nil, "disk", "3", "info")
+	want := "实例：3（已关机）\n数据盘逻辑大小：8.0 GB\n覆盖层在宿主上占用：3.0 GB\n" +
+		"已分配（客体实际数据）：2.0 GB\n估计可回收：1.0 GB\n"
+	if r.code != 0 || r.stdout != want {
+		t.Errorf("text: code %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if got := h.fake.callList(); len(got) != 1 || got[0] != "disk-info 3" {
+		t.Errorf("calls = %q", got)
+	}
+	r = h.run(t, nil, "--json", "disk", "mas_3", "INFO")
+	if m := envelope(t, r.stdout); m["ok"] != true {
+		t.Errorf("json: %s", r.stdout)
+	}
+	for _, s := range []string{`"logicalBytes":8589934592`, `"onDiskBytes":3221225472`, `"allocatedBytes":2147483648`,
+		`"reclaimableBytes":1073741824`, `"needsShutdown":false`} {
+		if !strings.Contains(r.stdout, s) {
+			t.Errorf("json data lacks %s: %s", s, r.stdout)
+		}
+	}
+	// a running instance: no allocated / reclaimable, the flag and the warning say why
+	h = newHarness()
+	r = h.run(t, nil, "disk", "4", "info")
+	if r.code != 0 || strings.Contains(r.stdout, "估计可回收") || strings.Contains(r.stdout, "已分配（") ||
+		!strings.Contains(r.stdout, "要关机后才能算") || !strings.Contains(r.stdout, "运行中") {
+		t.Errorf("running text: code %d stdout %q", r.code, r.stdout)
+	}
+	r = h.run(t, nil, "--json", "disk", "4", "info")
+	if strings.Contains(r.stdout, "allocatedBytes") || strings.Contains(r.stdout, "reclaimableBytes") ||
+		!strings.Contains(r.stdout, `"needsShutdown":true`) {
+		t.Errorf("running json: %s", r.stdout)
 	}
 }
 

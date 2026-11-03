@@ -178,6 +178,32 @@ func DiskFree(path string) (uint64, error) {
 	return free, nil
 }
 
+// GetCompressedFileSize is the bytes the file at path really occupies on the volume (GetCompressedFileSizeW): for a
+// sparse or NTFS-compressed file that is less than its length. For a plain file it is the length rounded up to the
+// cluster.
+func GetCompressedFileSize(path string) (uint64, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	if err := procGetCompressedFileSizeW.Find(); err != nil {
+		return 0, errs.Wrap(errs.Internal, err, "读不到文件占用的磁盘空间: "+err.Error())
+	}
+	const invalidFileSize = 0xFFFFFFFF
+	var high uint32
+	low, _, e := procGetCompressedFileSizeW.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&high)))
+	// INVALID_FILE_SIZE is also a legal low word of a file larger than 4 GiB: only the last error tells them apart.
+	if uint32(low) == invalidFileSize {
+		if en, ok := e.(syscall.Errno); ok && en != 0 {
+			if en == syscall.ERROR_FILE_NOT_FOUND || en == syscall.ERROR_PATH_NOT_FOUND {
+				return 0, errs.Wrap(errs.NotFound, e, "找不到文件: "+path)
+			}
+			return 0, errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 占用的磁盘空间: %v", path, e))
+		}
+	}
+	return uint64(high)<<32 | uint64(uint32(low)), nil
+}
+
 type memoryStatusEx struct {
 	Length               uint32
 	MemoryLoad           uint32
