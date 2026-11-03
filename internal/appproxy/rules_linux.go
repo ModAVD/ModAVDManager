@@ -4,11 +4,14 @@ package appproxy
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os/exec"
 	"path"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -62,6 +65,12 @@ func setupRules(uids []UIDRange) error {
 	}
 	del, add := planRules(have, wantRules(uids))
 	for _, r := range add { // before deleting: no gap for uids that stay
+		if dnsRule(r) {
+			if err := addRuleNetlink(r); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := run("", ipCmd, append([]string{r.family(), "rule"}, r.addArgs()...)...); err != nil {
 			return err
 		}
@@ -70,6 +79,51 @@ func setupRules(uids []UIDRange) error {
 		run("", ipCmd, append([]string{r.family(), "rule"}, r.delArgs()...)...)
 	}
 	return nil
+}
+
+var nlSeq atomic.Uint32
+
+// addRuleNetlink adds a port-53 rule (ruleMessage) and waits for the kernel's answer.
+func addRuleNetlink(r ipRule) error {
+	fail := func(err error) error {
+		return fmt.Errorf("ip rule add pref %d uidrange %s（netlink）：%v", r.pref, r.uids, err)
+	}
+	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, syscall.NETLINK_ROUTE)
+	if err != nil {
+		return fail(err)
+	}
+	defer syscall.Close(fd)
+	if err := syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		return fail(err)
+	}
+	tv := syscall.Timeval{Sec: 5}
+	if err := syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv); err != nil {
+		return fail(err)
+	}
+	seq := nlSeq.Add(1)
+	if err := syscall.Sendto(fd, ruleMessage(r, seq), 0, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
+		return fail(err)
+	}
+	buf := make([]byte, 8192)
+	for {
+		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return fail(err)
+		}
+		msgs, err := syscall.ParseNetlinkMessage(buf[:n])
+		if err != nil {
+			return fail(err)
+		}
+		for _, m := range msgs {
+			if m.Header.Seq != seq || m.Header.Type != syscall.NLMSG_ERROR || len(m.Data) < 4 {
+				continue
+			}
+			if code := int32(binary.LittleEndian.Uint32(m.Data)); code != 0 {
+				return fail(syscall.Errno(-code))
+			}
+			return nil
+		}
+	}
 }
 
 func currentRules() ([]ipRule, error) {
