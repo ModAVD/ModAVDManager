@@ -44,8 +44,24 @@ func transparent(origDst bool) func(network, address string, c syscall.RawConn) 
 
 // listenTCP is the TCP socket TPROXY hands connections to; an accepted connection's local address is where the app
 // connected to.
+//
+// It carries ReplyMark: Android sets net.ipv4.tcp_fwmark_accept, so without a mark of its own the SYN-ACK and every
+// later packet to the app would carry the app's SYN's mark, Mark, and PREROUTING's TPROXY would take them back to
+// this socket instead of the app's.
 func listenTCP(addr netip.AddrPort) (*net.TCPListener, error) {
-	lc := net.ListenConfig{Control: transparent(false), KeepAlive: tcpKeepAlive}
+	tr := transparent(false)
+	lc := net.ListenConfig{KeepAlive: tcpKeepAlive, Control: func(network, address string, c syscall.RawConn) error {
+		if err := tr(network, address, c); err != nil {
+			return err
+		}
+		var serr error
+		if err := c.Control(func(fd uintptr) {
+			serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, ReplyMark)
+		}); err != nil {
+			return err
+		}
+		return serr
+	}}
 	l, err := lc.Listen(context.Background(), "tcp4", addr.String())
 	if err != nil {
 		return nil, err

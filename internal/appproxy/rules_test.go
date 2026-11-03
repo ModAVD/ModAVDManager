@@ -1,6 +1,7 @@
 package appproxy
 
 import (
+	"encoding/hex"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ func TestRestoreInput(t *testing.T) {
 -A modavd_proxy_app -d 224.0.0.0/3 -j RETURN
 -A modavd_proxy_app -p tcp -j MARK --set-xmark 0x1000000/0x1000000
 -A modavd_proxy_app -p udp -j MARK --set-xmark 0x1000000/0x1000000
+-A modavd_proxy_app -m mark --mark 0x1000000/0x1000000 -j RETURN
 -A modavd_proxy_app -j DROP
 -A modavd_proxy_pre -i lo -p tcp -m mark --mark 0x1000000/0x1000000 -j TPROXY --on-port 18990 --on-ip 127.0.0.1 --tproxy-mark 0x1000000/0x1000000
 -A modavd_proxy_pre -i lo -p udp -m mark --mark 0x1000000/0x1000000 -j TPROXY --on-port 18990 --on-ip 127.0.0.1 --tproxy-mark 0x1000000/0x1000000
@@ -115,5 +117,27 @@ func TestParseMangle(t *testing.T) {
 	}
 	if !routeOK("local default dev lo scope host src 127.0.0.1 \n") || routeOK("") {
 		t.Error("routeOK")
+	}
+}
+
+// TestRuleMessage: the RTM_NEWRULE of a port-53 rule, as `ip rule add pref 8991 uidrange 10128-10130 ipproto udp
+// dport 53 lookup 8990` of a newer iproute2 sends it.
+func TestRuleMessage(t *testing.T) {
+	m := ruleMessage(ipRule{pref: prefDNSUDP, uids: UIDRange{10128, 10130}}, 7)
+	want := "48000000" + "2000" + "0506" + "07000000" + "00000000" + // nlmsghdr: len 72, RTM_NEWRULE, flags, seq, pid
+		"020000000000000100000000" + // fib_rule_hdr: AF_INET, table unspec, FR_ACT_TO_TBL
+		"08000600" + "1f230000" + // FRA_PRIORITY 8991
+		"08000f00" + "1e230000" + // FRA_TABLE 8990
+		"0c001400" + "90270000" + "92270000" + // FRA_UID_RANGE 10128-10130
+		"05001600" + "11000000" + // FRA_IP_PROTO udp, padded
+		"08001800" + "35003500" // FRA_DPORT_RANGE 53-53
+	if got := hex.EncodeToString(m); got != want {
+		t.Errorf("udp\n got %s\nwant %s", got, want)
+	}
+	if m := ruleMessage(ipRule{pref: prefDNSTCP, uids: UIDRange{10128, 10130}}, 7); m[28+8+8+12+4] != 6 || m[28+4] != 0x20 {
+		t.Errorf("tcp: proto %d pref %#x", m[28+8+8+12+4], m[28+4])
+	}
+	if !dnsRule(ipRule{pref: prefDNSTCP}) || dnsRule(ipRule{pref: prefMark}) || dnsRule(ipRule{pref: prefV6}) {
+		t.Error("dnsRule")
 	}
 }
