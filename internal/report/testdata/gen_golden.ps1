@@ -150,6 +150,13 @@ function MockShell($s, [string]$key) {
     # the old shell protocol: stderr merged into stdout, no exit code
     @{ TimedOut = $false; ExitCode = 0; Stdout = $out + $err; Stderr = '' }
 }
+# adb.exe writes the guest's output through the C runtime's text mode: every LF becomes CRLF (not for exec-out, which
+# goes to -StdoutFile as bytes)
+function AdbTextMode($r) {
+    $r.Stdout = ([string]$r.Stdout).Replace("`n", "`r`n")
+    $r.Stderr = ([string]$r.Stderr).Replace("`n", "`r`n")
+    $r
+}
 function Invoke-Native {
     param([string]$Exe, [string[]]$Arguments, [int]$TimeoutSec = 20, [string]$StdoutFile, [hashtable]$ExtraEnv)
     $leaf = Split-Path -Leaf $Exe
@@ -174,12 +181,12 @@ function Invoke-Native {
                 if ($e) { $bytes = [Convert]::FromBase64String([string]$e.b64) }
                 if ($StdoutFile) { [IO.File]::WriteAllBytes($StdoutFile, $bytes) }
             } elseif ($cmd[0] -eq 'shell') {
-                $res = MockShell $s (($cmd[1..($cmd.Count - 1)]) -join ' ')
+                $res = AdbTextMode (MockShell $s (($cmd[1..($cmd.Count - 1)]) -join ' '))
             } elseif ($cmd[0] -eq 'logcat') {
                 # adb's logcat(): export ANDROID_LOG_TAGS="''"; exec logcat '<arg>'...
                 $key = 'export ANDROID_LOG_TAGS="' + "''" + '"; exec logcat'
                 foreach ($x in $cmd[1..($cmd.Count - 1)]) { $key += " '" + ($x -replace "'", "'\''") + "'" }
-                $res = MockShell $s $key
+                $res = AdbTextMode (MockShell $s $key)
             } else { throw ('mock: unexpected adb ' + ($a -join ' ')) }
         } else { throw ('mock: unexpected adb ' + ($a -join ' ')) }
     } else {

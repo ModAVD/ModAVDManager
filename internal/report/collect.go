@@ -1300,13 +1300,19 @@ func (c *collector) screenshot(png, serial string) error {
 	return nil
 }
 
+// adbTextMode is what adb.exe makes of the guest's output on Windows: it writes stdout and stderr through the C
+// runtime's text mode, which turns every LF into CRLF (a CRLF the guest sent becomes CR CR LF). The script gets that;
+// the host protocol gets the guest's bytes as they are.
+func adbTextMode(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
+
 func (c *collector) liveCommand(liveDir, name, serial, tag, kind string, args []string) error {
 	res := adbLive(c.ctx, c.adbPort, serial, nativeTimeout, nil, kind, args...)
 	if res.TimedOut {
 		c.L(fmt.Sprintf("  %s：超时（20 秒），已放弃", tag))
 		return nil
 	}
-	text := decodeText(res.Stdout)
+	res.Stderr = adbTextMode(res.Stderr)
+	text := adbTextMode(decodeText(res.Stdout))
 	if tag == "window-focus" {
 		var keep []string
 		for _, l := range splitCRLF(text) {

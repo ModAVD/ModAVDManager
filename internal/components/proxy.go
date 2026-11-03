@@ -8,12 +8,18 @@ import (
 	"strings"
 )
 
+// proxyEnv are the variables that hand the choice to the environment.
+var proxyEnv = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
+
+// readSystemProxy is systemProxy; tests put a stand-in here.
+var readSystemProxy = systemProxy
+
 // requestProxy is the proxy of a request. The script's HttpWebRequest uses the Windows proxy settings; Go reads only
 // the environment. So: HTTPS_PROXY / HTTP_PROXY / NO_PROXY when any of them is set (like update), else the static
 // proxy of the Windows Internet settings (systemProxy). A proxy auto-config script (PAC, WPAD) is not evaluated: set
 // HTTPS_PROXY for such a network. Loopback addresses (local test mirrors) always go direct.
 func requestProxy(req *http.Request) (*url.URL, error) {
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+	for _, k := range proxyEnv {
 		if os.Getenv(k) != "" {
 			return http.ProxyFromEnvironment(req)
 		}
@@ -21,7 +27,7 @@ func requestProxy(req *http.Request) (*url.URL, error) {
 	if isLoopback(req.URL.Hostname()) {
 		return nil, nil
 	}
-	server, override, ok := systemProxy()
+	server, override, ok := readSystemProxy()
 	if !ok {
 		return nil, nil
 	}

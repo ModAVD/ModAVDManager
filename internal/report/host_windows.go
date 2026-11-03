@@ -35,8 +35,8 @@ import (
 //go:embed cim.ps1
 var cimScript string
 
-// cimTimeout bounds one run of cim.ps1 (the scripts call Get-CimInstance without a limit; a stuck WMI service must
-// not hang the command).
+// cimTimeout bounds one run of cim.ps1, i.e. one part (the scripts call Get-CimInstance without a limit; a stuck WMI
+// service must not hang the command).
 const cimTimeout = 60 * time.Second
 
 var (
@@ -82,12 +82,11 @@ func windowsDir() string {
 	return `C:\Windows`
 }
 
-// winHost is Host on this computer. The WMI parts come from cim.ps1, run once for the classes both commands need,
-// once for the disk kind and once for the event log, each on first use.
+// winHost is Host on this computer. The WMI parts come from cim.ps1, one process per part (and drive letter), each
+// on first use; see part.
 type winHost struct {
-	mu   sync.Mutex
-	cim  map[string]*cimRun
-	disk map[string]*cimRun
+	mu  sync.Mutex
+	cim map[string]*cimRun // by part|letter
 }
 
 type cimRun struct {
@@ -97,22 +96,26 @@ type cimRun struct {
 }
 
 func newHost() (Host, error) {
-	return &winHost{cim: map[string]*cimRun{}, disk: map[string]*cimRun{}}, nil
+	return &winHost{cim: map[string]*cimRun{}}, nil
 }
 
-const cimParts = "os,cpu,cs,gpu,features,av"
+// cimRunner is runCIM; tests put a stand-in here.
+var cimRunner = runCIM
 
-// part runs cim.ps1 for parts (once per parts and letter) and decodes the answer of one part into v (a slice).
-func (h *winHost) part(ctx context.Context, parts, letter, name string, v any) error {
+// part runs the cim.ps1 part name (once per part and letter, on first use) and decodes its answer into v (a slice).
+// Every part gets a process and a cimTimeout of its own: a slow class (SecurityCenter2 waiting for an antivirus, a
+// stuck WMI provider) loses only its own rows, not every WMI line of the report. A part nobody asks for never runs
+// (report-config needs three of collect-info's six), and none outlives the command.
+func (h *winHost) part(ctx context.Context, letter, name string, v any) error {
 	h.mu.Lock()
-	key := parts + "|" + letter
+	key := name + "|" + letter
 	run := h.cim[key]
 	if run == nil {
 		run = &cimRun{}
 		h.cim[key] = run
 	}
 	h.mu.Unlock()
-	run.once.Do(func() { run.data, run.err = runCIM(ctx, parts, letter) })
+	run.once.Do(func() { run.data, run.err = cimRunner(ctx, name, letter) })
 	if run.err != nil {
 		return run.err
 	}
@@ -131,8 +134,9 @@ func (h *winHost) part(ctx context.Context, parts, letter, name string, v any) e
 	return nil
 }
 
-// runCIM runs cim.ps1 with Windows PowerShell 5.1 (hidden, no profile, stdin NUL) and parses its JSON line.
-func runCIM(ctx context.Context, parts, letter string) (map[string]json.RawMessage, error) {
+// runCIM runs cim.ps1 for one part with Windows PowerShell 5.1 (hidden, no profile, stdin NUL) and parses its JSON
+// line.
+func runCIM(ctx context.Context, part, letter string) (map[string]json.RawMessage, error) {
 	ps := filepath.Join(windowsDir(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 	u := utf16.Encode([]rune(cimScript))
 	b := make([]byte, 2*len(u))
@@ -143,7 +147,7 @@ func runCIM(ctx context.Context, parts, letter string) (map[string]json.RawMessa
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ps, "-NoLogo", "-NoProfile", "-NonInteractive", "-InputFormat", "None",
 		"-EncodedCommand", base64.StdEncoding.EncodeToString(b))
-	cmd.Env = append(os.Environ(), "MODAVD_CIM_PARTS="+parts, "MODAVD_CIM_LETTER="+letter)
+	cmd.Env = append(os.Environ(), "MODAVD_CIM_PARTS="+part, "MODAVD_CIM_LETTER="+letter)
 	cmd.Dir = filepath.Dir(ps)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -151,7 +155,7 @@ func runCIM(ctx context.Context, parts, letter string) (map[string]json.RawMessa
 	win.HideConsoleCmd(cmd)
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("WMI 查询 %.0f 秒没有结果", cimTimeout.Seconds())
+		return nil, fmt.Errorf("WMI 查询（%s）%.0f 秒没有结果", part, cimTimeout.Seconds())
 	}
 	out := bytes.TrimSpace(bytes.TrimPrefix(stdout.Bytes(), []byte("\xef\xbb\xbf")))
 	var data map[string]json.RawMessage
@@ -164,6 +168,8 @@ func runCIM(ctx context.Context, parts, letter string) (map[string]json.RawMessa
 	return data, nil
 }
 
+// first is the first item of a part h.part decoded. The part runs before first is called: Go leaves unspecified
+// whether the items argument of first(raw, h.part(..., &raw), ...) is read before or after the call fills raw.
 func first[T any](items []T, err error, what string) (T, error) {
 	var zero T
 	if err != nil {
@@ -184,7 +190,8 @@ func (h *winHost) OS(ctx context.Context) (OSInfo, error) {
 		TotalKB float64 `json:"totalKB"`
 		FreeKB  float64 `json:"freeKB"`
 	}
-	o, err := first(raw, h.part(ctx, cimParts, "", "os", &raw), "Win32_OperatingSystem")
+	err := h.part(ctx, "", "os", &raw)
+	o, err := first(raw, err, "Win32_OperatingSystem")
 	return OSInfo{Caption: o.Caption, Version: o.Version, BuildNumber: o.Build, OSArchitecture: o.Arch,
 		TotalVisibleKB: o.TotalKB, FreePhysicalKB: o.FreeKB}, err
 }
@@ -196,7 +203,7 @@ func (h *winHost) Processors(ctx context.Context) ([]Processor, error) {
 		Threads *int64 `json:"threads"`
 		VT      *bool  `json:"vt"`
 	}
-	if err := h.part(ctx, cimParts, "", "cpu", &raw); err != nil {
+	if err := h.part(ctx, "", "cpu", &raw); err != nil {
 		return nil, err
 	}
 	out := []Processor{}
@@ -210,7 +217,8 @@ func (h *winHost) ComputerSystem(ctx context.Context) (ComputerSystem, error) {
 	var raw []struct {
 		Hypervisor *bool `json:"hypervisor"`
 	}
-	cs, err := first(raw, h.part(ctx, cimParts, "", "cs", &raw), "Win32_ComputerSystem")
+	err := h.part(ctx, "", "cs", &raw)
+	cs, err := first(raw, err, "Win32_ComputerSystem")
 	return ComputerSystem{HypervisorPresent: cs.Hypervisor}, err
 }
 
@@ -221,7 +229,7 @@ func (h *winHost) VideoControllers(ctx context.Context) ([]VideoController, erro
 		PNP    string `json:"pnp"`
 		Date   string `json:"date"`
 	}
-	if err := h.part(ctx, cimParts, "", "gpu", &raw); err != nil {
+	if err := h.part(ctx, "", "gpu", &raw); err != nil {
 		return nil, err
 	}
 	out := []VideoController{}
@@ -236,7 +244,7 @@ func (h *winHost) OptionalFeatures(ctx context.Context) ([]OptionalFeature, erro
 		Name  string `json:"name"`
 		State *int64 `json:"state"`
 	}
-	if err := h.part(ctx, cimParts, "", "features", &raw); err != nil {
+	if err := h.part(ctx, "", "features", &raw); err != nil {
 		return nil, err
 	}
 	out := []OptionalFeature{}
@@ -251,7 +259,7 @@ func (h *winHost) Antivirus(ctx context.Context) ([]Antivirus, error) {
 		Name  string `json:"name"`
 		State int64  `json:"state"`
 	}
-	if err := h.part(ctx, cimParts, "", "av", &raw); err != nil {
+	if err := h.part(ctx, "", "av", &raw); err != nil {
 		return nil, err
 	}
 	out := []Antivirus{}
@@ -266,7 +274,8 @@ func (h *winHost) DiskKind(ctx context.Context, letter string) (string, string, 
 		Bus   string `json:"bus"`
 		Media string `json:"media"`
 	}
-	d, err := first(raw, h.part(ctx, "disk", letter, "disk", &raw), "磁盘")
+	err := h.part(ctx, letter, "disk", &raw)
+	d, err := first(raw, err, "磁盘")
 	return d.Bus, d.Media, err
 }
 
@@ -277,7 +286,7 @@ func (h *winHost) AppEvents(ctx context.Context) ([]AppEvent, error) {
 		Provider string `json:"provider"`
 		Message  string `json:"message"`
 	}
-	if err := h.part(ctx, "events", "", "events", &raw); err != nil {
+	if err := h.part(ctx, "", "events", &raw); err != nil {
 		return nil, err
 	}
 	out := []AppEvent{}
