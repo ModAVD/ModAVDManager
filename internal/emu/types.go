@@ -220,8 +220,10 @@ type StopResult struct {
 	// sync, console kill) / console_kill (private adb unusable: console kill without sync) / launching_kill (qemu had
 	// only just been launched by a concurrent start, Android not booted, nothing to sync) / force (Force) — with
 	// "+terminate" appended when qemu had to be terminated in the end.
-	Method   string   `json:"method"`
-	Synced   bool     `json:"synced"` // a sync ran before qemu was ended (always true for graceful)
+	Method string `json:"method"`
+	// Synced: a sync ran before qemu was ended (always true for graceful; for sync_kill, the one before the shutdown
+	// command or the one before the kill).
+	Synced   bool     `json:"synced"`
 	Seconds  float64  `json:"seconds"`
 	Warnings []string `json:"warnings"`
 	// PID of the qemu this stop ended; 0 when it was already offline.
