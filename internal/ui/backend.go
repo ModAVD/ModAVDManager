@@ -21,7 +21,6 @@ type backend interface {
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)
-	SetWindowVisible(ctx context.Context, i int, visible bool) (*emu.WindowResult, error)
 	Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).

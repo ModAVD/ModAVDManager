@@ -179,7 +179,7 @@ export function openActivity() {
   if (actCtl) return;
   const list = h('ul', { class: 'jobs' });
   const empty = h('div', { class: 'act-empty' }, icon('pulse'), h('p', { text: '还没有任务' }),
-    h('p', { class: 'muted', text: '开机、关机、重启和安装 APK 都会显示在这里。' }));
+    h('p', { class: 'muted', text: '新建、开机、关机和安装 APK 都会显示在这里。' }));
   const logBox = h('div', { class: 'loglines', role: 'log', 'aria-label': '最近的消息' });
   const ctl = openDialog({
     title: '活动', sub: ' ', cls: 'drawer', light: true,
@@ -266,7 +266,7 @@ function updateJob(r, j) {
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'restart'));
+  r.acts.hidden = !(running && j.kind === 'start');
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
   const why = j.state === 'canceled' && j.error ? j.error.message || '' : '';

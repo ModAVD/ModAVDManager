@@ -18,16 +18,19 @@ import (
 	"modavd/internal/win"
 )
 
-// Reference lists printed by AUTO-MAS build_launch_args("mas_3", 20030, memory_mb=4096, headless=...).
+// Reference lists printed by AUTO-MAS build_launch_args("mas_3", 20030, memory_mb=4096, headless=...), plus the three
+// netsim switches before -qemu (ModAVDManager #32).
 var (
 	masArgsHeadless = []string{"-avd", "mas_3", "-no-snapshot", "-gpu", "host", "-ports", "20030,20031", "-grpc", "20032",
 		"-grpc-use-token", "-audio", "none", "-memory", "4096", "-no-window", "-no-boot-anim",
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
 		"-device", "virtio-balloon-pci,free-page-reporting=on"}
 	masArgsWindow = []string{"-avd", "mas_3", "-no-snapshot", "-gpu", "host", "-ports", "20030,20031", "-grpc", "20032",
 		"-grpc-use-token", "-audio", "none", "-memory", "4096",
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
 		"-device", "virtio-balloon-pci,free-page-reporting=on"}
 )

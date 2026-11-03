@@ -1096,3 +1096,20 @@ func TestCreateKeepsOtherMetadata(t *testing.T) {
 		t.Fatal("initialized")
 	}
 }
+
+// TestCreateMarksCreating: Creating writes creationState with the other keys, so the instance is never listed
+// without it.
+func TestCreateMarksCreating(t *testing.T) {
+	r := newRoot(t)
+	old := nowISO
+	nowISO = func() string { return "2026-11-02T21:00:00" }
+	defer func() { nowISO = old }()
+	if _, err := Create(r, 0, CreateOptions{MemoryMB: 3072, CPU: 2, DataPartitionGB: 16, FPS: 30, Creating: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\r\n  \"instances\": {\r\n    \"0\": {\r\n      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n" +
+		"      \"createdAt\": \"2026-11-02T21:00:00\",\r\n      \"creationState\": \"creating\"\r\n    }\r\n  }\r\n}"
+	if got := string(readFile(t, r.MetadataPath())); got != want {
+		t.Fatalf("got %q", got)
+	}
+}

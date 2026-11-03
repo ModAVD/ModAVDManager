@@ -77,7 +77,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 		return nil, err
 	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
-		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps,
+		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps, Creating: !req.filesOnly,
 	})
 	if err != nil {
 		lock.Unlock()
@@ -143,8 +143,8 @@ func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
 	return i, nil
 }
 
-// resumeCreate runs the setup again on an instance whose setup failed (or was killed); its bridge setting is the one
-// recorded at create.
+// resumeCreate runs the setup again on an instance whose setup failed (or was killed), shutting down normally the
+// emulator that setup left running first; its bridge setting is the one recorded at create.
 func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
 	if req.Index == nil {
 		return nil, errs.New(errs.Usage, "--resume 要给实例编号")
@@ -158,16 +158,28 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	if err != nil {
 		return nil, err
 	}
+	// a killed setup left its progress behind; from here status reads "creating" (our lock), so drop it before the
+	// leftover shutdown below, or that shows the old percentage until the setup starts over
+	m.removeCreateProgress(i)
 	// with the lock in hand, a recorded "creating" is one that was killed (creation() would see our own lock)
 	if state := m.creationRecorded(i); state != creationFailed && state != creationCreating {
 		lock.Unlock()
 		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
 			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
 	}
-	if _, running := m.findQemu(i); running {
-		lock.Unlock()
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的模拟器还开着", i).
-			WithAdvice(fmt.Sprintf("先 modavd stop %d，再重试", i))
+	if createRunning(m, i) {
+		// the boot of the setup that failed (or was killed): start refuses this instance, so nothing else booted it.
+		// Shut it down normally, sync first, and set the instance up again.
+		m.Log.Infof("实例 %d 上次新建时开的模拟器还开着，先正常关机再重新初始化", i)
+		sctx, cancel := context.WithTimeout(ctx, createStopTimeout)
+		err := createStop(m, sctx, i)
+		cancel()
+		if err != nil {
+			lock.Unlock()
+			e := errs.As(err)
+			return nil, errs.Wrap(e.Code, err, fmt.Sprintf("魔改 AVD 实例 %d 上次新建时开的模拟器没能正常关掉: %s", i, e.Message)).
+				WithAdvice(fmt.Sprintf("用 modavd stop %d 关掉它，再重试", i))
+		}
 	}
 	return m.setupNew(ctx, i, in.Config, req, lock)
 }
