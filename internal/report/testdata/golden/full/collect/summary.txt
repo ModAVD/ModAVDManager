@@ -116,16 +116,16 @@ qemu 命令行读不到（多半是 AUTO-MAS 以管理员运行），现场按 a
     本 ModAVD 目录的 avd 下没有这个实例，跳过
 mas_1（pid 4100，emulator-20010）：
   截图：70 B
-  getprop：退出码 0，82 字符
+  getprop：退出码 0，85 字符
   mCurrentFocus=Window{2bce772 u0 de.jrpie.android.launcher/de.jrpie.android.launcher.ui.HomeActivity}
   mFocusedApp=ActivityRecord{fb750ba u0 de.jrpie.android.launcher/.ui.HomeActivity t6}
   window-focus：退出码 0，186 字符
-  logcat-crash：退出码 1，64 字符
+  logcat-crash：退出码 1，65 字符
 mas_3（emulator-20030，实例名是推算的）：
   截图：失败，退出码 0 
-  getprop：退出码 0，47 字符
+  getprop：退出码 0，49 字符
   window-focus：退出码 0，0 字符
-  logcat-crash：退出码 0，29 字符
+  logcat-crash：退出码 0，30 字符
 
 == 收集过程 ==
 收集耗时：0.0 秒
