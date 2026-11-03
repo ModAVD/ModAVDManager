@@ -102,7 +102,7 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 - A change takes effect at once while the instance runs (`applied` is `now`), otherwise at the next boot (`next_boot`). A boot through modavd, MCP or the manager puts the rules in place as the first step after Android is up; after the guest reboots on its own, the boot watch puts them back. An instance AUTO-MAS boots by itself, without modavd, has none.
 - `test` probes the configured address from this computer: which protocol it speaks and whether UDP works through it. A proxy that cannot be reached is exit code 9 (`proxy_unavailable`).
 - For overseas games that sign in with Google, also list Google Play services (`com.google.android.gms`).
-- The setting is stored in `mas-avd.json` under `instances.<i>.appProxy` (`enabled`, `server`, `apps`) and goes away with the instance. `app_proxy` in `info` / `list` is its summary (read from the configuration only, no adb; `null` when never set).
+- The setting is stored in `mas-avd.json` under `instances.<i>.appProxy` (`enabled`, `server`, `apps`) and goes away with the instance. `app_proxy` in `info` / `list` is its summary (read from the configuration only, no adb; `null` when never set). For a running instance that has one set, `collect-info` also takes the guest daemon's state and the last 200 lines of its log.
 
 **Machine-readable output** (`--json`):
 

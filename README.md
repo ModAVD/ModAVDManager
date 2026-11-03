@@ -102,7 +102,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 实例开着时改了马上生效（`applied` 是 `now`），关着就下次开机生效（`next_boot`）。由 modavd、MCP 或管理器开机时，开完机第一件事就是挂上规则；客体自己重启后由开机守护补上。AUTO-MAS 自己开机、不经过 modavd 的实例没有。
 - `test`：在这台电脑上探测设好的地址，是什么协议、经它的 UDP 能不能用。探测不到是退出码 9（`proxy_unavailable`）。
 - 海外游戏用 Google 登录的，把 Google Play 服务（`com.google.android.gms`）也加进名单。
-- 设置存在 `mas-avd.json` 的 `instances.<i>.appProxy`（`enabled`、`server`、`apps`），删除实例时一起删掉。`info` / `list` 的 `app_proxy` 是它的概要（只读配置，不走 adb；没设过是 `null`）。
+- 设置存在 `mas-avd.json` 的 `instances.<i>.appProxy`（`enabled`、`server`、`apps`），删除实例时一起删掉。`info` / `list` 的 `app_proxy` 是它的概要（只读配置，不走 adb；没设过是 `null`）。`collect-info` 对开着、又设过的实例另收客体守护进程的状态和日志最后 200 行。
 
 **机读输出**（`--json`）：
 
