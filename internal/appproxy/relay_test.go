@@ -62,8 +62,8 @@ func TestHandleTCP(t *testing.T) {
 	go func() { co.HandleTCP(d, remote); close(done) }()
 	app.Write([]byte("hello"))
 	readAll(t, app, "echo:hello")
-	app.(*net.TCPConn).CloseWrite() // half close passes through: the echo server ends, and so does the app's side
-	if b, err := io.ReadAll(app); err != nil || len(b) != 0 {
+	app.(*net.TCPConn).CloseWrite() // half close passes through: the echo server still answers, then ends
+	if b, err := io.ReadAll(app); err != nil || string(b) != "bye" {
 		t.Errorf("after FIN: %q %v", b, err)
 	}
 	<-done
@@ -89,12 +89,23 @@ func TestHandleTCP(t *testing.T) {
 	}
 	app.Close()
 
-	want := []string{remote.String(), "game.example.com:443", "srv.example:7000"}
+	// on a web port the name the app sends wins over the resolved one; when it sends none, the resolved one is used
+	app, d = appConn(t)
+	go co.HandleTCP(d, netip.MustParseAddrPort("93.184.216.35:443"))
+	app.Write(hello)
+	readAll(t, app, "echo:"+string(hello))
+	app.Close()
+	app, d = appConn(t)
+	go co.HandleTCP(d, netip.MustParseAddrPort("93.184.216.35:443"))
+	readAll(t, app, "echo:")
+	app.Close()
+
+	want := []string{remote.String(), "game.example.com:443", "srv.example:7000", "game.example.com:443", "srv.example:443"}
 	if got := targets(p, "connect"); !slices.Equal(got, want) {
 		t.Errorf("asked %v, want %v", got, want)
 	}
 	time.Sleep(50 * time.Millisecond)
-	if c.tcp.Load() != 3 || c.bytesUp.Load() < int64(5+len(hello)) || c.bytesDown.Load() < 10 {
+	if c.tcp.Load() != 5 || c.bytesUp.Load() < int64(5+2*len(hello)) || c.bytesDown.Load() < 10 {
 		t.Errorf("%+v", c.snapshot())
 	}
 }
@@ -105,15 +116,25 @@ func TestHandleTCPRefused(t *testing.T) {
 	for _, dst := range []string{"10.0.0.5:80", "127.0.0.1:18990", "192.168.1.1:443", "93.184.216.34:0",
 		"127.0.0.1:8080"} {
 		app, d := appConn(t)
-		co.HandleTCP(d, netip.MustParseAddrPort(dst))
+		go co.HandleTCP(d, netip.MustParseAddrPort(dst)) // a relay that should not be there would block
 		app.SetReadDeadline(time.Now().Add(2 * time.Second))
 		if b, err := io.ReadAll(app); len(b) != 0 || err != nil {
 			t.Errorf("%s: %q %v", dst, b, err)
 		}
+		app.Close()
 	}
 	if got := p.Events(); len(got) != 0 {
 		t.Errorf("proxy asked: %v", got)
 	}
+}
+
+func TestHandleTCPPending(t *testing.T) {
+	// an HTTP proxy that sends the server's first bytes along with its answer: they reach the app
+	s := oneShot(t, "HTTP/1.1 200 Connection established\r\n\r\nSSH-2.0-banner\r\n")
+	co, _, _ := newTestCore(t, "http://"+s.Addr.String())
+	app, d := appConn(t)
+	go co.HandleTCP(d, netip.MustParseAddrPort("93.184.216.34:22"))
+	readAll(t, app, "SSH-2.0-banner\r\n")
 }
 
 func TestHandleTCPProxyDown(t *testing.T) {
@@ -191,7 +212,7 @@ func TestHandleUDP(t *testing.T) {
 		t.Errorf("%d associations, %d sessions", n, c.udpSessions.Load())
 	}
 	co.HandleUDP(netip.MustParseAddrPort("10.0.2.16:4001"), netip.MustParseAddrPort("10.0.0.9:9"), []byte("lan"))
-	co.HandleUDP(client, co.listen, []byte("self"))
+	co.HandleUDP(client, netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), UDPPort), []byte("self"))
 	time.Sleep(100 * time.Millisecond)
 	if c.udpSessions.Load() != 1 {
 		t.Error("private or own address relayed")

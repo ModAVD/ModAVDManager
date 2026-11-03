@@ -27,7 +27,7 @@ func listenLocal(t *testing.T) net.Listener {
 	return l
 }
 
-// echoServer echoes every TCP connection, prefixed with "echo:" once.
+// echoServer echoes every TCP connection, prefixed with "echo:" once and followed by "bye" at the client's FIN.
 func echoServer(t *testing.T) string {
 	l := listenLocal(t)
 	go func() {
@@ -40,6 +40,7 @@ func echoServer(t *testing.T) string {
 				defer c.Close()
 				c.Write([]byte("echo:"))
 				io.Copy(c, c)
+				c.Write([]byte("bye")) // after the client's FIN: reaches it only if the FIN was passed on as a half close
 			}()
 		}
 	}()
