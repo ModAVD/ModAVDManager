@@ -182,6 +182,9 @@ function updateCard(c, inst) {
   setText(c.cfg, cfgText(inst.config));
 
   let [pt, tone] = PILL[v.key];
+  // create's setup: our own job's progress, else what the process doing it (CLI, AUTO-MAS) left in the instance
+  const cp = v.key === 'creating' ? (pct(v.job && v.job.progress) ?? (inst.status === 'creating' ? inst.creation_progress : null)) : null;
+  if (cp != null) pt = `新建中 ${Math.floor(cp)}%`;
   if (v.key === 'error') pt = FAIL[v.failed.kind];
   setText(c.pillText, pt);
   attr(c.pill, 'class', 'pill tone-' + tone);
@@ -210,7 +213,7 @@ function updateCard(c, inst) {
     const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
-    const n = pct(p);
+    const n = cp ?? pct(p);
     for (const [bar, fill] of [[c.progBar, c.progFill], [c.lbar, c.lfill]]) {
       bar.classList.toggle('indet', n == null);
       fill.style.width = n == null ? '' : n.toFixed(1) + '%';
@@ -279,7 +282,10 @@ function menuItems(c) {
   // no 带窗口开机 (开机 is with the window), no 重启 and no 显示 / 隐藏窗口: the manager never switches how an instance runs
   return [
     v.key === 'starting' && { label: '关机', icon: 'power', run: () => A.stop(i) },
-    { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
+    // create's setup: our own create job is cancelled, one of another process (CLI, AUTO-MAS) is ended by a normal
+    // stop; either way the instance is shut down normally and reads create_failed (resumable)
+    v.key === 'creating' ? { label: '取消新建', icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.stop(i)) }
+      : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },

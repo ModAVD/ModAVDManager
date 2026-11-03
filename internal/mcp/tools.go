@@ -176,8 +176,9 @@ func toolDefs() []*toolDef {
 		finishing(newTool("create_instance", "Create instance",
 			fmt.Sprintf("Create a new instance and set it up: one headless boot runs the boot setup, the host IME, the "+
 				"first-boot setup and the arm64 execution bridge, then a normal shutdown. Takes a few minutes (progress "+
-				"notifications with a progressToken); returns the stopped, ready instance. Until then its status is "+
-				"creating; a failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
+				"notifications with a progressToken, counted by the steps done); returns the stopped, ready instance. "+
+				"Until then its status is creating, with creation_progress (0-100) in get_instance / list_instances; a "+
+				"failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
 				"Omitted options take the defaults (%d MB memory, %d CPU "+
 				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory, CPU and fps "+
 				"only accept the listed steps; the data partition can later only be made larger (update_instance).",
@@ -216,7 +217,14 @@ func toolDefs() []*toolDef {
 				if req.FPS, err = a.optInt("fps"); err != nil {
 					return nil, err
 				}
-				req.Progress = progress
+				if progress != nil {
+					req.Progress = func(p emu.Progress) {
+						if p.Step != "done" {
+							p.Message = fmt.Sprintf("新建中 %d%%：%s", p.Percent(), p.Message)
+						}
+						progress(p)
+					}
+				}
 				return b.Create(ctx, req)
 			})),
 

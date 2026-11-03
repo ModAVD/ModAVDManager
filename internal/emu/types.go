@@ -65,7 +65,10 @@ type InstanceInfo struct {
 	Creation      string `json:"creation"`
 	CreationError string `json:"creation_error"`
 	CreationLog   string `json:"creation_log"`
-	PID           int    `json:"pid"`
+	// CreationProgress is how much of create's setup is done while Creation is "creating", 0–100, counted by the steps
+	// done (createinit.go); 0 otherwise.
+	CreationProgress int `json:"creation_progress"`
+	PID              int `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt string `json:"started_at"`
 	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.
@@ -175,6 +178,14 @@ type Progress struct {
 	Message string // Chinese, for people
 	Done    int
 	Total   int
+}
+
+// Percent is Done as a whole percentage of Total (0 without a Total).
+func (p Progress) Percent() int {
+	if p.Total <= 0 {
+		return 0
+	}
+	return max(0, min(100, p.Done*100/p.Total))
 }
 
 type StartResult struct {

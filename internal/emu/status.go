@@ -24,6 +24,11 @@ import (
 // depend on what runs on the machine either.
 var qemuScan func(indexes []int) map[int]win.Process
 
+// statusBooted is the getprop of instanceInfo; a test replaces it.
+var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
+	return m.bootCompleted(ctx, i, statusAdbTimeout, true)
+}
+
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
 func (m *Manager) qemus(indexes []int) map[int]win.Process {
 	if qemuScan != nil {
@@ -132,6 +137,13 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		Screencap:  Screencap{Shm: shmName(i)},
 		Path:       in.Dir,
 	}
+	// create's setup (createinit.go) is read before the getprop, which may wait up to statusAdbTimeout: its shutdown
+	// is what makes the getprop wait, and a setup that ends meanwhile would leave the qemu of the snapshot with no
+	// creation state, read as "starting"
+	info.Creation, info.CreationError, info.CreationLog = m.creation(i)
+	if info.Creation == creationCreating {
+		info.CreationProgress = m.createPercent(i)
+	}
 	if p != nil {
 		info.Running = true
 		info.Window, _ = qemuWindowed(*p)
@@ -143,7 +155,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		if booted != nil {
 			info.Booted = *booted
 		} else {
-			info.Booted = m.bootCompleted(ctx, i, statusAdbTimeout, true)
+			info.Booted = statusBooted(m, ctx, i)
 		}
 		// Only for a running instance: the name is per console port, not per root, so an offline instance would
 		// report another root's mapping on the same port.
@@ -151,8 +163,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
-	// create's setup (createinit.go): "creating" overrides what the boots of that setup look like from outside
-	info.Creation, info.CreationError, info.CreationLog = m.creation(i)
+	// "creating" overrides what the boots of that setup look like from outside
 	switch info.Creation {
 	case creationCreating:
 		info.Status, info.Busy = StatusCreating, "creating"

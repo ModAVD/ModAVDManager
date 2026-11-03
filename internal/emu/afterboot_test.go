@@ -60,13 +60,13 @@ func TestFastpathReport(t *testing.T) {
 }
 
 func TestIdlepollReport(t *testing.T) {
-	status := "disk: vdc\r\nwatchers: 3456 \r\nloops: \r\n"
+	status := "disk: vdc\r\nwatchers: 3456 \r\nmax: 2\r\nloops: \r\n"
 	warn, msg := idlepollReport(1, "", status)
-	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 vdc）" {
+	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 vdc，忙等上限 2）" {
 		t.Errorf("running: %v %q", warn, msg)
 	}
 	warn, msg = idlepollReport(1, "", "disk: \nwatchers: 3456\n")
-	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 ?）" {
+	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 ?，忙等上限 每个 vCPU 一个）" {
 		t.Errorf("no disk: %v %q", warn, msg)
 	}
 	started := "mas-idlepoll: no stat for the data disk 'x', not watching"

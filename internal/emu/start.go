@@ -120,6 +120,11 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 		}
 		return m.finishBridge(ctx, i, opt, res)
 	}
+	// The bridge is installed: its files are updated when they are not this package's payload (the package was updated
+	// since), also only on a boot this start launched. `modavd bridge <i> install` (bridgeLocked) updates by itself.
+	if bridge && res.Launched && !opt.bridgeLocked {
+		return m.updateBridge(ctx, i, opt, res)
+	}
 	return res, nil
 }
 
@@ -184,6 +189,8 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		res, launchedAt, marker, mode = &StartResult{}, time.Time{}, nil, setupAdopted
 		var emulator, adopted *win.Process
 		var bootLock *win.FileLock
+		var adoptedAt time.Time
+		stopSeen := false // a stop of this instance held its lock while this round waited for an adopted qemu
 		p, running := startFindQemu(m, i)
 		if w := opt.watchQemu; w != nil && (!running || p.PID != w.PID || p.Created != w.Created) {
 			// the watched qemu is gone (or replaced): a boot watch never launches an emulator
@@ -207,7 +214,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		if running {
 			m.Log.Infof("魔改 AVD 实例 %d 已在运行（pid %d）", i, p.PID)
 			prog.emit("launch", fmt.Sprintf("实例 %d 已在运行（pid %d），不重新开机", i, p.PID), progressLaunch)
-			adopted = &p
+			adopted, adoptedAt = &p, time.Now()
 			mk, ok := m.readSetupMarker(i)
 			now := time.Now()
 			switch use, stale := setupMarkerUse(mk, ok, p, now); {
@@ -290,12 +297,12 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		}
 
 		var err error
-		qemu, err = m.waitBoot(ctx, i, timeout, emulator, adopted, res.LogFile, prog, onQemu)
+		qemu, err = m.waitBoot(ctx, i, timeout, emulator, adopted, res.LogFile, prog, onQemu, &stopSeen)
 		bootLock.Unlock()
 		if err == nil {
 			break
 		}
-		if round == 1 && opt.watchQemu == nil && errors.Is(err, errAdoptedGone) {
+		if relaunchAfterAdoptedGone(round, opt.watchQemu != nil, err, time.Since(adoptedAt), stopSeen) {
 			// Most likely a guest that was powering off and no longer answered adb, so guestShuttingDown could not
 			// tell: boot the instance as asked. Its setup marker, if any, names a boot that is over now.
 			m.Log.Infof("魔改 AVD 实例 %d 接管的模拟器（pid %d）没等安卓开机完成就退出了（多半是正在关机），重新开机",
@@ -418,9 +425,10 @@ func pollUntil(ctx context.Context, limit, every time.Duration, ok func() bool) 
 // is not re-registered meanwhile (it has not registered with the private server yet, which is normal); an adopted
 // one may have missed a server restart and is. Fails when the deadline passes, when emulator.exe has exited while
 // no qemu is there, or when the adopted qemu is gone. onQemu, when set, is told the qemu process each time the scan
-// finds it (the setup marker records it the first time).
+// finds it (the setup marker records it the first time). stopSeen, when set and a qemu was adopted, is set to true
+// once a stop of this instance is seen holding its lock (relaunchAfterAdoptedGone).
 func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, emulator, adopted *win.Process,
-	logPath string, prog *progressor, onQemu func(win.Process)) (win.Process, error) {
+	logPath string, prog *progressor, onQemu func(win.Process), stopSeen *bool) (win.Process, error) {
 	launched := emulator != nil
 	started := time.Now()
 	deadline := started.Add(timeout)
@@ -451,6 +459,9 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			}
 			return win.Process{}, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
 				i, code, logTail(logPath, 8))
+		}
+		if adopted != nil && stopSeen != nil && !*stopSeen && m.lockHeld(i, "stop") {
+			*stopSeen = true
 		}
 		// both the process snapshot and the PID + creation time check must agree, so a failed snapshot is no exit
 		if !found && adopted != nil && !adopted.Alive() {
@@ -484,6 +495,16 @@ func qemuAfterSetup(old, now win.Process, found bool) (win.Process, bool) {
 
 // errAdoptedGone is the cause of waitBoot's error when the qemu it adopted exited before Android was up.
 var errAdoptedGone = errors.New("adopted qemu exited before boot completed")
+
+// relaunchAfterAdoptedGone: the start boots the instance itself after the qemu it adopted exited before Android was
+// up (err is errAdoptedGone). That is a guest which was powering off and no longer answered adb when the start looked
+// (the window's ×, measured 11-02: adb goes about 1.3 s after the click, qemu 5–8 s), so only in the first round,
+// never for the boot watch, only when the exit came within shutdownExitWait of the adopt, and only when no stop of
+// this instance was seen meanwhile. A qemu adopted for longer, or ended by a stop (modavd stop, AUTO-MAS stopping a
+// start it gave up on), was turned off on purpose: booting it again would overrule that.
+func relaunchAfterAdoptedGone(round int, watch bool, err error, adoptedFor time.Duration, stopSeen bool) bool {
+	return round == 1 && !watch && errors.Is(err, errAdoptedGone) && adoptedFor <= shutdownExitWait && !stopSeen
+}
 
 // shutdownExitWait is how long a start waits for the qemu of a guest that is powering off to exit. The emulator's own
 // safe shutdown (the window's ×) gives Android 15 s and ends itself 25 s after the click at the latest; AUTO-MAS's

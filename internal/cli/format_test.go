@@ -92,6 +92,32 @@ func TestFormatListTable(t *testing.T) {
 	}
 }
 
+// TestFormatCreating: an instance being created reads 新建中 with its percentage (not "creating", not 未初始化);
+// a failed one 新建失败.
+func TestFormatCreating(t *testing.T) {
+	a := sampleInstance(6)
+	a.Status, a.Busy, a.Running, a.Booted, a.Creation, a.CreationProgress = emu.StatusCreating, "creating", true, true, "creating", 35
+	b := sampleInstance(7)
+	b.Status, b.Creation, b.CreationError = emu.StatusCreateFailed, "failed", "没做完：宿主输入法"
+	var buf bytes.Buffer
+	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`}, Instances: []emu.InstanceInfo{a, b}})
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	rows := lines[len(lines)-2:]
+	if !strings.Contains(rows[0], "新建中 35%") || !strings.Contains(rows[1], "新建失败") {
+		t.Errorf("rows = %q", rows)
+	}
+	for _, bad := range []string{"creating", "create_failed", "未初始化"} {
+		if strings.Contains(buf.String(), bad) {
+			t.Errorf("list shows %q:\n%s", bad, buf.String())
+		}
+	}
+	buf.Reset()
+	formatInfo(&buf, &a)
+	if out := buf.String(); !strings.Contains(out, "状态：新建中 35%\n") || !strings.Contains(out, "首次初始化：还没做完（新建时做）\n") {
+		t.Errorf("info:\n%s", out)
+	}
+}
+
 func TestFormatInfo(t *testing.T) {
 	in := sampleInstance(3)
 	in.Title = "星铁"
