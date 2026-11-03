@@ -26,6 +26,6 @@ func AppDataDir() string {
 	}
 	return filepath.Join(base, "ModAVD")
 }
-func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge") }
+func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge2") }
 func FindEdge() string       { return "" }
 func shellOpen(string) error { return fmt.Errorf("当前平台暂不支持打开浏览器") }

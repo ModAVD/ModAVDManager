@@ -105,7 +105,9 @@ data: {}                    每 15 秒
 
 ## 生命周期
 
-- `ModAVD.exe`（GUI 子系统）启动服务，再用 Edge 的应用模式打开窗口：`msedge --app=<地址> --user-data-dir=%LOCALAPPDATA%\ModAVD\ui-edge`。找不到 Edge 时用默认浏览器打开。
+- `ModAVD.exe`（GUI 子系统）启动服务，再用 Edge 的应用模式打开窗口：`msedge --app=<地址> --user-data-dir=%LOCALAPPDATA%\ModAVD\ui-edge2 --disable-features=msImplicitSignin --disable-sync --disable-extensions`。找不到 Edge 时用默认浏览器打开。
+  - 管理器自己的配置不登录、不同步、不加载扩展：不然 Edge 会在新配置上自动用 Windows 账户登录，同步装上用户的扩展，扩展的欢迎页再弹出一个完整的浏览器窗口。
+  - 0.3.0 及以前用的是 `ui-edge`，没带这三个开关，可能已经登着用户的账户，所以换了新目录。旧目录留给旧版管理器，新版不再打开它。
 - 同一个根目录只开一个服务：再次双击时，把已有的窗口重新打开。
 - 窗口关掉（Edge 进程退出，或者 60 秒内没有任何事件流连着）以后，等正在跑的任务做完，服务再退出。
   - Edge 进程在启动后 10 秒内就退出：当作把窗口交给了同一配置下已在运行的 Edge，不算关窗，之后按事件流规则判断。

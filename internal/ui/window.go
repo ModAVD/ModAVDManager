@@ -25,12 +25,11 @@ type Window struct {
 }
 
 // LaunchWindow opens url (the login address "http://127.0.0.1:<port>/?t=<token>") in an Edge app window on the
-// manager's own profile (%LOCALAPPDATA%\ModAVD\ui-edge), or in the default browser when Edge is missing or does not
+// manager's own profile (%LOCALAPPDATA%\ModAVD\ui-edge2), or in the default browser when Edge is missing or does not
 // start.
 func LaunchWindow(url string) (*Window, error) {
 	if exe := FindEdge(); exe != "" {
-		cmd := exec.Command(exe, "--app="+url, "--user-data-dir="+EdgeProfileDir(), "--no-first-run",
-			"--no-default-browser-check", "--window-size=1180,760")
+		cmd := exec.Command(exe, edgeArgs(url, EdgeProfileDir())...)
 		if err := cmd.Start(); err == nil {
 			done := make(chan struct{})
 			go func() {
@@ -58,9 +57,19 @@ func AppDataDir() string {
 	return filepath.Join(base, "ModAVD")
 }
 
+// edgeArgs is the msedge.exe command line of the manager window on profile. A profile of its own is not enough: on a
+// new profile Edge signs in with the Windows account by itself (the msImplicitSignin feature), sync then installs the
+// user's extensions there, and their welcome pages open in a full browser window next to the manager. So the window
+// also runs without sign-in, sync and extensions; the last two hold even if a later Edge renames the feature.
+func edgeArgs(url, profile string) []string {
+	return []string{"--app=" + url, "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check",
+		"--disable-features=msImplicitSignin", "--disable-sync", "--disable-extensions", "--window-size=1180,760"}
+}
+
 // EdgeProfileDir is the manager's own Edge profile: the window does not mix with the user's browsing, and the
-// cookie lives there only.
-func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge") }
+// cookie lives there only. Not ui-edge: managers up to 0.3.0 used that one without the switches of edgeArgs, so it
+// may already be signed in with the user's account (switches do not sign a profile out). Older managers keep it.
+func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge2") }
 
 // FindEdge is msedge.exe from the App Paths registration (per user, then per machine, both registry views), else
 // the usual install folders; "" when there is none.
