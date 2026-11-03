@@ -48,6 +48,9 @@ type InstanceInfo struct {
 	Status  Status `json:"status"`
 	Running bool   `json:"running"` // qemu process exists (MuMuManager is_process_started)
 	Booted  bool   `json:"booted"`  // Android finished booting (MuMuManager is_android_started)
+	// Window: it runs with the emulator window (started with --window); false when headless or not running. The way it
+	// runs cannot change until it is shut down (StartOptions.Window).
+	Window bool `json:"window"`
 	// Busy: "starting" / "stopping" / "bridging" while some modavd process holds that lock of the instance (AUTO-MAS's
 	// updater must not swap sdk\emulator then); "" otherwise. "bridging" covers the whole bridge install, including the
 	// stops and cold boots in it; callers that do not know a value treat it as busy.
@@ -62,7 +65,10 @@ type InstanceInfo struct {
 	Creation      string `json:"creation"`
 	CreationError string `json:"creation_error"`
 	CreationLog   string `json:"creation_log"`
-	PID           int    `json:"pid"`
+	// CreationProgress is how much of create's setup is done while Creation is "creating", 0–100, counted by the steps
+	// done (createinit.go); 0 otherwise.
+	CreationProgress int `json:"creation_progress"`
+	PID              int `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt string `json:"started_at"`
 	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.
@@ -142,8 +148,11 @@ type DeleteResult struct {
 }
 
 type StartOptions struct {
-	// Window: boot with the emulator window (default headless, like AUTO-MAS silent mode).
-	Window bool
+	// Window: boot with the emulator window (default headless, like AUTO-MAS silent mode). Headless: the caller wants
+	// it headless. An instance already running the other way is not adopted: errs.Busy, shut it down first (switching
+	// would take a restart). With neither, a running instance is adopted as it runs and a launch is headless.
+	Window   bool
+	Headless bool
 	// Timeout for Android to finish booting; 0 = DefaultBootTimeout.
 	Timeout time.Duration
 	// Progress, when set, is told about each step (CLI shows nothing extra; MCP sends notifications/progress).
@@ -160,6 +169,8 @@ type StartOptions struct {
 	bridgeLocked bool
 	// creating: create's own first boot (crud.go), which may boot an instance whose metadata says creating.
 	creating bool
+	// bridgeMarker: Start wants the execution bridge on this instance, so a launch places its boot marker first.
+	bridgeMarker bool
 }
 
 type Progress struct {
@@ -167,6 +178,14 @@ type Progress struct {
 	Message string // Chinese, for people
 	Done    int
 	Total   int
+}
+
+// Percent is Done as a whole percentage of Total (0 without a Total).
+func (p Progress) Percent() int {
+	if p.Total <= 0 {
+		return 0
+	}
+	return max(0, min(100, p.Done*100/p.Total))
 }
 
 type StartResult struct {
@@ -207,8 +226,8 @@ type StopResult struct {
 	// PID of the qemu this stop ended; 0 when it was already offline.
 	PID int `json:"pid"`
 	// Process is that qemu (PID + creation time), for callers in this process that must wait until it is really gone
-	// (restart): a qemu that was terminated can take seconds to release its memory, and by then the root-identity
-	// checks no longer recognise it (its runtime file and run lock are gone first).
+	// before booting it again: a qemu that was terminated can take seconds to release its memory, and by then the
+	// root-identity checks no longer recognise it (its runtime file and run lock are gone first).
 	Process win.Process `json:"-"`
 }
 

@@ -120,6 +120,9 @@ func parseStrict(args []string) (*invocation, error) {
 	k++
 	inv.cmd = findCommand(name)
 	if inv.cmd == nil {
+		if err := removedError(name); err != nil {
+			return inv, err
+		}
 		return inv, errs.Newf(errs.Usage, "未知命令 %s", name).WithAdvice(helpAdvice)
 	}
 	inv.fs = inv.cmd.newFlagSet()
