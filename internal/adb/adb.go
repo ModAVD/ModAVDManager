@@ -276,7 +276,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // the port, and waits up to timeout until it listens (polling the listener table every 100 ms, not waiting for the
 // start-server client, which takes ~2.1 s; a client that exits non-zero while the port is still closed = failed).
 // Returns whether it listens. A listener whose process name is not adb.exe is errs.PortConflict with the AUTO-MAS
-// message (change adbServerPort in mas-avd.json); an unreadable owner name counts as adb.
+// message (change adbServerPort in mas-avd.json); an unreadable owner name counts as adb. A root whose mas-avd.json
+// ports root.CheckPorts refuses gets that errs.InvalidArgument error, before anything is looked at or started.
 func (c *Client) EnsureServer(ctx context.Context, timeout time.Duration) (bool, error) {
 	return c.ensure(ctx, privateServer, c.Root.AdbServerPort(), timeout)
 }
@@ -287,6 +288,12 @@ func (c *Client) EnsureScriptServer(ctx context.Context, timeout time.Duration) 
 }
 
 func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout time.Duration) (bool, error) {
+	// Every adb run of this root comes through here first (Run, servers, the adb passthrough, status). A root with a
+	// port plan of its own whose servers are left on the production ones (20050 / 20049, the defaults) must neither
+	// start nor use those (ModAVD/ModAVD#75); a root without portBase always passes.
+	if err := c.Root.CheckPorts(); err != nil {
+		return false, err
+	}
 	up, pid, name, err := listener(port)
 	if err != nil {
 		return false, err

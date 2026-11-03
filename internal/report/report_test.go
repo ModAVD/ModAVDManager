@@ -85,6 +85,20 @@ func TestScriptPort(t *testing.T) {
 			t.Errorf("otherRootsInstance(%d, %s, %d) = %v", c.base, c.avd, c.port, got)
 		}
 	}
+	// report-config's index of a device: counted in the root's plan, so the production root's emulator-20060 (listed
+	// by its servers, which report-config also asks) is no instance of a root with portBase 21000
+	for _, c := range []struct {
+		base, port int
+		want       string
+		ok         bool
+	}{
+		{root.DefaultPortBase, 20060, "6", true}, {root.DefaultPortBase, 20065, "", false},
+		{21000, 21060, "6", true}, {21000, 20060, "", false}, {21000, 21000, "0", true},
+	} {
+		if got, ok := configIndex(root.PortPlan{Base: c.base}, c.port); got != c.want || ok != c.ok {
+			t.Errorf("configIndex(%d, %d) = %q %v", c.base, c.port, got, ok)
+		}
+	}
 	// a root with portBase 21000: its own instance ports are refused, the default plan's are not (ModAVD/ModAVD#75)
 	for raw, want := range map[string]int{`20010`: 20010, `21010`: 0, `21092`: 0, `21093`: 21093} {
 		v, _ := jsonord.Parse([]byte(raw))

@@ -45,11 +45,12 @@ type fake struct {
 	startGate chan struct{} // Start waits here (after its first progress) when set
 	stopGate  chan struct{}
 
-	shot      adb.Result
-	shotDelay time.Duration
-	adbCalls  atomic.Int32
-	listCalls atomic.Int32
-	checks    atomic.Int32
+	shot        adb.Result
+	shotDelay   time.Duration
+	shotSerials []string // the serial of each capture
+	adbCalls    atomic.Int32
+	listCalls   atomic.Int32
+	checks      atomic.Int32
 }
 
 type fakeInstall struct {
@@ -81,8 +82,9 @@ func (f *fake) get(i int) (emu.InstanceInfo, bool) {
 	return in, ok
 }
 
-var fakeRoot = emu.RootInfo{Root: `C:\fake-root`, SDK: `C:\fake-root\sdk`, AdbServerPort: 20050,
-	ScriptAdbServerPort: 20049, PortBase: 20000, Version: "0.35.0", Build: 35}
+// The fake root has a port plan of its own (portBase 21000), so a serial counted from 20000 anywhere shows.
+var fakeRoot = emu.RootInfo{Root: `C:\fake-root`, SDK: `C:\fake-root\sdk`, AdbServerPort: 21099,
+	ScriptAdbServerPort: 21098, PortBase: 21000, Version: "0.35.0", Build: 35}
 
 var fakePorts = root.PortPlan{Base: fakeRoot.PortBase}
 
@@ -239,6 +241,7 @@ func (b fakeBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...str
 	b.f.adbCalls.Add(1)
 	b.f.mu.Lock()
 	res, delay := b.f.shot, b.f.shotDelay
+	b.f.shotSerials = append(b.f.shotSerials, opt.Serial)
 	b.f.mu.Unlock()
 	if delay > 0 {
 		select {

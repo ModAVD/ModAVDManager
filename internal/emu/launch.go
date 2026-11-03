@@ -75,8 +75,8 @@ type launchPlan struct {
 	memoryMB int
 }
 
-// prepareLaunch is AUTO-MAS _launch up to the Popen: components, host checks against the memory -memory will get,
-// free ports, the private adb server, the fixed 720p display, old logs, the log file name. Errors stop the start.
+// prepareLaunch is AUTO-MAS _launch up to the Popen: the root's ports, components, another root's instance on our
+// ports, host checks against the memory -memory will get, then launchPlanFor. Errors stop the start.
 func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window bool) (*launchPlan, error) {
 	i := inst.Index
 	// mas-avd.json's portBase and adb server ports (root.CheckPorts): nothing is started on ports that are not this
@@ -102,8 +102,14 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
+	return m.launchPlanFor(ctx, inst, memoryMB, window)
+}
 
-	port := ports.Console(i)
+// launchPlanFor is the rest of prepareLaunch, once the checks passed: the instance's ports in the root's plan (free?),
+// the private adb server, the fixed 720p display, old logs, the log file name, the emulator's arguments.
+func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryMB int, window bool) (*launchPlan, error) {
+	i := inst.Index
+	port := m.Root.Ports().Console(i)
 	busy, err := win.BusyPorts([]int{port, port + 1, port + 2})
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))

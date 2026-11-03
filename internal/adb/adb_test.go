@@ -15,6 +15,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/win"
 )
 
 // tempDir is a fresh directory for one test, removed afterwards: under $MODAVD_TEST_TMP\adb when that is set (to keep
@@ -203,6 +204,55 @@ func TestQemuOnAdbPortNotOurs(t *testing.T) {
 		if p, ok := QemuOnAdbPort(r, r.Ports().Console(i)); ok {
 			t.Errorf("QemuOnAdbPort(%d) on a fresh root = pid %d", r.Ports().Console(i), p.PID)
 		}
+	}
+}
+
+// TestEnsureServerPortPlan: a root with a port plan of its own whose adb servers are still the production ones is
+// refused before any listener is looked at or any server started (ModAVD/ModAVD#75); so is every adb run through it.
+func TestEnsureServerPortPlan(t *testing.T) {
+	dir := tempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(`{"portBase": 21000}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &root.Root{Dir: dir}
+	c := New(r, nil)
+	ctx := context.Background()
+	for name, ensure := range map[string]func(context.Context, time.Duration) (bool, error){
+		"EnsureServer": c.EnsureServer, "EnsureScriptServer": c.EnsureScriptServer,
+	} {
+		if up, err := ensure(ctx, time.Second); up || errs.CodeOf(err) != errs.InvalidArgument {
+			t.Errorf("%s = %v, %v; want invalid_argument", name, up, err)
+		}
+	}
+	if res := c.Run(ctx, RunOptions{Serial: "emulator-21060", Timeout: time.Second}, "get-state"); res.Code == 0 ||
+		!strings.Contains(res.Out, "portBase") {
+		t.Errorf("Run = %+v", res)
+	}
+}
+
+// TestReregisterPortPlan: on a root with portBase 21000, emulator-21060 is its instance 6 (the qemu check is asked
+// about console 21060) and emulator-20060, the production root's, is not looked at.
+func TestReregisterPortPlan(t *testing.T) {
+	dir := tempDir(t)
+	meta := `{"portBase": 21000, "adbServerPort": 21099, "scriptAdbServerPort": 21098}`
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var asked []int
+	saved := qemuOnAdbPort
+	qemuOnAdbPort = func(_ *root.Root, console int) (win.Process, bool) {
+		asked = append(asked, console)
+		return win.Process{}, false
+	}
+	t.Cleanup(func() { qemuOnAdbPort = saved })
+	c := New(&root.Root{Dir: dir}, nil)
+	for _, serial := range []string{"emulator-21060", "emulator-20060"} {
+		if c.Reregister(context.Background(), serial) {
+			t.Errorf("Reregister(%s) = true without a qemu", serial)
+		}
+	}
+	if len(asked) != 1 || asked[0] != 21060 {
+		t.Errorf("qemu looked up for consoles %v, want [21060]", asked)
 	}
 }
 
