@@ -1,4 +1,9 @@
-package components
+// Package hostproxy is the proxy the manager's own downloads use (components fetch, update): HTTPS_PROXY /
+// HTTP_PROXY / NO_PROXY when any of them is set, else the static proxy of the Windows Internet settings (the proxy
+// set by hand under "Internet Options" or Settings > Network > Proxy, which is also where proxy programs put theirs).
+// A proxy auto-config script (PAC, WPAD) is not evaluated: set HTTPS_PROXY for such a network (Advice says so).
+// Loopback targets (local test mirrors) always go direct.
+package hostproxy
 
 import (
 	"net"
@@ -8,25 +13,54 @@ import (
 	"strings"
 )
 
-// requestProxy is the proxy of a request. The script's HttpWebRequest uses the Windows proxy settings; Go reads only
-// the environment. So: HTTPS_PROXY / HTTP_PROXY / NO_PROXY when any of them is set (like update), else the static
-// proxy of the Windows Internet settings (systemProxy). A proxy auto-config script (PAC, WPAD) is not evaluated: set
-// HTTPS_PROXY for such a network. Loopback addresses (local test mirrors) always go direct.
-func requestProxy(req *http.Request) (*url.URL, error) {
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+var envKeys = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
+
+// envSet: one of the proxy variables is set, so the environment decides alone.
+func envSet() bool {
+	for _, k := range envKeys {
 		if os.Getenv(k) != "" {
-			return http.ProxyFromEnvironment(req)
+			return true
 		}
+	}
+	return false
+}
+
+// ForRequest is an http.Transport Proxy.
+func ForRequest(req *http.Request) (*url.URL, error) {
+	if envSet() {
+		return http.ProxyFromEnvironment(req)
 	}
 	if isLoopback(req.URL.Hostname()) {
 		return nil, nil
 	}
-	server, override, ok := systemProxy()
-	if !ok {
+	s := system()
+	if !s.enabled {
 		return nil, nil
 	}
-	return proxyFor(req.URL, server, override), nil
+	return proxyFor(req.URL, s.server, s.override), nil
 }
+
+// Advice is the hint for a failed download when the proxy may be the cause: "" unless no proxy was used because the
+// Internet settings use an auto-config script.
+func Advice() string {
+	if envSet() {
+		return ""
+	}
+	if s := system(); !s.enabled && s.autoConfig {
+		return "这台电脑的代理是自动配置脚本（PAC），本程序不读它；请把 HTTPS_PROXY 环境变量设成代理的地址（比如 http://127.0.0.1:7890）再试"
+	}
+	return ""
+}
+
+// settings are the Internet settings that matter here.
+type settings struct {
+	enabled          bool   // ProxyEnable and a ProxyServer
+	server, override string // ProxyServer, ProxyOverride
+	autoConfig       bool   // AutoConfigURL is set
+}
+
+// system reads them (a variable for the tests).
+var system = readSystem
 
 func isLoopback(host string) bool {
 	if strings.EqualFold(host, "localhost") {

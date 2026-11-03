@@ -2,7 +2,6 @@ package components
 
 import (
 	"context"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,43 +151,6 @@ func TestLicenseText(t *testing.T) {
 	}
 	if _, err := licenseText([]byte("<html>captive portal</html>"), "android-sdk-license"); err == nil {
 		t.Error("an HTML page gave a license")
-	}
-}
-
-func TestProxyFor(t *testing.T) {
-	u := func(s string) *url.URL {
-		p, err := url.Parse(s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	cases := []struct {
-		target, server, override, want string
-	}{
-		{"https://dl.google.com/x", "127.0.0.1:7890", "", "http://127.0.0.1:7890"},
-		{"https://dl.google.com/x", "http=10.0.0.1:80;https=10.0.0.2:443", "", "http://10.0.0.2:443"},
-		{"http://dl.google.com/x", "http=10.0.0.1:80;https=10.0.0.2:443", "", "http://10.0.0.1:80"},
-		{"https://dl.google.com/x", "http=10.0.0.1:80", "", ""},
-		{"https://dl.google.com/x", "http://proxy.example:3128", "", "http://proxy.example:3128"},
-		{"https://dl.google.com/x", "127.0.0.1:7890", "*.google.com;<local>", ""},
-		{"https://mirrors.cloud.tencent.com/x", "127.0.0.1:7890", "*.google.com;<local>", "http://127.0.0.1:7890"},
-		{"https://intranet/x", "127.0.0.1:7890", "<local>", ""},
-		{"https://DL.Google.COM/x", "127.0.0.1:7890", "dl.google.*", ""},
-	}
-	for _, c := range cases {
-		got := proxyFor(u(c.target), c.server, c.override)
-		if (got == nil && c.want != "") || (got != nil && got.String() != c.want) {
-			t.Errorf("%s %q %q: %v, want %q", c.target, c.server, c.override, got, c.want)
-		}
-	}
-	for _, h := range []string{"localhost", "127.0.0.1", "::1"} {
-		if !isLoopback(h) {
-			t.Errorf("%s not loopback", h)
-		}
-	}
-	if isLoopback("dl.google.com") || !wildcard("a*c", "abbbc") || wildcard("a*c", "abd") || !wildcard("*", "") {
-		t.Error("wildcard")
 	}
 }
 

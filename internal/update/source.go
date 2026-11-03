@@ -22,6 +22,7 @@ import (
 
 	"modavd/internal/buildinfo"
 	"modavd/internal/errs"
+	"modavd/internal/hostproxy"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
 )
@@ -92,7 +93,7 @@ func (u *Updater) client() *http.Client {
 		return u.httpClient
 	}
 	return &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment, // HTTPS_PROXY / NO_PROXY; Go does not read the system proxy
+		Proxy:                 hostproxy.ForRequest, // the same proxy as components fetch
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
@@ -117,7 +118,7 @@ func (u *Updater) githubLatest(ctx context.Context) (*release, error) {
 	req.Header.Set("User-Agent", userAgent())
 	resp, err := u.client().Do(req)
 	if err != nil {
-		return nil, sourceError("连不上 GitHub（%s）", netErrText(err, ""))
+		return nil, sourceError("连不上 GitHub（%s）", netErrText(err, "")).WithAdvice(hostproxy.Advice())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -371,7 +372,7 @@ func (u *Updater) download(ctx context.Context, r *release) (string, error) {
 			os.Remove(part)
 			return "", sourceError("下载中断，再更新一次会重新下载（从 Mirror 酱下载 %d 次都没成：%v）", downloadAttempts, lastErr)
 		}
-		return "", sourceError("下载 %s 失败: %v", r.assetName, lastErr)
+		return "", sourceError("下载 %s 失败: %v", r.assetName, lastErr).WithAdvice(hostproxy.Advice())
 	}
 	st, err := os.Stat(part)
 	if err != nil || st.Size() != r.size {
