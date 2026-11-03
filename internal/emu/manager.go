@@ -39,11 +39,13 @@ const (
 
 	// Shutdown (the caller in AUTO-MAS gives close 30 s in all, so the worst case stays under stopBudget, 28 s), counted
 	// from the first look for qemu:
-	// graceful: 4 + sync 2, and Android shuts down until gracefulDeadline (24 s; at least 18 s after the shutdown
-	// command), falling back to sync 2 + console kill (what the sync leaves of the 4 s, at least 1 s) + terminate wait 1
-	// => 28 (fallbackKillTimeout);
+	// graceful: 4 + HOME 2 (+ homeWait 2 when an app was in front) + sync 2, and Android shuts down until
+	// gracefulDeadline (24 s; at least 14 s after the shutdown command, usually about 21 s after HOME and 23 s
+	// without), falling back to sync 2 + console kill (what the sync leaves of the 4 s, at least 1 s) + terminate
+	// wait 1 => 28 (fallbackKillTimeout);
 	// private adb unusable: 4 + console kill 3 + exit wait 12 + terminate wait 5 = 24; Force: 4 + sync 3 + 5 = 12.
 	adbServerStartOnClose  = 4 * time.Second
+	homeTimeout            = 2 * time.Second
 	shutdownSyncTimeout    = 2 * time.Second
 	gracefulDeadline       = 24 * time.Second
 	syncTimeout            = 3 * time.Second

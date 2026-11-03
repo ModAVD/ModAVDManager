@@ -3,17 +3,21 @@ package emu
 // Shutdown. Faithful port of AUTO-MAS manager.py close / _close / _graceful_shutdown / _sync_before_kill /
 // _console_kill / _force_kill.
 //
-// The default syncs, lets Android shut itself down (svc power shutdown) and waits for qemu to exit by itself; only
-// when that fails it falls back to sync + console kill + terminate. A console kill or a terminate ends qemu without the
-// guest's shutdown: whatever is still in the guest page cache is lost (10-03: nine Star Rail hot-update manifests
-// became 0 bytes and showed up as "网络请求超时" and a black screen), and what a game writes between the sync and
-// qemu's exit is lost too. Disk write-through only covers data already written to the virtual disk.
+// The default sends the foreground app home, syncs, lets Android shut itself down (svc power shutdown) and waits for
+// qemu to exit by itself; only when that fails it falls back to sync + console kill + terminate. A console kill or a
+// terminate ends qemu without the guest's shutdown: whatever is still in the guest page cache is lost (10-03: nine
+// Star Rail hot-update manifests became 0 bytes and showed up as "网络请求超时" and a black screen), and what a game
+// writes between the sync and qemu's exit is lost too. Disk write-through only covers data already written to the
+// virtual disk.
 //
-// The sync comes before the shutdown command, while adbd surely answers: once Android is shutting down, adbd is
-// ended early and the fallback's sync only gets "device offline", the console often no longer answers either, and the
-// terminate is a power cut (ModAVD/ModAVD#88). svc power shutdown is Android's own shutdown (PowerManager, the
-// ShutdownThread): the shutdown broadcast, the foreground activity paused and stopped, then init; it runs as shell, no
-// su. Setting sys.powerctl, as before, hands the guest to init directly, and apps are ended without either.
+// An app in the foreground (not the home screen) first goes to the background with HOME and gets homeWait to finish
+// what it writes on pause (Unity's OnApplicationPause): the shutdown itself leaves it about 2 s between its onPause
+// and init's SIGKILL. The sync then comes before the shutdown command, while adbd surely answers: once Android is
+// shutting down, adbd is ended early and the fallback's sync only gets "device offline", the console often no longer
+// answers either, and the terminate is a power cut (ModAVD/ModAVD#88). svc power shutdown is Android's own shutdown
+// (PowerManager, the ShutdownThread): the shutdown broadcast, the foreground activity paused and stopped, then init; it
+// runs as shell, no su. Setting sys.powerctl, as before, hands the guest to init directly, and apps are ended without
+// either.
 //
 // Time limits: AUTO-MAS gives close 30 s in all, see the shutdown constants in manager.go (worst case 28 s,
 // stopBudget). The graceful path counts from the first look for qemu: Android gets until gracefulDeadline, and the
@@ -44,6 +48,7 @@ package emu
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"modavd/internal/adb"
@@ -59,11 +64,19 @@ const stopBudget = 28 * time.Second
 // guestShutdownCommand asks Android to shut down through its framework (see the header comment).
 const guestShutdownCommand = "svc power shutdown"
 
+// guestHomeScript presses HOME unless nothing or the home screen is in front (the top resumed activity is the home
+// activity's package), and says which: "app" when it pressed it, "home" when not.
+const guestHomeScript = `home=$(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n 1); ` +
+	`top=$(dumpsys activity activities | grep -m 1 topResumedActivity); ` +
+	`case "$top" in ""|*=null*|*" ${home%%/*}/"*) echo home ;; *) input keyevent KEYCODE_HOME && echo app ;; esac`
+
 // startingQemuWait / startingQemuPoll: how long and how often a stop looks for the qemu of a start that holds the
-// start lock but has not launched it yet. Variables for tests.
+// start lock but has not launched it yet. homeWait: how long an app sent home gets before the sync (see the header
+// comment). Variables for tests.
 var (
 	startingQemuWait = 10 * time.Second
 	startingQemuPoll = 500 * time.Millisecond
+	homeWait         = 2 * time.Second
 )
 
 // stopOpsOf builds the side effects of a stop on qemu p (Manager.stopOpsFor); a variable so a test can drive Stop
@@ -210,6 +223,9 @@ func fallbackKillTimeout(elapsed time.Duration) time.Duration {
 type stopOps struct {
 	// prepare makes the private adb server usable for this instance; "" when it is, else why not.
 	prepare func() string
+	// home sends an app in the foreground home within timeout (guestHomeScript): sent, and adb's output when the
+	// command failed ("" when it ran).
+	home func(timeout time.Duration) (bool, string)
 	// graceful asks Android to shut down and waits up to window for qemu to exit by itself; "" when it did, else why
 	// not.
 	graceful func(window time.Duration) string
@@ -250,6 +266,11 @@ func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started t
 		log.Warnf("魔改 AVD 实例 %d 私有 adb 用不了，不能正常关机也不能 sync，直接用控制台关: %s", i, problem)
 		return endQemu(ctx, log, i, "console_kill", false, consoleKillTimeout+closeTimeout, forceKillWait, ops)
 	}
+	// The foreground app goes home first and gets homeWait; the sync below takes what it wrote along (see the header
+	// comment). A failure is only a warning.
+	if err := sendHome(ctx, log, i, ops.home); err != nil {
+		return "graceful", false, err
+	}
 	// Before the shutdown command, while adbd surely answers (see the header comment). A failure is only a warning.
 	presynced := syncBeforeShutdown(log, i, ops.sync)
 	if err := stopCanceled(ctx, i); err != nil {
@@ -267,6 +288,26 @@ func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started t
 	synced := syncBeforeKill(log, i, "", fallbackSyncTimeout, ops.sync)
 	return endQemu(ctx, log, i, "sync_kill", presynced || synced, fallbackKillTimeout(time.Since(started)),
 		fallbackForceKillWait, ops)
+}
+
+// sendHome sends an app in the foreground home and waits homeWait for it; nothing when the home screen is in front.
+// errs.Canceled when the wait is canceled.
+func sendHome(ctx context.Context, log *logx.Logger, i int, home func(time.Duration) (bool, string)) error {
+	sent, failure := home(homeTimeout)
+	if failure != "" {
+		log.Warnf("魔改 AVD 实例 %d 关机前按 HOME 失败，照常关机: %s", i, failure)
+		return nil
+	}
+	if !sent {
+		return nil
+	}
+	log.Infof("魔改 AVD 实例 %d 前台的应用已退到后台，等 %.0f 秒让它保存再关机", i, homeWait.Seconds())
+	select {
+	case <-ctx.Done():
+		return stopCanceled(ctx, i)
+	case <-time.After(homeWait):
+		return nil
+	}
 }
 
 // syncBeforeShutdown: `sync` right before the shutdown command, so what the guest wrote until then reaches the
@@ -347,13 +388,25 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps 
 	}
 	return stopOps{
 		prepare: func() string { return m.ADB.PrepareForClose(ctx, console, adbServerStartOnClose) },
+		home: func(timeout time.Duration) (bool, string) {
+			res := closeRun(timeout, "shell", guestHomeScript)
+			if res.Code != 0 {
+				return false, fmt.Sprintf("返回码 %d: %s", res.Code, res.Out)
+			}
+			return strings.TrimSpace(res.Out) == "app", ""
+		},
 		graceful: func(window time.Duration) string {
-			// Android's own shutdown (see the header comment). The command waits for the device to go off, so it
-			// returns only when adbd is ended, or not at all within window while the framework takes its time; its
-			// exit code then says nothing about the shutdown. Only qemu's exit counts.
+			// Android's own shutdown (see the header comment). The command waits for the device to go off: adb loses
+			// adbd on the way (exit 255, about 2.4 s after it), or it runs all of window while the framework takes
+			// its time, so a code other than 0 says nothing about the shutdown and only qemu's exit counts. svc coming
+			// back by itself with 0 (a usage text, an unknown subcommand) means no shutdown is under way: waiting
+			// would only use up the budget.
 			started := time.Now()
 			res := closeRun(window, "shell", guestShutdownCommand)
 			ran := time.Since(started)
+			if res.Code == 0 && p.Alive() {
+				return fmt.Sprintf("关机命令自己返回了，安卓没有开始关机: %s", res.Out)
+			}
 			if remaining := window - ran; remaining > 0 {
 				waitQemuExit(ctx, p, remaining)
 			}

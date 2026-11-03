@@ -3,6 +3,7 @@
 package emu
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -130,9 +131,21 @@ func fakeAdbClientMain(args []string) int {
 		fmt.Println("device")
 	case strings.Contains(all, "sys.boot_completed"):
 		fmt.Println("1")
+	case strings.Contains(all, "KEYCODE_HOME"): // guestHomeScript: what is in front
+		fmt.Println(cmp.Or(os.Getenv(fakeAdbHomeEnv), "home"))
+	case strings.Contains(all, guestShutdownCommand):
+		code, _ := strconv.Atoi(os.Getenv(fakeAdbSvcExitEnv))
+		return code
 	}
 	return 0
 }
+
+// The fake adb client's answers for the stop tests: what guestHomeScript prints ("app" / "home", default "home") and
+// the exit code of the shutdown command (default 0).
+const (
+	fakeAdbHomeEnv    = "MODAVD_EMU_FAKE_ADB_HOME"
+	fakeAdbSvcExitEnv = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
+)
 
 func freeTCPPort(t *testing.T) int {
 	t.Helper()

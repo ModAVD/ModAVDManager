@@ -24,6 +24,8 @@ import (
 // stopFake records the steps runStop takes.
 type stopFake struct {
 	problem      string // prepare's answer
+	homeApp      bool   // home sent an app home
+	homeFailure  string // home's command failed
 	gracefulWhy  string // graceful's answer
 	syncOK       bool
 	syncOKs      []bool // the answers of successive syncs, when they differ (the last one repeats); else syncOK
@@ -37,15 +39,29 @@ type stopFake struct {
 	syncTimeout  time.Duration   // the last sync's
 	syncTimeouts []time.Duration // every sync's, in order
 	window       time.Duration   // graceful's
+	homeTimeout  time.Duration
+	at           map[string]time.Time // when each step was called (the last time)
 	killTimeout  time.Duration
 	forceKillFor time.Duration
 }
 
 func (f *stopFake) ops() stopOps {
+	call := func(name string) {
+		f.calls = append(f.calls, name)
+		if f.at == nil {
+			f.at = map[string]time.Time{}
+		}
+		f.at[name] = time.Now()
+	}
 	return stopOps{
-		prepare: func() string { f.calls = append(f.calls, "prepare"); return f.problem },
+		prepare: func() string { call("prepare"); return f.problem },
+		home: func(d time.Duration) (bool, string) {
+			call("home")
+			f.homeTimeout = d
+			return f.homeApp && f.homeFailure == "", f.homeFailure
+		},
 		graceful: func(window time.Duration) string {
-			f.calls = append(f.calls, "graceful")
+			call("graceful")
 			f.window = window
 			if f.onGraceful != nil {
 				f.onGraceful()
@@ -53,7 +69,7 @@ func (f *stopFake) ops() stopOps {
 			return f.gracefulWhy
 		},
 		sync: func(d time.Duration) (bool, string) {
-			f.calls = append(f.calls, "sync")
+			call("sync")
 			f.syncTimeout = d
 			f.syncTimeouts = append(f.syncTimeouts, d)
 			if f.onSync != nil {
@@ -109,7 +125,7 @@ func TestRunStopGraceful(t *testing.T) {
 	if err != nil || method != "graceful" || !synced || len(warns) != 0 {
 		t.Fatalf("got %s %v %v %v", method, synced, err, warns)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful" {
 		t.Fatalf("calls = %s", got)
 	}
 	if !slices.Equal(f.syncTimeouts, []time.Duration{shutdownSyncTimeout}) {
@@ -125,6 +141,49 @@ func TestRunStopGraceful(t *testing.T) {
 		f.window > gracefulDeadline-5*time.Second || f.window < gracefulDeadline-6*time.Second {
 		t.Fatalf("graceful window %v 5 s after the first look (%v)", f.window, err)
 	}
+	if f.homeTimeout != homeTimeout {
+		t.Fatalf("home timeout %v", f.homeTimeout)
+	}
+}
+
+// An app in the foreground goes home before the sync and gets homeWait first, which Android's window then lacks; the
+// home screen in front costs no wait; a failed HOME is a warning; a cancel during the wait sends no shutdown.
+func TestRunStopSendsAppHome(t *testing.T) {
+	saved := homeWait
+	t.Cleanup(func() { homeWait = saved })
+	homeWait = 300 * time.Millisecond
+
+	f := &stopFake{homeApp: true, syncOK: true}
+	method, _, err, warns := runStopFake(t, context.Background(), false, f)
+	if err != nil || method != "graceful" || len(warns) != 0 || strings.Join(f.calls, ",") != "prepare,home,sync,graceful" {
+		t.Fatalf("app: %s %v %q %v", method, err, warns, f.calls)
+	}
+	if d := f.at["sync"].Sub(f.at["home"]); d < homeWait {
+		t.Fatalf("app: synced %v after HOME, want at least %v", d, homeWait)
+	}
+	if f.window > gracefulDeadline-homeWait {
+		t.Fatalf("app: graceful window %v after waiting %v", f.window, homeWait)
+	}
+
+	f = &stopFake{syncOK: true}
+	if _, _, err, _ := runStopFake(t, context.Background(), false, f); err != nil || f.at["sync"].Sub(f.at["home"]) >= homeWait {
+		t.Fatalf("home screen: waited %v (%v)", f.at["sync"].Sub(f.at["home"]), err)
+	}
+
+	f = &stopFake{homeFailure: "返回码 1: error: closed", syncOK: true}
+	method, _, err, warns = runStopFake(t, context.Background(), false, f)
+	if err != nil || method != "graceful" || len(warns) != 1 ||
+		warns[0] != "魔改 AVD 实例 3 关机前按 HOME 失败，照常关机: 返回码 1: error: closed" ||
+		f.at["sync"].Sub(f.at["home"]) >= homeWait {
+		t.Fatalf("failed: %s %v %q", method, err, warns)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	f = &stopFake{homeApp: true, syncOK: true}
+	if _, _, err, _ := runStopFake(t, ctx, false, f); errs.CodeOf(err) != errs.Canceled || strings.Join(f.calls, ",") != "prepare,home" {
+		t.Fatalf("canceled: %v %v", err, f.calls)
+	}
 }
 
 // A failed sync before the shutdown command is a warning; the shutdown goes ahead.
@@ -134,7 +193,7 @@ func TestRunStopSyncBeforeShutdownFails(t *testing.T) {
 	if err != nil || method != "graceful" || !synced {
 		t.Fatalf("got %s %v %v", method, synced, err)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful" {
 		t.Fatalf("calls = %s", got)
 	}
 	if len(warns) != 1 || warns[0] != "魔改 AVD 实例 3 发关机命令前 sync 失败，照常关机: error: closed" {
@@ -149,7 +208,7 @@ func TestRunStopFallbackSyncKill(t *testing.T) {
 	if err != nil || method != "sync_kill" || !synced {
 		t.Fatalf("got %s %v %v", method, synced, err)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful,sync,console_kill,alive" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful,sync,console_kill,alive" {
 		t.Fatalf("calls = %s", got)
 	}
 	if !slices.Equal(f.syncTimeouts, []time.Duration{shutdownSyncTimeout, fallbackSyncTimeout}) {
@@ -191,7 +250,7 @@ func TestRunStopFallbackTerminate(t *testing.T) {
 	if err != nil || method != "sync_kill+terminate" || synced {
 		t.Fatalf("got %s %v %v", method, synced, err)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful,sync,console_kill,alive,force_kill" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful,sync,console_kill,alive,force_kill" {
 		t.Fatalf("calls = %s", got)
 	}
 	if f.forceKillFor != fallbackForceKillWait {
@@ -206,13 +265,18 @@ func TestRunStopFallbackTerminate(t *testing.T) {
 	}
 }
 
-// The graceful path's limits stay within stopBudget, whatever starting the private server and the sync before the
-// shutdown command take (at most adbServerStartOnClose and shutdownSyncTimeout): Android gets until gracefulDeadline,
-// at least 18 s, and the fallback (sync, console kill, terminate wait) fits in the rest.
+// The graceful path's limits stay within stopBudget, whatever starting the private server, HOME (and the wait after
+// it) and the sync before the shutdown command take (at most adbServerStartOnClose, homeTimeout + homeWait,
+// shutdownSyncTimeout): Android gets until gracefulDeadline, at least 14 s, and the fallback (sync, console kill,
+// terminate wait) fits in the rest.
 func TestGracefulBudget(t *testing.T) {
+	if homeWait != 2*time.Second {
+		t.Fatalf("homeWait = %v; check the shutdown constants in manager.go", homeWait)
+	}
 	for _, c := range []struct{ elapsed, want time.Duration }{
 		{0, gracefulDeadline},
 		{6 * time.Second, 18 * time.Second},
+		{10 * time.Second, 14 * time.Second},
 		{gracefulDeadline + time.Second, 0},
 	} {
 		if got := gracefulWindow(c.elapsed); got != c.want {
@@ -229,9 +293,10 @@ func TestGracefulBudget(t *testing.T) {
 			t.Errorf("fallbackKillTimeout(%v) = %v, want %v", c.elapsed, got, c.want)
 		}
 	}
-	for before := time.Duration(0); before <= adbServerStartOnClose+shutdownSyncTimeout; before += 250 * time.Millisecond {
+	worstBefore := adbServerStartOnClose + homeTimeout + homeWait + shutdownSyncTimeout
+	for before := time.Duration(0); before <= worstBefore; before += 250 * time.Millisecond {
 		window := gracefulWindow(before)
-		if window < 18*time.Second {
+		if window < 14*time.Second {
 			t.Errorf("%v before the shutdown command: Android gets %v", before, window)
 		}
 		for sync := time.Duration(0); sync <= fallbackSyncTimeout; sync += 250 * time.Millisecond {
@@ -243,8 +308,8 @@ func TestGracefulBudget(t *testing.T) {
 	}
 }
 
-// The real side effects send what the graceful path is about: `sync`, then svc power shutdown (Android's own shutdown,
-// as shell; not su + sys.powerctl), both to the instance on the private server.
+// The real side effects send what the graceful path is about: HOME (guestHomeScript), `sync`, then svc power shutdown
+// (Android's own shutdown, as shell; not su + sys.powerctl), all to the instance on the private server.
 func TestStopOpsShutdownCommands(t *testing.T) {
 	r, log := portPlanRoot(t)
 	m := New(r, logx.Nop())
@@ -254,6 +319,13 @@ func TestStopOpsShutdownCommands(t *testing.T) {
 	}
 	gone := win.Process{PID: 0xFFFFFFFC} // an unused PID: qemu has exited
 	ops := m.stopOpsFor(context.Background(), 6, gone)
+	if sent, failure := ops.home(homeTimeout); sent || failure != "" {
+		t.Fatalf("home screen in front: sent %v, %q", sent, failure)
+	}
+	t.Setenv(fakeAdbHomeEnv, "app")
+	if sent, failure := ops.home(homeTimeout); !sent || failure != "" {
+		t.Fatalf("app in front: sent %v, %q", sent, failure)
+	}
 	if ok, out := ops.sync(shutdownSyncTimeout); !ok {
 		t.Fatalf("sync: %s", out)
 	}
@@ -278,8 +350,40 @@ func TestStopOpsShutdownCommands(t *testing.T) {
 			cmds = append(cmds, strings.Join(args[i+1:], " "))
 		}
 	}
-	if !slices.Equal(cmds, []string{"sync", "svc power shutdown"}) {
+	if !slices.Equal(cmds, []string{guestHomeScript, guestHomeScript, "sync", "svc power shutdown"}) {
 		t.Fatalf("shell commands %q", cmds)
+	}
+}
+
+// svc power shutdown's exit code (measured: adb exits 255 about 2.4 s after it, when the shutdown ends adbd): anything
+// but 0 waits for qemu to the end of the window; 0 means it came back by itself and no shutdown is under way, so the
+// fallback starts at once instead of after the whole window.
+func TestStopOpsShutdownExitCode(t *testing.T) {
+	r, _ := portPlanRoot(t)
+	m := New(r, logx.Nop())
+	six := 6
+	if _, err := m.Create(context.Background(), CreateRequest{filesOnly: true, Index: &six}); err != nil {
+		t.Fatal(err)
+	}
+	running, ok := win.FindProcess(uint32(os.Getpid())) // a qemu that does not exit
+	if !ok {
+		t.Fatal("cannot read our own process")
+	}
+	ops := m.stopOpsFor(context.Background(), 6, running)
+	const window = 1500 * time.Millisecond
+
+	t.Setenv(fakeAdbSvcExitEnv, "255")
+	began := time.Now()
+	why := ops.graceful(window)
+	if took := time.Since(began); took < window || why != "2 秒内没有自己退出" {
+		t.Errorf("exit 255: %q after %v, want the whole %v", why, took, window)
+	}
+
+	t.Setenv(fakeAdbSvcExitEnv, "0")
+	began = time.Now()
+	why = ops.graceful(window)
+	if took := time.Since(began); took >= window || !strings.HasPrefix(why, "关机命令自己返回了，安卓没有开始关机") {
+		t.Errorf("exit 0: %q after %v, want it at once", why, took)
 	}
 }
 
@@ -336,14 +440,14 @@ func TestRunStopCancelNeverEscalates(t *testing.T) {
 	if errs.CodeOf(err) != errs.Canceled {
 		t.Fatalf("err = %v", err)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful" {
 		t.Fatalf("calls = %s", got)
 	}
 
 	// canceled during the sync before the shutdown command: the command is not sent
 	ctx, cancel = context.WithCancel(context.Background())
 	f = &stopFake{syncOK: true, onSync: cancel}
-	if _, _, err, _ := runStopFake(t, ctx, false, f); errs.CodeOf(err) != errs.Canceled || strings.Join(f.calls, ",") != "prepare,sync" {
+	if _, _, err, _ := runStopFake(t, ctx, false, f); errs.CodeOf(err) != errs.Canceled || strings.Join(f.calls, ",") != "prepare,home,sync" {
 		t.Fatalf("canceled during the sync: err %v calls %v", err, f.calls)
 	}
 
@@ -832,7 +936,7 @@ func TestStopReportsItsQemu(t *testing.T) {
 	if err != nil || st.Method != "graceful" || !st.Synced || st.PID != 4242 || st.Process != qemu {
 		t.Fatalf("stop: %+v %v", st, err)
 	}
-	if got := strings.Join(f.calls, ","); got != "prepare,sync,graceful" {
+	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful" {
 		t.Fatalf("calls = %s", got)
 	}
 	b, err := json.Marshal(st)
