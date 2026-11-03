@@ -174,7 +174,10 @@ function Invoke-Native {
             $serial = $a[3]; $cmd = @($a[4..($a.Count - 1)])
             $s = $MockScenario.adb.serials.$serial
             if (-not $s) {
-                $res.ExitCode = 1; $res.Stderr = "adb: device '$serial' not found`n"
+                # adb.exe's own message, through the same text mode; a -StdoutFile is still created (empty): the real
+                # Invoke-Native creates it before adb.exe runs
+                $res.ExitCode = 1; $res.Stderr = "adb: device '$serial' not found`r`n"
+                if ($StdoutFile) { [IO.File]::WriteAllBytes($StdoutFile, (New-Object byte[] 0)) }
             } elseif ($cmd[0] -eq 'exec-out') {
                 $e = $s.exec.(($cmd[1..($cmd.Count - 1)]) -join ' ')
                 $bytes = New-Object byte[] 0
