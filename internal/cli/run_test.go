@@ -519,225 +519,48 @@ func TestStopAllNoneRunning(t *testing.T) {
 	}
 }
 
-func TestRestart(t *testing.T) {
+// TestRestartRemoved: restart went away in 0.3.0; an old call is told to stop, then start, and reaches no manager.
+func TestRestartRemoved(t *testing.T) {
 	h := newHarness()
-	h.fake.stop = func(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
-		if !opt.Force {
-			t.Error("force not passed to stop")
+	for _, args := range [][]string{{"restart", "3"}, {"restart", "3", "--window", "--json"}, {"help", "restart"}} {
+		r := h.run(t, nil, args...)
+		if r.code != 2 || strings.Contains(r.stdout+r.stderr, "未知命令") ||
+			!strings.Contains(r.stdout+r.stderr, "modavd restart 已经去掉了") || !strings.Contains(r.stdout+r.stderr, "modavd stop") {
+			t.Errorf("%v: exit %d stdout %s stderr %s", args, r.code, r.stdout, r.stderr)
 		}
-		return &emu.StopResult{Index: i, Method: "force", Warnings: []string{"关机警告"}}, nil
 	}
-	h.fake.start = func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error) {
-		if !opt.Window || opt.Timeout != 90*time.Second {
-			t.Errorf("start options = %+v", opt)
-		}
-		return &emu.StartResult{Instance: sampleInstance(i), Launched: true, Warnings: []string{"开机警告"}}, nil
+	if r := h.run(t, nil, "restart", "3", "--json"); !strings.Contains(r.stdout, `"code":"usage"`) {
+		t.Errorf("json: %s", r.stdout)
 	}
-	r := h.run(t, nil, "restart", "3", "--force", "--window", "--timeout", "90", "--json")
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stdout)
-	}
-	if got := h.fake.callList(); strings.Join(got, ",") != "stop 3,running,start 3" {
+	if got := h.fake.callList(); len(got) != 0 {
 		t.Errorf("calls = %q", got)
 	}
-	if !strings.Contains(r.stdout, `"warnings":["关机警告","开机警告"]`) {
-		t.Errorf("stdout = %s", r.stdout)
-	}
-	if !strings.Contains(r.stderr, "实例 3 已强制关机（先 sync 再结束），用时 0.0 秒，接着开机") {
-		t.Errorf("stderr = %s", r.stderr)
-	}
-	// A failed stop does not start.
-	h = newHarness()
-	h.fake.stop = func(context.Context, int, emu.StopOptions) (*emu.StopResult, error) {
-		return nil, errs.New(errs.Timeout, "关机超时")
-	}
-	if r := h.run(t, nil, "restart", "3"); r.code != 6 || len(h.fake.callList()) != 1 {
-		t.Errorf("exit %d calls %q", r.code, h.fake.callList())
+	if strings.Contains(h.run(t, nil, "help").stdout, "restart") {
+		t.Error("help still lists restart")
 	}
 }
 
-// fastRestartPoll shortens the wait for qemu to exit for one test.
-func fastRestartPoll(t *testing.T, wait time.Duration) {
-	t.Helper()
-	oldWait, oldPoll := restartExitWait, restartExitPoll
-	restartExitWait, restartExitPoll = wait, 5*time.Millisecond
-	t.Cleanup(func() { restartExitWait, restartExitPoll = oldWait, oldPoll })
-}
-
-func TestRestartWaitsForQemuExit(t *testing.T) {
-	fastRestartPoll(t, 5*time.Second)
+// TestStartWindowFlags: --window / --headless reach Start (the conflict with a running instance is emu's); both at once
+// is a usage error.
+func TestStartWindowFlags(t *testing.T) {
 	h := newHarness()
-	polls := 0
-	h.fake.running = func(context.Context) ([]int, error) {
-		polls++
-		if polls <= 3 {
-			return []int{1, 3}, nil // a qemu that is still ending after a force kill
-		}
-		return []int{1}, nil
+	var got []emu.StartOptions
+	h.fake.start = func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error) {
+		got = append(got, opt)
+		return &emu.StartResult{Instance: sampleInstance(i), Launched: true, Warnings: []string{}}, nil
 	}
-	r := h.run(t, nil, "restart", "3", "--force", "--json")
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s %s", r.code, r.stdout, r.stderr)
-	}
-	if got := strings.Join(h.fake.callList(), ","); got != "stop 3,running,running,running,running,start 3" {
-		t.Errorf("calls = %s", got)
-	}
-	if !strings.Contains(r.stderr, "实例 3 的 qemu 进程还没退出，等它退出再开机") || strings.Count(r.stderr, "还没退出") != 1 {
-		t.Errorf("stderr = %s", r.stderr)
-	}
-}
-
-func TestRestartQemuStaysTimesOut(t *testing.T) {
-	fastRestartPoll(t, 50*time.Millisecond)
-	h := newHarness()
-	h.fake.running = func(context.Context) ([]int, error) { return []int{3}, nil } // e.g. an elevated qemu
-	started := time.Now()
-	r := h.run(t, nil, "restart", "3", "--json")
-	if r.code != 6 || !strings.Contains(r.stdout, `"code":"timeout"`) || !strings.Contains(r.stdout, "qemu 进程仍在运行，没有重新开机") {
-		t.Errorf("exit %d stdout %s", r.code, r.stdout)
-	}
-	if time.Since(started) < 50*time.Millisecond {
-		t.Errorf("gave up after %v", time.Since(started))
-	}
-	for _, c := range h.fake.callList() {
-		if strings.HasPrefix(c, "start") {
-			t.Errorf("started an instance whose qemu is still there: %q", h.fake.callList())
+	for _, args := range [][]string{{"start", "3"}, {"start", "3", "--window"}, {"start", "3", "--headless"}} {
+		if r := h.run(t, nil, args...); r.code != 0 {
+			t.Fatalf("%v: exit %d %s", args, r.code, r.stderr)
 		}
 	}
-}
-
-func TestRestartCanceledWhileWaiting(t *testing.T) {
-	fastRestartPoll(t, 5*time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	h := newHarness()
-	h.fake.running = func(context.Context) ([]int, error) {
-		cancel() // Ctrl+C while the qemu is still there
-		return []int{3}, nil
+	if len(got) != 3 || got[0].Window || got[0].Headless || !got[1].Window || got[1].Headless || got[2].Window || !got[2].Headless {
+		t.Fatalf("options %+v", got)
 	}
-	r := h.run(t, ctx, "restart", "3", "--json")
-	if r.code != 8 || !strings.Contains(r.stdout, `"code":"canceled"`) {
-		t.Errorf("exit %d stdout %s", r.code, r.stdout)
-	}
-	if got := strings.Join(h.fake.callList(), ","); got != "stop 3,running" {
-		t.Errorf("calls = %s", got)
+	if r := h.run(t, nil, "start", "3", "--window", "--headless"); r.code != 2 || len(got) != 3 {
+		t.Errorf("both: exit %d, %d starts", r.code, len(got))
 	}
 }
-
-// fakeStoppedQemu replaces the check whether the process Stop ended still exists: alive answers it, and every
-// process asked about is recorded.
-func fakeStoppedQemu(t *testing.T, alive func(n int) bool) *[]win.Process {
-	t.Helper()
-	saved := stoppedQemuAlive
-	t.Cleanup(func() { stoppedQemuAlive = saved })
-	var mu sync.Mutex
-	var asked []win.Process
-	stoppedQemuAlive = func(p win.Process) bool {
-		mu.Lock()
-		asked = append(asked, p)
-		n := len(asked)
-		mu.Unlock()
-		return alive(n)
-	}
-	return &asked
-}
-
-var stoppedQemu = win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe", Created: 133_000_000_000_000_000}
-
-// The qemu Stop terminated no longer counts as the instance's (its runtime file and run lock are gone, so Running
-// omits it) but is still releasing its memory: restart waits for that very process to be gone before it starts.
-func TestRestartWaitsForStoppedProcess(t *testing.T) {
-	fastRestartPoll(t, 5*time.Second)
-	h := newHarness()
-	h.fake.stop = func(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
-		return &emu.StopResult{Index: i, Method: "sync_kill+terminate", PID: int(stoppedQemu.PID), Process: stoppedQemu,
-			Warnings: []string{}}, nil
-	}
-	asked := fakeStoppedQemu(t, func(n int) bool { return n <= 3 })
-	r := h.run(t, nil, "restart", "3", "--json")
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s %s", r.code, r.stdout, r.stderr)
-	}
-	if got := strings.Join(h.fake.callList(), ","); got != "stop 3,running,running,running,running,start 3" {
-		t.Errorf("calls = %s", got)
-	}
-	if len(*asked) != 4 {
-		t.Errorf("asked %d times", len(*asked))
-	}
-	for _, p := range *asked {
-		if p != stoppedQemu {
-			t.Errorf("asked about %+v, want the stopped qemu", p)
-		}
-	}
-	if strings.Count(r.stderr, "实例 3 的 qemu 进程还没退出，等它退出再开机") != 1 {
-		t.Errorf("stderr = %s", r.stderr)
-	}
-}
-
-// Still there after restartExitWait: a timeout, no start, although Running had long stopped listing it.
-func TestRestartStoppedProcessStaysTimesOut(t *testing.T) {
-	fastRestartPoll(t, 50*time.Millisecond)
-	h := newHarness()
-	h.fake.stop = func(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
-		return &emu.StopResult{Index: i, Method: "force", PID: int(stoppedQemu.PID), Process: stoppedQemu}, nil
-	}
-	fakeStoppedQemu(t, func(int) bool { return true })
-	r := h.run(t, nil, "restart", "3", "--force", "--json")
-	if r.code != 6 || !strings.Contains(r.stdout, "qemu 进程仍在运行，没有重新开机") {
-		t.Errorf("exit %d stdout %s", r.code, r.stdout)
-	}
-	for _, c := range h.fake.callList() {
-		if strings.HasPrefix(c, "start") {
-			t.Errorf("started while the stopped qemu is still there: %q", h.fake.callList())
-		}
-	}
-}
-
-// An instance that was already offline has no process to wait for: no wait at all.
-func TestRestartAlreadyOffline(t *testing.T) {
-	fastRestartPoll(t, 5*time.Second)
-	h := newHarness()
-	h.fake.stop = func(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
-		return &emu.StopResult{Index: i, Method: "already_offline"}, nil
-	}
-	r := h.run(t, nil, "restart", "3", "--json")
-	if r.code != 0 || strings.Join(h.fake.callList(), ",") != "stop 3,running,start 3" {
-		t.Errorf("exit %d calls %q", r.code, h.fake.callList())
-	}
-}
-
-// The real check, on this test process itself (never a qemu): the identity is the creation time; without one, the PID
-// and the executable name.
-func TestStoppedQemuAliveReal(t *testing.T) {
-	if stoppedQemuAlive(win.Process{}) {
-		t.Error("no process")
-	}
-	self, ok := win.FindProcess(uint32(os.Getpid()))
-	if !ok || self.Created == 0 {
-		t.Skipf("this process: %+v %v", self, ok)
-	}
-	if !stoppedQemuAlive(self) {
-		t.Errorf("this process %+v", self)
-	}
-	reused := self
-	reused.Created++
-	if stoppedQemuAlive(reused) {
-		t.Error("another creation time: a reused PID, not the stopped process")
-	}
-	noTime := self
-	noTime.Created = 0
-	if !stoppedQemuAlive(noTime) {
-		t.Error("without a creation time, same PID and name")
-	}
-	noTime.Name = "qemu-system-x86_64.exe"
-	if stoppedQemuAlive(noTime) {
-		t.Error("without a creation time, another executable under the PID")
-	}
-	if stoppedQemuAlive(win.Process{PID: 0xFFFFFFFC, Created: 1}) {
-		t.Error("an unused PID")
-	}
-}
-
 func TestShell(t *testing.T) {
 	h := newHarness()
 	h.fake.shell = func(i int, cmd string, timeout time.Duration) (*emu.ShellResult, error) {
@@ -863,7 +686,7 @@ func TestCanceledQueryNeverOK(t *testing.T) {
 func TestCanceledFinalCommandKeepsResult(t *testing.T) {
 	withFakeMemory(t)
 	finals := [][]string{{"stop", "3"}, {"stop", "--all"}, {"create"}, {"set", "3", "--cpu", "4"}, {"delete", "3", "--yes"},
-		{"start", "3"}, {"restart", "3"}, {"window", "3", "show"}, {"install", "3", "x.apk"}, {"version"}, {"help"}}
+		{"start", "3"}, {"window", "3", "show"}, {"install", "3", "x.apk"}, {"version"}, {"help"}}
 	for _, args := range finals {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -1094,13 +917,17 @@ func TestCreateFlags(t *testing.T) {
 		got = append(got, req)
 		if req.Progress != nil {
 			req.Progress(emu.Progress{Step: "create", Message: "后台无头开机", Done: 20, Total: 1000})
+			req.Progress(emu.Progress{Step: "ime", Message: "实例 6 宿主输入法", Done: 357, Total: 1000})
+			req.Progress(emu.Progress{Step: "done", Message: "实例 6 新建完成", Done: 1000, Total: 1000})
 		}
 		in := sampleInstance(1)
 		return &in, nil
 	}
 	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge")
 	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge ||
-		got[0].Resume || !strings.Contains(r.stderr, "后台无头开机") {
+		got[0].Resume || !strings.Contains(r.stderr, "新建中 2%：后台无头开机") ||
+		!strings.Contains(r.stderr, "新建中 35%：实例 6 宿主输入法") || strings.Contains(r.stderr, "新建中 100%") ||
+		!strings.Contains(r.stderr, "实例 6 新建完成") {
 		t.Fatalf("create: exit %d, %+v, stderr %s", r.code, got, r.stderr)
 	}
 	r = h.run(t, nil, "create", "--resume", "6", "--json")
@@ -1122,19 +949,34 @@ func TestStatusSubset(t *testing.T) {
 	h := newHarness()
 	h.fake.info = func(i int) (*emu.InstanceInfo, error) {
 		in := sampleInstance(i)
-		in.Status, in.Running, in.Booted, in.PID, in.Busy = emu.StatusOnline, true, true, 4242, "stopping"
+		in.Status, in.Running, in.Booted, in.Window, in.PID, in.Busy = emu.StatusOnline, true, true, true, 4242, "stopping"
 		return &in, nil
 	}
 	r := h.run(t, nil, "status", "3", "--json")
-	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":""}}` + "\n"
+	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)
 	}
 	h.fake.info = nil
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":""}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"window":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("offline stdout = %s", r.stdout)
+	}
+	// create's setup: AUTO-MAS reads status creating (its boot shows as running and booted) and may read the percentage
+	h.fake.info = func(i int) (*emu.InstanceInfo, error) {
+		in := sampleInstance(i)
+		in.Status, in.Running, in.Booted, in.PID, in.Busy = emu.StatusCreating, true, true, 4242, "creating"
+		in.Creation, in.CreationProgress = "creating", 35
+		return &in, nil
+	}
+	r = h.run(t, nil, "status", "3", "--json")
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"window":false,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35}}` + "\n"
+	if r.stdout != want {
+		t.Errorf("creating stdout = %s", r.stdout)
+	}
+	if r = h.run(t, nil, "status", "3"); r.stdout != "实例 3：新建中 35%（PID 4242）\n" {
+		t.Errorf("creating text = %q", r.stdout)
 	}
 }
 

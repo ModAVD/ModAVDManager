@@ -159,19 +159,15 @@ func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// handleStart boots an instance with its window: the manager starts no headless ones (only the CLI does). One already
+// running headless is not adopted (emu: no switch while it runs).
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	i, ok := pathIndex(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Window bool `json:"window"`
-	}
-	if !decode(w, r, &body) {
+	if !ok || !decode(w, r, &struct{}{}) {
 		return
 	}
 	s.respondJob(w)(s.startJob(kindStart, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		return b.Start(ctx, i, emu.StartOptions{Window: body.Window, Progress: s.progressFn(j)})
+		return b.Start(ctx, i, emu.StartOptions{Window: true, Progress: s.progressFn(j)})
 	}))
 }
 
@@ -205,30 +201,6 @@ func stopMessage(res *emu.StopResult) string {
 	return fmt.Sprintf("实例 %d 已关机（%.1f 秒）", res.Index, res.Seconds)
 }
 
-func (s *server) handleRestart(w http.ResponseWriter, r *http.Request) {
-	i, ok := pathIndex(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Window bool `json:"window"`
-		Force  bool `json:"force"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	s.respondJob(w)(s.startJob(kindRestart, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		s.setProgress(j, jobProgress{Step: "stop", Message: fmt.Sprintf("实例 %d 先关机", i), Total: progressTotal})
-		if _, err := b.Stop(ctx, i, emu.StopOptions{Force: body.Force}); err != nil {
-			return nil, err
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, errs.Wrap(errs.Canceled, err, "已取消")
-		}
-		return b.Start(ctx, i, emu.StartOptions{Window: body.Window, Progress: s.progressFn(j)})
-	}))
-}
-
 // respondJob answers a job request: 202 with the job, or the error.
 func (s *server) respondJob(w http.ResponseWriter) func(jobView, error) {
 	return func(v jobView, err error) {
@@ -238,29 +210,6 @@ func (s *server) respondJob(w http.ResponseWriter) func(jobView, error) {
 		}
 		writeJSON(w, http.StatusAccepted, v)
 	}
-}
-
-func (s *server) handleWindow(w http.ResponseWriter, r *http.Request) {
-	i, ok := pathIndex(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Visible *bool `json:"visible"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	if body.Visible == nil {
-		writeError(w, errs.New(errs.Usage, "缺少 visible（true 显示窗口，false 隐藏）"))
-		return
-	}
-	res, err := s.mgr.SetWindowVisible(detached(r), i, *body.Visible)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {

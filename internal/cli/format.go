@@ -22,10 +22,20 @@ func statusText(s emu.Status) string {
 		return "开机中"
 	case emu.StatusOnline:
 		return "运行中"
+	case emu.StatusCreateFailed:
+		return "新建失败"
 	case "":
 		return "未知"
 	}
 	return string(s)
+}
+
+// statusLabel is statusText, and 新建中 with the percentage of create's setup while it runs ("新建中 35%").
+func statusLabel(s emu.Status, creationProgress int) string {
+	if s == emu.StatusCreating {
+		return fmt.Sprintf("新建中 %d%%", creationProgress)
+	}
+	return statusText(s)
 }
 
 func busyText(b string) string {
@@ -34,6 +44,8 @@ func busyText(b string) string {
 		return "正在开机"
 	case "stopping":
 		return "正在关机"
+	case "creating":
+		return "" // the status says so
 	}
 	return b
 }
@@ -174,7 +186,7 @@ func formatList(w io.Writer, r *emu.ListResult) {
 			title = in.Name
 		}
 		rows = append(rows, []string{
-			strconv.Itoa(in.Index), title, statusText(in.Status), in.AdbAddress,
+			strconv.Itoa(in.Index), title, statusLabel(in.Status, in.CreationProgress), in.AdbAddress,
 			fmtMemory(in.Config.MemoryMB), intOrDash(in.Config.CPU), intOrDash(in.Config.FPS),
 			strings.Join(listNotes(in), "，"),
 		})
@@ -187,7 +199,8 @@ func listNotes(in emu.InstanceInfo) []string {
 	if b := busyText(in.Busy); b != "" {
 		notes = append(notes, b)
 	}
-	if !in.Initialized {
+	// a new instance is initialized by create's setup, whose state the status shows
+	if !in.Initialized && in.Creation == "" {
 		notes = append(notes, "未初始化")
 	}
 	if in.SoftwareRenderer {
@@ -196,8 +209,8 @@ func listNotes(in emu.InstanceInfo) []string {
 	return notes
 }
 
-func statusDetail(status emu.Status, pid int, startedAt, busy string) string {
-	s := statusText(status)
+func statusDetail(status emu.Status, creationProgress, pid int, startedAt, busy string) string {
+	s := statusLabel(status, creationProgress)
 	var extra []string
 	if pid != 0 {
 		extra = append(extra, "PID "+strconv.Itoa(pid))
@@ -221,7 +234,7 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	if in.Title != "" && in.Title != in.Name {
 		kv("标题", in.Title)
 	}
-	kv("状态", statusDetail(in.Status, in.PID, in.StartedAt, in.Busy))
+	kv("状态", statusDetail(in.Status, in.CreationProgress, in.PID, in.StartedAt, in.Busy))
 	kv("adb 地址", in.AdbAddress)
 	kv("序列号", in.Serial+"（私有 adb server 上）")
 	kv("端口", fmt.Sprintf("控制台 %d，adb %d，gRPC %d", in.Ports.Console, in.Ports.Adb, in.Ports.Grpc))
@@ -240,9 +253,12 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	if cfg.Width > 0 && cfg.Height > 0 {
 		kv("显示", fmt.Sprintf("%dx%d，%d dpi", cfg.Width, cfg.Height, cfg.DPI))
 	}
-	if in.Initialized {
+	switch {
+	case in.Initialized:
 		kv("首次初始化", "已完成")
-	} else {
+	case in.Creation != "":
+		kv("首次初始化", "还没做完（新建时做）")
+	default:
 		kv("首次初始化", "还没做（第一次开机时做）")
 	}
 	if in.Launcher != "" {
@@ -259,7 +275,7 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 }
 
 func formatStatus(w io.Writer, s *StatusResult) {
-	fmt.Fprintf(w, "实例 %d：%s\n", s.Index, statusDetail(s.Status, s.PID, "", s.Busy))
+	fmt.Fprintf(w, "实例 %d：%s\n", s.Index, statusDetail(s.Status, s.CreationProgress, s.PID, "", s.Busy))
 }
 
 func formatCreate(w io.Writer, in *emu.InstanceInfo) {

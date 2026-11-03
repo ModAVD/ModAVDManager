@@ -3,6 +3,11 @@ package emu
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/bits"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -79,14 +84,24 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	i := inst.Index
 	port := root.ConsolePort(i)
 	var imeDefault bool
+	cores, ok := inst.CPU()
+	if !ok || cores <= 0 {
+		cores = avd.DefaultCPU
+	}
+	spare := 0 // set by step 1
 
 	steps := []func(){
 		func() {
 			prog.emit("tune", fmt.Sprintf("实例 %d 开机后调优", i), progressTune)
-			// 1) host scheduling: priority, X3D pinning
-			if p, ok := m.findQemu(i); ok {
-				m.Log.Infof("实例 %d 宿主调度: %s", i, tuneHostScheduling(p))
+			// 1) host scheduling: priority, X3D pinning; what the host has left sizes the busy loops of 8b
+			p, ok := m.findQemu(i)
+			if !ok {
+				spare = planHost(nil, hostCPUs(win.L3Groups()), m.otherQemus(p, cores), cores).Spare
+				return
 			}
+			note, plan := m.tuneHostScheduling(p, cores)
+			spare = plan.Spare
+			m.Log.Infof("实例 %d 宿主调度: %s", i, note)
 		},
 		func() {
 			// 2) screenshot shared memory: SHM_videmulator<port> only exists while streaming, and a static screen
@@ -151,7 +166,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		//    eth0 (the virtual Wi-Fi alone does about 6 MB/s). The Wi-Fi switch persists in /data: set every boot
 		func() { m.setupNetwork(ctx, i) },
 		// 8b) no vCPU halts while the data disk is busy with small requests (see the script's header)
-		func() { m.setupIdlepoll(ctx, i) },
+		func() { m.setupIdlepoll(ctx, i, idlepollCap(cores, spare)) },
 		func() {
 			// 9) guest log: 16 MB buffers (persistent), streamed to <root>\logs from now on
 			m.shell(ctx, i, "su 0 setprop persist.logd.size "+logcatBufferSize+"; logcat -G "+logcatBufferSize, 0)
@@ -196,24 +211,236 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	return r, ctxErr(ctx)
 }
 
-// tuneHostScheduling raises qemu to above normal priority and, on X3D parts, pins it to the big-L3 cores (09-28 on a
-// 7950X3D, Honkai: qemu CPU -20%, the game's main thread CPU per frame -25%; the high-clock CCD was no better than
-// default). Only pinned when the L3 sizes differ; otherwise Windows decides. Returns the note for the log.
-func tuneHostScheduling(p win.Process) string {
+// affinityLockWait is how long tuneHostScheduling waits for the lock around read-choose-pin.
+const affinityLockWait = 10 * time.Second
+
+// affinityLockPath is that lock, %LOCALAPPDATA%\ModAVD\affinity.lock: instances booting at the same time (one modavd
+// process each, or several roots) must not all read the same load and pick the same group. The same for every process
+// of the user, elevated or not; other users' processes are not excluded.
+func affinityLockPath() string {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+	}
+	return filepath.Join(base, "ModAVD", "affinity.lock")
+}
+
+// tuneHostScheduling raises the instance's qemu p to above normal priority and, on X3D parts, pins it to one of the L3
+// groups (09-28 on a 7950X3D, Honkai: qemu CPU -20%, the game's main thread CPU per frame -25%; the high-clock CCD was
+// no better than default). Only pinned when the L3 sizes differ; otherwise Windows decides. Which group: see planHost
+// (ModAVD#34: pinning every instance to the big group left the other CCD idle). Only p is changed; every other qemu
+// on the host, production's included, is only read. Returns the note for the log and the plan (its Spare sizes the
+// busy loops of setupIdlepoll).
+func (m *Manager) tuneHostScheduling(p win.Process, cores int) (string, hostPlan) {
 	var notes []string
 	if err := win.SetAboveNormalPriority(p); err != nil {
 		notes = append(notes, fmt.Sprintf("设优先级失败（%v）", err))
 	} else {
 		notes = append(notes, "优先级高于正常")
 	}
-	if mask, cpus, ok := win.BigL3CPUs(); ok && len(cpus) > 0 {
-		if err := win.SetAffinity(p, mask); err != nil {
-			notes = append(notes, fmt.Sprintf("绑核失败（%v）", err))
-		} else {
-			notes = append(notes, fmt.Sprintf("绑定大 L3 核心 %d–%d", cpus[0], cpus[len(cpus)-1]))
+	groups := win.L3Groups()
+	if hasBigL3(groups) {
+		lock, ok, err := win.Lock(affinityLockPath(), affinityLockWait)
+		if err != nil || !ok {
+			notes = append(notes, "拿不到绑核锁，不绑核")
+			plan := planHost(nil, hostCPUs(groups), m.otherQemus(p, cores), cores)
+			return strings.Join(notes, "，"), plan
+		}
+		defer lock.Unlock()
+	}
+	plan := planHost(groups, hostCPUs(groups), m.otherQemus(p, cores), cores)
+	if !hasBigL3(groups) {
+		return strings.Join(notes, "，"), plan
+	}
+	if plan.Unread > 0 {
+		notes = append(notes, fmt.Sprintf("%d 个 qemu 读不到绑核，按绑在大 L3 算", plan.Unread))
+	}
+	if plan.Group < 0 {
+		notes = append(notes, fmt.Sprintf("各组 L3 空余核数 %v 都不够 %d 个 vCPU，不绑核", plan.Free, cores))
+	} else if err := win.SetAffinity(p, plan.Mask); err != nil {
+		notes = append(notes, fmt.Sprintf("绑核失败（%v）", err))
+	} else {
+		notes = append(notes, fmt.Sprintf("绑定 L3 %d MB 的核心 %s（各组空余核数 %v，本实例 %d 个 vCPU）",
+			groups[plan.Group].Size>>20, cpuRanges(plan.Mask), plan.Free, cores))
+	}
+	return strings.Join(notes, "，"), plan
+}
+
+// hostCPUs is the logical processor count: those under an L3 group, at least runtime.NumCPU.
+func hostCPUs(groups []win.L3Group) int {
+	var all uint64
+	for _, g := range groups {
+		all |= g.Mask
+	}
+	return max(bits.OnesCount64(all), runtime.NumCPU())
+}
+
+// otherQemu is another qemu on the host as planHost counts it.
+type otherQemu struct {
+	Mask  uint64 // affinity mask; 0 when it could not be read
+	Cores int    // vCPUs
+}
+
+// otherQemus reads (never changes) every qemu process on the host except self: this root's, another root's,
+// production's. vCPUs: hw.cpu.ncore of this root's instance it runs, else "-cores N" on its command line, else cores
+// (the vCPU count is in the AVD config, not on a modavd or AUTO-MAS command line).
+func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
+	procs, err := win.ListProcesses()
+	if err != nil {
+		return nil
+	}
+	var insts []*avd.Instance
+	if m.Root != nil {
+		insts, _ = avd.List(m.Root)
+	}
+	var out []otherQemu
+	for _, q := range procs {
+		if q.PID == self.PID || !isQemuName(q.Name) {
+			continue
+		}
+		o := otherQemu{Cores: cores}
+		if mask, err := win.GetAffinity(q); err == nil {
+			o.Mask = mask
+		}
+		if cmdline, err := q.CommandLine(); err == nil {
+			o.Cores = m.qemuCores(q, cmdline, insts, cores)
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// qemuCores is the vCPU count of qemu q (see otherQemus).
+func (m *Manager) qemuCores(q win.Process, cmdline []string, insts []*avd.Instance, def int) int {
+	for _, in := range insts {
+		if cmdlineMatches(cmdline, root.AvdName(in.Index), root.ConsolePort(in.Index)) &&
+			adb.QemuBelongsTo(m.Root, q, in.Index) {
+			if n, ok := in.CPU(); ok && n > 0 {
+				return n
+			}
+			break
 		}
 	}
-	return strings.Join(notes, "，")
+	for k := 0; k+1 < len(cmdline); k++ {
+		if cmdline[k] == "-cores" {
+			if n, err := strconv.Atoi(cmdline[k+1]); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return def
+}
+
+// hasBigL3 is true when the L3 groups differ in size (AMD X3D).
+func hasBigL3(groups []win.L3Group) bool {
+	if len(groups) < 2 {
+		return false
+	}
+	lo, hi := groups[0].Size, groups[0].Size
+	for _, g := range groups {
+		lo, hi = min(lo, g.Size), max(hi, g.Size)
+	}
+	return hi > lo
+}
+
+// hostPlan is where an instance goes and what is left of the host.
+type hostPlan struct {
+	Group int    // index in the L3 group list; -1: not pinned
+	Mask  uint64 // processors of Group
+	Free  []int  // free logical processors per group before this instance (nil without differing L3 groups)
+	// Spare is the logical processors left after every qemu's vCPUs, this instance's included: in Group when pinned,
+	// on the whole host otherwise. May be negative.
+	Spare  int
+	Unread int // other qemu whose affinity could not be read
+}
+
+// planHost is the pure decision. Without differing L3 groups nothing is pinned. Otherwise each other qemu loads the
+// groups with its vCPUs in proportion to the processors its mask has in each (a mask inside one group loads that
+// group only, one covering all of them spreads by group size); one whose mask could not be read counts as pinned to
+// the big L3, as AUTO-MAS and older modavd pin. The instance goes to the group with the largest free share (free
+// processors over the group's processors), the bigger L3 on a tie, then the lower mask: alone it gets the big L3 as
+// before, also where the groups differ in processor count (Ryzen AI 300: 8 Zen5 threads with 16 MB, 16 Zen5c threads
+// with 8 MB), and on equal groups (7950X3D) the share orders like the free count. A group with fewer free processors
+// than cores is no option, and when none is left the instance is not pinned and Windows spreads it.
+func planHost(groups []win.L3Group, hostCPUs int, others []otherQemu, cores int) hostPlan {
+	plan := hostPlan{Group: -1, Spare: hostCPUs - cores}
+	for _, o := range others {
+		plan.Spare -= o.Cores
+		if o.Mask == 0 {
+			plan.Unread++
+		}
+	}
+	if !hasBigL3(groups) {
+		return plan
+	}
+	big := 0
+	var all uint64
+	for k, g := range groups {
+		all |= g.Mask
+		if g.Size > groups[big].Size || g.Size == groups[big].Size && g.Mask < groups[big].Mask {
+			big = k
+		}
+	}
+	load := make([]float64, len(groups))
+	for _, o := range others {
+		m := o.Mask & all
+		if o.Mask == 0 {
+			m = groups[big].Mask
+		} else if m == 0 { // outside every group (another processor group): Windows' business, spread
+			m = all
+		}
+		n := float64(bits.OnesCount64(m))
+		for k, g := range groups {
+			load[k] += float64(o.Cores) * float64(bits.OnesCount64(m&g.Mask)) / n
+		}
+	}
+	plan.Free = make([]int, len(groups))
+	total := make([]int, len(groups))
+	for k, g := range groups {
+		total[k] = bits.OnesCount64(g.Mask)
+		plan.Free[k] = total[k] - int(math.Round(load[k]))
+	}
+	for k, g := range groups {
+		if plan.Free[k] < cores {
+			continue
+		}
+		c := plan.Group
+		if c < 0 {
+			plan.Group, plan.Mask = k, g.Mask
+			continue
+		}
+		// free share: Free[k]/total[k] against Free[c]/total[c], without division
+		share, other := plan.Free[k]*total[c], plan.Free[c]*total[k]
+		if share > other || share == other &&
+			(g.Size > groups[c].Size || g.Size == groups[c].Size && g.Mask < groups[c].Mask) {
+			plan.Group, plan.Mask = k, g.Mask
+		}
+	}
+	if plan.Group >= 0 {
+		plan.Spare = plan.Free[plan.Group] - cores
+	}
+	return plan
+}
+
+// cpuRanges renders a mask as "0–15" / "0–7,16–23".
+func cpuRanges(mask uint64) string {
+	var parts []string
+	for c := 0; c < 64; c++ {
+		if mask>>c&1 == 0 {
+			continue
+		}
+		e := c
+		for e+1 < 64 && mask>>(e+1)&1 == 1 {
+			e++
+		}
+		if e == c {
+			parts = append(parts, strconv.Itoa(c))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d–%d", c, e))
+		}
+		c = e
+	}
+	return strings.Join(parts, ",")
 }
 
 // setupGuestWriteback sets the guest dirty_expire / dirty_writeback to 200 / 100 cs and reads them back (10-04 hard
@@ -299,12 +526,25 @@ func fastpathReport(i int, status string) (warn bool, msg string) {
 	return true, fmt.Sprintf("实例 %d fastpath 没起来: %s", i, tail(status, 300))
 }
 
-func (m *Manager) setupIdlepoll(ctx context.Context, i int) {
+// idlepollCap is how many busy loops an instance with cores vCPUs may start: one per vCPU, but no more than the logical
+// processors left after every qemu's vCPUs, this instance's included (spare, see hostPlan: in its L3 group when
+// pinned, on the whole host otherwise), so the host keeps room for qemu's own threads and everything else on it.
+// ModAVD#34 A/B on a 7950X3D, 8 KB write + fsync: one 6-vCPU instance does 15 MB/s with 6 loops, 14 with 4, 12.5 with
+// 3, 11 with 1 or 2 and with none; four of them with one loop per vCPU whenever the vCPUs fit made each no faster
+// while production ran beside them, with the host at 91-94% CPU instead of 67-88%. #34 itself was one loop per vCPU
+// on three instances pinned to the same 16 processors, 18 saturated host threads. Fixed at boot: an instance starting
+// later sees more load and gets fewer, so the loops of all running instances stay within what was spare.
+func idlepollCap(cores, spare int) int {
+	return max(0, min(cores, spare))
+}
+
+// setupIdlepoll starts the watcher with at most limit busy loops per burst.
+func (m *Manager) setupIdlepoll(ctx context.Context, i int, limit int) {
 	remote, ok := m.pushGuestScript(ctx, i, guest.IdlePoll)
 	if !ok {
 		return
 	}
-	started := m.shell(ctx, i, "su 0 sh "+remote+" daemon", 0).Out
+	started := m.shell(ctx, i, fmt.Sprintf("su 0 sh %s daemon %d", remote, limit), 0).Out
 	status := m.shell(ctx, i, "su 0 sh "+remote+" status", 0).Out
 	if warn, msg := idlepollReport(i, started, status); warn {
 		m.Log.Warnf("%s", msg)
@@ -317,8 +557,8 @@ func (m *Manager) setupIdlepoll(ctx context.Context, i int) {
 func idlepollReport(i int, started, status string) (warn bool, msg string) {
 	lines := parseStatusLines(status)
 	if lines["watchers"] != "" {
-		return false, fmt.Sprintf("实例 %d 密集读写加速: 守护已起（pid %s，数据盘 %s）", i, lines["watchers"],
-			orText(lines["disk"], "?"))
+		return false, fmt.Sprintf("实例 %d 密集读写加速: 守护已起（pid %s，数据盘 %s，忙等上限 %s）", i, lines["watchers"],
+			orText(lines["disk"], "?"), orText(lines["max"], "每个 vCPU 一个"))
 	}
 	return true, fmt.Sprintf("实例 %d 密集读写加速没起来: %s", i, tail(strings.TrimSpace(started)+" / "+status, 300))
 }

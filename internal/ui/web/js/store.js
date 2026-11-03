@@ -15,7 +15,6 @@ export const S = {
   conn: 'connecting', // connecting | open | lost | auth
   lostAt: 0, // when the event stream went down (0 while it is up)
   pending: {}, // index -> kind while the POST is in flight
-  win: {}, // index -> window visible, as last told by the server
   dismissed: new Set(), // failed job ids the user closed on the card
 };
 
@@ -61,7 +60,7 @@ export function lastJob(i, running) {
   return best;
 }
 
-// The root cannot boot right now (the banner says why); 开机 / 重启 would only fail.
+// The root cannot boot right now (the banner says why); 开机 would only fail.
 export const rootBlocked = () => !!S.check && S.check.ready === false;
 
 export function runningCount() {

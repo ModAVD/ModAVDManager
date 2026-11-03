@@ -117,8 +117,17 @@ func SetAboveNormalPriority(Process) error { return errUnsupported }
 // SetAffinity calls SetProcessAffinityMask on Windows.
 func SetAffinity(Process, uint64) error { return errUnsupported }
 
-// BigL3CPUs uses GetLogicalProcessorInformationEx to find large shared L3 caches.
-func BigL3CPUs() (uint64, []int, bool) { return 0, nil, false }
+// GetAffinity calls GetProcessAffinityMask on Windows.
+func GetAffinity(Process) (uint64, error) { return 0, errUnsupported }
+
+// L3Group is one L3 cache: its size in bytes and the logical processors sharing it.
+type L3Group struct {
+	Size uint32
+	Mask uint64
+}
+
+// L3Groups lists the L3 caches of the host.
+func L3Groups() []L3Group { return nil }
 
 // SharedMemoryExists calls OpenFileMappingW for the Windows named mapping.
 func SharedMemoryExists(string) bool { return false }
