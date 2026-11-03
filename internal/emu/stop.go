@@ -353,11 +353,13 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps 
 			// exit code then says nothing about the shutdown. Only qemu's exit counts.
 			started := time.Now()
 			res := closeRun(window, "shell", guestShutdownCommand)
-			if remaining := window - time.Since(started); remaining > 0 {
+			ran := time.Since(started)
+			if remaining := window - ran; remaining > 0 {
 				waitQemuExit(ctx, p, remaining)
 			}
 			if p.Alive() {
-				if res.Code != 0 && res.Out != "" {
+				// one that failed before the window was over says why; one that ran all of it only timed out
+				if res.Code != 0 && res.Out != "" && ran < window {
 					return fmt.Sprintf("%.0f 秒内没有自己退出；关机命令返回码 %d: %s", window.Seconds(), res.Code, res.Out)
 				}
 				return fmt.Sprintf("%.0f 秒内没有自己退出", window.Seconds())
