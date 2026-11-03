@@ -15,9 +15,10 @@ import (
 // either way they come to the daemon, which answers them:
 //
 //   - AAAA: an empty answer, so the apps use IPv4 (their IPv6 is blocked, rules.go).
-//   - Otherwise from its own cache, or by asking over TCP through the proxy: the resolver the app chose when that is
-//     a public address, else Config.DNS (the guest's own 10.0.2.3 cannot be reached from the proxy). TCP so that DNS
-//     works with proxies that do not relay UDP; queries are pipelined on up to two connections per resolver.
+//   - Otherwise from its own cache, or by asking Config.DNS over TCP through the proxy, whichever resolver the query
+//     was sent to: the guest's own 10.0.2.3 cannot be reached from the proxy, and the cache is shared by the listed
+//     apps, so an answer from a resolver one app picked (one it runs) would reach the others. TCP so that DNS works
+//     with proxies that do not relay UDP; queries are pipelined on up to two connections.
 //   - Every answer goes back with TTL 0, so that netd's cache, which the apps going direct share, keeps none of
 //     them. The other way round cannot be helped: an answer netd cached for an app going direct reaches the listed
 //     apps without asking the daemon. The TCP relay makes up for most of it by connecting by name (relay.go).
@@ -64,9 +65,9 @@ func newDNSEngine(up *Upstream, resolver netip.AddrPort, c *counters) *dnsEngine
 		cache: map[string]cacheEntry{}, names: map[netip.Addr]nameEntry{}, pools: map[netip.AddrPort]*dnsPool{}}
 }
 
-// answer answers query, which was sent to dst (over TCP, or UDP: then cut to the client's UDP size). nil: not a
-// query, drop it.
-func (e *dnsEngine) answer(ctx context.Context, query []byte, dst netip.AddrPort, overTCP bool) []byte {
+// answer answers query (over TCP, or UDP: then cut to the client's UDP size), wherever it was sent. nil: not a query,
+// drop it.
+func (e *dnsEngine) answer(ctx context.Context, query []byte, overTCP bool) []byte {
 	q, err := parseQuery(query)
 	if err != nil {
 		return nil
@@ -89,11 +90,7 @@ func (e *dnsEngine) answer(ctx context.Context, query []byte, dst netip.AddrPort
 		e.c.dnsFailed.Add(1)
 		return emptyAnswer(query, q, rcodeServFail)
 	}
-	server := e.resolver
-	if publicAddr(dst.Addr()) {
-		server = dst
-	}
-	a, err := e.ask(ctx, server, query)
+	a, err := e.ask(ctx, e.resolver, query)
 	var info answerInfo
 	if err == nil {
 		info, err = fixAnswer(a, q.id)

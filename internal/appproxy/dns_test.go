@@ -31,13 +31,13 @@ func TestDNSAnswers(t *testing.T) {
 	ctx := context.Background()
 
 	// AAAA: empty, without asking anyone
-	a := e.answer(ctx, query(1, "game.example.com", dnsTypeAAAA, 0), guestDNS, false)
+	a := e.answer(ctx, query(1, "game.example.com", dnsTypeAAAA, 0), false)
 	if rcodeOf(a) != rcodeNoError || binary.BigEndian.Uint16(a[6:]) != 0 || f.queries.Load() != 0 {
 		t.Fatalf("AAAA: %x, %d queries", a, f.queries.Load())
 	}
 
 	q := query(0x4242, "game.example.com", dnsTypeA, 0)
-	a = e.answer(ctx, q, guestDNS, false)
+	a = e.answer(ctx, q, false)
 	info, err := fixAnswer(append([]byte(nil), a...), 0x4242)
 	if err != nil || binary.BigEndian.Uint16(a) != 0x4242 || len(info.addrs) != 1 || info.addrs[0].String() != "1.2.3.4" {
 		t.Fatalf("A: %x %+v %v", a, info, err)
@@ -55,7 +55,7 @@ func TestDNSAnswers(t *testing.T) {
 
 	// again, other ID and 0x20 case: from the cache, with the query's ID and question
 	q2 := query(0x1111, "GaMe.ExAmPlE.cOm", dnsTypeA, 0)
-	a2 := e.answer(ctx, q2, guestDNS, false)
+	a2 := e.answer(ctx, q2, false)
 	if f.queries.Load() != 1 {
 		t.Errorf("%d queries upstream, want 1 (cached)", f.queries.Load())
 	}
@@ -64,12 +64,12 @@ func TestDNSAnswers(t *testing.T) {
 	}
 
 	// NXDOMAIN is cached a short while; SERVFAIL not at all
-	if a := e.answer(ctx, query(3, "nx.example", dnsTypeA, 0), guestDNS, false); rcodeOf(a) != rcodeNXDomain {
+	if a := e.answer(ctx, query(3, "nx.example", dnsTypeA, 0), false); rcodeOf(a) != rcodeNXDomain {
 		t.Errorf("NXDOMAIN: %x", a)
 	}
-	e.answer(ctx, query(4, "nx.example", dnsTypeA, 0), guestDNS, false)
-	e.answer(ctx, query(5, "fail.example", dnsTypeA, 0), guestDNS, false)
-	e.answer(ctx, query(6, "fail.example", dnsTypeA, 0), guestDNS, false)
+	e.answer(ctx, query(4, "nx.example", dnsTypeA, 0), false)
+	e.answer(ctx, query(5, "fail.example", dnsTypeA, 0), false)
+	e.answer(ctx, query(6, "fail.example", dnsTypeA, 0), false)
 	if got := f.queries.Load(); got != 4 {
 		t.Errorf("%d queries upstream, want 4", got)
 	}
@@ -77,20 +77,14 @@ func TestDNSAnswers(t *testing.T) {
 		t.Errorf("counted %d queries", c.dns.Load())
 	}
 
-	// an app that picked a public resolver itself gets that one
-	e.answer(ctx, query(7, "other.example", dnsTypeA, 0), netip.MustParseAddrPort("8.8.8.8:53"), false)
-	if got := targets(p, "connect"); !slices.Contains(got, "8.8.8.8:53") {
-		t.Errorf("asked %v", got)
-	}
-
 	// expiry
 	now := time.Now()
 	e.now = func() time.Time { return now.Add(dnsMaxTTL + time.Second) }
-	e.answer(ctx, query(8, "game.example.com", dnsTypeA, 0), guestDNS, false)
-	if f.queries.Load() != 6 {
+	e.answer(ctx, query(8, "game.example.com", dnsTypeA, 0), false)
+	if f.queries.Load() != 5 {
 		t.Errorf("expired entry served: %d queries", f.queries.Load())
 	}
-	if e.answer(ctx, []byte("junk"), guestDNS, false) != nil {
+	if e.answer(ctx, []byte("junk"), false) != nil {
 		t.Error("junk answered")
 	}
 }
@@ -102,9 +96,9 @@ func TestDNSTTLBounds(t *testing.T) {
 	e, _ := newTestEngine(t, serverOf(t, "socks5", p))
 	now := time.Now()
 	e.now = func() time.Time { return now }
-	e.answer(context.Background(), query(1, "short.example", dnsTypeA, 0), guestDNS, false)
+	e.answer(context.Background(), query(1, "short.example", dnsTypeA, 0), false)
 	e.now = func() time.Time { return now.Add(dnsMinTTL - time.Second) }
-	e.answer(context.Background(), query(2, "short.example", dnsTypeA, 0), guestDNS, false)
+	e.answer(context.Background(), query(2, "short.example", dnsTypeA, 0), false)
 	if f.queries.Load() != 1 {
 		t.Errorf("a TTL of 1 s was not raised to %v", dnsMinTTL)
 	}
@@ -117,7 +111,7 @@ func TestDNSTTLBounds(t *testing.T) {
 
 func TestDNSProxyDown(t *testing.T) {
 	e, c := newTestEngine(t, deadServer(t))
-	a := e.answer(context.Background(), query(1, "game.example.com", dnsTypeA, 0), guestDNS, false)
+	a := e.answer(context.Background(), query(1, "game.example.com", dnsTypeA, 0), false)
 	if rcodeOf(a) != rcodeServFail || binary.BigEndian.Uint16(a) != 1 {
 		t.Errorf("%x", a)
 	}
@@ -146,7 +140,7 @@ func TestDNSPipelined(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			name := fmt.Sprintf("n%d.example", i)
-			a := e.answer(context.Background(), query(uint16(1000+i), name, dnsTypeA, 0), guestDNS, false)
+			a := e.answer(context.Background(), query(uint16(1000+i), name, dnsTypeA, 0), false)
 			info, err := fixAnswer(a, 0)
 			if err != nil || binary.BigEndian.Uint16(a) != 0 || len(info.addrs) != 1 || info.addrs[0].String() != names[name] {
 				t.Errorf("%s: %+v %v", name, info, err)
@@ -173,14 +167,14 @@ func TestDNSOverUDPTruncates(t *testing.T) {
 	big := answer(q, 0, 0, rrs...)
 	info, _ := fixAnswer(big, 1)
 	e.store(qd, big, info)
-	a := e.answer(context.Background(), q, guestDNS, false)
+	a := e.answer(context.Background(), q, false)
 	if binary.BigEndian.Uint16(a[2:])&flagTC == 0 {
 		t.Error("UDP answer not truncated")
 	}
-	if a := e.answer(context.Background(), q, guestDNS, true); len(a) != len(big) {
+	if a := e.answer(context.Background(), q, true); len(a) != len(big) {
 		t.Error("TCP answer truncated")
 	}
-	if a := e.answer(context.Background(), query(1, "big.example", dnsTypeA, 4096), guestDNS, false); len(a) != len(big) {
+	if a := e.answer(context.Background(), query(1, "big.example", dnsTypeA, 4096), false); len(a) != len(big) {
 		t.Error("EDNS size ignored")
 	}
 }

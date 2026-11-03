@@ -103,7 +103,7 @@ func (co *Core) HandleTCP(c net.Conn, orig netip.AddrPort) {
 		return
 	}
 	if orig.Port() == 53 {
-		co.serveDNSTCP(c, orig)
+		co.serveDNSTCP(c)
 		return
 	}
 	first, t := co.target(c, orig)
@@ -202,7 +202,7 @@ func finish(dst, src net.Conn, err error) {
 }
 
 // serveDNSTCP answers DNS over TCP (two-byte length, then the message), one query after another.
-func (co *Core) serveDNSTCP(c net.Conn, orig netip.AddrPort) {
+func (co *Core) serveDNSTCP(c net.Conn) {
 	var l [2]byte
 	for {
 		c.SetReadDeadline(time.Now().Add(dnsTCPIdle))
@@ -213,7 +213,7 @@ func (co *Core) serveDNSTCP(c net.Conn, orig netip.AddrPort) {
 		if _, err := io.ReadFull(c, q); err != nil {
 			return
 		}
-		a := co.dns.answer(context.Background(), q, orig, true)
+		a := co.dns.answer(context.Background(), q, true)
 		if a == nil {
 			return
 		}
@@ -234,7 +234,7 @@ func (co *Core) HandleUDP(client, orig netip.AddrPort, p []byte) {
 	if orig.Port() == 53 {
 		q := append([]byte(nil), p...)
 		go func() {
-			if a := co.dns.answer(context.Background(), q, orig, false); a != nil {
+			if a := co.dns.answer(context.Background(), q, false); a != nil {
 				co.udp.reply(orig, client, a)
 			}
 		}()
