@@ -178,7 +178,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`，规则和随包的 `fetch-components.ps1`（「补全组件.bat」）一条一条对上：
 
-- 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则联网之前就报 `usage`。协议和提问不受 `--quiet` 影响。
+- 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
 - 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。
 - 先下成 `downloads\*.part`，中断了再运行会接着下（`Range`）；已经下满的直接校验。服务器的回答先核对再动 `.part`：200 要大小相符，206 要正好从已有的位置接着给。校验大小和 SHA-1 后才改名。请求头带 `Accept-Encoding: identity`，服务器回压缩过的内容一律不收。HTTP 4xx、大小不符、压缩过的内容、超时马上换下一个镜像（`.part` 留着让下一个接着下）；其余错误同一个镜像最多试 3 次，中间等 3 秒。
 - 解压到 `sdk\.staging\`，整包解完、核对完（关键文件、adb 三个文件钉住的 SHA-256、版本）再挪到位；缺 `source.properties` 就补写。原来不完整的目录改名为 `<目录>.incomplete-<时间>` 留着，不删，确认没用后自己删掉。Ctrl+C 随时能停，不留下装到一半的组件。

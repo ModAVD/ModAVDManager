@@ -783,6 +783,8 @@ func TestFetchJSONNeedsAcceptLicense(t *testing.T) {
 	if out := fetch(t, nil, r, opts(m)); out.err != nil {
 		t.Fatal(out.err)
 	}
+	// a root that lacks nothing asks no question, so this layer lets it through (the CLI refuses --json without
+	// --accept-license before it gets here: cli.TestComponentsFetchJSONNeedsAcceptLicense)
 	n := len(m.all())
 	if out := fetch(t, nil, r, o); out.err != nil || len(m.all()) != n {
 		t.Fatalf("complete root: %v", out.err)

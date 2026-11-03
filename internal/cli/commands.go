@@ -924,6 +924,11 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	if _, err := components.ChooseMirrors(o.Mirror, o.MirrorURLs); err != nil {
 		return o, err
 	}
+	// whatever the root holds: a script that sometimes gets ok and sometimes usage for the same command line (by
+	// whether components were missing) would only learn of the license at the worst moment
+	if o.JSON && !o.AcceptLicense {
+		return o, components.JSONNeedsLicense()
+	}
 	var last time.Time
 	o.Progress = func(p components.Progress) {
 		if !p.Final && !last.IsZero() && time.Since(last) < 2*time.Second {
