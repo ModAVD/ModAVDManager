@@ -214,7 +214,7 @@ function finishJob(j, result, warnings = []) {
   j.finished_at = iso();
   j.result = result;
   j.warnings = warnings;
-  if (j.kind === 'start' || j.kind === 'restart') j.progress = { step: 'done', message: `实例 ${j.index} 已就绪（共 ${result.total_seconds.toFixed(1)} 秒）`, done: 1000, total: 1000 };
+  if (j.kind === 'start') j.progress = { step: 'done', message: `实例 ${j.index} 已就绪（共 ${result.total_seconds.toFixed(1)} 秒）`, done: 1000, total: 1000 };
   emit('job', j);
   emit('instances', list());
 }
@@ -296,7 +296,7 @@ function finishStop(inst, j, force) {
 
 function stopSeq(inst, j, force) {
   for (const s of db.jobs) {
-    if (s.index === inst.index && s.state === 'running' && (s.kind === 'start' || s.kind === 'restart')) {
+    if (s.index === inst.index && s.state === 'running' && s.kind === 'start') {
       s.state = 'canceled';
       s.finished_at = iso();
       s.error = { code: 'canceled', message: '开机被关机打断', advice: '' };
@@ -628,7 +628,7 @@ async function handle(url, init) {
     const j = db.jobs.find((x) => x.id === decodeURIComponent(m[1]));
     if (!j) return errResp('not_found', `没有任务 ${m[1]}`);
     if (m[2] && method === 'POST') {
-      if (j.state === 'running' && (j.kind === 'start' || j.kind === 'restart')) {
+      if (j.state === 'running' && j.kind === 'start') {
         j.state = 'canceled';
         j.finished_at = iso();
         j.error = { code: 'canceled', message: '已停止等待，模拟器继续开机', advice: '' };
@@ -666,28 +666,22 @@ async function handle(url, init) {
       return json({ index: i, name: inst.name, path: inst.path });
     }
   }
-  if (act === 'start' || act === 'restart') {
+  if (act === 'start') {
     if (busyJob) return errResp('busy', `魔改 AVD 实例 ${i} ${busyJob.kind === 'stop' ? '正在关机' : '正在开机或做开机后设置'}`, '等它做完再试');
-    if (act === 'start' && inst.status === 'online') {
+    // the manager boots with the window only; one running headless is not adopted (no switch while it runs)
+    if (inst.running && !inst._.win) return errResp('busy', `魔改 AVD 实例 ${i} 正以无头方式运行，运行中不能换成带窗口`, `先关机再换：modavd stop ${i}，再 modavd start ${i} --window`);
+    if (inst.status === 'online') {
       const j = newJob('start', i);
       run(j, [[400, () => step(j, 'launch', `实例 ${i} 已在运行（pid ${inst.pid}），不重新开机`, 50)], [600, () => step(j, 'boot', `实例 ${i} 安卓已开机`, 610)],
         [600, () => finishJob(j, { ...startResult(inst, 0, 1.6, false), launched: false })]]);
       return json(j, 202);
     }
     const j = newJob(act, i);
-    if (act === 'restart' && inst.running) {
-      inst.busy = 'stopping';
-      emit('instances', list());
-      setTimeout(() => {
-        Object.assign(inst, { status: 'offline', running: false, booted: false, busy: '', pid: 0 });
-        step(j, 'launch', `实例 ${i} 已关机，重新开机`, 30);
-        startSeq(inst, j, body.window);
-      }, 2200);
-    } else startSeq(inst, j, body.window);
+    startSeq(inst, j, true);
     return json(j, 202);
   }
   if (act === 'stop') {
-    if (busyJob && busyJob.kind !== 'start' && busyJob.kind !== 'restart') return errResp('busy', `魔改 AVD 实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '安装 APK'}`, '等它做完再试');
+    if (busyJob && busyJob.kind !== 'start') return errResp('busy', `魔改 AVD 实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '安装 APK'}`, '等它做完再试');
     const j = newJob('stop', i);
     if (!inst.running) {
       setTimeout(() => finishJob(j, { index: i, name: inst.name, method: 'already_offline', synced: false, seconds: 0.1, warnings: [] }), 300);
@@ -703,10 +697,6 @@ async function handle(url, init) {
     log('info', `实例 ${i} 开始安装 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）`, j.id);
     setTimeout(() => finishJob(j, { index: i, apk: f.name, package: 'com.example.' + f.name.replace(/\.apk$/i, '').replace(/\W+/g, '').toLowerCase(), output: 'Success' }), 3000);
     return json(j, 202);
-  }
-  if (act === 'window') {
-    if (!inst.running) return errResp('busy', `魔改 AVD 实例 ${i} 没有在运行`);
-    return json({ index: i, visible: inst._.win ? !!body.visible : false, windows: inst._.win ? 1 : 0 });
   }
   if (act === 'input') {
     if (inst.status !== 'online') return errResp('busy', `魔改 AVD 实例 ${i} 没有开机`);

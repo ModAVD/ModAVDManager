@@ -176,8 +176,9 @@ func toolDefs() []*toolDef {
 		finishing(newTool("create_instance", "Create instance",
 			fmt.Sprintf("Create a new instance and set it up: one headless boot runs the boot setup, the host IME, the "+
 				"first-boot setup and the arm64 execution bridge, then a normal shutdown. Takes a few minutes (progress "+
-				"notifications with a progressToken); returns the stopped, ready instance. Until then its status is "+
-				"creating; a failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
+				"notifications with a progressToken, counted by the steps done); returns the stopped, ready instance. "+
+				"Until then its status is creating, with creation_progress (0-100) in get_instance / list_instances; a "+
+				"failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
 				"Omitted options take the defaults (%d MB memory, %d CPU "+
 				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory, CPU and fps "+
 				"only accept the listed steps; the data partition can later only be made larger (update_instance).",
@@ -216,7 +217,14 @@ func toolDefs() []*toolDef {
 				if req.FPS, err = a.optInt("fps"); err != nil {
 					return nil, err
 				}
-				req.Progress = progress
+				if progress != nil {
+					req.Progress = func(p emu.Progress) {
+						if p.Step != "done" {
+							p.Message = fmt.Sprintf("新建中 %d%%：%s", p.Percent(), p.Message)
+						}
+						progress(p)
+					}
+				}
 				return b.Create(ctx, req)
 			})),
 
@@ -293,22 +301,22 @@ func toolDefs() []*toolDef {
 
 		newTool("start_instance", "Start instance",
 			fmt.Sprintf("Boot an instance (headless unless window=true) and wait until Android has booted and the "+
-				"per-boot setup is done; usually 25-80 s, at most timeout_s (default %d) for Android to boot. An "+
-				"instance that is already running is adopted. Sends progress notifications when the request has a "+
-				"progressToken. Cancelling the call or reaching timeout_s only stops waiting: the emulator is not "+
-				"killed and keeps booting. Calling start_instance again adopts it and finishes the setup of that "+
-				"boot, one-time steps included (first-boot setup, guest Vulkan fix), before the deadline the "+
-				"error's advice names (launch + max(timeout_s, %d s) + %d min); after it the guest Vulkan fix "+
-				"waits for the next boot. Mounting it restarts zygote, ending every app, so that start mounts it "+
-				"only while no app is in the foreground and no install_apk runs; otherwise it warns and sets "+
-				"setup_pending=true: close the app or let the install finish and call it again before the "+
-				"deadline, or the next boot mounts it.",
+				"per-boot setup is done; usually 25-80 s, at most timeout_s (default %d) for Android to boot. A "+
+				"running instance is adopted as it runs; window naming the other way fails with busy (no switch "+
+				"while it runs: stop it first). Sends progress notifications with a progressToken. Cancelling or "+
+				"reaching timeout_s only stops waiting: the emulator keeps booting, and calling start_instance "+
+				"again before the deadline in the error's advice (launch + max(timeout_s, %d s) + %d min) finishes "+
+				"that boot's setup, one-time steps included (first-boot setup, guest Vulkan fix). Mounting the "+
+				"Vulkan fix restarts zygote (every app ends), so it is mounted only while no app is in the "+
+				"foreground and no install_apk runs; otherwise setup_pending=true: call again before the deadline, "+
+				"or the next boot mounts it.",
 				int(emu.DefaultBootTimeout/time.Second), int(emu.DefaultBootTimeout/time.Second),
 				int(emu.SetupMarkerGrace/time.Minute)),
 			mutating(false, true), reflect.TypeFor[emu.StartResult](), []prop{
 				indexProp(true),
-				{"window", false, map[string]any{"type": "boolean", "default": false,
-					"description": "Boot with the emulator window instead of headless."}},
+				{"window", false, map[string]any{"type": "boolean",
+					"description": "true: with the emulator window; false: headless. Omitted: a boot is headless and a " +
+						"running instance is adopted either way."}},
 				timeoutProp(emu.DefaultBootTimeout, "Seconds to wait for Android to finish booting; when they run "+
 					"out the call fails with a timeout but the emulator keeps booting."),
 			},
@@ -322,7 +330,9 @@ func toolDefs() []*toolDef {
 				if err != nil {
 					return nil, err
 				}
-				opt.Window = window != nil && *window
+				if window != nil {
+					opt.Window, opt.Headless = *window, !*window
+				}
 				if opt.Timeout, err = a.timeout(); err != nil {
 					return nil, err
 				}

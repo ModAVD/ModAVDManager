@@ -2,11 +2,14 @@
 # mas-idlepoll.sh - keep the vCPUs from halting while /data does many small
 # requests. Run as root (adb shell su 0 sh ...).
 #
-#   daemon  start "watch" in the background unless already running; exits 1
-#           with the reason when the data disk's counters cannot be read
+#   daemon [N]  start "watch" in the background unless already running; exits 1
+#           with the reason when the data disk's counters cannot be read. N
+#           caps the busy loops per burst (default: one per CPU; 0: watch but
+#           never spin); it is stored in $MAXFILE and read at every burst, so
+#           a later "daemon N" changes a running watcher
 #   watch   loop: every 0.2 s count the data disk's completed requests; at
-#           >= ON per second start one SCHED_IDLE busy loop per CPU, below
-#           OFF per second for 1 s stop them
+#           >= ON per second start one SCHED_IDLE busy loop per CPU (at most
+#           N), below OFF per second for 1 s stop them
 #   off     stop the watcher and the loops
 #   status  print current state
 #
@@ -18,10 +21,14 @@
 # 7-9 MB/s here, 7-11 MB/s on MuMu, 10-11 MB/s with the loops (10-21 A/B,
 # 457 MB update: 49-62 s -> 38-47 s). SCHED_IDLE tasks only run when a CPU
 # would otherwise be idle, so they take no time from real work; the cost is
-# host CPU, about two cores for as long as the burst lasts.
+# host CPU: every vCPU with a loop is a busy host thread for as long as the
+# burst lasts. Several instances bursting together over-commit the host that
+# way (ModAVD#34), so modavd passes as N what the host has left after every
+# qemu's vCPUs (0 when nothing).
 ON=400
 OFF=200
 TAG=mas-idlepoll
+MAXFILE=/data/local/tmp/mas-idlepoll.max
 
 say() { echo "$TAG: $*"; /system/bin/log -t $TAG "$*" 2>/dev/null; }
 
@@ -43,6 +50,11 @@ case "$1" in
 daemon)
     disk=$(data_disk)
     [ -r /sys/class/block/$disk/stat ] || { say "no stat for the data disk '$disk', not watching"; exit 1; }
+    case "$2" in
+    "") rm -f $MAXFILE ;;
+    *[!0-9]*) echo "usage: $0 daemon [N]"; exit 2 ;;
+    *) echo "$2" > $MAXFILE ;;
+    esac
     pgrep -f "$TAG.sh watch" >/dev/null || { nohup setsid sh "$0" watch >/dev/null 2>&1 & }
     # return once the watcher is visible, so a status right after this sees it
     i=0
@@ -74,8 +86,11 @@ watch)
         prev=$cur
         if [ -z "$loops" ]; then
             [ $rate -ge $ON ] || continue
+            n=$cpus
+            [ -r $MAXFILE ] && read m < $MAXFILE && [ "$m" -lt $n ] 2>/dev/null && n=$m
+            [ $n -gt 0 ] || continue
             i=0
-            while [ $i -lt $cpus ]; do
+            while [ $i -lt $n ]; do
                 # exec: $! must be the looping process itself (kill, pgrep)
                 (exec chrt -i 0 sh -c "$SPIN") & loops="$loops $!"
                 i=$((i + 1))
@@ -101,10 +116,11 @@ off)
 status)
     echo "disk: $(data_disk)"
     echo "watchers: $(pgrep -f "$TAG.sh watch" | tr '\n' ' ')"
+    echo "max: $(cat $MAXFILE 2>/dev/null)"
     echo "loops: $(pgrep -f "$TAG-spin" | tr '\n' ' ')"
     for p in $(pgrep -f "$TAG-spin"); do chrt -p $p | grep -o 'SCHED_[A-Z]*'; done | sort | uniq -c
     ;;
 *)
-    echo "usage: $0 daemon|watch|off|status"; exit 2
+    echo "usage: $0 daemon [N]|watch|off|status"; exit 2
     ;;
 esac
