@@ -133,55 +133,67 @@ type createStage struct {
 	weight float64 // the seconds it usually takes; only the ratios matter
 }
 
-// What the stages of the setup usually take, in seconds. Measured 11-02 on two creates with --no-bridge: boot 25 and
-// 31 s, the tuning 1–2 s, the host IME and the steps after it 2–3 s, the first-boot setup 2–3 s, the guest Vulkan
-// fix 12–13 s (most of it waiting for the framework after the zygote restart), the shutdown 6 s.
+// What the stages of the setup usually take, in seconds. Measured on real creates (11-02: two with --no-bridge;
+// 11-03: one with --no-bridge, one with the bridge): the first boot of a new instance 25–45 s, a cold boot 16–18 s,
+// the tuning 1–2 s, the host IME and the steps after it 2–3 s, the first-boot setup 3 s, the guest Vulkan fix 13–14 s
+// (most of it waiting for the framework after the zygote restart), the shutdown 5–8 s. The bridge on a new instance
+// takes two rounds with a cold boot each, then a check: the first remount turns verity off (27 s with its
+// shutdown), the install (12 s with its shutdown), the check that finds it installed (1 s, no boot).
 const (
-	stagePrepare   = 1.0  // the checks before the launch
-	stageBoot      = 27.0 // from the launch until Android has booted
-	stageTune      = 1.5
-	stageIme       = 2.5
-	stageFirstBoot = 2.5
-	stageVulkanFix = 12.5
-	// a bridge round: the install script and the shutdown before its cold boot (estimated, not measured yet)
-	stageBridge   = 20.0
-	stageShutdown = 6.0
+	stagePrepare     = 2.0  // the checks before the launch (and starting the private adb server)
+	stageBoot        = 35.0 // from the launch until Android has booted, the first boot of a new instance
+	stageColdBoot    = 17.0 // the same for a later boot (a bridge round's, a resume's)
+	stageTune        = 1.5
+	stageIme         = 2.5
+	stageFirstBoot   = 3.0
+	stageVulkanFix   = 13.5
+	stageRemount     = 27.0 // the bridge's first round: the first remount and the shutdown
+	stageBridge      = 12.0 // its second: the install and the shutdown
+	stageBridgeCheck = 1.0  // its last: the check that finds it installed
+	stageShutdown    = 6.0
 )
 
-// createPlan is the stages of a setup: one boot (with the first-boot setup unless the instance is initialized), a
-// bridge round when the bridge is installed, the shutdown.
-func createPlan(firstBoot, bridge bool) []createStage {
-	plan := append([]createStage{{"create", stagePrepare}}, bootStages(firstBoot)...)
+// createPlan is the stages of a setup: one boot (boot is its wait; with the first-boot setup unless the instance is
+// initialized), the bridge rounds of a new instance when the bridge is installed, the shutdown. An instance whose
+// first remount is done (a resume) needs one round fewer: the shutdown passes over the rest.
+func createPlan(boot float64, firstBoot, bridge bool) []createStage {
+	plan := append([]createStage{{"create", stagePrepare}}, bootStages(boot, firstBoot)...)
 	if bridge {
-		plan = append(plan, bridgeRound()...)
+		plan = append(plan, bridgeRound(stageRemount)...)
+		plan = append(plan, bridgeRound(stageBridge)...)
+		plan = append(plan, createStage{"bridge", stageBridgeCheck})
 	}
 	return append(plan, createStage{"create_stop", stageShutdown})
 }
 
-// bootStages are the stages of one boot of the setup, by the steps Start reports.
-func bootStages(firstBoot bool) []createStage {
-	s := []createStage{{"launch", stageBoot}, {"tune", stageTune}, {"ime", stageIme}}
+// bootStages are the stages of one boot of the setup, by the steps Start reports; boot is the wait for Android.
+func bootStages(boot float64, firstBoot bool) []createStage {
+	s := []createStage{{"launch", boot}, {"tune", stageTune}, {"ime", stageIme}}
 	if firstBoot {
 		s = append(s, createStage{"first_boot", stageFirstBoot})
 	}
 	return append(s, createStage{"vulkan_fix", stageVulkanFix})
 }
 
-// bridgeRound is one round of the bridge install: the script (and the shutdown), then a cold boot.
-func bridgeRound() []createStage {
-	return append([]createStage{{"bridge", stageBridge}}, bootStages(false)...)
+// bridgeRound is a round of the bridge install that changes the guest: the script (and the shutdown), then a cold
+// boot.
+func bridgeRound(script float64) []createStage {
+	return append([]createStage{{"bridge", script}}, bootStages(stageColdBoot, false)...)
 }
 
 // bootMilestones are lines the emulator writes to its log while Android boots, in that order, with the share of the
-// boot wait that has passed when each appears.
+// boot wait that has passed when each appears. Measured 11-03 on the first boot of a new instance and two cold boots:
+// 0.24 / 0.11 / 0.12 for the first two, 0.43 / 0.54 / 0.56, 0.65 / 0.58 / 0.61. The emulator's "Initialized handle"
+// only comes after Android has booted.
 var bootMilestones = []struct {
 	text  string
 	share float64
 }{
-	{" is operational", 0.15},                // the accelerator (WHPX ...): qemu's machine is up
-	{"Advertising in:", 0.25},                // the emulator's console and gRPC are up
-	{"Initialized handle: videmulator", 0.6}, // the guest draws its first frames
-	{"Boot completed in", 0.95},              // Android says it has booted
+	{" is operational", 0.1},                       // the accelerator (WHPX ...): qemu's machine is up
+	{"Advertising in:", 0.15},                      // the emulator's console and gRPC are up
+	{"qemu_win32_discard_memory", 0.45},            // the guest kernel reports free pages to the balloon
+	{"driver prefers a dedicated allocation", 0.6}, // the guest's first screen buffer (only some GPU drivers say so)
+	{"Boot completed in", 0.95},                    // Android says it has booted
 }
 
 // bootLogShare is the share of the boot wait the emulator log at path shows done (0 when unreadable). Only the
@@ -321,7 +333,11 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	bridge := m.bridgeWanted(i, cfg)
 	// the progress is also kept on disk, for status / list in other processes (AUTO-MAS, the manager)
 	defer m.removeCreateProgress(i)
-	prog := &createProgress{i: i, plan: createPlan(!m.initialized(i), bridge),
+	boot := stageBoot
+	if req.Resume {
+		boot = stageColdBoot // the instance has booted before
+	}
+	prog := &createProgress{i: i, plan: createPlan(boot, !m.initialized(i), bridge),
 		bootLog: func() string {
 			if mk, ok := m.readSetupMarker(i); ok {
 				return mk.LogFile // written at the launch, before the boot wait

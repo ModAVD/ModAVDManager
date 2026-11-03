@@ -138,6 +138,49 @@ func TestCreateResumeDropsOldProgress(t *testing.T) {
 	}
 }
 
+// TestStatusCreatingThroughGetprop: a status whose getprop waits while the setup ends (the setup's shutdown is what
+// makes it wait) reads creating with the percentage, as at its process snapshot, not a "starting" qemu.
+func TestStatusCreatingThroughGetprop(t *testing.T) {
+	m, _ := opsTestManager(t)
+	ctx := context.Background()
+	i := 6
+	if _, err := m.Create(ctx, CreateRequest{Index: &i, filesOnly: true}); err != nil {
+		opsSkipIfNotImplemented(t, err)
+		t.Fatal(err)
+	}
+	if err := m.setCreation(6, creationCreating, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	l, ok, err := win.TryLock(m.lockPath(6, "create"))
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v %v", ok, err)
+	}
+	unlocked := false
+	t.Cleanup(func() {
+		if !unlocked {
+			l.Unlock()
+		}
+	})
+	m.writeCreateProgress(6, Progress{Step: "create_stop", Done: 880, Total: progressTotal})
+	savedScan, savedBooted := qemuScan, statusBooted
+	t.Cleanup(func() { qemuScan, statusBooted = savedScan, savedBooted })
+	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: {PID: 4242}} }
+	statusBooted = func(m *Manager, _ context.Context, i int) bool {
+		// the setup is over while the guest shuts down
+		m.removeCreateProgress(i)
+		if err := m.setCreation(i, "", "", ""); err != nil {
+			t.Error(err)
+		}
+		l.Unlock()
+		unlocked = true
+		return false
+	}
+	info, err := m.Info(ctx, 6)
+	if err != nil || !info.Running || info.Status != StatusCreating || info.Busy != "creating" || info.CreationProgress != 88 {
+		t.Fatalf("a setup that ends during the getprop: %+v %v", info, err)
+	}
+}
+
 // TestCreateSetsUp: create sets the instance up before it returns; meanwhile it is "creating" and every other
 // operation on it is refused as busy; afterwards nothing of the creation state is left.
 func TestCreateSetsUp(t *testing.T) {
@@ -335,8 +378,8 @@ func oneBoot(firstBoot bool) []Progress {
 }
 
 // runCreateProgress feeds a setup's events into a createProgress with plan and returns what it sent. bridgeRounds
-// cold boots follow the first boot.
-func runCreateProgress(plan []createStage, bridgeRounds int, bootLog func() string) []Progress {
+// rounds with a cold boot follow the first boot; check adds the bridge round that only finds it installed.
+func runCreateProgress(plan []createStage, bridgeRounds int, check bool, bootLog func() string) []Progress {
 	var got []Progress
 	p := &createProgress{i: 6, plan: plan, bootLog: bootLog, fn: func(e Progress) { got = append(got, e) }}
 	p.stage("create", "开始")
@@ -348,6 +391,9 @@ func runCreateProgress(plan []createStage, bridgeRounds int, bootLog func() stri
 		for _, ev := range oneBoot(false) {
 			p.boot(ev)
 		}
+	}
+	if check {
+		p.boot(Progress{Step: "bridge", Total: progressTotal})
 	}
 	p.stage("create_stop", "关机")
 	p.stage("done", "完成")
@@ -391,7 +437,7 @@ func doneAt(t *testing.T, got []Progress, step string) int {
 // TestCreateProgress: the bar counts the steps done, weighted by what they take; the boot wait does not move it by
 // the clock.
 func TestCreateProgress(t *testing.T) {
-	got := runCreateProgress(createPlan(true, false), 0, nil)
+	got := runCreateProgress(createPlan(stageBoot, true, false), 0, false, nil)
 	checkBar(t, got)
 	// the shares follow the stage weights: the boot is about half of a create without the bridge
 	total := stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot + stageVulkanFix + stageShutdown
@@ -419,34 +465,89 @@ func TestCreateProgress(t *testing.T) {
 	}
 }
 
-// TestCreateProgressBridge: a planned bridge round is part of the bar; an unplanned one leaves it where it is; a
-// planned one that does not happen is passed over.
+// TestCreateProgressBridge: the bridge rounds of a new instance (two with a cold boot, then the check) are part of
+// the bar; an unplanned round leaves it where it is; planned ones that do not happen are passed over.
 func TestCreateProgressBridge(t *testing.T) {
-	planned := runCreateProgress(createPlan(true, true), 1, nil)
+	planned := runCreateProgress(createPlan(stageBoot, true, true), 2, true, nil)
 	checkBar(t, planned)
-	if d := doneAt(t, planned, "bridge"); d < 300 || d > 700 {
-		t.Errorf("the bridge round starts at %d", d)
+	if d := doneAt(t, planned, "bridge"); d < 250 || d > 450 {
+		t.Errorf("the bridge starts at %d", d)
 	}
-	// its cold boot moves the bar like the first boot
-	var cold []int
+	// each cold boot moves the bar like the first boot
+	var cold, rounds []int
 	for _, e := range planned[slices.IndexFunc(planned, func(e Progress) bool { return e.Step == "bridge" }):] {
-		if e.Step == "launch" || e.Step == "tune" || e.Step == "vulkan_fix" {
+		switch e.Step {
+		case "launch", "tune", "vulkan_fix":
 			cold = append(cold, e.Done)
+		case "bridge":
+			rounds = append(rounds, e.Done)
 		}
 	}
-	if len(cold) != 3 || cold[0] >= cold[1] || cold[1] >= cold[2] {
-		t.Errorf("the cold boot of the bridge round: %v", cold)
+	increasing := len(cold) == 6
+	for k := 1; k < len(cold); k++ {
+		increasing = increasing && cold[k] > cold[k-1]
 	}
-	checkBar(t, runCreateProgress(createPlan(true, false), 2, nil)) // two rounds, none planned
-	checkBar(t, runCreateProgress(createPlan(true, true), 3, nil))  // three, one planned
-	skipped := runCreateProgress(createPlan(true, true), 0, nil)
+	if !increasing {
+		t.Errorf("the cold boots of the bridge rounds: %v", cold)
+	}
+	// the check is a stage of its own, just before the shutdown
+	if stop := doneAt(t, planned, "create_stop"); len(rounds) != 3 || rounds[2] >= stop || stop-rounds[2] > 10 {
+		t.Errorf("bridge rounds start at %v, the shutdown at %d", rounds, doneAt(t, planned, "create_stop"))
+	}
+	checkBar(t, runCreateProgress(createPlan(stageBoot, true, false), 2, false, nil)) // two rounds, none planned
+	checkBar(t, runCreateProgress(createPlan(stageBoot, true, true), 3, true, nil))   // one more than planned
+	checkBar(t, runCreateProgress(createPlan(stageBoot, true, true), 1, true, nil))   // the first remount was done before
+	skipped := runCreateProgress(createPlan(stageBoot, true, true), 0, false, nil)
 	checkBar(t, skipped)
 	if d := doneAt(t, skipped, "create_stop"); d < 900 {
-		t.Errorf("the shutdown after a bridge round that never came starts at %d", d)
+		t.Errorf("the shutdown after bridge rounds that never came starts at %d", d)
 	}
 	// a resume of an instance that is initialized plans no first-boot setup
-	if plan := createPlan(false, false); slices.ContainsFunc(plan, func(s createStage) bool { return s.step == "first_boot" }) {
+	if plan := createPlan(stageBoot, false, false); slices.ContainsFunc(plan, func(s createStage) bool { return s.step == "first_boot" }) {
 		t.Errorf("plan %+v", plan)
+	}
+}
+
+// TestCreatePlanOfSetup: the setup plans the boot of a new instance as its first boot, the boot of a resume as a
+// later one, and the first-boot setup only while the instance is not initialized.
+func TestCreatePlanOfSetup(t *testing.T) {
+	m, _ := opsTestManager(t)
+	ctx := context.Background()
+	var h createHooks
+	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+		for _, ev := range oneBoot(true) {
+			opt.Progress(ev)
+		}
+		return &StartResult{HostIME: true}, nil
+	}
+	h.check = errs.New(errs.NotReady, "没做完：宿主输入法")
+	h.install(t)
+	// where the boot ends (the tuning starts), per mille
+	tuneAt := func(req CreateRequest) int {
+		var sent []Progress
+		req.Progress = func(p Progress) { sent = append(sent, p) }
+		if _, err := m.Create(ctx, req); errs.CodeOf(err) != errs.NotReady {
+			opsSkipIfNotImplemented(t, err)
+			t.Fatalf("create %+v: %v", req, err)
+		}
+		return doneAt(t, sent, "tune")
+	}
+	want := func(boot, firstBoot float64) int {
+		total := stagePrepare + boot + stageTune + stageIme + firstBoot + stageVulkanFix + stageShutdown
+		return int(float64(progressTotal) * (stagePrepare + boot) / total)
+	}
+	i := 6
+	if d, w := tuneAt(CreateRequest{Index: &i, NoBridge: true}), want(stageBoot, stageFirstBoot); d != w {
+		t.Errorf("create: the boot ends at %d, want %d", d, w)
+	}
+	if err := m.Root.EditInstanceMeta(6, func(meta *jsonord.Obj) error {
+		meta.Set("initialized", jsonord.NewBool(true))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if d, w := tuneAt(CreateRequest{Index: &i, Resume: true}), want(stageColdBoot, 0); d != w {
+		t.Errorf("resume of an initialized instance: the boot ends at %d, want %d", d, w)
 	}
 }
 
@@ -461,7 +562,7 @@ func TestCreateProgressBootLog(t *testing.T) {
 	}
 	write("INFO | Android emulator version 37.2.10.0\n")
 	var got []Progress
-	p := &createProgress{i: 6, plan: createPlan(true, false), bootLog: func() string { return log },
+	p := &createProgress{i: 6, plan: createPlan(stageBoot, true, false), bootLog: func() string { return log },
 		fn: func(e Progress) { got = append(got, e) }}
 	p.stage("create", "开始")
 	p.boot(Progress{Step: "launch", Done: progressLaunch})
@@ -478,12 +579,19 @@ func TestCreateProgressBootLog(t *testing.T) {
 	if mid <= launched {
 		t.Fatalf("console up: %d", mid)
 	}
-	write("x is operational\nAdvertising in: x\nINFO | Initialized handle: videmulator20060\nINFO | Boot completed in 19637 ms\n")
+	write("x is operational\nAdvertising in: x\nqemu-system-x86_64-headless.exe: info: qemu_win32_discard_memory: using DiscardVirtualMemory\n")
+	guest := wait()
+	if guest <= mid {
+		t.Fatalf("guest kernel up: %d (console %d)", guest, mid)
+	}
+	write("x is operational\nAdvertising in: x\nqemu_win32_discard_memory\n" +
+		"INFO | ColorBuffer 4 (1280x720 VK_FORMAT_R8G8B8A8_UNORM): driver prefers a dedicated allocation, using one\n" +
+		"INFO | Boot completed in 19637 ms\n")
 	late := wait()
 	total := stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot + stageVulkanFix + stageShutdown
 	booted := int(float64(progressTotal) * (stagePrepare + stageBoot) / total)
-	if late <= mid || late >= booted {
-		t.Fatalf("boot completed in the log: %d (console %d, booted %d)", late, mid, booted)
+	if late <= guest || late >= booted {
+		t.Fatalf("boot completed in the log: %d (guest %d, booted %d)", late, guest, booted)
 	}
 	// a log that cannot be read for a moment takes nothing back
 	if err := os.Remove(log); err != nil {
