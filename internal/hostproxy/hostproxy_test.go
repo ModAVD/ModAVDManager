@@ -69,9 +69,11 @@ func TestForRequestSystem(t *testing.T) {
 			t.Errorf("%s: %v %v, want %q", target, got, err, want)
 		}
 	}
-	noEnv(t, settings{autoConfig: true})
-	if got, _ := ForRequest(&http.Request{URL: mustURL(t, "https://api.github.com/")}); got != nil {
-		t.Errorf("no static proxy: %v", got)
+	for _, s := range []settings{{autoConfig: true}, {server: "127.0.0.1:7890"}} { // PAC only; turned off, address left
+		noEnv(t, s)
+		if got, _ := ForRequest(&http.Request{URL: mustURL(t, "https://api.github.com/")}); got != nil {
+			t.Errorf("%+v: %v", s, got)
+		}
 	}
 }
 
@@ -109,5 +111,10 @@ func TestAdvice(t *testing.T) {
 		if got := Advice(); (got != "") != c.want {
 			t.Errorf("%+v: %q", c.s, got)
 		}
+	}
+	noEnv(t, settings{autoConfig: true})
+	t.Setenv("no_proxy", "mirrors.example") // any of the variables, NO_PROXY alone too: the environment decides
+	if !envSet() || Advice() != "" {
+		t.Error("NO_PROXY alone")
 	}
 }
