@@ -165,7 +165,8 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。管理器里暂时只能改设置和检查更新，「更新」按钮不可用。
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
 - `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
-- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。Go 不读 Windows 的系统代理，只认 `HTTPS_PROXY` / `NO_PROXY`。
+- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。
+- 代理和 `components fetch` 是同一套规则，见下一节的「代理」。
 
 ## 补全 Google 组件
 

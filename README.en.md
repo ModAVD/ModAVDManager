@@ -165,7 +165,8 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 - The update source is chosen in the manager's "Settings" (`设置`): GitHub (the latest Release of `ModAVD/ModAVD`, the full package) or MirrorChyan (downloads need a CDK, and it can provide delta packages; on errors it downloads from GitHub instead and says so in the result's `notices`). The CDK is encrypted with Windows DPAPI and stored in `%LOCALAPPDATA%\ModAVD\update-settings.json`; only this Windows user can decrypt it, and it is not written to logs and does not appear on the command line or in API responses. For now the manager can only change the settings and check for updates; the "Update" (`更新`) button is not available.
 - Only files from the package are swapped: `avd\`, `mas-avd.json` (only `components.emulator` is changed and an `updateHistory` entry is recorded), `sdk\platform-tools`, `sdk\system-images`, `logs\` and so on are never touched; `sdk\emulator` is replaced as a whole. A root folder that sets `sdkRoot` in `mas-avd.json` is not updated.
 - `--automas-version` is the version of the calling AUTO-MAS: if the first line of the new version's announcement requires a higher AUTO-MAS, it does not install.
-- Exit codes: being unable to check (offline, rate-limited, a GitHub error) is 9 (`update_unavailable`), a downloaded package that fails verification is also 9 (`update_rejected`), and a program in use or an update already in progress is 5. Go does not read the Windows system proxy; it only honors `HTTPS_PROXY` / `NO_PROXY`.
+- Exit codes: being unable to check (offline, rate-limited, a GitHub error) is 9 (`update_unavailable`), a downloaded package that fails verification is also 9 (`update_rejected`), and a program in use or an update already in progress is 5.
+- The proxy follows the same rules as `components fetch`; see "Proxy" in the next section.
 
 ## Fetching the Google components
 
