@@ -57,6 +57,10 @@ func (p *progressor) emit(step, msg string, done int) {
 	p.fn(Progress{Step: step, Message: msg, Done: done, Total: progressTotal})
 }
 
+// startFindQemu is how Start looks for the instance's qemu (m.findQemu, always the real scan); a test replaces it to
+// have Start find one running.
+var startFindQemu = (*Manager).findQemu
+
 // Start boots instance i (or adopts it when already running), runs the per-boot setup and, once, the first-boot
 // setup, and returns when the instance is online. See StartOptions / StartResult.
 //
@@ -180,7 +184,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		res, launchedAt, marker, mode = &StartResult{}, time.Time{}, nil, setupAdopted
 		var emulator, adopted *win.Process
 		var bootLock *win.FileLock
-		p, running := m.findQemu(i)
+		p, running := startFindQemu(m, i)
 		if w := opt.watchQemu; w != nil && (!running || p.PID != w.PID || p.Created != w.Created) {
 			// the watched qemu is gone (or replaced): a boot watch never launches an emulator
 			return nil, errs.Newf(errs.LaunchFailed, "实例 %d 的模拟器（pid %d）已不在运行", i, w.PID)

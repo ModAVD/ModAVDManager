@@ -516,6 +516,29 @@ func TestWaitShutdown(t *testing.T) {
 	}
 }
 
+// TestStartNoSwitchWhileRunning: a start that finds the instance running headless (the -headless build of qemu) and
+// is asked for the window fails with busy before it adopts anything; without a mode, or asking for headless, it goes
+// on to adopt it.
+func TestStartNoSwitchWhileRunning(t *testing.T) {
+	m, i := opsTestInstance(t)
+	saved := startFindQemu
+	t.Cleanup(func() { startFindQemu = saved })
+	startFindQemu = func(*Manager, int) (win.Process, bool) {
+		return win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true
+	}
+	ctx := context.Background()
+	_, err := m.Start(ctx, i, StartOptions{Window: true, Timeout: time.Second})
+	if errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正以无头方式运行，运行中不能换成带窗口") {
+		t.Fatalf("--window on a headless qemu: %v", err)
+	}
+	for _, opt := range []StartOptions{{}, {Headless: true}} {
+		opt.Timeout = time.Second
+		if _, err := m.Start(ctx, i, opt); errs.CodeOf(err) == errs.Busy {
+			t.Errorf("%+v did not adopt: %v", opt, err)
+		}
+	}
+}
+
 // TestWaitBootAdoptedGone: an adopted qemu that exits during the boot wait is errAdoptedGone (the start then boots the
 // instance once more); an emulator.exe this start launched that exits is a plain launch failure.
 func TestWaitBootAdoptedGone(t *testing.T) {
