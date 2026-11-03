@@ -64,6 +64,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
+| `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force]`、`stop --all` | 关机：先让安卓正常关机，不成再 sync + kill；`--force` 是 sync + 强杀 |
@@ -90,6 +91,19 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
 
+**按应用走代理**（`proxy`）：
+
+- 名单里的应用（按包名）的 TCP、UDP 和 DNS 都走设好的代理，别的应用照旧直连。不用 VPN：客体里一个 root 守护进程（`modavd-proxyd`，随 `modavd.exe` 带进去）按应用的 uid 用策略路由和透明代理接走它们的流量，应用和系统都看不到 VPN。
+- `modavd proxy <i>` 查看：开关、地址、名单；实例开着时附上客体里的实际状态（规则在不在、代理连没连上、名单里哪些还没装）。
+- `on` 打开、`off` 关掉（地址和名单留着）；`--server` 改地址，`--add` / `--remove` 增删，`--apps` 整个换掉名单（可写多次或用逗号隔开，`--apps ""` 清空）；可以和 `on` 一起给。名单最多 64 个。
+- 地址写 `socks5://IP:端口` 或 `http://IP:端口`；`127.0.0.1`、`localhost` 记成实例里看到的 `10.0.2.2`；不写协议就在这台电脑上探测。`--server auto`（第一次 `on` 没给地址时也是）取这台电脑的代理设置：先看 `ALL_PROXY`、`HTTPS_PROXY`、`HTTP_PROXY`，再看 Windows「Internet 选项」里手动设的代理（有 `socks=` 时优先），再探测是 SOCKS5 还是 HTTP。只认 IPv4 地址和 localhost。
+- 代理软件的混合端口（Clash 系的 7890、7897 之类）会被认成 SOCKS5，TCP、UDP、DNS 都能走。只给 HTTP 代理时只转 TCP 和 DNS，名单里的应用的 UDP 不通。
+- **代理断了，名单里的应用就断网**，不会悄悄改走直连。DNS 经代理用 TCP 问 `1.1.1.1`，名单里的应用的 IPv6 一律不通（让它们用 IPv4）。
+- 实例开着时改了马上生效（`applied` 是 `now`），关着就下次开机生效（`next_boot`）。由 modavd、MCP 或管理器开机时，开完机第一件事就是挂上规则；客体自己重启后由开机守护补上。AUTO-MAS 自己开机、不经过 modavd 的实例没有。
+- `test`：在这台电脑上探测设好的地址，是什么协议、经它的 UDP 能不能用。探测不到是退出码 9（`proxy_unavailable`）。
+- 海外游戏用 Google 登录的，把 Google Play 服务（`com.google.android.gms`）也加进名单。
+- 设置存在 `mas-avd.json` 的 `instances.<i>.appProxy`（`enabled`、`server`、`apps`），删除实例时一起删掉。`info` / `list` 的 `app_proxy` 是它的概要（只读配置，不走 adb；没设过是 `null`）。
+
 **机读输出**（`--json`）：
 
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
@@ -102,7 +116,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
   - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
   - 进度：命令行逐步打印到 stderr，每行带「新建中 NN%」；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示「新建中 NN%」和进度条（别处发起的新建也显示），「更多」里可以取消新建，关掉窗口会在后台做完。
 
-**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
+**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 
@@ -128,7 +142,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 modavd mcp --root D:\ModAVD
 ```
 
-同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`。
+同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
 
 在 Claude Code 里注册（PowerShell 里 `--` 要加引号，否则会被吞掉）：
 
