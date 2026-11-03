@@ -145,7 +145,7 @@ func Protect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
 func Unprotect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
 
 // SetEmulatorWindowsVisible finds the emulator window and calls ShowWindow on Windows.
-func SetEmulatorWindowsVisible(uint32, string, bool) (int, error) { return 0, errUnsupported }
+func SetEmulatorWindowsVisible(uint32, bool) (int, error) { return 0, errUnsupported }
 
 // GetConsoleWindow calls the Windows GetConsoleWindow API.
 func GetConsoleWindow() uintptr { return 0 }

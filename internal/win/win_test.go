@@ -822,9 +822,15 @@ type winMsg struct {
 	Private uint32
 }
 
+// testWindow is one window of testWindows; owned: the first window of the list owns it.
+type testWindow struct {
+	class, title string
+	owned        bool
+}
+
 // testWindows creates visible 1x1 tool windows far off-screen (never activated, no taskbar button) on a thread that
 // pumps messages, so ShowWindowAsync takes effect. Returns their handles in the order of specs.
-func testWindows(t *testing.T, specs [][2]string) []uintptr {
+func testWindows(t *testing.T, specs []testWindow) []uintptr {
 	t.Helper()
 	type result struct {
 		hwnds []uintptr
@@ -848,24 +854,28 @@ func testWindows(t *testing.T, specs [][2]string) []uintptr {
 			}
 		}()
 		for _, s := range specs {
-			cls, ok := classes[s[0]]
+			cls, ok := classes[s.class]
 			if !ok {
-				cls, _ = syscall.UTF16PtrFromString(s[0])
+				cls, _ = syscall.UTF16PtrFromString(s.class)
 				wc := wndClassEx{WndProc: procDefWindowProcW.Addr(), Instance: inst, ClassName: cls}
 				wc.Size = uint32(unsafe.Sizeof(wc))
 				if r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-					ready <- result{err: fmt.Errorf("RegisterClassExW %s: %v", s[0], err)}
+					ready <- result{err: fmt.Errorf("RegisterClassExW %s: %v", s.class, err)}
 					return
 				}
-				classes[s[0]] = cls
+				classes[s.class] = cls
 			}
-			title, _ := syscall.UTF16PtrFromString(s[1])
+			title, _ := syscall.UTF16PtrFromString(s.title)
+			var owner uintptr // a popup window's parent is its owner
+			if s.owned && len(hwnds) > 0 {
+				owner = hwnds[0]
+			}
 			off := -32000
 			const wsExToolWindow, wsExNoActivate, wsPopup, wsVisible = 0x80, 0x08000000, 0x80000000, 0x10000000
 			h, _, err := procCreateWindowExW.Call(wsExToolWindow|wsExNoActivate, uintptr(unsafe.Pointer(cls)),
-				uintptr(unsafe.Pointer(title)), wsPopup|wsVisible, uintptr(off), uintptr(off), 1, 1, 0, 0, inst, 0)
+				uintptr(unsafe.Pointer(title)), wsPopup|wsVisible, uintptr(off), uintptr(off), 1, 1, owner, 0, inst, 0)
 			if h == 0 {
-				ready <- result{err: fmt.Errorf("CreateWindowExW %q: %v", s[1], err)}
+				ready <- result{err: fmt.Errorf("CreateWindowExW %q: %v", s.title, err)}
 				return
 			}
 			hwnds = append(hwnds, h)
@@ -900,21 +910,64 @@ func testWindows(t *testing.T, specs [][2]string) []uintptr {
 	return res.hwnds
 }
 
+// TestEmulatorWindow: the main window is found whatever its title says (upstream's, with the mouse-capture prefix or
+// the safe-shutdown suffix, or the instance name of ModAVD/ModAVD#58); the toolbar by its title; the emulator's other
+// windows and Qt's helper windows never. Class names are the real ones of the emulator (Qt 6.5.3) and of Qt 5.
+func TestEmulatorWindow(t *testing.T) {
+	const main, mainGL, tool, popup = "Qt653QWindowIcon", "Qt653QWindowOwnDCIcon", "Qt653QWindowToolSaveBits",
+		"Qt653QWindowPopupDropShadowSaveBits"
+	for _, c := range []struct {
+		class, title string
+		owned, want  bool
+	}{
+		{main, "Android Emulator - mas_7:29070", false, true},
+		{main, "Android Emulator - mas_7:29070（正在关机…）", false, true},
+		{main, "[Mouse captured, press Ctrl+G to release] Android Emulator - mas_7:29070", false, true},
+		{main, "方舟", false, true},
+		{main, "方舟（正在关机…）", false, true},
+		{mainGL, "方舟", false, true}, // a main window drawn by OpenGL, or frameless (ModAVD/ModAVD#58)
+		{"Qt5QWindowIcon", "Android Emulator - mas_1:20010", false, true},
+		{tool, "Emulator", true, true}, // the side toolbar (full toolbar mode), owned by the main window
+		{main, "", false, false},
+		{main, "APK Installer", true, false}, // a dialog of the main window
+		{main, "Extended Controls - mas_7:29070", false, false},
+		{main, "方舟 - Extended Controls", false, false},
+		{mainGL, "Display 2", false, false},
+		{tool, "方舟", false, false}, // overlays, touchpad, virtual scene controls
+		{popup, "方舟", false, false},
+		{"Qt653QWindowToolTipSaveBits", "方舟", false, false},
+		{"Qt653ScreenChangeObserverWindow", "", false, false},
+		{"Qt653ScreenChangeObserverWindow", "方舟", false, false},
+		{"NVOpenGLPbuffer", "NVOGLDC invisible", false, false},
+		{"IME", "Default IME", true, false},
+		{"ModavdTestWindow", "Emulator", false, false},
+		{"ModavdTestWindow", "Android Emulator - mas_7:29070", false, false},
+		{"OtherAppQWindowIcon", "方舟", false, false},
+	} {
+		if got := emulatorWindow(c.class, c.title, c.owned); got != c.want {
+			t.Errorf("emulatorWindow(%q, %q, owned %v) = %v, want %v", c.class, c.title, c.owned, got, c.want)
+		}
+	}
+}
+
 func TestSetEmulatorWindowsVisible(t *testing.T) {
 	self := uint32(os.Getpid())
-	if n, err := SetEmulatorWindowsVisible(self, "mas_7:20070", false); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(self, false); err != nil || n != 0 {
 		t.Fatalf("before any window: %d %v", n, err)
 	}
-	if n, err := SetEmulatorWindowsVisible(0, "mas_7:20070", true); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(0, true); err != nil || n != 0 {
 		t.Fatalf("pid 0: %d %v", n, err)
 	}
-	qt := fmt.Sprintf("Qt5QWindowModavdTest%d", self)
-	other := fmt.Sprintf("ModavdTestWindow%d", self)
-	w := testWindows(t, [][2]string{
-		{qt, "Android Emulator - mas_7:20070"}, // main window: touched
-		{qt, "Emulator"},                       // toolbar: touched
-		{qt, "Android Emulator - mas_8:20080"}, // another instance's title
-		{other, "Emulator"},                    // not a Qt window
+	suffix := fmt.Sprint("ModavdTest", self)
+	main, tool := "Qt5QWindowIcon"+suffix, "Qt5QWindowToolSaveBits"+suffix
+	w := testWindows(t, []testWindow{
+		{class: main, title: "方舟"},                                     // main window, new title: touched
+		{class: tool, title: "Emulator", owned: true},                  // toolbar: touched
+		{class: main, title: "APK Installer", owned: true},             // owned by the main window
+		{class: main, title: "Extended Controls - mas_7:20070"},        // upstream's other window
+		{class: tool, title: "方舟"},                                     // an overlay
+		{class: "Qt5ScreenChangeObserverWindow" + suffix, title: "方舟"}, // a Qt helper window
+		{class: "ModavdTestWindow" + suffix, title: "Emulator"},        // not a Qt window
 	})
 	visible := func(h uintptr) bool { r, _, _ := procIsWindowVisible.Call(h); return r != 0 }
 	for i, h := range w {
@@ -922,18 +975,31 @@ func TestSetEmulatorWindowsVisible(t *testing.T) {
 			t.Fatalf("window %d not visible at start", i)
 		}
 	}
-	n, err := SetEmulatorWindowsVisible(self, "mas_7:20070", false)
+	untouched := func() {
+		t.Helper()
+		for i, h := range w[2:] {
+			if !visible(h) {
+				t.Errorf("untargeted window %d hidden", i+2)
+			}
+		}
+	}
+	n, err := SetEmulatorWindowsVisible(self, false)
 	if err != nil || n != 2 {
 		t.Fatalf("hide: %d %v, want 2", n, err)
 	}
 	if !waitFor(3*time.Second, func() bool { return !visible(w[0]) && !visible(w[1]) }) {
 		t.Fatalf("still visible: main %v toolbar %v", visible(w[0]), visible(w[1]))
 	}
-	if !visible(w[2]) || !visible(w[3]) {
-		t.Errorf("untargeted windows hidden: %v %v", visible(w[2]), visible(w[3]))
+	untouched()
+	if n, err := SetEmulatorWindowsVisible(self, true); err != nil || n != 2 {
+		t.Fatalf("show: %d %v, want 2", n, err)
 	}
+	if !waitFor(3*time.Second, func() bool { return visible(w[0]) && visible(w[1]) }) {
+		t.Fatalf("still hidden: main %v toolbar %v", visible(w[0]), visible(w[1]))
+	}
+	untouched()
 	// Other processes' windows are never matched.
-	if n, err := SetEmulatorWindowsVisible(uint32(os.Getppid()), "mas_7:20070", false); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(uint32(os.Getppid()), false); err != nil || n != 0 {
 		t.Errorf("parent process: %d %v", n, err)
 	}
 }

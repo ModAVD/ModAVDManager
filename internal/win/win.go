@@ -86,6 +86,7 @@ var (
 	procGetWindowThreadProcessId = moduser32.NewProc("GetWindowThreadProcessId")
 	procGetClassNameW            = moduser32.NewProc("GetClassNameW")
 	procGetWindowTextW           = moduser32.NewProc("GetWindowTextW")
+	procGetWindow                = moduser32.NewProc("GetWindow")
 	procShowWindowAsync          = moduser32.NewProc("ShowWindowAsync")
 
 	// shell32 CommandLineToArgvW is syscall.CommandLineToArgv (its typed result keeps go vet's unsafeptr check quiet).
