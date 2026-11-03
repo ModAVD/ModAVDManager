@@ -703,17 +703,15 @@ func TestDiskFreeAndMemory(t *testing.T) {
 	t.Logf("available memory: %d MiB", mb)
 }
 
-func TestBigL3CPUs(t *testing.T) {
+func TestL3Groups(t *testing.T) {
 	raw := cacheTopology()
-	groups := parseL3Groups(raw)
-	mask, cpus, ok := BigL3CPUs()
-	t.Logf("cache topology %d bytes, L3 groups %+v; BigL3CPUs = 0x%x %v %v", len(raw), groups, mask, cpus, ok)
+	t.Logf("cache topology %d bytes, L3 groups %+v", len(raw), L3Groups())
 	if len(raw) == 0 {
 		t.Error("no cache topology")
 	}
 }
 
-func TestBigL3Parse(t *testing.T) {
+func TestL3Parse(t *testing.T) {
 	entry := func(level byte, size uint32, mask uint64) []byte {
 		b := make([]byte, 56)
 		binary.LittleEndian.PutUint32(b[0:], relationCache)
@@ -730,25 +728,6 @@ func TestBigL3Parse(t *testing.T) {
 	if len(groups) != 2 || groups[0] != (l3Group{96 << 20, 0xFFFF}) || groups[1] != (l3Group{32 << 20, 0xFFFF0000}) {
 		t.Fatalf("groups %+v", groups)
 	}
-	mask, cpus, ok := bigL3(groups)
-	if !ok || mask != 0xFFFF || !slices.Equal(cpus, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
-		t.Errorf("x3d: 0x%x %v %v", mask, cpus, ok)
-	}
-	// Big CCD second in the list.
-	if mask, _, ok := bigL3(parseL3Groups(cat(entry(3, 32<<20, 0xFF), entry(3, 96<<20, 0xFF00)))); !ok || mask != 0xFF00 {
-		t.Errorf("x3d reversed: 0x%x %v", mask, ok)
-	}
-	// Two equal L3 (7950X), a single L3, no L3: ordinary.
-	for name, raw := range map[string][]byte{
-		"equal":  cat(entry(3, 32<<20, 0xFF), entry(3, 32<<20, 0xFF00)),
-		"single": cat(entry(2, 1<<20, 1), entry(3, 36<<20, 0xFFFFFF)),
-		"none":   cat(entry(1, 32<<10, 1)),
-		"empty":  nil,
-	} {
-		if _, _, ok := bigL3(parseL3Groups(raw)); ok {
-			t.Errorf("%s: reported big L3", name)
-		}
-	}
 	// A zero entry size stops the walk before that entry is read (AUTO-MAS breaks there too).
 	broken := entry(3, 96<<20, 0xFF)
 	binary.LittleEndian.PutUint32(broken[4:], 0)
@@ -762,18 +741,17 @@ func TestBigL3Parse(t *testing.T) {
 }
 
 var (
-	procGetPriorityClass       = modkernel32.NewProc("GetPriorityClass")
-	procGetProcessAffinityMask = modkernel32.NewProc("GetProcessAffinityMask")
-	procGetModuleHandleW       = modkernel32.NewProc("GetModuleHandleW")
-	procRegisterClassExW       = moduser32.NewProc("RegisterClassExW")
-	procUnregisterClassW       = moduser32.NewProc("UnregisterClassW")
-	procCreateWindowExW        = moduser32.NewProc("CreateWindowExW")
-	procDestroyWindow          = moduser32.NewProc("DestroyWindow")
-	procDefWindowProcW         = moduser32.NewProc("DefWindowProcW")
-	procIsWindowVisible        = moduser32.NewProc("IsWindowVisible")
-	procPeekMessageW           = moduser32.NewProc("PeekMessageW")
-	procTranslateMessage       = moduser32.NewProc("TranslateMessage")
-	procDispatchMessageW       = moduser32.NewProc("DispatchMessageW")
+	procGetPriorityClass = modkernel32.NewProc("GetPriorityClass")
+	procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
+	procRegisterClassExW = moduser32.NewProc("RegisterClassExW")
+	procUnregisterClassW = moduser32.NewProc("UnregisterClassW")
+	procCreateWindowExW  = moduser32.NewProc("CreateWindowExW")
+	procDestroyWindow    = moduser32.NewProc("DestroyWindow")
+	procDefWindowProcW   = moduser32.NewProc("DefWindowProcW")
+	procIsWindowVisible  = moduser32.NewProc("IsWindowVisible")
+	procPeekMessageW     = moduser32.NewProc("PeekMessageW")
+	procTranslateMessage = moduser32.NewProc("TranslateMessage")
+	procDispatchMessageW = moduser32.NewProc("DispatchMessageW")
 )
 
 func TestPriorityAndAffinity(t *testing.T) {
@@ -798,6 +776,9 @@ func TestPriorityAndAffinity(t *testing.T) {
 	} else if got != 1 {
 		t.Errorf("affinity 0x%x, want 1", got)
 	}
+	if got, err := GetAffinity(p); err != nil || got != 1 {
+		t.Errorf("GetAffinity = 0x%x %v, want 1", got, err)
+	}
 	if err := SetAffinity(p, 0); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Errorf("mask 0: %v", err)
 	}
@@ -810,6 +791,9 @@ func TestPriorityAndAffinity(t *testing.T) {
 	}
 	if err := SetAffinity(p, 1); err == nil {
 		t.Error("affinity on a killed process succeeded")
+	}
+	if _, err := GetAffinity(p); err == nil {
+		t.Error("GetAffinity on a killed process succeeded")
 	}
 }
 

@@ -198,14 +198,6 @@ func TestCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("delete result %+v", del)
 	}
 	expectError(t, h.do("DELETE", "/api/instances/2?confirm=1", nil), 404, errs.NotFound)
-
-	// window
-	var win emu.WindowResult
-	expect(t, h.do("POST", "/api/instances/3/window", `{"visible":true}`), http.StatusOK, &win)
-	if !win.Visible || win.Index != 3 {
-		t.Fatalf("window %+v", win)
-	}
-	expectError(t, h.do("POST", "/api/instances/3/window", `{}`), 400, errs.Usage)
 }
 
 var testWeb = fstest.MapFS{

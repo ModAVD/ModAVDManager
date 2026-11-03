@@ -21,8 +21,8 @@ import (
 // adbServerStartTimeout is how long a launch waits for the private server (AUTO-MAS ensure_adb_server default).
 const adbServerStartTimeout = 20 * time.Second
 
-// buildLaunchArgs is the emulator.exe argument list, item for item AUTO-MAS build_launch_args (each switch was
-// verified on real instances; the long reasons are in its docstring):
+// buildLaunchArgs is the emulator.exe argument list: AUTO-MAS build_launch_args item for item, then no netsim (each
+// switch was verified on real instances; the long reasons for AUTO-MAS's switches are in its docstring):
 //   - cold boot (-no-snapshot), like MAS does with LDPlayer / MuMu every round;
 //   - the boot animation is turned off only when headless: a window has something to show meanwhile;
 //   - -audio none and -feature -VirtioSndCard: no host sound and no guest sound card (the image's virtio-snd ignores
@@ -33,7 +33,11 @@ const adbServerStartTimeout = 20 * time.Second
 //   - VulkanBatchedDescriptorSetUpdate: without it Endfield's render thread spent 67.5% in synchronous
 //     vkAllocateDescriptorSets round trips;
 //   - disk write-through: the guest sends no flushes, yet a hard kill keeps what was written (nobarrier broke 3/3
-//     AVDs, this 6/6 survived). Everything after -qemu belongs to QEMU, so it comes last.
+//     AVDs, this 6/6 survived). Everything after -qemu belongs to QEMU, so it comes last;
+//   - no netsim (-WiFiPacketStream, -BluetoothEmulation, -Uwb): all emulators of a Windows user share one netsimd
+//     (found in TMPDIR, else %LOCALAPPDATA%\Temp), and once it wedges no instance on the machine boots (ModAVDManager
+//     #32). Wi-Fi then comes from the emulator's own hostapd and slirp, where it falls back when netsim is unreachable;
+//     no Bluetooth, which the first boot turns off anyway. Uwb is on in the SDK defaults, only the image keeps it off.
 //
 // The window is not an instance option: it is decided at boot by whoever starts it.
 func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []string {
@@ -54,6 +58,9 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []str
 		"-feature", "-QuickbootFileBacked",
 		"-feature", "-VirtioSndCard",
 		"-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream",
+		"-feature", "-BluetoothEmulation",
+		"-feature", "-Uwb",
 		"-qemu",
 		"-global", "virtio-blk-device.write-cache=off",
 		"-global", "virtio-blk-device.config-wce=off",

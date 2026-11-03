@@ -19,7 +19,6 @@ import (
 	"modavd/internal/report"
 	"modavd/internal/root"
 	"modavd/internal/update"
-	"modavd/internal/win"
 )
 
 // command is one subcommand: its help, its arguments and what it runs.
@@ -65,10 +64,11 @@ var (
 	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
-	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）"}
+	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
+	optHeadless      = flagSpec{"headless", kindBool, "", "无头开机（不带 --window 时本来就是无头）；实例已经带窗口运行时报错，不接管"}
 	optTimeout       = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
 	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
-	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的；其他选项不用）"}
+	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的，它开的模拟器还开着就先正常关机；其他选项不用）"}
 	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
@@ -118,8 +118,9 @@ func init() {
 		},
 		{
 			name: "status", args: "<i>", summary: "一台实例的状态",
-			details: "status：offline 已关机 / starting 开机中 / online 运行中；running 是 qemu 进程在不在，booted 是 Android 开完没有；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它。",
+			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
+				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},
@@ -128,8 +129,9 @@ func init() {
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
-				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印；之后第一次开机和平常一样快。" +
-				"这期间实例的状态是 creating，不能开机、修改或删除；失败（或被打断）是 create_failed，" +
+				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
+				"之后第一次开机和平常一样快。" +
+				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
 				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
 			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optNoBridge, optCreateTimeout, optResume},
 			final: true,
@@ -154,15 +156,17 @@ func init() {
 			run:   runDelete, human: humanOf(formatDelete),
 		},
 		{
-			name: "start", args: "<i> [--window] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
-			details: "默认无头启动，--window 带窗口。第一次开机还会做首次初始化。" +
+			name: "start", args: "<i> [--window | --headless] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
+			details: "默认无头启动，--window 带窗口。运行中不能换：实例已经在运行（或正被另一次 start 开着）时，" +
+				"带了 --window 或 --headless 而它不是这种方式，就报错（busy），不接管也不重启，要换先 stop 再 start；" +
+				"两个都不带就照它现在的方式接管。第一次开机还会做首次初始化。" +
 				"按 Ctrl+C 或 --timeout 到点都只是不再等：模拟器不会被结束，会接着开机。" +
 				"之后再运行一次 start 会接管它，把这次开机还没做完的设置补完（包括首次初始化和客体 Vulkan 修复）。" +
 				"实例已经在运行、设置也都做完时，只重做每次开机都做的设置。" +
 				"返回前确认 /sdcard 能写进文件（一般这时早已就绪，不多花时间；最多再等 60 秒，到点只警告）。" +
 				"实例还没有 arm64 执行桥时，设置做完后自动装上（中间关机再开机一两次）；--no-bridge 这次不装，" +
 				"用 bridge uninstall 卸过或新建时带 --no-bridge 的实例不装，接管已经在运行的实例时也不装。",
-			flags:    []flagSpec{optWindow, optTimeout, optBootNoBridge},
+			flags:    []flagSpec{optWindow, optHeadless, optTimeout, optBootNoBridge},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runStart, human: humanOf(formatStart),
@@ -175,15 +179,6 @@ func init() {
 			posNames: []string{"实例编号"}, minPos: 0, maxPos: 1,
 			final: true,
 			run:   runStop, human: humanStop, exit: exitStop,
-		},
-		{
-			name: "restart", args: "<i> [--window] [--timeout 300] [--force] [--no-bridge]", summary: "关机再开机",
-			details: fmt.Sprintf("先关机（--force 同 stop），等 qemu 进程退出（最多 %.0f 秒，还在就报超时、不开机），"+
-				"再开机（--window、--timeout、--no-bridge 同 start）。", restartExitWait.Seconds()),
-			flags:    []flagSpec{optWindow, optTimeout, optForce, optBootNoBridge},
-			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
-			final: true,
-			run:   runRestart, human: humanOf(formatStart),
 		},
 		{
 			name: "check", args: "[--memory M]", summary: "开机前的电脑检查",
@@ -235,7 +230,8 @@ func init() {
 			details: "用 modavd 或管理器开机时会自动装上，一般不用手动跑。调用包里的 tools\\modavd-bridge.ps1：" +
 				"install 需要时关机再开机，装上；已经装了的只在载荷有变时更新。uninstall 卸掉桥、开机标记和装桥时加的 asg，" +
 				"并记下以后开机不再自动装（退回更早的版本之前要先卸）；再 install 就恢复。" +
-				"实例原来关着的，做完再关掉。verify：只读核对，实例要开着。",
+				"实例原来关着的，做完再关掉；开着的，中间冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"verify：只读核对，实例要开着。",
 			posNames: []string{"实例编号", "install、uninstall 或 verify"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
@@ -307,6 +303,20 @@ var helpCmd = &command{
 
 func helpCommand() *command { return helpCmd }
 
+// removedCommands are commands that went away, with what to run instead: an old caller is told that, not 未知命令.
+var removedCommands = map[string]string{
+	"restart": "0.3.0 起没有重启：先 modavd stop <i>，再 modavd start <i>（要窗口加 --window）",
+}
+
+// removedError is the error of removed command name, nil when name was never removed.
+func removedError(name string) error {
+	instead, ok := removedCommands[name]
+	if !ok {
+		return nil
+	}
+	return errs.Newf(errs.Usage, "modavd %s 已经去掉了", name).WithAdvice(instead)
+}
+
 func findCommand(name string) *command {
 	for _, c := range commands {
 		if c.name == name {
@@ -334,11 +344,14 @@ type StatusResult struct {
 	Status        emu.Status `json:"status"`
 	Running       bool       `json:"running"`
 	Booted        bool       `json:"booted"`
+	Window        bool       `json:"window"` // emu.InstanceInfo.Window
 	Busy          string     `json:"busy"`
 	PID           int        `json:"pid"`
 	Creation      string     `json:"creation"`
 	CreationError string     `json:"creation_error"`
 	CreationLog   string     `json:"creation_log"`
+	// CreationProgress: 0–100 while status is creating (emu.InstanceInfo.CreationProgress)
+	CreationProgress int `json:"creation_progress"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
@@ -470,7 +483,10 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 }
 
 func buildStartOptions(inv *invocation) (emu.StartOptions, error) {
-	opt := emu.StartOptions{Window: inv.boolOpt("window"), NoBridge: inv.boolOpt("no-bridge")}
+	opt := emu.StartOptions{Window: inv.boolOpt("window"), Headless: inv.boolOpt("headless"), NoBridge: inv.boolOpt("no-bridge")}
+	if opt.Window && opt.Headless {
+		return opt, errs.New(errs.Usage, "--window 和 --headless 只能给一个").WithAdvice(findCommand("start").usageAdvice())
+	}
 	if inv.isSet("timeout") {
 		s := inv.intOpt("timeout")
 		if s <= 0 {
@@ -490,8 +506,9 @@ func intPtrOpt(inv *invocation, name string) *int {
 }
 
 func statusOf(in *emu.InstanceInfo) *StatusResult {
-	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted,
-		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog}
+	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted, Window: in.Window,
+		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
+		CreationProgress: in.CreationProgress}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------
@@ -554,12 +571,20 @@ func runCreate(c *cmdCtx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Progress = func(p emu.Progress) { c.log.Infof("%s", p.Message) }
+	req.Progress = func(p emu.Progress) { c.log.Infof("%s", createProgressLine(p)) }
 	in, err := m.Create(c.ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return in, nil
+}
+
+// createProgressLine is one progress line of create: "新建中 35%：…" until the setup is done.
+func createProgressLine(p emu.Progress) string {
+	if p.Step == "done" {
+		return p.Message
+	}
+	return fmt.Sprintf("新建中 %d%%：%s", p.Percent(), p.Message)
 }
 
 func runSet(c *cmdCtx) (any, error) {
@@ -725,95 +750,6 @@ func humanStop(w io.Writer, data any) {
 		formatStop(w, r)
 	case *StopAllResult:
 		formatStopAll(w, r)
-	}
-}
-
-func runRestart(c *cmdCtx) (any, error) {
-	i, err := parseIndex(c.inv.pos[0])
-	if err != nil {
-		return nil, err
-	}
-	opt, err := buildStartOptions(c.inv)
-	if err != nil {
-		return nil, err
-	}
-	m, err := c.mgr()
-	if err != nil {
-		return nil, err
-	}
-	sr, err := m.Stop(c.ctx, i, emu.StopOptions{Force: c.inv.boolOpt("force")})
-	if err != nil {
-		return nil, err
-	}
-	c.log.Infof("%s，接着开机", stopLine(sr))
-	if err := waitQemuGone(c, m, i, sr.Process); err != nil {
-		return nil, err
-	}
-	r, err := m.Start(c.ctx, i, opt)
-	if err != nil {
-		return nil, err
-	}
-	// The stop's warnings belong to this restart too.
-	r.Warnings = append(append([]string{}, sr.Warnings...), r.Warnings...)
-	return r, nil
-}
-
-// How long restart waits for the qemu to be gone after Stop, and how often it looks (variables for tests).
-var (
-	restartExitWait = 15 * time.Second
-	restartExitPoll = 500 * time.Millisecond
-)
-
-// stoppedQemuAlive: the very process Stop ended still exists (a variable for tests). With its creation time known,
-// Process.Alive checks the identity, so a reused PID is not taken for it; without one only the PID and the executable
-// name can be compared.
-var stoppedQemuAlive = func(p win.Process) bool {
-	if p.PID == 0 {
-		return false // the instance was already offline: nothing to wait for
-	}
-	if p.Created != 0 {
-		return p.Alive()
-	}
-	q, ok := win.FindProcess(p.PID)
-	return ok && (p.Name == "" || strings.EqualFold(q.Name, p.Name))
-}
-
-// waitQemuGone waits until instance i is no longer running (process table only, no adb) and the qemu process Stop
-// handled (stopped, zero when it was offline) is really gone, at most restartExitWait.
-//
-// Stop's kill paths do not confirm the exit: a big WHPX qemu can take seconds to end after TerminateProcess, and one
-// running elevated cannot be ended by us at all. A Start right then would adopt that qemu, then either report a
-// launch failure once it is gone or "succeed" without any restart. Running alone is not enough: it recognises an
-// instance's qemu by its runtime file and run lock, which go away before a terminated qemu has released its memory
-// and exited, so Running stops listing it while the process (and its gigabytes of guest memory) is still there.
-func waitQemuGone(c *cmdCtx, m manager, i int, stopped win.Process) error {
-	deadline := time.Now().Add(restartExitWait)
-	logged := false
-	for {
-		running, err := m.Running(c.ctx)
-		if err != nil {
-			return err
-		}
-		if !slices.Contains(running, i) && !stoppedQemuAlive(stopped) {
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			return errs.Newf(errs.Timeout, "实例 %d 关机后等了 %.0f 秒，qemu 进程仍在运行，没有重新开机", i,
-				restartExitWait.Seconds()).
-				WithAdvice(fmt.Sprintf("等 qemu 退出后再运行 modavd start %d；它一直不退出时，可能是以管理员身份运行的，"+
-					"modavd 结束不了它", i))
-		}
-		if !logged {
-			c.log.Infof("实例 %d 的 qemu 进程还没退出，等它退出再开机（最多 %.0f 秒）", i, restartExitWait.Seconds())
-			logged = true
-		}
-		t := time.NewTimer(restartExitPoll)
-		select {
-		case <-c.ctx.Done():
-			t.Stop()
-			return errs.Wrap(errs.Canceled, c.ctx.Err(), "已取消")
-		case <-t.C:
-		}
 	}
 }
 
@@ -1261,6 +1197,9 @@ func runHelp(c *cmdCtx) (any, error) {
 	}
 	cmd := findCommand(c.inv.pos[0])
 	if cmd == nil {
+		if err := removedError(c.inv.pos[0]); err != nil {
+			return nil, err
+		}
 		return nil, errs.Newf(errs.Usage, "未知命令 %s", c.inv.pos[0]).WithAdvice(helpAdvice)
 	}
 	return helpFor(cmd), nil
