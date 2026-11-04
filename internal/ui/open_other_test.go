@@ -44,3 +44,9 @@ func TestOpenUnsupportedBeforeSideEffects(t *testing.T) {
 		})
 	}
 }
+
+func TestShellOpenUnsupported(t *testing.T) {
+	if err := shellOpen(t.TempDir()); errs.CodeOf(err) != errs.Unsupported {
+		t.Fatalf("shellOpen: %v, want unsupported", err)
+	}
+}

@@ -170,14 +170,18 @@ func isQemuName(name string) bool {
 // indexes whose command line matches (in the port plan of the root it belongs to) and that adb.QemuBelongsTo one of
 // roots. The same-numbered instance of another root is not found: it is not ours to stop, re-register or adopt (a
 // start then fails on its busy ports).
-func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
+// Ordinary snapshot/command-line failures remain best effort; unsupported must reach the caller.
+func scanQemuOf(roots []*root.Root, indexes []int) (map[int]win.Process, error) {
 	found := map[int]win.Process{}
 	if len(indexes) == 0 || len(roots) == 0 {
-		return found
+		return found, nil
 	}
-	procs, err := win.ListProcesses()
+	procs, err := listQemuProcesses()
 	if err != nil {
-		return found
+		if errs.CodeOf(err) == errs.Unsupported {
+			return nil, err
+		}
+		return found, nil
 	}
 	plans := make([]root.PortPlan, len(roots))
 	for k, r := range roots {
@@ -189,6 +193,9 @@ func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
 		}
 		cmdline, err := p.CommandLine()
 		if err != nil {
+			if errs.CodeOf(err) == errs.Unsupported {
+				return nil, err
+			}
 			continue
 		}
 		for _, i := range indexes {
@@ -200,21 +207,28 @@ func scanQemuOf(roots []*root.Root, indexes []int) map[int]win.Process {
 			}
 		}
 	}
-	return found
+	return found, nil
 }
 
+// listQemuProcesses is the host snapshot API; tests inject platform failures here.
+var listQemuProcesses = win.ListProcesses
+
 // scanQemu finds the qemu processes of the given indexes of m's root with one process snapshot.
-func (m *Manager) scanQemu(indexes []int) map[int]win.Process {
+func (m *Manager) scanQemu(indexes []int) (map[int]win.Process, error) {
 	if m.Root == nil {
-		return map[int]win.Process{}
+		return map[int]win.Process{}, nil
 	}
 	return scanQemuOf([]*root.Root{m.Root}, indexes)
 }
 
 // findQemu is the qemu process of instance i of m's root (always a real process scan, see qemuScan).
-func (m *Manager) findQemu(i int) (win.Process, bool) {
-	p, ok := m.scanQemu([]int{i})[i]
-	return p, ok
+func (m *Manager) findQemu(i int) (win.Process, bool, error) {
+	procs, err := m.scanQemu([]int{i})
+	if err != nil {
+		return win.Process{}, false, err
+	}
+	p, ok := procs[i]
+	return p, ok, nil
 }
 
 // bootCompleted: `getprop sys.boot_completed` says 1. reregister=false while the instance is booting (it has not

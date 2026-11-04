@@ -605,7 +605,10 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
-	p, wasRunning := bridgeFindQemu(m, i)
+	p, wasRunning, err := bridgeFindQemu(m, i)
+	if err != nil {
+		return nil, err
+	}
 	windowed := false // how the cold boots below come back
 	if wasRunning {
 		windowed, _ = qemuWindowed(p)
@@ -754,7 +757,9 @@ func (m *Manager) bridgeStop(ctx context.Context, i int, res *BridgeResult) erro
 func (m *Manager) waitQemuGone(ctx context.Context, i int) error {
 	deadline := time.Now().Add(bridgeQemuGoneWait)
 	for {
-		if _, running := m.findQemu(i); !running {
+		if _, running, err := m.findQemu(i); err != nil {
+			return err
+		} else if !running {
 			return nil
 		}
 		if time.Now().After(deadline) {

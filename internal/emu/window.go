@@ -52,7 +52,7 @@ var setEmulatorWindowsVisible = win.SetEmulatorWindowsVisible
 // and the side toolbar get SW_SHOW / SW_HIDE. Hiding does not stop rendering or the screenshot channel (10-04: the
 // shared-memory frame counter kept going at ~51 fps while hidden). A headless instance has no window and cannot get
 // one after boot: that is Windows 0, not an error. Unsupported hosts return errs.Unsupported before any query.
-// On Windows, window failures are only logged, never returned: scripts call this
+// On Windows, ordinary window failures are only logged, never returned: scripts call this
 // every round in silent mode and an error would fail the whole run. The windows are those of the instance's qemu
 // process, not looked up by title: the title is going to change (ModAVD/ModAVD#58).
 func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*WindowResult, error) {
@@ -76,6 +76,9 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 	}
 	n, err := setEmulatorWindowsVisible(p.PID, visible)
 	if err != nil {
+		if errs.CodeOf(err) == errs.Unsupported {
+			return nil, err
+		}
 		m.Log.Warnf("魔改 AVD 实例 %d %s窗口失败: %v", i, verb, err)
 		return res, nil
 	}

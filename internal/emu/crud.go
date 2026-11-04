@@ -175,7 +175,12 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
 			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
 	}
-	if createRunning(m, i) {
+	running, err := createRunning(m, i)
+	if err != nil {
+		lock.Unlock()
+		return nil, err
+	}
+	if running {
 		// the boot of the setup that failed (or was killed): start refuses this instance, so nothing else booted it.
 		// Shut it down normally, sync first, and set the instance up again.
 		m.Log.Infof("实例 %d 上次新建时开的模拟器还开着，先正常关机再重新初始化", i)

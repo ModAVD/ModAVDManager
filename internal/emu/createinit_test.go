@@ -56,7 +56,7 @@ func (h *createHooks) install(t *testing.T) {
 		h.running = false
 		return nil
 	}
-	createRunning = func(*Manager, int) bool { return h.running }
+	createRunning = func(*Manager, int) (bool, error) { return h.running, nil }
 }
 
 // TestCreateResumeStopsLeftover: --resume shuts down (normally) the emulator the failed setup left running, then sets

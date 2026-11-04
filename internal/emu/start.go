@@ -191,7 +191,10 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		var bootLock *win.FileLock
 		var adoptedAt time.Time
 		stopSeen := false // a stop of this instance held its lock while this round waited for an adopted qemu
-		p, running := startFindQemu(m, i)
+		p, running, err := startFindQemu(m, i)
+		if err != nil {
+			return nil, err
+		}
 		if w := opt.watchQemu; w != nil && (!running || p.PID != w.PID || p.Created != w.Created) {
 			// the watched qemu is gone (or replaced): a boot watch never launches an emulator
 			return nil, errs.Newf(errs.LaunchFailed, "实例 %d 的模拟器（pid %d）已不在运行", i, w.PID)
@@ -296,7 +299,6 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			prog.emit("launch", fmt.Sprintf("实例 %d 的模拟器已拉起（pid %d），等安卓开机", i, p.PID), progressLaunch)
 		}
 
-		var err error
 		qemu, err = m.waitBoot(ctx, i, timeout, emulator, adopted, res.LogFile, prog, onQemu, &stopSeen)
 		bootLock.Unlock()
 		if err == nil {
@@ -349,7 +351,10 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// The setup ran on adb alone, whose failures are only warnings: qemu may have gone meanwhile (a stop, which does
 	// not wait for a start; a host GPU driver reset). Reporting online with the old PID would send the caller on to a
 	// device that is not there; modavd has no watchdog that would correct it later (AUTO-MAS has).
-	now, found := m.findQemu(i)
+	now, found, err := m.findQemu(i)
+	if err != nil {
+		return nil, owed(err)
+	}
 	qemu, gone := qemuAfterSetup(qemu, now, found)
 	// The setup is over (done, or its boot is gone), unless the Vulkan fix was left out because an app was in the
 	// foreground or an install was running: the marker then stays, so a start after that (before its deadline) still
@@ -437,7 +442,10 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 		if err := ctxErr(ctx); err != nil {
 			return win.Process{}, err
 		}
-		p, found := m.findQemu(i)
+		p, found, err := m.findQemu(i)
+		if err != nil {
+			return win.Process{}, err
+		}
 		if found && onQemu != nil {
 			// before the getprop, which may take seconds: a cancel then must find qemu already recorded
 			onQemu(p)
@@ -541,8 +549,7 @@ func (m *Manager) waitShutdown(ctx context.Context, i int, p win.Process, prog *
 		return win.Process{}, false, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
 			shutdownExitWait.Seconds(), p.PID).WithAdvice(fmt.Sprintf("稍后再开机；一直关不掉的话先 modavd stop %d", i))
 	}
-	q, found := m.findQemu(i)
-	return q, found, nil
+	return m.findQemu(i)
 }
 
 // setupAdvice is added to the error of a start that ended after launching qemu (or adopting an unfinished boot). It

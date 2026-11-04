@@ -29,21 +29,20 @@ var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
 }
 
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
-func (m *Manager) qemus(indexes []int) map[int]win.Process {
+func (m *Manager) qemus(indexes []int) (map[int]win.Process, error) {
 	if qemuScan != nil {
-		return qemuScan(indexes)
+		return qemuScan(indexes), nil
 	}
 	return m.scanQemu(indexes)
 }
 
 // qemuOf is the qemu process of instance i of m's root, through qemuScan.
 func (m *Manager) qemuOf(i int) (win.Process, bool, error) {
-	// The best-effort scan below treats snapshot failures as no processes. Reject an
-	// unsupported host first, so callers cannot mistake it for an offline instance.
-	if err := requireWindows(); err != nil {
+	procs, err := m.qemus([]int{i})
+	if err != nil {
 		return win.Process{}, false, err
 	}
-	p, ok := m.qemus([]int{i})[i]
+	p, ok := procs[i]
 	return p, ok, nil
 }
 
@@ -65,7 +64,10 @@ func (m *Manager) Running(ctx context.Context) ([]int, error) {
 	for k, in := range insts {
 		indexes[k] = in.Index
 	}
-	procs := m.qemus(indexes)
+	procs, err := m.qemus(indexes)
+	if err != nil {
+		return nil, err
+	}
 	running := make([]int, 0, len(procs))
 	for _, i := range indexes {
 		if _, ok := procs[i]; ok {
@@ -89,7 +91,10 @@ func (m *Manager) List(ctx context.Context) (*ListResult, error) {
 	for k, in := range insts {
 		indexes[k] = in.Index
 	}
-	procs := m.qemus(indexes)
+	procs, err := m.qemus(indexes)
+	if err != nil {
+		return nil, err
+	}
 	res := &ListResult{RootInfo: m.rootInfo(), Instances: make([]InstanceInfo, len(insts))}
 	// AUTO-MAS asks the running instances one after another; each getprop may take up to statusAdbTimeout, so ask them
 	// all at once (re-registration is serialized per serial inside adb.Client anyway). A private server that is down

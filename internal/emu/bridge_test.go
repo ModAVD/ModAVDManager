@@ -185,11 +185,11 @@ func TestBridgeKeepsWindowMode(t *testing.T) {
 			window bool
 		}{{"windowed", &windowed, true}, {"headless", &headless, false}, {"off", nil, false}} {
 			var starts []StartOptions
-			bridgeFindQemu = func(*Manager, int) (win.Process, bool) {
+			bridgeFindQemu = func(*Manager, int) (win.Process, bool, error) {
 				if run.qemu == nil {
-					return win.Process{}, false
+					return win.Process{}, false, nil
 				}
-				return *run.qemu, true
+				return *run.qemu, true, nil
 			}
 			// the instance's qemu is not really there: the stops before the boots find it offline
 			bridgeStart = func(_ *Manager, _ context.Context, _ int, opt StartOptions) (*StartResult, error) {
