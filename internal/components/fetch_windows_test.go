@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -188,13 +189,15 @@ func wantCode(t *testing.T, err error, code string) {
 type mirrorReq struct{ path, rng, encoding, agent string }
 
 // mirror is an httptest mirror: repository2-3.xml and the zips by base name, served with http.ServeContent (which
-// honours Range like a CDN). serve, when set, may answer a zip request itself.
+// honours Range like a CDN). serve, when set, may answer a zip request itself; serveManifest answers the manifest
+// request instead of manifest.
 type mirror struct {
 	srv            *httptest.Server
 	manifest       string
 	manifestStatus int
 	files          map[string][]byte
 	serve          func(w http.ResponseWriter, r *http.Request, data []byte) bool
+	serveManifest  func(w http.ResponseWriter, r *http.Request)
 
 	mu   sync.Mutex
 	reqs []mirrorReq
@@ -231,11 +234,14 @@ func (m *mirror) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.reqs = append(m.reqs, mirrorReq{r.URL.Path, r.Header.Get("Range"), r.Header.Get("Accept-Encoding"), r.Header.Get("User-Agent")})
 	m.mu.Unlock()
 	if strings.HasSuffix(r.URL.Path, "/"+licenseManifest) {
-		if m.manifestStatus != 0 {
+		switch {
+		case m.manifestStatus != 0:
 			http.Error(w, "no manifest here", m.manifestStatus)
-			return
+		case m.serveManifest != nil:
+			m.serveManifest(w, r)
+		default:
+			io.WriteString(w, m.manifest)
 		}
-		io.WriteString(w, m.manifest)
 		return
 	}
 	data, ok := m.files[path.Base(r.URL.Path)]
@@ -554,15 +560,17 @@ func TestFetchCompletePart(t *testing.T) {
 	}
 }
 
-// TestFetch416StartsOver: a mirror that cannot continue from the .part's size (HTTP 416) gets a request from 0. The
-// connection is not kept: the bytes this one sends after its answer must not make net/http log "Unsolicited
+// TestFetch416KeepsPart: a mirror that cannot continue from the .part's size (HTTP 416: its file is shorter) is left
+// at once, without a request from 0, and the .part stays as it was for the next mirror to resume (the script's
+// 'HTTP 4\d\d'). When no mirror can continue it, the fetch fails with the .part still there and the advice to delete
+// it. The connection is not kept: the bytes the mirror sends after its answer must not make net/http log "Unsolicited
 // response" on stderr (seen with a real mirror, in the middle of the --json lines).
-func TestFetch416StartsOver(t *testing.T) {
+func TestFetch416KeepsPart(t *testing.T) {
 	pt := ptZip(t, adbBody)
 	setup(t, ptSpec(pt))
 	var mu sync.Mutex
 	var ranges []string
-	base := rawServer(t, func(c net.Conn, req *http.Request) {
+	short := rawServer(t, func(c net.Conn, req *http.Request) {
 		if strings.HasSuffix(req.URL.Path, licenseManifest) {
 			doc := manifestDoc(testLicense)
 			fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(doc), doc)
@@ -576,26 +584,85 @@ func TestFetch416StartsOver(t *testing.T) {
 			time.Sleep(300 * time.Millisecond)
 			return
 		}
-		fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(pt))
-		c.Write(pt)
+		// the short file a mirror answering 416 has; never asked for
+		fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", 8)
+		c.Write(pt[:8])
 	})
 	var logged lockedBuffer
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	good := newMirror(t, map[string][]byte{"pt.zip": pt})
+
 	r := tempRoot(t)
 	putFile(t, filepath.Join(downloadsDir(r), "pt.zip.part"), string(pt[:10]))
-	out := fetch(t, nil, r, Options{AcceptLicense: true, MirrorURLs: []string{base}})
+	out := fetch(t, nil, r, Options{AcceptLicense: true, MirrorURLs: []string{short, good.url()}})
 	time.Sleep(200 * time.Millisecond) // a pooled connection would have read the stray bytes by now
 	if out.err != nil {
 		t.Fatal(out.err)
 	}
 	mu.Lock()
+	if len(ranges) != 1 || ranges[0] != "bytes=10-" || !out.warned("HTTP 416") {
+		t.Fatalf("ranges %q, warnings %q", ranges, out.warns)
+	}
+	ranges = nil
+	mu.Unlock()
+	if z := good.zipReqs(); len(z) != 1 || z[0].rng != "bytes=10-" || good.bytesSent() != int64(len(pt)-10) {
+		t.Fatalf("second mirror: requests %+v, %d bytes sent", z, good.bytesSent())
+	}
+	if got := readText(t, filepath.Join(r.SDK(), "platform-tools", "adb.exe")); got != adbBody {
+		t.Fatalf("adb.exe = %q", got)
+	}
+
+	// Only the short mirror: no run gets past it, the part is kept untouched and the advice says what to delete.
+	r = tempRoot(t)
+	part := filepath.Join(downloadsDir(r), "pt.zip.part")
+	putFile(t, part, string(pt[:10]))
+	out = fetch(t, nil, r, Options{AcceptLicense: true, MirrorURLs: []string{short}})
+	time.Sleep(200 * time.Millisecond)
+	wantCode(t, out.err, errs.ComponentsUnavailable)
+	if e := errs.As(out.err); !strings.Contains(e.Message, "HTTP 416") || !strings.Contains(e.Advice, "删掉 "+part) {
+		t.Fatalf("error %q, advice %q", e.Message, e.Advice)
+	}
+	if got := readText(t, part); got != string(pt[:10]) {
+		t.Fatalf(".part = %q, want the 10 bytes it had", got)
+	}
+	mu.Lock()
 	defer mu.Unlock()
-	if len(ranges) != 2 || ranges[0] != "bytes=10-" || ranges[1] != "" || !out.warned("HTTP 416") {
-		t.Fatalf("ranges %q", ranges)
+	if len(ranges) != 1 || ranges[0] != "bytes=10-" {
+		t.Fatalf("ranges %q: the short mirror was asked again", ranges)
 	}
 	if s := logged.String(); strings.Contains(s, "Unsolicited") {
 		t.Fatalf("net/http logged: %s", s)
+	}
+}
+
+// TestFetchResumeAnswered200: a mirror that ignores the Range of a resume and sends the whole file with 200 gets it
+// written from 0 over the .part (the script's "这个镜像不支持断点续传，从头下载"), counted from 0.
+func TestFetchResumeAnswered200(t *testing.T) {
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	m := newMirror(t, map[string][]byte{"pt.zip": pt})
+	m.serve = func(w http.ResponseWriter, r *http.Request, data []byte) bool {
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+		return true
+	}
+	r := tempRoot(t)
+	// not the start of pt: appended to, or counted as already there, the result would be wrong
+	putFile(t, filepath.Join(downloadsDir(r), "pt.zip.part"), strings.Repeat("x", 10))
+	out := fetch(t, nil, r, opts(m))
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	if z := m.zipReqs(); len(z) != 1 || z[0].rng != "bytes=10-" || !out.warned("这个镜像不支持断点续传，从头下载") {
+		t.Fatalf("requests %+v, warnings %q", z, out.warns)
+	}
+	if got := readText(t, filepath.Join(r.SDK(), "platform-tools", "adb.exe")); got != adbBody {
+		t.Fatalf("adb.exe = %q", got)
+	}
+	if !strings.Contains(logText(t, r), fmt.Sprintf("下载开始：从第 0 字节起，共 %d 字节", len(pt))) {
+		t.Fatal("the log does not say the download started from 0")
 	}
 }
 
@@ -716,9 +783,113 @@ func TestFetchJSONNeedsAcceptLicense(t *testing.T) {
 	if out := fetch(t, nil, r, opts(m)); out.err != nil {
 		t.Fatal(out.err)
 	}
+	// a root that lacks nothing asks no question, so this layer lets it through (the CLI refuses --json without
+	// --accept-license before it gets here: cli.TestComponentsFetchJSONNeedsAcceptLicense)
 	n := len(m.all())
 	if out := fetch(t, nil, r, o); out.err != nil || len(m.all()) != n {
 		t.Fatalf("complete root: %v", out.err)
+	}
+}
+
+// TestFetchUsesProxy: every request of a fetch (manifest and zip) really goes through the proxy hostproxy picks, here
+// one named by HTTP_PROXY. net/http reads the proxy variables once per process, so the fetch runs in a child
+// (TestFetchUsesProxyChild) whose first request is that fetch's.
+func TestFetchUsesProxy(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFetchUsesProxyChild$", "-test.v", "-test.count=1")
+	cmd.Env = append(os.Environ(), fetchProxyChildEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestFetchUsesProxyChild") {
+		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+const fetchProxyChildEnv = "MODAVD_TEST_FETCH_PROXY_CHILD"
+
+// TestFetchUsesProxyChild is TestFetchUsesProxy's child. The mirror's host does not resolve, so the fetch can only
+// succeed when every request is sent to the proxy, in proxy form.
+func TestFetchUsesProxyChild(t *testing.T) {
+	if os.Getenv(fetchProxyChildEnv) == "" {
+		t.Skip("run by TestFetchUsesProxy")
+	}
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(k, "")
+	}
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	m := &mirror{manifest: manifestDoc(testLicense), files: map[string][]byte{"pt.zip": pt}}
+	var mu sync.Mutex
+	var seen []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, fmt.Sprintf("%s abs=%t", r.Host, r.URL.IsAbs()))
+		mu.Unlock()
+		m.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	t.Setenv("HTTP_PROXY", proxy.URL) // before the first request of this process
+
+	r := tempRoot(t)
+	out := fetch(t, nil, r, Options{AcceptLicense: true, MirrorURLs: []string{"http://mirror.invalid/repo/"}})
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 || seen[0] != "mirror.invalid abs=true" || seen[1] != "mirror.invalid abs=true" {
+		t.Fatalf("requests at the proxy: %q", seen)
+	}
+	if got := readText(t, filepath.Join(r.SDK(), "platform-tools", "adb.exe")); got != adbBody {
+		t.Fatalf("adb.exe = %q", got)
+	}
+}
+
+// TestFetchManifestLimits: the license manifest as a whole gets ManifestTimeout even while every read brings
+// something (a mirror dribbling it), and is refused past maxManifestBytes but taken at exactly that size; a refused
+// manifest means no zip is asked for.
+func TestFetchManifestLimits(t *testing.T) {
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	doc := manifestDoc(testLicense)
+
+	slow := newMirror(t, map[string][]byte{"pt.zip": pt})
+	slow.serveManifest = func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		for k := range len(doc) {
+			if _, err := io.WriteString(w, doc[k:k+1]); err != nil || r.Context().Err() != nil {
+				return
+			}
+			fl.Flush()
+			time.Sleep(20 * time.Millisecond) // never a stall, but the whole takes about 8 s
+		}
+	}
+	o := opts(slow)
+	o.ManifestTimeout = time.Second
+	started := time.Now()
+	out := fetch(t, nil, tempRoot(t), o)
+	wantCode(t, out.err, errs.ComponentsUnavailable)
+	if !strings.Contains(out.err.Error(), "整个过程超过") || time.Since(started) > 4*time.Second || len(slow.zipReqs()) != 0 {
+		t.Fatalf("after %v: %v, %d zip requests", time.Since(started), out.err, len(slow.zipReqs()))
+	}
+
+	padded := func(n int) func(w http.ResponseWriter, r *http.Request) {
+		// trailing white space after the root element is still a well-formed document
+		return func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, doc)
+			io.WriteString(w, strings.Repeat(" ", n-len(doc)))
+		}
+	}
+	big := newMirror(t, map[string][]byte{"pt.zip": pt})
+	big.serveManifest = padded(maxManifestBytes + 1)
+	out = fetch(t, nil, tempRoot(t), opts(big))
+	wantCode(t, out.err, errs.ComponentsUnavailable)
+	if !strings.Contains(out.err.Error(), fmt.Sprintf("大得不正常（超过 %d MB）", maxManifestBytes>>20)) || len(big.zipReqs()) != 0 {
+		t.Fatalf("%v, %d zip requests", out.err, len(big.zipReqs()))
+	}
+
+	full := newMirror(t, map[string][]byte{"pt.zip": pt})
+	full.serveManifest = padded(maxManifestBytes)
+	if out = fetch(t, nil, tempRoot(t), opts(full)); out.err != nil || out.res.License != testLicense {
+		t.Fatalf("a manifest of exactly %d bytes: %v", maxManifestBytes, out.err)
 	}
 }
 

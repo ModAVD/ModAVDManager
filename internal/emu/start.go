@@ -309,7 +309,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				i, adopted.PID)
 			continue
 		}
-		return nil, owed(err)
+		return nil, m.saveBootFailure(ctx, i, owed(err))
 	}
 	if res.Launched {
 		res.BootSeconds = time.Since(launchedAt).Seconds()
@@ -339,7 +339,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	}
 	ab, err := m.afterBoot(ctx, inst, mode, owedUntil, res.LogFile, prog)
 	if err != nil {
-		return nil, owed(err)
+		return nil, m.saveBootFailure(ctx, i, owed(err))
 	}
 	res.FirstBoot = ab.FirstBoot
 	res.ZygoteRestarted = ab.ZygoteRestarted

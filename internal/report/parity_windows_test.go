@@ -148,6 +148,33 @@ func (f *fixture) modavdLine(line string) string {
 	return line
 }
 
+// crashSource is the file the zip entry crash/<db>/<name> was copied from: <name> anywhere under <db> in one of the
+// two crash folders (%LOCALAPPDATA%\Temp\AndroidEmulator, %TEMP%\AndroidEmulator); "" when there is none.
+func (f *fixture) crashSource(entry string) string {
+	db, name, _ := strings.Cut(strings.TrimPrefix(entry, "crash/"), "/")
+	var dirs []string
+	if v := f.env["LOCALAPPDATA"]; v != "" {
+		dirs = append(dirs, filepath.Join(v, "Temp"))
+	}
+	if v := f.env["TEMP"]; v != "" {
+		dirs = append(dirs, v)
+	}
+	for _, dir := range dirs {
+		found := ""
+		filepath.WalkDir(filepath.Join(dir, "AndroidEmulator", db), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.EqualFold(d.Name(), name) {
+				found = p
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
 func containsLine(ls []string, s string) bool {
 	for _, l := range ls {
 		if l == s {
@@ -258,6 +285,11 @@ func TestCollectMatchesScript(t *testing.T) {
 					src = filepath.Join(f.root, entry)
 				case strings.HasPrefix(entry, "mas/"):
 					src = filepath.Join(f.base, "mas", "debug", strings.TrimPrefix(entry, "mas/"))
+				case strings.HasPrefix(entry, "crash/"):
+					if src = f.crashSource(entry); src == "" {
+						t.Errorf("%s: no such dump in the scenario's crash folders", entry)
+						continue
+					}
 				default:
 					continue
 				}

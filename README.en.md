@@ -106,10 +106,16 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 
 **Machine-readable output** (`--json`):
 
-- stdout has exactly one line: `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message","advice"}}`. The fields of `data` are in `internal/emu/types.go`, in snake_case, and all fields are always present.
+- stdout has exactly one line: `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message","advice","details"}}`. The fields of `data` are in `internal/emu/types.go`, in snake_case, and all fields are always present.
 - Progress logs go to stderr, one JSON object per line: `{"time","level","msg"}`. Callers must not merge stderr into stdout.
 - `protocol` in `version --json` is the contract version; it is incremented only when a command or a field is removed or changes meaning. From 0.3.0 it is 2: `restart` is gone, `start` takes `--headless`, a running instance asked to start the other way (window / headless) fails with `busy` instead of being taken over, and the fields `window` and `creation_progress` were added; up to 0.2.0 it was 1.
 - **Ports** (from 0.3.1): `port_base` in `list` and `check` is the port range the root folder actually uses (see `portBase` under "Conventions" below), and `status` now also gives `serial`, `adb_address` and `ports` (`list` and `info` always had them, for stopped instances too). Scripts that connect to an instance should take these fields instead of computing 20000 + 10 × index. An older modavd without `port_base` only uses the 20000 range.
+- **`details` of an error**: when an `error` carries more machine-readable information, it has a `details` object; otherwise the field is absent. For now the only key is `boot_diag_dir`: the directory where the guest state was saved after a boot timed out, the setup after boot failed and so on.
+  - When a boot fails while the emulator is still running, `start` and `create` (also those started over MCP or by the manager) save the guest's `logcat -d -b all`, `dmesg`, `getprop`, `ps -A`, `/proc/meminfo` and the first 300 lines of `dumpsys activity processes` into `logs\mas_<i>-<time>-bootfail\` before they return; `summary.txt` in the same directory says what came of each item.
+  - Each item has its own time limit, and the whole takes at most 30 seconds; when an item times out or fails, what was read so far is kept.
+  - Nothing is saved after a cancel (Ctrl+C, an MCP cancel), when the instance is being shut down during the boot, or when the emulator is gone.
+  - Each instance keeps its newest 3 such directories, and their size counts toward the 1 GiB total of `logs\`. `collect-info` puts the newest 3 into the problem package, and stops taking more once they add up to 100 MB.
+  - These files may contain account information and stay on this computer. In text mode, the last line of the error names the directory.
 - Running instances gain `started_at_ms` (Unix milliseconds); the original `started_at` stays. `window` (from 0.3.0) is `true` while it runs with the emulator window, `false` when headless or not running. `stop --all` returns `ok:true` and the result list even if some instances failed, and exits with the exit code of the first failure.
 - **Create (from 0.2.0)**: after creating the files, `create` starts the instance once in the background, headless, and finishes the post-boot setup, the host IME, first-boot initialization and the execution bridge (with one or two cold boots in between). Then it syncs first, shuts down cleanly and confirms that qemu has exited; only then is creation complete. This usually takes a few minutes (`--timeout` covers the whole process, default 1200 seconds; at the deadline it shuts down cleanly first and then records a failure). After that, the first `start` is as fast as usual. Instances created before 0.2.0 are unaffected and still finish this at their first `start`.
   - During this, `status` in `status` / `list` / `info` is `creating` and `busy` is `creating` (`running` / `booted` of that boot may be `true`; go by `status`), and `creation_progress` (from 0.3.0) is the percentage done (0–100, counted by the steps done, not by time); `start`, `set`, `bridge`, `delete` and a `create` with the same index return instance busy (exit code 5). `stop` is not refused: it ends the creation (recorded as failed).
@@ -148,7 +154,7 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 modavd mcp --root D:\ModAVD
 ```
 
-It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 2025-06-18 (`initialize` handshake). The root folder is fixed at startup and is not a tool parameter. Tools: `list_instances`, `get_instance`, `check_host`, `create_instance`, `update_instance`, `delete_instance`, `start_instance` (with progress), `stop_instance`, `set_window_visible`, `shell`, `install_apk`, `get_app_proxy`, `set_app_proxy` (per-app proxy).
+It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 2025-06-18 (`initialize` handshake). The root folder is fixed at startup and is not a tool parameter. Tools: `list_instances`, `get_instance`, `check_host`, `create_instance`, `update_instance`, `delete_instance`, `start_instance` (with progress), `stop_instance`, `set_window_visible`, `shell`, `install_apk`, `disk_info` (data disk size), `trim_disk` (reclaim space while running; the emulator must support discard), `compact_disk` (shrink the data disk; the instance must be stopped), `get_app_proxy`, `set_app_proxy` (per-app proxy).
 
 To register it in Claude Code (in PowerShell, `--` needs quotes, or it gets swallowed):
 
@@ -161,6 +167,25 @@ Or in the project's `.mcp.json`:
 ```json
 {"mcpServers": {"modavd": {"command": "D:\\ModAVD\\tools\\modavd.exe", "args": ["mcp", "--root", "D:\\ModAVD"]}}}
 ```
+
+### Tested in Claude Code
+
+On 2026-11-03, Claude Code 2.1.317 (the command-line version) was connected to modavd 0.3.0 with `claude -p --mcp-config <file> --strict-mcp-config`, which loads modavd for that one call only. Five runs in all:
+
+| What was done | Result |
+| --- | --- |
+| Seven tools called in order in one run: `list_instances`, `get_instance`, `create_instance` (3 GB, 4 cores), `update_instance`, `start_instance`, `stop_instance`, `delete_instance` | The first six succeeded; `delete_instance` was blocked under `-p` (see below) |
+| Only `start_instance`, and claude exited normally once the instance had booted (run twice) | The emulator was still running, `list` showed it online, and its parent process chain had neither claude nor modavd in it; a later `modavd stop` shut it down normally |
+| `MCP_TOOL_TIMEOUT` set shorter than a boot, so `start_instance` timed out halfway and claude exited | The emulator finished booting, but the setup after boot was not done; running `modavd start <i>` once more completed it |
+| The claude process killed 8 seconds after the emulator came up | `modavd mcp` exited by itself within 5 seconds, and the emulator finished booting |
+
+- Two protocol versions were negotiated, 2025-11-25 and 2026-07-28; both work.
+- `delete_instance` carries the `anthropic/requiresUserInteraction` mark, so under `-p` it is always blocked and the instance is not deleted. That is what the mark is for. To delete an instance from an unattended script, use the command line `delete <i> --yes`.
+- If a create started over MCP is disconnected halfway, it cannot finish and is recorded as failed; redo it with `create --resume N`.
+- Not yet checked in Claude Code:
+  - the tools `check_host`, `shell`, `install_apk` and `set_window_visible` have not been called;
+  - there was no dedicated run with `MCP_PROTOCOL_NEGOTIATION=legacy`;
+  - whether the `notifications/progress` of `start_instance` increase one by one was not checked: the `-p` output only shows Claude Code's own heartbeat every 30 seconds.
 
 ## The manager ModAVD.exe
 
@@ -192,7 +217,7 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 
 The ModAVD release package does not include adb (platform-tools 37.0.1) or the Android 14 Google APIs x86_64 system image (r14, about 1.5 GB, about 4.2 GB unpacked): they belong to Google, are governed by the Android Software Development Kit License Agreement, and cannot be redistributed. `modavd components fetch` downloads them from official channels and installs them into `sdk\`; its rules match the bundled `fetch-components.ps1` (`补全组件.bat`) one for one:
 
-- First it fetches the full license text from `repository2-3.xml` on a mirror and displays it (stating which mirror it came from and which components will be downloaded), and continues only if you type `y`; otherwise nothing is downloaded and `downloads\` gets no extra files. `--accept-license` skips the prompt, but the full text is still fetched and displayed, and if it cannot be fetched it still exits; with `--json` it is required, otherwise the command reports `usage` before going online. The license text and the prompt are not affected by `--quiet`.
+- First it fetches the full license text from `repository2-3.xml` on a mirror and displays it (stating which mirror it came from and which components will be downloaded), and continues only if you type `y`; otherwise nothing is downloaded and `downloads\` gets no extra files. `--accept-license` skips the prompt, but the full text is still fetched and displayed, and if it cannot be fetched it still exits; with `--json` it is required, otherwise the command always reports `usage` (exit code 2), before it even looks at the root folder and whether or not components are missing (up to 0.3.0 it succeeded when nothing was missing). The license text and the prompt are not affected by `--quiet`.
 - Mirrors are tried in this order: googledownloads.cn → Tencent Cloud mirror → dl.google.com. `--mirror` uses only one of them (case-insensitive); `--mirror-url` uses your own directory URL in place of those three (it can be given several times or comma-separated, and the URLs are tried in order). A mirror from which the license manifest could not be fetched is moved to the end when downloading.
 - It first downloads to `downloads\*.part`; if interrupted, running it again resumes (`Range`), and files that are already complete are just verified. The server's response is checked before the `.part` file is touched: a 200 must match the expected size, and a 206 must continue exactly from the existing offset. The file is renamed only after the size and SHA-1 are verified. Requests carry `Accept-Encoding: identity`, and any compressed response from the server is rejected. HTTP 4xx, a size mismatch, compressed content or a timeout switches to the next mirror immediately (the `.part` is kept so the next mirror can continue it); other errors are retried up to 3 times on the same mirror, waiting 3 seconds between tries.
 - It unpacks to `sdk\.staging\`, and moves the result into place only after the whole package is unpacked and verified (key files, the SHA-256 pinned for the three adb files, the version); a missing `source.properties` is written in. A directory that was previously incomplete is renamed `<dir>.incomplete-<time>` and kept, not deleted; delete it yourself once you are sure you do not need it. Ctrl+C stops it at any time and leaves no half-installed component.

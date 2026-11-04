@@ -5,6 +5,7 @@ package ui
 import (
 	"fmt"
 	"modavd/internal/errs"
+	"modavd/internal/logx"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,6 +27,7 @@ func AppDataDir() string {
 	}
 	return filepath.Join(base, "ModAVD")
 }
-func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge") }
-func FindEdge() string       { return "" }
-func shellOpen(string) error { return fmt.Errorf("当前平台暂不支持打开浏览器") }
+func EdgeProfileDir() string                    { return filepath.Join(AppDataDir(), "ui-edge2") }
+func removeOldEdgeProfile(string, *logx.Logger) {}
+func FindEdge() string                          { return "" }
+func shellOpen(string) error                    { return fmt.Errorf("当前平台暂不支持打开浏览器") }

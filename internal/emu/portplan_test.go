@@ -133,12 +133,18 @@ func fakeAdbClientMain(args []string) int {
 	case strings.Contains(all, "get-state"):
 		fmt.Println("device")
 	case strings.Contains(all, "sys.boot_completed"):
-		fmt.Println("1")
+		if os.Getenv(fakeAdbNoBootEnv) == "" {
+			fmt.Println("1")
+		}
 	case strings.Contains(all, "KEYCODE_HOME"): // guestHomeScript: what is in front
 		fmt.Println(cmp.Or(os.Getenv(fakeAdbHomeEnv), "home"))
 	case strings.Contains(all, guestShutdownCommand):
 		code, _ := strconv.Atoi(os.Getenv(fakeAdbSvcExitEnv))
 		return code
+	case strings.Contains(all, "logcat -d -b all"): // bootdiag.go
+		fmt.Println("11-04 10:00:00.000 E zygote: fake")
+	case strings.HasSuffix(all, "shell getprop"):
+		fmt.Println("[sys.boot_completed]: []")
 	}
 	return 0
 }
@@ -148,6 +154,7 @@ func fakeAdbClientMain(args []string) int {
 const (
 	fakeAdbHomeEnv    = "MODAVD_EMU_FAKE_ADB_HOME"
 	fakeAdbSvcExitEnv = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
+	fakeAdbNoBootEnv  = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
 )
 
 func freeTCPPort(t *testing.T) int {
@@ -481,9 +488,9 @@ func TestBootingPortPlan(t *testing.T) {
 	}
 }
 
-// TestWindowTitlePortPlan: showing or hiding the window looks for the emulator's title "mas_6:21060" on a root with
-// portBase 21000 (the emulator puts its console port in the title).
-func TestWindowTitlePortPlan(t *testing.T) {
+// TestWindowOfInstanceQemu: showing or hiding the window acts on the qemu process of that instance, nothing else
+// (the windows are no longer looked up by a title with the console port in it).
+func TestWindowOfInstanceQemu(t *testing.T) {
 	m, _ := portPlanTestRoot(t, 6)
 	self, ok := win.FindProcess(uint32(os.Getpid()))
 	if !ok {
@@ -491,17 +498,17 @@ func TestWindowTitlePortPlan(t *testing.T) {
 	}
 	saved, savedSet := qemuScan, setEmulatorWindowsVisible
 	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: self} }
-	var titles []string
-	setEmulatorWindowsVisible = func(pid uint32, title string, visible bool) (int, error) {
-		titles = append(titles, title)
+	var pids []uint32
+	setEmulatorWindowsVisible = func(pid uint32, visible bool) (int, error) {
+		pids = append(pids, pid)
 		return 1, nil
 	}
 	t.Cleanup(func() { qemuScan, setEmulatorWindowsVisible = saved, savedSet })
 	if res, err := m.SetWindowVisible(context.Background(), 6, false); err != nil || res.Windows != 1 {
 		t.Fatalf("SetWindowVisible = %+v, %v", res, err)
 	}
-	if len(titles) != 1 || titles[0] != "mas_6:21060" {
-		t.Errorf("window titles looked for: %q", titles)
+	if len(pids) != 1 || pids[0] != self.PID {
+		t.Errorf("windows looked for in processes %v, want [%d]", pids, self.PID)
 	}
 }
 

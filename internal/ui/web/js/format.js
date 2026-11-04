@@ -1,7 +1,7 @@
 // Formatting for people (zh-CN).
 
-export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建' };
-export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus' };
+export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
+export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk' };
 export const STATE = { running: '进行中', done: '完成', failed: '失败', canceled: '已取消' };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };
 
@@ -45,6 +45,35 @@ export function dur(sec) {
   const s = sec % 60;
   if (m < 60) return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
   return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
+export function fmtBytes(n) {
+  if (n == null || !(n >= 0)) return '—';
+  if (n >= 2 ** 30) return (n / 2 ** 30).toFixed(1) + ' GB';
+  if (n >= 2 ** 20) return Math.round(n / 2 ** 20) + ' MB';
+  if (n >= 2 ** 10) return Math.round(n / 2 ** 10) + ' KB';
+  return n + ' B';
+}
+
+// 磁盘占用 (DiskInfoResult). A running instance has the disk open: allocated and reclaimable are not known then.
+export function diskInfoText(r) {
+  const parts = [];
+  if (r.logical_bytes) parts.push(`逻辑大小 ${fmtBytes(r.logical_bytes)}`);
+  parts.push(`宿主占用 ${fmtBytes(r.on_disk_bytes)}`);
+  if (r.allocated_bytes != null) parts.push(`已分配 ${fmtBytes(r.allocated_bytes)}`);
+  if (r.reclaimable_bytes != null) parts.push(`可回收约 ${fmtBytes(r.reclaimable_bytes)}`);
+  let text = parts.join(' · ');
+  if (r.needs_shutdown) text += '。开机时算不出已分配和可回收，关机后再看';
+  else if (r.reclaimable_bytes != null) text += r.reclaimable_bytes > 0 ? '。用「整理磁盘」可以收回' :'。没有可以回收的';
+  return text + '。';
+}
+
+export function diskTrimText() {
+  return '已让安卓把删掉的文件占的空间还回来；电脑上的磁盘文件要关机后用「整理磁盘」才会变小。';
+}
+
+export function diskCompactText(r) {
+  return `磁盘文件从 ${fmtBytes(r.before_on_disk_bytes)} 缩到 ${fmtBytes(r.after_on_disk_bytes)}，释放 ${fmtBytes(r.freed_bytes)}。`;
 }
 
 export function uptime(started) {

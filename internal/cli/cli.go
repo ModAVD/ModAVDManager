@@ -24,6 +24,9 @@
 //	report-config [--no-clipboard]                        read-only configuration and installed-game report
 //	collect-info [--out-dir D] [--stage-dir D] ...        read-only diagnostics zip
 //	window <i> show|hide                                  emu.WindowResult
+//	disk <i> trim                                         emu.DiskTrimResult {index,discard_max_bytes}
+//	disk <i> info                                         emu.DiskInfoResult {index,overlay,running,needs_shutdown,logical_bytes,on_disk_bytes,allocated_bytes?,reclaimable_bytes?}
+//	disk <i> compact                                      emu.DiskCompactResult {index,overlay,before_on_disk_bytes,after_on_disk_bytes,freed_bytes}
 //	install <i> <apk>                                     emu.InstallResult
 //	shell <i> [--timeout S] <command...>                  emu.ShellResult
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
@@ -54,7 +57,7 @@
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
 // context ended fails with errs.Canceled even when the command returned a result, unless the command is final (its
 // result reports a change that was made: create, set, proxy, delete, start, stop, window, install, components fetch;
-// or does not depend on the context: version, help, components status): a query whose adb calls were killed half way
+// or does not depend on the context: version, help, components status; also bridge and disk trim / info): a query whose adb calls were killed half way
 // would report what it saw by then, an online instance as starting. components fetch stops at Ctrl+C with
 // errs.Canceled itself, between two reads of a download or an unpack and before the next component.
 //
@@ -99,6 +102,9 @@ type manager interface {
 	AdbPassthrough(ctx context.Context, i int, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
+	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
 	EnsureServers(ctx context.Context) (*emu.ServersResult, error)
 	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
 	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)

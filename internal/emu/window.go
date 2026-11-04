@@ -45,18 +45,17 @@ func windowConflict(i int, opt StartOptions, windowed bool) error {
 	return nil
 }
 
-// setEmulatorWindowsVisible is win.SetEmulatorWindowsVisible; a test replaces it (the window title it is given names
-// the console port, "mas_<i>:<port>").
+// setEmulatorWindowsVisible is win.SetEmulatorWindowsVisible; a test replaces it.
 var setEmulatorWindowsVisible = win.SetEmulatorWindowsVisible
 
 // SetWindowVisible shows / hides the window of an instance booted with one (AUTO-MAS setVisible): the main window
 // and the side toolbar get SW_SHOW / SW_HIDE. Hiding does not stop rendering or the screenshot channel (10-04: the
 // shared-memory frame counter kept going at ~51 fps while hidden). A headless instance has no window and cannot get
 // one after boot: that is Windows 0, not an error. Window failures are only logged, never returned: scripts call this
-// every round in silent mode and an error would fail the whole run.
+// every round in silent mode and an error would fail the whole run. The windows are those of the instance's qemu
+// process, not looked up by title: the title is going to change (ModAVD/ModAVD#58).
 func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*WindowResult, error) {
-	in, err := m.instance(i)
-	if err != nil {
+	if _, err := m.instance(i); err != nil {
 		return nil, err
 	}
 	res := &WindowResult{Index: i, Visible: visible}
@@ -68,7 +67,7 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 	if visible {
 		verb = "显示"
 	}
-	n, err := setEmulatorWindowsVisible(p.PID, fmt.Sprintf("%s:%d", in.Name, m.Root.Ports().Console(i)), visible)
+	n, err := setEmulatorWindowsVisible(p.PID, visible)
 	if err != nil {
 		m.Log.Warnf("魔改 AVD 实例 %d %s窗口失败: %v", i, verb, err)
 		return res, nil

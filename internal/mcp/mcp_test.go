@@ -199,6 +199,25 @@ func (f *fake) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.Inst
 	return &emu.InstallResult{Index: i, APK: apkPath, Package: "com.example", Output: "Success"}, nil
 }
 
+func (f *fake) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	f.record("disk info %d", i)
+	allocated, reclaim := int64(8<<30), int64(4<<30)
+	return &emu.DiskInfoResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536, AllocatedBytes: &allocated,
+		ReclaimableBytes: &reclaim}, nil
+}
+
+func (f *fake) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	f.record("disk trim %d", i)
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 4 << 20}, nil
+}
+
+func (f *fake) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	f.record("disk compact %d", i)
+	return &emu.DiskCompactResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		BeforeOnDiskBytes: 12 << 30, AfterOnDiskBytes: 8 << 30, FreedBytes: 4 << 30}, nil
+}
+
 func (f *fake) AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error) {
 	f.record("app_proxy %d", i)
 	return &emu.AppProxyResult{Index: i, Apps: []string{}, Notes: []string{}}, nil
@@ -497,7 +516,7 @@ func TestLegacySession(t *testing.T) {
 			t.Fatalf("legacy tools/list has %s", k)
 		}
 	}
-	if n := len(r["tools"].([]any)); n != 13 {
+	if n := len(r["tools"].([]any)); n != 16 {
 		t.Fatalf("%d tools", n)
 	}
 
@@ -562,7 +581,7 @@ func TestModernSession(t *testing.T) {
 
 	r := result(t, h.request(1, "tools/list", modernParams(nil, nil)))
 	if r["resultType"] != "complete" || r["ttlMs"] != float64(listTTLMs) || r["cacheScope"] != "public" ||
-		r["_meta"] == nil || len(r["tools"].([]any)) != 13 {
+		r["_meta"] == nil || len(r["tools"].([]any)) != 16 {
 		t.Fatalf("tools/list %v", r)
 	}
 
@@ -760,6 +779,9 @@ func TestToolCalls(t *testing.T) {
 		{"set_window_visible", map[string]any{"index": 1, "visible": false}, "window 1 false"},
 		{"shell", map[string]any{"index": 1, "command": "getprop sys.boot_completed", "timeout_s": 10}, "shell 1"},
 		{"install_apk", map[string]any{"index": 1, "apk_path": `D:\apk\game.apk`}, "install 1 D:\\apk\\game.apk"},
+		{"disk_info", map[string]any{"index": 1}, "disk info 1"},
+		{"trim_disk", map[string]any{"index": 1}, "disk trim 1"},
+		{"compact_disk", map[string]any{"index": 1}, "disk compact 1"},
 		{"get_app_proxy", map[string]any{"index": 2}, "app_proxy 2"},
 		{"set_app_proxy", map[string]any{"index": 2, "enabled": true, "server": "auto", "add_apps": []string{"a.b"}},
 			"set_app_proxy 2"},
@@ -880,6 +902,16 @@ func TestNewManagerError(t *testing.T) {
 	text, isErr, _ := toolText(t, h.call(1, "list_instances", nil, nil))
 	if !isErr || text != "缺少组件：模拟器。运行 补全组件.bat\n错误码: not_ready" {
 		t.Fatalf("text %q", text)
+	}
+}
+
+// TestErrorTextBootDiag: a failed boot's guest state (ModAVD/ModAVD#79) is named after the code, also when the error
+// that has it is wrapped.
+func TestErrorTextBootDiag(t *testing.T) {
+	e := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_1-20261104-100000-bootfail`), "实例 1 启动超时")
+	if got, want := errorText(e), "实例 1 启动超时\n错误码: timeout\n开机失败时的客体现场: D:\\r\\logs\\mas_1-20261104-100000-bootfail"; got != want {
+		t.Errorf("errorText = %q, want %q", got, want)
 	}
 }
 
@@ -1121,7 +1153,7 @@ func TestCancelStart(t *testing.T) {
 	<-started
 
 	// the read loop is free while the instance boots
-	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 13 {
+	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 16 {
 		t.Fatal("tools/list during boot")
 	}
 
@@ -1403,7 +1435,7 @@ func TestWaitsForManagerAfterCall(t *testing.T) {
 func TestKeptTools(t *testing.T) {
 	for _, tool := range toolDefs() {
 		want := tool.Name == "create_instance" || tool.Name == "update_instance" || tool.Name == "delete_instance" ||
-			tool.Name == "install_apk" || tool.Name == "set_app_proxy"
+			tool.Name == "install_apk" || tool.Name == "compact_disk" || tool.Name == "set_app_proxy"
 		if tool.keep != want {
 			t.Errorf("%s: keep %v", tool.Name, tool.keep)
 		}
@@ -1463,7 +1495,7 @@ func TestToolDefinitions(t *testing.T) {
 	}
 	want := []string{"list_instances", "get_instance", "check_host", "create_instance", "update_instance",
 		"delete_instance", "start_instance", "stop_instance", "set_window_visible", "shell", "install_apk",
-		"get_app_proxy", "set_app_proxy"}
+		"disk_info", "trim_disk", "compact_disk", "get_app_proxy", "set_app_proxy"}
 	if len(tools) != len(want) {
 		t.Fatalf("%d tools", len(tools))
 	}
@@ -1521,6 +1553,9 @@ func TestToolDefinitions(t *testing.T) {
 		"delete_instance": {false, true, true},
 		"start_instance":  {false, false, true},
 		"stop_instance":   {false, true, true},
+		"disk_info":       {true, nil, nil},
+		"trim_disk":       {false, false, true},
+		"compact_disk":    {false, true, false},
 	} {
 		ann := byName[name]["annotations"].(map[string]any)
 		if ann["readOnlyHint"] != hints[0] || ann["destructiveHint"] != hints[1] || ann["idempotentHint"] != hints[2] {

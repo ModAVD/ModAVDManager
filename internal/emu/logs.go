@@ -19,12 +19,16 @@ import (
 	"modavd/internal/win"
 )
 
-// The two kinds of files in the logs dir that are ours to prune: emulator output mas_<i>-<time>.log and guest logcat
-// logcat-mas_<i>-<time>.txt. Nothing else there is touched.
-var managedLogPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^mas_\d+-.+\.log$`),
-	regexp.MustCompile(`^logcat-mas_\d+-.+\.txt$`),
-}
+// What in the logs dir is ours to prune: the files emulator output mas_<i>-<time>.log and guest logcat
+// logcat-mas_<i>-<time>.txt, and the directories of failed boots mas_<i>-<time>-bootfail (bootdiag.go). Nothing else
+// there is touched.
+var (
+	managedLogPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^mas_\d+-.+\.log$`),
+		regexp.MustCompile(`^logcat-mas_\d+-.+\.txt$`),
+	}
+	bootDiagDirPattern = regexp.MustCompile(`^mas_\d+-[0-9]{8}-[0-9]{6}` + bootDiagSuffix + `$`)
+)
 
 // pruneMu: several instances of one process booting at once prune the same directory; other processes are covered
 // by tolerating files that vanish meanwhile.
@@ -34,12 +38,14 @@ type logFile struct {
 	path  string
 	name  string
 	mtime time.Time
-	size  int64
+	size  int64 // a directory's: its files together
+	dir   bool  // a failed boot's directory
 }
 
 // pruneLogs deletes old logs before a new one is created (AUTO-MAS host.prune_logs): per instance keep the newest 10
-// emulator logs (mas_<i>-*.log) and 10 logcats (logcat-mas_<i>-*.txt); then while the closed files of both kinds in
-// the whole logs dir exceed 1 GiB, delete from the oldest. Files in use are skipped and not counted.
+// emulator logs (mas_<i>-*.log) and 10 logcats (logcat-mas_<i>-*.txt), and the newest 3 failed boots
+// (mas_<i>-*-bootfail); then while the closed files of these kinds in the whole logs dir exceed 1 GiB, delete from the
+// oldest. Files in use are skipped and not counted.
 func (m *Manager) pruneLogs(i int) {
 	pruneMu.Lock()
 	defer pruneMu.Unlock()
@@ -60,19 +66,27 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 	avdName := root.AvdName(i)
 	gone := map[string]bool{}
 
-	for _, kind := range [][2]string{{avdName + "-", ".log"}, {"logcat-" + avdName + "-", ".txt"}} {
+	for _, kind := range []struct {
+		prefix, suffix string
+		dir            bool
+		keep           int
+	}{
+		{avdName + "-", ".log", false, keep},
+		{"logcat-" + avdName + "-", ".txt", false, keep},
+		{avdName + "-", bootDiagSuffix, true, bootDiagKeep},
+	} {
 		var mine []logFile
 		for _, f := range files {
-			if strings.HasPrefix(f.name, kind[0]) && strings.HasSuffix(f.name, kind[1]) {
+			if f.dir == kind.dir && strings.HasPrefix(f.name, kind.prefix) && strings.HasSuffix(f.name, kind.suffix) {
 				mine = append(mine, f)
 			}
 		}
 		sortLogFiles(mine, true)
-		if len(mine) <= keep {
+		if len(mine) <= kind.keep {
 			continue
 		}
-		for _, f := range mine[keep:] {
-			result := tryUnlink(f.path, log)
+		for _, f := range mine[kind.keep:] {
+			result := removeLog(f, log)
 			if result != unlinkFailed {
 				gone[f.path] = true
 			}
@@ -94,6 +108,10 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 	if total > maxBytes {
 		var closed []logFile
 		for _, f := range rest {
+			if f.dir {
+				closed = append(closed, f) // written once and closed (bootdiag.go)
+				continue
+			}
 			switch busy, vanished := fileInUse(f.path); {
 			case vanished:
 			case busy:
@@ -111,7 +129,7 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 			if closedTotal <= maxBytes {
 				break
 			}
-			result := tryUnlink(f.path, log)
+			result := removeLog(f, log)
 			// removed, removed by someone else, or just opened for writing: none of them counts as closed any more
 			closedTotal -= f.size
 			if result == unlinkRemoved {
@@ -127,7 +145,8 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 	return removed, freed, nil
 }
 
-// managedLogFiles lists the regular files of both kinds (no symlinks) with mtime and size; none when dir is missing.
+// managedLogFiles lists the regular files of both kinds and the failed boots' directories (no symlinks) with mtime and
+// size; none when dir is missing.
 func managedLogFiles(dir string) ([]logFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -138,17 +157,36 @@ func managedLogFiles(dir string) ([]logFile, error) {
 	}
 	var files []logFile
 	for _, e := range entries {
-		if !isManagedLog(e.Name()) || !e.Type().IsRegular() {
+		isDir := e.IsDir() && bootDiagDirPattern.MatchString(e.Name())
+		if !isDir && (!isManagedLog(e.Name()) || !e.Type().IsRegular()) {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		files = append(files, logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(),
-			size: info.Size()})
+		f := logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(), size: info.Size(), dir: isDir}
+		if isDir {
+			f.size = dirSize(f.path)
+		}
+		files = append(files, f)
 	}
 	return files, nil
+}
+
+// dirSize is the size of the regular files directly in dir (a failed boot's directory has no subdirectories).
+func dirSize(dir string) int64 {
+	entries, _ := os.ReadDir(dir)
+	var n int64
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			n += info.Size()
+		}
+	}
+	return n
 }
 
 func isManagedLog(name string) bool {
@@ -181,6 +219,21 @@ const (
 	unlinkFailed               // still there (open in another process)
 	unlinkGone                 // not there any more (someone else deleted it)
 )
+
+// removeLog removes f: tryUnlink for a file, the whole tree for a failed boot's directory.
+func removeLog(f logFile, log *logx.Logger) unlinkResult {
+	if !f.dir {
+		return tryUnlink(f.path, log)
+	}
+	if _, err := os.Lstat(f.path); errors.Is(err, fs.ErrNotExist) {
+		return unlinkGone
+	}
+	if err := os.RemoveAll(f.path); err != nil {
+		log.Debugf("旧的开机失败现场 %s 删不掉，跳过: %v", f.name, err)
+		return unlinkFailed
+	}
+	return unlinkRemoved
+}
 
 func tryUnlink(path string, log *logx.Logger) unlinkResult {
 	err := os.Remove(path)

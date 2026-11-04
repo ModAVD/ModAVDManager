@@ -339,6 +339,22 @@ func TestErrorOutput(t *testing.T) {
 		t.Errorf("no advice: %q", buf.String())
 	}
 
+	// a failed boot's guest state (ModAVD/ModAVD#79), named by the start inside create's wrapper: the last line, and
+	// error.details in JSON (absent without details, see below)
+	diag := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_6-20261104-100000-bootfail`), "实例 6 新建后的初始化 20 分钟没做完")
+	buf.Reset()
+	writeHumanError(&buf, diag)
+	if buf.String() != "错误：实例 6 新建后的初始化 20 分钟没做完\n开机失败时的客体现场：D:\\r\\logs\\mas_6-20261104-100000-bootfail\n" {
+		t.Errorf("human with details: %q", buf.String())
+	}
+	buf.Reset()
+	writeJSONLine(&buf, errEnvelope{Error: errorInfo(diag)})
+	if want := `{"ok":false,"error":{"code":"timeout","message":"实例 6 新建后的初始化 20 分钟没做完",` +
+		`"details":{"boot_diag_dir":"D:\\r\\logs\\mas_6-20261104-100000-bootfail"}}}` + "\n"; buf.String() != want {
+		t.Errorf("json with details:\n%s\nwant\n%s", buf.String(), want)
+	}
+
 	buf.Reset()
 	writeJSONLine(&buf, errEnvelope{Error: errorInfo(errors.New("a <b> & c"))})
 	if buf.String() != `{"ok":false,"error":{"code":"internal","message":"a <b> & c"}}`+"\n" {

@@ -135,6 +135,15 @@ func SharedMemoryExists(string) bool { return false }
 // DiskFree calls GetDiskFreeSpaceExW for the Windows volume.
 func DiskFree(string) (uint64, error) { return 0, errUnsupported }
 
+// GetCompressedFileSize calls GetCompressedFileSizeW for the Windows file.
+func GetCompressedFileSize(string) (uint64, error) { return 0, errUnsupported }
+
+// VolumeFileSystem calls GetVolumePathNameW + GetVolumeInformationW on Windows.
+func VolumeFileSystem(string) (string, error) { return "", errUnsupported }
+
+// MoveFileReplaceThrough calls MoveFileExW (REPLACE_EXISTING | WRITE_THROUGH).
+func MoveFileReplaceThrough(string, string) error { return errUnsupported }
+
 // AvailableMemoryMB calls GlobalMemoryStatusEx on Windows.
 func AvailableMemoryMB() (uint64, error) { return 0, errUnsupported }
 
@@ -145,7 +154,7 @@ func Protect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
 func Unprotect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
 
 // SetEmulatorWindowsVisible finds the emulator window and calls ShowWindow on Windows.
-func SetEmulatorWindowsVisible(uint32, string, bool) (int, error) { return 0, errUnsupported }
+func SetEmulatorWindowsVisible(uint32, bool) (int, error) { return 0, errUnsupported }
 
 // GetConsoleWindow calls the Windows GetConsoleWindow API.
 func GetConsoleWindow() uintptr { return 0 }

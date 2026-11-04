@@ -109,6 +109,8 @@ func TestComponentsArgumentsBeforeRoot(t *testing.T) {
 		{"components", "fetch", "--mirror", "aliyun"},
 		{"components", "fetch", "--mirror-url", "ftp://example.invalid/"},
 		{"components", "fetch", "--test-free-space-mb", "-1"},
+		{"components", "fetch"}, // --json without --accept-license
+		{"components", "fetch", "--keep-downloads"},
 	} {
 		h := newHarness()
 		calls := h.useRoot(componentsRoot(t))
@@ -198,16 +200,28 @@ func licenseServer(t *testing.T) (*httptest.Server, *int32) {
 	return srv, &n
 }
 
-// TestComponentsFetchJSONNeedsAcceptLicense: the real fetch refuses --json without --accept-license before any
-// request (usage, exit 2).
+// TestComponentsFetchJSONNeedsAcceptLicense: --json without --accept-license is a usage error (exit 2) before the
+// root is looked up or any request is made, also when the root lacks nothing (the fetch itself would then succeed
+// without asking): the same command line gets the same answer whatever the root holds.
 func TestComponentsFetchJSONNeedsAcceptLicense(t *testing.T) {
 	srv, n := licenseServer(t)
 	h := newHarness()
-	h.useRoot(componentsRoot(t))
+	calls := h.useRoot(componentsRoot(t))
+	fetched := false
+	h.fetch = func(context.Context, *root.Root, components.Options) (*components.Result, error) {
+		fetched = true
+		return &components.Result{}, nil // a root that lacks nothing
+	}
 	res := h.run(t, nil, "--json", "components", "fetch", "--mirror-url", srv.URL)
 	e := envelope(t, res.stdout)["error"].(map[string]any)
-	if res.code != 2 || e["code"] != errs.Usage || atomic.LoadInt32(n) != 0 {
-		t.Fatalf("exit %d %v, %d requests", res.code, e, atomic.LoadInt32(n))
+	if res.code != 2 || e["code"] != errs.Usage || !strings.Contains(e["message"].(string), "--accept-license") ||
+		atomic.LoadInt32(n) != 0 || *calls != 0 || fetched {
+		t.Fatalf("exit %d %v, %d requests, root looked up %d times, fetched %v", res.code, e, atomic.LoadInt32(n),
+			*calls, fetched)
+	}
+	// without --json the question is asked instead, so nothing is refused here
+	if res := h.run(t, nil, "components", "fetch", "--mirror-url", srv.URL); res.code != 0 || !fetched {
+		t.Fatalf("without --json: exit %d, fetched %v", res.code, fetched)
 	}
 }
 

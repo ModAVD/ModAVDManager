@@ -69,6 +69,9 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force]`、`stop --all` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀 |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
+| `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM，让模拟器释放已删文件占着的空间；模拟器太旧、不支持回收时返回不支持（退出码 4） |
+| `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；实例关机时再给已分配的大小和估计能回收多少（开着时这两个数要关机后才有）；只读 |
+| `disk <i> compact` | 整理数据盘：关机状态下把覆盖层重写一遍、丢掉已释放的簇、把文件缩小；转换后先校验再原子替换，原盘在替换成功前不动；仅在 NTFS/ReFS 卷上进行，实例有快照、或剩余空间不够放下新文件时拒绝 |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读） |
@@ -106,10 +109,16 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 **机读输出**（`--json`）：
 
-- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
+- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice","details"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
 - **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
+- **错误的 `details`**：`error` 有额外的机读信息时多一个 `details` 对象，没有就不出现。现在只有 `boot_diag_dir`：开机超时、开机后设置失败等情况下，客体现场存放的目录。
+  - 开机失败、模拟器还在时，`start` 和 `create`（包括 MCP 和管理器发起的）在返回前把客体的 `logcat -d -b all`、`dmesg`、`getprop`、`ps -A`、`/proc/meminfo`、`dumpsys activity processes` 前 300 行存进 `logs\mas_<i>-<时间>-bootfail\`，各项是否收到写在同目录的 `summary.txt` 里。
+  - 每项单独限时，一共最多 30 秒；超时或出错时，已经读到的部分也留着。
+  - 取消（Ctrl+C、MCP 取消）、开机中途被关机、模拟器已经不在时不收。
+  - 每台实例留最新 3 个这样的目录，大小算进 `logs\` 的 1 GiB 总量。`collect-info` 把最新的 3 个收进问题包，合计到了 100 MB 就不再往下收。
+  - 这些文件可能带账号信息，只存在本机。文本模式出错时，最后一行写这个目录。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。`stop` 不拦，等于中止新建（记为失败）。
@@ -148,7 +157,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 modavd mcp --root D:\ModAVD
 ```
 
-同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
+同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
 
 在 Claude Code 里注册（PowerShell 里 `--` 要加引号，否则会被吞掉）：
 
@@ -161,6 +170,25 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 ```json
 {"mcpServers": {"modavd": {"command": "D:\\ModAVD\\tools\\modavd.exe", "args": ["mcp", "--root", "D:\\ModAVD"]}}}
 ```
+
+### 在 Claude Code 里实测过的
+
+2026-11-03，Claude Code 2.1.317（命令行版）连 modavd 0.3.0，用 `claude -p --mcp-config <文件> --strict-mcp-config`，只在这一次调用里加载 modavd，共跑了 5 次：
+
+| 做了什么 | 结果 |
+| --- | --- |
+| 一次按顺序调 7 个工具：`list_instances`、`get_instance`、`create_instance`（3 GB、4 核）、`update_instance`、`start_instance`、`stop_instance`、`delete_instance` | 前 6 个都成功；`delete_instance` 在 `-p` 下被拦（见下） |
+| 只调 `start_instance`，开完机 claude 正常退出（跑了两次） | 模拟器还在，`list` 是 online，它的父进程链里没有 claude 和 modavd；之后 `modavd stop` 正常关机 |
+| `MCP_TOOL_TIMEOUT` 设得比开机短，`start_instance` 开到一半超时，claude 退出 | 模拟器照常开完机，但开机后的设置没做完；再运行一次 `modavd start <i>` 就补完了 |
+| 模拟器起来 8 秒后直接结束 claude 进程 | `modavd mcp` 5 秒内自己退出，模拟器照常开完机 |
+
+- 协商到的协议有 2025-11-25 和 2026-07-28 两种，都能用。
+- `delete_instance` 带 `anthropic/requiresUserInteraction` 标记，在 `-p` 下一定被拦，实例不删，这是这个标记要的效果。在无人值守的脚本里删实例，用命令行 `delete <i> --yes`。
+- 经 MCP 新建时中途断开，新建就做不完，记成失败；用 `create --resume N` 重做。
+- 还没在 Claude Code 里核对的：
+  - `check_host`、`shell`、`install_apk`、`set_window_visible` 这几个工具没调过；
+  - 没有专门用 `MCP_PROTOCOL_NEGOTIATION=legacy` 跑一轮；
+  - `start_instance` 的 `notifications/progress` 是否逐条递增没核对，`-p` 的输出里只看得到 Claude Code 自己每 30 秒一条的心跳。
 
 ## 管理器 ModAVD.exe
 
@@ -192,7 +220,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`，规则和随包的 `fetch-components.ps1`（「补全组件.bat」）一条一条对上：
 
-- 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则联网之前就报 `usage`。协议和提问不受 `--quiet` 影响。
+- 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
 - 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。
 - 先下成 `downloads\*.part`，中断了再运行会接着下（`Range`）；已经下满的直接校验。服务器的回答先核对再动 `.part`：200 要大小相符，206 要正好从已有的位置接着给。校验大小和 SHA-1 后才改名。请求头带 `Accept-Encoding: identity`，服务器回压缩过的内容一律不收。HTTP 4xx、大小不符、压缩过的内容、超时马上换下一个镜像（`.part` 留着让下一个接着下）；其余错误同一个镜像最多试 3 次，中间等 3 秒。
 - 解压到 `sdk\.staging\`，整包解完、核对完（关键文件、adb 三个文件钉住的 SHA-256、版本）再挪到位；缺 `source.properties` 就补写。原来不完整的目录改名为 `<目录>.incomplete-<时间>` 留着，不删，确认没用后自己删掉。Ctrl+C 随时能停，不留下装到一半的组件。

@@ -238,6 +238,19 @@ func init() {
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
 		},
 		{
+			name: "disk", args: "<i> trim|info|compact", summary: "磁盘回收：触发回收或整理把客体已删文件占的空间还给宿主；看数据盘大小",
+			details: "trim：在客体的数据盘（/data）上触发一次回收（FITRIM，经 vold 空闲维护），" +
+				"让模拟器释放已删除文件在数据盘镜像里占着的空间。实例要开着并已开机完成；" +
+				"模拟器版本太旧、数据盘不支持回收时返回不支持（退出码 4），不会白跑。" +
+				"info：报数据盘的逻辑大小、在宿主上实际占的空间，以及（实例关机时）已分配的大小和估计能回收多少；" +
+				"实例开着时已分配和可回收的数要关机后才有，只读，不改任何东西。" +
+				"compact：关机状态下把数据盘覆盖层重写一遍、丢掉已释放的簇、把文件缩小；" +
+				"转换后先校验（check + compare）再原子替换，原盘在替换成功前不动；实例有快照时拒绝。",
+			posNames: []string{"实例编号", "trim、info 或 compact"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runDisk, human: formatDiskHuman,
+		},
+		{
 			name: "install", args: "<i> <apk>", summary: "在已开机的实例上安装 APK（adb install -r）",
 			details:  "最多等 900 秒（游戏安装包有 1–3 GB）。",
 			posNames: []string{"实例编号", "APK 路径"}, minPos: 2, maxPos: 2,
@@ -362,9 +375,10 @@ type StatusResult struct {
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
 type ErrorInfo struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice,omitempty"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice,omitempty"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf: boot_diag_dir ...
 }
 
 func errorInfo(err error) ErrorInfo {
@@ -373,7 +387,7 @@ func errorInfo(err error) ErrorInfo {
 	if msg == "" {
 		msg = e.Code
 	}
-	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice}
+	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // StopFailure is one instance stop --all could not stop.
@@ -925,6 +939,11 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	if _, err := components.ChooseMirrors(o.Mirror, o.MirrorURLs); err != nil {
 		return o, err
 	}
+	// whatever the root holds: a script that sometimes gets ok and sometimes usage for the same command line (by
+	// whether components were missing) would only learn of the license at the worst moment
+	if o.JSON && !o.AcceptLicense {
+		return o, components.JSONNeedsLicense()
+	}
 	var last time.Time
 	o.Progress = func(p components.Progress) {
 		if !p.Final && !last.IsZero() && time.Since(last) < 2*time.Second {
@@ -986,6 +1005,34 @@ func runBridge(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return m.Bridge(c.ctx, i, action)
+}
+
+// runDisk dispatches `disk <i> <action>` (trim, info, compact); add a case per new action.
+func runDisk(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "trim", "info", "compact":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 trim、info 或 compact，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("disk").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	switch action {
+	case "trim":
+		return m.DiskTrim(c.ctx, i)
+	case "info":
+		return m.DiskInfo(c.ctx, i)
+	case "compact":
+		return m.DiskCompact(c.ctx, i)
+	}
+	return nil, errs.Newf(errs.Internal, "disk 动作 %s 没有实现", action)
 }
 
 // exitBridge: 1 when the bridge did not end up as asked (installed after install, gone after uninstall), the script's

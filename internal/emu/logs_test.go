@@ -133,6 +133,55 @@ func TestPruneLogDirTotalSize(t *testing.T) {
 	}
 }
 
+// mkDiag makes a failed boot's directory with two files of 25 bytes, mtime base + minute minutes.
+func mkDiag(t *testing.T, dir, name string, minute int) {
+	t.Helper()
+	d := filepath.Join(dir, name)
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkLog(t, d, "logcat.txt", 25, minute)
+	mkLog(t, d, "summary.txt", 25, minute)
+	mt := time.Date(2026, 10, 28, 12, 0, 0, 0, time.Local).Add(time.Duration(minute) * time.Minute)
+	if err := os.Chtimes(d, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPruneLogDirBootDiag: per instance the newest 3 failed boots' directories stay (bootDiagKeep), whatever the
+// keep of the logs; their size counts toward the total, and they go oldest first like the logs. Directories that do
+// not look like ours stay.
+func TestPruneLogDirBootDiag(t *testing.T) {
+	dir := t.TempDir()
+	for k := 0; k < 5; k++ {
+		mkDiag(t, dir, fmt.Sprintf("mas_0-20261028-1200%02d-bootfail", k), k)
+	}
+	mkDiag(t, dir, "mas_1-20261028-115900-bootfail", -1)
+	mkDiag(t, dir, "mas_0-notes-bootfail", -100)             // not ours: no time stamp
+	mkLog(t, dir, "mas_0-20261028-120009-bootfail", 1, -100) // a file, not a directory: not ours
+	mkLog(t, dir, "mas_0-20261028-120010.log", 10, 10)       // a log of the same instance
+	removed, freed, err := pruneLogDir(dir, 0, 10, 1<<30, logx.Nop())
+	if err != nil || removed != 2 || freed != 100 {
+		t.Fatalf("per instance: removed %d freed %d, %v; want 2 / 100", removed, freed, err)
+	}
+	want := []string{"mas_0-20261028-120002-bootfail", "mas_0-20261028-120003-bootfail", "mas_0-20261028-120004-bootfail",
+		"mas_0-20261028-120009-bootfail", "mas_0-20261028-120010.log", "mas_0-notes-bootfail", "mas_1-20261028-115900-bootfail"}
+	if got := names(t, dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("left %q\nwant %q", got, want)
+	}
+
+	// total: 3 × 50 + 50 + the log's 10 = 210 > 100 -> the oldest go: mas_1's (160), mas_0 02 (110), mas_0 03 (60)
+	removed, freed, err = pruneLogDir(dir, 1, 10, 100, logx.Nop())
+	if err != nil || removed != 3 || freed != 150 {
+		t.Fatalf("total: removed %d freed %d, %v; want 3 / 150", removed, freed, err)
+	}
+	want = []string{"mas_0-20261028-120004-bootfail", "mas_0-20261028-120009-bootfail", "mas_0-20261028-120010.log",
+		"mas_0-notes-bootfail"}
+	if got := names(t, dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("left %q\nwant %q", got, want)
+	}
+}
+
 func TestPruneLogDirMissing(t *testing.T) {
 	removed, freed, err := pruneLogDir(filepath.Join(t.TempDir(), "logs"), 0, 10, 1<<30, logx.Nop())
 	if removed != 0 || freed != 0 || err != nil {
