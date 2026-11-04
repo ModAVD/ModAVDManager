@@ -175,7 +175,12 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
 			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
 	}
-	if createRunning(m, i) {
+	running, err := createRunning(m, i)
+	if err != nil {
+		lock.Unlock()
+		return nil, err
+	}
+	if running {
 		// the boot of the setup that failed (or was killed): start refuses this instance, so nothing else booted it.
 		// Shut it down normally, sync first, and set the instance up again.
 		m.Log.Infof("实例 %d 上次新建时开的模拟器还开着，先正常关机再重新初始化", i)
@@ -218,7 +223,11 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		return nil, err
 	}
 	var p *win.Process
-	if q, ok := m.qemuOf(i); ok {
+	q, ok, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		p = &q
 		m.Log.Infof("魔改 AVD 实例 %d 正在运行，改动下次开机生效", i)
 	}
@@ -279,7 +288,10 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		stopLock.Unlock()
 		startLock.Unlock()
 	}
-	if _, running := m.qemuOf(i); running {
+	if _, running, err := m.qemuOf(i); err != nil {
+		unlock()
+		return nil, err
+	} else if running {
 		unlock()
 		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法删除", i)
 	}

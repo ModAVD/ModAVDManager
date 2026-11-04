@@ -13,6 +13,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/win"
 )
 
 func gateTree(t *testing.T, dir string) []string {
@@ -50,6 +51,8 @@ func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
 	_, calls["running"] = m.Running(ctx)
 	_, calls["list"] = m.List(ctx)
 	_, calls["info"] = m.Info(ctx, index)
+	_, calls["window show"] = m.SetWindowVisible(ctx, index, true)
+	_, calls["window hide"] = m.SetWindowVisible(ctx, index, false)
 	for name, callErr := range calls {
 		if got := errs.CodeOf(callErr); got != errs.Unsupported {
 			t.Errorf("%s: %v (%s)", name, callErr, got)
@@ -57,6 +60,32 @@ func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
 	}
 	if after := gateTree(t, dir); !reflect.DeepEqual(after, before) {
 		t.Fatalf("root changed: before %v, after %v", before, after)
+	}
+}
+
+func TestQemuOfRejectsUnsupportedHost(t *testing.T) {
+	r, err := root.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, found, err := New(r, nil).qemuOf(1)
+	if found || errs.CodeOf(err) != errs.Unsupported {
+		t.Fatalf("qemuOf: found=%v error=%v, want unsupported", found, err)
+	}
+}
+
+func TestQemuScanRejectsUnsupportedCommandLine(t *testing.T) {
+	r, err := root.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := listQemuProcesses
+	t.Cleanup(func() { listQemuProcesses = saved })
+	listQemuProcesses = func() ([]win.Process, error) {
+		return []win.Process{{PID: 4242, Name: "qemu-system-x86_64"}}, nil
+	}
+	if _, err := scanQemuOf([]*root.Root{r}, []int{1}); errs.CodeOf(err) != errs.Unsupported {
+		t.Fatalf("lost command-line unsupported: %v", err)
 	}
 }
 

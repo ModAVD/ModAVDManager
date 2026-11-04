@@ -213,6 +213,10 @@ func (s *server) respondJob(w http.ResponseWriter) func(jobView, error) {
 }
 
 func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
+	if !root.CurrentPlatform().Windows() {
+		writeError(w, errs.New(errs.Unsupported, "当前平台暂不支持打开目录"))
+		return
+	}
 	var body struct {
 		What  string `json:"what"`
 		Index *int   `json:"index"`

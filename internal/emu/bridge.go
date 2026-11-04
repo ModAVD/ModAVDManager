@@ -261,6 +261,9 @@ type bridgeRun struct {
 	LogFile string // its whole output
 }
 
+// bridgeCommandContext lets tests observe command creation before any process starts.
+var bridgeCommandContext = exec.CommandContext
+
 // runBridgeScript runs <root>\tools\modavd-bridge.ps1 <action> on instance i with Windows PowerShell 5.1 (what the
 // release notes tell users to run), against the root's private adb server and the root's adb. Its output goes to
 // logs\modavd-bridge-<i>-<time>.log; the console encoding is set to UTF-8 first, otherwise a process without a console
@@ -290,7 +293,7 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 
 	cctx, cancel := context.WithTimeout(ctx, bridgeScriptTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	cmd := bridgeCommandContext(cctx, ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	// the script's adb calls: same environment as ours (an adb that starts a server must not scan local ports either)
 	cmd.Env = m.ADB.Env()
 	win.HideConsoleCmd(cmd)
@@ -602,7 +605,10 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
-	p, wasRunning := bridgeFindQemu(m, i)
+	p, wasRunning, err := bridgeFindQemu(m, i)
+	if err != nil {
+		return nil, err
+	}
 	windowed := false // how the cold boots below come back
 	if wasRunning {
 		windowed, _ = qemuWindowed(p)
@@ -751,7 +757,9 @@ func (m *Manager) bridgeStop(ctx context.Context, i int, res *BridgeResult) erro
 func (m *Manager) waitQemuGone(ctx context.Context, i int) error {
 	deadline := time.Now().Add(bridgeQemuGoneWait)
 	for {
-		if _, running := m.findQemu(i); !running {
+		if _, running, err := m.findQemu(i); err != nil {
+			return err
+		} else if !running {
 			return nil
 		}
 		if time.Now().After(deadline) {

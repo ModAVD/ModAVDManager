@@ -3,7 +3,6 @@
 package ui
 
 import (
-	"fmt"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"os"
@@ -30,4 +29,6 @@ func AppDataDir() string {
 func EdgeProfileDir() string                    { return filepath.Join(AppDataDir(), "ui-edge2") }
 func removeOldEdgeProfile(string, *logx.Logger) {}
 func FindEdge() string                          { return "" }
-func shellOpen(string) error                    { return fmt.Errorf("当前平台暂不支持打开浏览器") }
+func shellOpen(string) error {
+	return errs.New(errs.Unsupported, "当前平台暂不支持打开目录或浏览器")
+}

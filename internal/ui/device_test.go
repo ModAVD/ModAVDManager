@@ -283,6 +283,23 @@ func TestOpenFolders(t *testing.T) {
 	}
 }
 
+func TestOpenFolderHostErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"ordinary", errors.New("test open failed"), http.StatusInternalServerError, errs.Internal},
+		{"unsupported", errs.New(errs.Unsupported, "test open unsupported"), http.StatusUnprocessableEntity, errs.Unsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(opt *Options) { opt.openPath = func(string) error { return tc.err } })
+			expectError(t, h.do("POST", "/api/open", `{"what":"root"}`), tc.status, tc.code)
+		})
+	}
+}
+
 func multipartBody(t *testing.T, field, name, content string) ([]byte, string) {
 	t.Helper()
 	var buf bytes.Buffer

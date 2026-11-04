@@ -523,8 +523,8 @@ func TestStartNoSwitchWhileRunning(t *testing.T) {
 	m, i := opsTestInstance(t)
 	saved := startFindQemu
 	t.Cleanup(func() { startFindQemu = saved })
-	startFindQemu = func(*Manager, int) (win.Process, bool) {
-		return win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true
+	startFindQemu = func(*Manager, int) (win.Process, bool, error) {
+		return win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true, nil
 	}
 	ctx := context.Background()
 	_, err := m.Start(ctx, i, StartOptions{Window: true, Timeout: time.Second})

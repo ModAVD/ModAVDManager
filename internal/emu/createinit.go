@@ -54,7 +54,7 @@ var (
 	createStart   = (*Manager).Start
 	createStop    = (*Manager).stopAndWait
 	createCheck   = (*Manager).checkCreated
-	createRunning = func(m *Manager, i int) bool { _, ok := m.findQemu(i); return ok }
+	createRunning = func(m *Manager, i int) (bool, error) { _, ok, err := m.findQemu(i); return ok, err }
 )
 
 // creation is the creation state of instance i: "" (ready, or made before 0.2.0), "creating" or "failed", with the
@@ -432,7 +432,9 @@ func (m *Manager) checkCreated(ctx context.Context, i int, bridge bool, sr *Star
 
 // stopAndWait shuts instance i down normally (sync first; Stop's own fallbacks) and waits for its qemu to exit.
 func (m *Manager) stopAndWait(ctx context.Context, i int) error {
-	if _, running := m.findQemu(i); !running {
+	if _, running, err := m.findQemu(i); err != nil {
+		return err
+	} else if !running {
 		return nil
 	}
 	if _, err := m.Stop(ctx, i, StopOptions{}); err != nil {

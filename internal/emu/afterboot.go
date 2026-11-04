@@ -72,7 +72,8 @@ const (
 
 // afterBoot is AUTO-MAS _after_boot: the per-boot tuning (gone after a reboot, also one of the guest alone: the boot
 // watch then runs it again, see bootwatch.go) plus the one-time first-boot setup.
-// Failures are only warnings and never stop the boot; ctx is checked between the steps (errs.Canceled then). mode
+// Ordinary failures are only warnings; an unsupported host API stops the boot. ctx is checked between the steps
+// (errs.Canceled then). mode
 // says what this boot is owed (bootSetup); until is the deadline of its setup marker (zero without one), which the
 // warning of a deferred Vulkan fix names.
 //
@@ -90,6 +91,13 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		cores = avd.DefaultCPU
 	}
 	spare := 0 // set by step 1
+	if err := ctxErr(ctx); err != nil {
+		return r, err
+	}
+	p, running, err := m.findQemu(i)
+	if err != nil {
+		return r, err
+	}
 
 	steps := []func(){
 		// 0) per-app proxy (appproxy.go): first, so the listed apps meet its rules from their first connection
@@ -97,8 +105,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		func() {
 			prog.emit("tune", fmt.Sprintf("实例 %d 开机后调优", i), progressTune)
 			// 1) host scheduling: priority, X3D pinning; what the host has left sizes the busy loops of 8b
-			p, ok := m.findQemu(i)
-			if !ok {
+			if !running {
 				spare = planHost(nil, hostCPUs(win.L3Groups()), m.otherQemus(p, cores), cores).Spare
 				return
 			}
