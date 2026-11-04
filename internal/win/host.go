@@ -178,6 +178,31 @@ func DiskFree(path string) (uint64, error) {
 	return free, nil
 }
 
+// VolumeFileSystem is the file-system name of the volume that holds path ("NTFS", "ReFS", "exFAT", "FAT32", ...),
+// via GetVolumePathNameW (path -> the volume's mount point) then GetVolumeInformationW. Compact uses it to run only
+// on journaled file systems, where a write-through replace is a single transaction and the swap is atomic.
+func VolumeFileSystem(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	p, err := syscall.UTF16PtrFromString(abs)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	mount := make([]uint16, syscall.MAX_PATH+1)
+	if r, e := call(procGetVolumePathNameW, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&mount[0])),
+		uintptr(len(mount))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("找不到 %s 所在的卷: %v", path, e))
+	}
+	fsName := make([]uint16, 64)
+	if r, e := call(procGetVolumeInformationW, uintptr(unsafe.Pointer(&mount[0])), 0, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&fsName[0])), uintptr(len(fsName))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 所在卷的文件系统: %v", path, e))
+	}
+	return syscall.UTF16ToString(fsName), nil
+}
+
 // GetCompressedFileSize is the bytes the file at path really occupies on the volume (GetCompressedFileSizeW): for a
 // sparse or NTFS-compressed file that is less than its length. For a plain file it is the length rounded up to the
 // cluster.

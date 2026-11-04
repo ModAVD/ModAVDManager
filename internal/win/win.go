@@ -71,6 +71,8 @@ var (
 	procGetProcessAffinityMask           = modkernel32.NewProc("GetProcessAffinityMask")
 	procOpenFileMappingW                 = modkernel32.NewProc("OpenFileMappingW")
 	procGetDiskFreeSpaceExW              = modkernel32.NewProc("GetDiskFreeSpaceExW")
+	procGetVolumePathNameW               = modkernel32.NewProc("GetVolumePathNameW")
+	procGetVolumeInformationW            = modkernel32.NewProc("GetVolumeInformationW")
 	procGetCompressedFileSizeW           = modkernel32.NewProc("GetCompressedFileSizeW")
 	procGlobalMemoryStatusEx             = modkernel32.NewProc("GlobalMemoryStatusEx")
 	procLockFileEx                       = modkernel32.NewProc("LockFileEx")

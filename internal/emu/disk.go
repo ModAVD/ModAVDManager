@@ -311,6 +311,26 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		return res, nil
 	}
 
+	// Not seen running, but a start may be launching qemu right now (it holds the start lock for the whole start,
+	// before qemuOf can see the process). Take that lock so qemu-img does not read the overlay while a launch opens
+	// it; if a start holds it, report the header-only numbers rather than fail or stall a boot (ModAVD/ModAVD#2 P3-8).
+	startLock, ok, err := win.TryLock(m.lockPath(i, "start"))
+	if err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+m.lockPath(i, "start"))
+	}
+	if !ok {
+		res.NeedsShutdown = true
+		res.Warnings = append(res.Warnings, "实例正在启动：已分配和可回收的大小要关机后才能算")
+		return res, nil
+	}
+	defer startLock.Unlock()
+	// With the lock held, re-check: a start that finished between the first scan and the lock leaves qemu running.
+	if _, running := m.qemuOf(i); running {
+		res.Running, res.NeedsShutdown = true, true
+		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
+		return res, nil
+	}
+
 	out, failure, err := m.runQemuImgCheck(ctx, overlay)
 	if err != nil {
 		return nil, err
@@ -346,11 +366,35 @@ const (
 	diskConvertTimeout = 30 * time.Minute
 	// diskCompareTimeout bounds `qemu-img compare` of the before/after images.
 	diskCompareTimeout = 20 * time.Minute
+	// compactSpaceSlack is the headroom required on the volume beyond the estimated new overlay (allocated x 1.05),
+	// so a convert cannot fill the volume and stall other instances sharing it (ModAVD/ModAVD#2 P1-2).
+	compactSpaceSlack = 2 << 30 // 2 GiB
 )
 
-// userdataCompactTmp is the scratch file compact converts into before swapping it
-// over the overlay; a stray one from an interrupted run is removed on the next run.
-const userdataCompactTmp = userdataOverlay + ".compact.tmp"
+// userdataCompactTmp is the scratch file compact converts into before swapping it over the overlay. Its name is no
+// longer than the overlay's, so the temp path can never overflow MAX_PATH where the overlay path itself fits
+// (ModAVD/ModAVD#2 P3-3). A stray one from an interrupted run is validated and cleared on the next run
+// (clearStrayCompactTmp), never deleted unseen.
+const userdataCompactTmp = "userdata-qemu.cmp"
+
+// compactFileSystems are the journaled file systems compact runs on: a write-through replace is one transaction
+// there, so the final swap is atomic and a crash never leaves the overlay missing with only the temp file behind.
+var compactFileSystems = map[string]bool{"NTFS": true, "REFS": true}
+
+// requireCompactFS refuses to compact on a file system where the final rename is not atomic (exFAT, FAT32): a crash
+// mid-rename could leave only the temp file, and the emulator would then build an empty overlay over the backing,
+// so a later run would delete the one good copy (ModAVD/ModAVD#2 P2-1).
+func requireCompactFS(overlay string) error {
+	fs, err := win.VolumeFileSystem(overlay)
+	if err != nil {
+		return err
+	}
+	if !compactFileSystems[strings.ToUpper(fs)] {
+		return errs.Newf(errs.Unsupported, "数据盘所在卷是 %s，只能在 NTFS 或 ReFS 卷上整理磁盘", fs).
+			WithAdvice("在这种文件系统上换文件不是原子操作，中途断电可能丢数据；请把实例放到 NTFS 卷上再整理")
+	}
+	return nil
+}
 
 // DiskCompactResult reports `modavd disk <id> compact`.
 type DiskCompactResult struct {
@@ -475,17 +519,34 @@ func (m *Manager) verifyCompacted(ctx context.Context, orig, tmp string) error {
 		return errs.Newf(errs.Internal, "整理后的数据盘有 %d 处检查错误、%d 处损坏，放弃替换，原盘未动",
 			chk.CheckErrors, chk.Corruptions)
 	}
-	// compare the effective content (overlay + backing); exit 0 means identical.
-	so, se, code, err := m.runQemuImg(ctx, diskCompareTimeout, "compare", orig, tmp)
+	// compare the effective content (overlay + backing); equal means the swap is safe.
+	equal, err := m.compareEqual(ctx, orig, tmp)
 	if err != nil {
 		return err
 	}
-	if code != 0 {
-		return errs.Newf(errs.Internal,
-			"整理前后的数据盘内容对不上（qemu-img compare 退出码 %d）：%s，放弃替换，原盘未动",
-			code, qemuImgFail(so, se))
+	if !equal {
+		return errs.New(errs.Internal, "整理前后的数据盘内容对不上，放弃替换，原盘未动")
 	}
 	return nil
+}
+
+// compareEqual runs `qemu-img compare a b` and reports whether they hold identical guest-visible content (whole
+// backing chain, both sides). compare exits 0 when identical and 1 when they differ; any other exit (>=2, or a
+// killed process) is a real failure, returned as err so a mismatch is never mistaken for a compare that could not
+// run (ModAVD/ModAVD#2 P3-7).
+func (m *Manager) compareEqual(ctx context.Context, a, b string) (bool, error) {
+	so, se, code, err := m.runQemuImg(ctx, diskCompareTimeout, "compare", a, b)
+	if err != nil {
+		return false, err
+	}
+	switch code {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		return false, errs.Newf(errs.Internal, "qemu-img compare 没跑完（退出码 %d）: %s", code, qemuImgFail(so, se))
+	}
 }
 
 // syncFile flushes the file's pending writes to disk (FlushFileBuffers on Windows).
@@ -507,15 +568,87 @@ func dirHasEntries(path string) bool {
 	return err == nil && len(es) > 0
 }
 
+// probeCompactAllocated runs `qemu-img check` on the overlay and returns the bytes its live clusters hold
+// (allocated clusters x cluster size), used to size the volume headroom compact needs (ModAVD/ModAVD#2 P1-2). It
+// refuses a disk whose check reports errors or corruption: the size would be unreliable and compacting a damaged
+// image is unsafe. The overlay must not be open in a running qemu (compact holds the locks that guarantee that).
+func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clusterBytes int64) (int64, error) {
+	out, failure, err := m.runQemuImgCheck(ctx, overlay)
+	if err != nil {
+		return 0, err
+	}
+	if failure != "" {
+		return 0, errs.Newf(errs.Internal, "整理前检查数据盘没通过：%s，没有整理", failure)
+	}
+	chk, err := parseQemuImgCheck(out)
+	if err != nil {
+		return 0, err
+	}
+	if chk.CheckErrors > 0 || chk.Corruptions > 0 {
+		return 0, errs.Newf(errs.Unsupported,
+			"数据盘镜像有 %d 处检查错误、%d 处损坏，先修复再整理", chk.CheckErrors, chk.Corruptions).
+			WithAdvice("可以先用 modavd disk <id> info 看一下，修复镜像后再整理")
+	}
+	return *chk.AllocatedClusters * clusterBytes, nil
+}
+
+// clearStrayCompactTmp deals with a temp file left by an interrupted earlier compact, before a new run reuses the
+// path. On the journaled file systems compact runs on the overlay is always the intact disk when a temp is present
+// (the swap is atomic), so the temp is at most a half-written or stale copy; it is still never deleted unseen
+// (ModAVD/ModAVD#2 P2-1): a temp that will not open as qcow2 is dropped, one that opens and matches the current
+// overlay is dropped, and one that opens but differs stops the run with both files kept for the user to resolve.
+func (m *Manager) clearStrayCompactTmp(ctx context.Context, overlay, tmp string) error {
+	if _, err := os.Stat(tmp); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return errs.Wrap(errs.Internal, err, "查看整理临时文件失败: "+err.Error())
+	}
+	m.Log.Infof("发现上次整理遗留的临时文件 %s，先检查再决定去留", tmp)
+	out, failure, err := m.runQemuImgCheck(ctx, tmp)
+	if err != nil {
+		return err
+	}
+	if failure != "" {
+		m.Log.Infof("整理临时文件打不开（上次转换没写完），删除：%s", tmp)
+		return removeCompactTmp(tmp)
+	}
+	if chk, perr := parseQemuImgCheck(out); perr != nil || chk.CheckErrors > 0 || chk.Corruptions > 0 {
+		m.Log.Infof("整理临时文件检查没通过，删除：%s", tmp)
+		return removeCompactTmp(tmp)
+	}
+	equal, err := m.compareEqual(ctx, overlay, tmp)
+	if err != nil {
+		return err
+	}
+	if equal {
+		m.Log.Infof("整理临时文件和当前数据盘内容一致，删除：%s", tmp)
+		return removeCompactTmp(tmp)
+	}
+	return errs.New(errs.Internal, "发现上次整理遗留的临时文件，和当前数据盘内容不一致，为安全起见没有删除任何文件").
+		WithAdvice(fmt.Sprintf("请确认数据盘 %s 能正常开机后，手动删除 %s 再重试整理", overlay, tmp))
+}
+
+// removeCompactTmp deletes a compact temp file; a missing file is not an error.
+func removeCompactTmp(tmp string) error {
+	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+		return errs.Wrap(errs.Internal, err, "删除整理临时文件失败: "+err.Error())
+	}
+	return nil
+}
+
 // DiskCompact offline-compacts instance i's data disk: it converts the overlay to a
 // fresh qcow2 that keeps only the clusters still in use (same backing), checks and
 // compares the copy, then atomically swaps it in with a write-through replace. The
 // instance must be powered off; compact holds its start/stop/bridge/create locks so
-// nothing boots it mid-rewrite. It refuses when the data disk or the instance has
-// snapshots (the convert would drop them). The original is untouched until the final
-// replace, so a crash at any earlier point leaves a working instance (a stray
-// .compact.tmp is removed on the next run). errs.Busy when the instance is running or
-// a lock is held; errs.Unsupported for snapshots or a missing backing.
+// nothing boots it mid-rewrite. It runs only on NTFS/ReFS (where the swap is atomic),
+// refuses when the data disk or the instance has snapshots (the convert would drop
+// them), and refuses when the volume lacks room for the copy (so a convert cannot fill
+// it and stall other instances). The original is untouched until the final replace, so
+// a crash at any earlier point leaves a working instance (a stray temp from an
+// interrupted run is validated and cleared on the next run, never deleted unseen).
+// errs.Busy when the instance is running or a lock is held; errs.Unsupported for a
+// non-journaled volume, snapshots, a missing backing or too little free space.
 func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
@@ -528,6 +661,9 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	if !regularFile(overlay) {
 		return nil, errs.Newf(errs.NotFound, "实例 %d 没有数据盘覆盖层: %s", i, overlay).
 			WithAdvice("实例还没开过机，或数据盘不是这种格式")
+	}
+	if err := requireCompactFS(overlay); err != nil {
+		return nil, err
 	}
 	unlock, err := m.lockInstanceForCompact(i)
 	if err != nil {
@@ -558,7 +694,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, errs.New(errs.Unsupported, "数据盘没有 backing，不整理（避免把整盘复制进来）")
 	}
 	if info.BackingFilenameFmt == "" {
-		return nil, errs.New(errs.Internal, "读不到数据盘 backing 的格式，不整理")
+		return nil, errs.New(errs.Unsupported, "读不到数据盘 backing 的格式，不整理")
 	}
 	backingName := filepath.Base(info.BackingFilename)
 
@@ -567,12 +703,40 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, err
 	}
 
+	// Clear a temp left by an interrupted earlier run first, so the space it would free counts toward the room check
+	// below (it may be as large as the whole copy); it is validated, not deleted unseen (ModAVD/ModAVD#2 P2-1).
 	tmp := filepath.Join(in.Dir, userdataCompactTmp)
-	_ = os.Remove(tmp) // clear a stray temp from an interrupted run
+	if err := m.clearStrayCompactTmp(ctx, overlay, tmp); err != nil {
+		return nil, err
+	}
 
-	// convert: a fresh overlay holding only the live clusters, same backing. -B skips
-	// the backing's data; -T none keeps the host cache out of a tens-of-GB copy.
-	so, se, code, err := m.runQemuImg(ctx, diskConvertTimeout, "convert", "-T", "none",
+	// Size the rewrite and refuse if the volume cannot hold the copy: a convert that fills the volume would stall
+	// other instances sharing it in io-error (ModAVD/ModAVD#2 P1-2). The new overlay is about the live-cluster size
+	// plus a little metadata; keep headroom beyond that.
+	hdr, err := readQcow2Header(overlay)
+	if err != nil {
+		return nil, err
+	}
+	allocated, err := m.probeCompactAllocated(ctx, overlay, hdr.ClusterSize)
+	if err != nil {
+		return nil, err
+	}
+	free, err := win.DiskFree(in.Dir)
+	if err != nil {
+		return nil, err
+	}
+	need := allocated + allocated/20 + compactSpaceSlack // ~ allocated x 1.05 + 2 GiB
+	if free < uint64(need) {
+		return nil, errs.Newf(errs.Unsupported,
+			"整理磁盘大约需要 %s 可用空间，%s 所在磁盘只剩 %s，请先腾出约 %s 再整理",
+			gib(need), in.Dir, gib(int64(free)), gib(need-int64(free))).
+			WithAdvice("整理会先写一份新的数据盘，空间不够会写满磁盘、拖累同一个磁盘上开着的其他实例")
+	}
+
+	// convert: a fresh overlay holding only the live clusters, same backing. -B skips the backing's data. The source
+	// is read through the host cache: a qcow2 source with cache=none (-T none) fails on 2.12's file-win32 because the
+	// header read is not sector-aligned, and the cache only touches referenced clusters, not the holes (#2 P1-1).
+	so, se, code, err := m.runQemuImg(ctx, diskConvertTimeout, "convert",
 		"-O", "qcow2", "-B", backingName, "-o", "backing_fmt="+info.BackingFilenameFmt, overlay, tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
