@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"modavd/internal/appproxy"
 	"modavd/internal/emu"
@@ -135,6 +136,8 @@ func formatAppProxy(w io.Writer, r *emu.AppProxyResult) {
 	}
 	if g := r.Guest; g != nil {
 		formatProxyGuest(w, g)
+	} else if r.GuestError != "" {
+		fmt.Fprintln(w, "客体：问不到状态（"+r.GuestError+"）")
 	}
 }
 
@@ -154,11 +157,20 @@ func formatProxyGuest(w io.Writer, g *appproxy.Status) {
 	rules := map[string]string{appproxy.RulesOK: "就位", appproxy.RulesPartial: "缺了几条，正在补",
 		appproxy.RulesFailed: "挂不上：" + g.RulesError, appproxy.RulesOff: "没有"}[g.Rules]
 	fmt.Fprintf(w, "客体：在运行（pid %d），规则%s\n", g.PID, orDash(rules))
-	tcp := map[string]string{"ok": "能连", "failed": "连不上", "unknown": "还没用过"}[g.Server.TCP]
+	// TCP is the last connection's outcome only: one that failed may be a target that did not answer
+	tcp := map[string]string{"ok": "能连", "failed": "最近一次没连上", "unknown": "还没用过"}[g.Server.TCP]
 	udp := map[string]string{"ok": "可用", "unsupported": "不通（代理不转 UDP）", "failed": "失败", "unknown": "还没用过"}[g.Server.UDP]
 	fmt.Fprintf(w, "代理：TCP %s，UDP %s\n", orDash(tcp), orDash(udp))
-	if g.Server.TCP == "failed" && g.Server.LastError != "" {
-		fmt.Fprintln(w, "最近的错误："+g.Server.LastError)
+	if g.Server.TCP == "failed" {
+		line := "最近的错误"
+		if at := localStamp(g.Server.LastErrorAt); at != "" {
+			line += "（" + at + "）"
+		}
+		line += "：" + orDash(g.Server.LastError)
+		if at := localStamp(g.Server.LastOKAt); at != "" {
+			line += "；上次连上是 " + at
+		}
+		fmt.Fprintln(w, line)
 	}
 	var missing []string
 	for _, a := range g.Apps {
@@ -193,7 +205,18 @@ func formatAppProxyTest(w io.Writer, r *emu.AppProxyTestResult) {
 	}
 	if r.Guest != nil {
 		formatProxyGuest(w, r.Guest)
+	} else if r.GuestError != "" {
+		fmt.Fprintln(w, "客体：问不到状态（"+r.GuestError+"）")
 	}
+}
+
+// localStamp is an RFC 3339 time of the guest's as this computer's local "01-02 15:04:05"; "" when there is none.
+func localStamp(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return ""
+	}
+	return t.Local().Format("01-02 15:04:05")
 }
 
 func orDash(s string) string {

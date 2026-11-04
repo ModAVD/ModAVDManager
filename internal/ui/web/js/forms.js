@@ -16,9 +16,10 @@ const CREATE_TIME = '一般要几分钟';
 const settingsOpen = new Map();
 let seq = 0;
 
-const hint = (text, id) => h('p', { class: 'f-hint', text, id });
-const cell = (...kids) => h('div', { class: 'f-ctl' }, kids);
-const inputRow = (text, el, ...more) => [h('label', { class: 'f-label', for: (el.id ? el : el.querySelector('input')).id, text }), cell(el, ...more)];
+// the form parts the other dialogs (proxy.js) use too
+export const hint = (text, id) => h('p', { class: 'f-hint', text, id });
+export const cell = (...kids) => h('div', { class: 'f-ctl' }, kids);
+export const inputRow = (text, el, ...more) => [h('label', { class: 'f-label', for: (el.id ? el : el.querySelector('input')).id, text }), cell(el, ...more)];
 
 function segRow(text, name, opts, value, ...more) {
   const id = 'seg' + ++seq;
@@ -27,9 +28,9 @@ function segRow(text, name, opts, value, ...more) {
       opts.map(([v, t]) => h('label', null, h('input', { type: 'radio', name, value: String(v), checked: v === value }), h('span', { text: t })))), ...more)];
 }
 
-const errorBox = () => h('div', { class: 'form-error', role: 'alert', hidden: true });
+export const errorBox = () => h('div', { class: 'form-error', role: 'alert', hidden: true });
 
-function setBusy(b, busy, text) {
+export function setBusy(b, busy, text) {
   if (!b.idle) b.idle = [...b.childNodes];
   attr(b, 'aria-busy', busy || null);
   attr(b, 'aria-disabled', busy || null);
@@ -37,7 +38,7 @@ function setBusy(b, busy, text) {
 }
 
 // Runs one submit: busy button, the API call, then close + toast, or the error inside the dialog.
-async function submit(ctl, b, text, box, work, onFail) {
+export async function submit(ctl, b, text, box, work, onFail) {
   if (ctl.busy || b.getAttribute('aria-disabled') === 'true') return;
   ctl.busy = true;
   box.hidden = true;

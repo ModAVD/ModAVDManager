@@ -6,6 +6,7 @@ import { api, connectEvents } from './api.js';
 import { initUI } from './ui.js';
 import { initGrid, renderGrid, viewState, setView } from './cards.js';
 import { openCreate, openSettings, openDelete } from './forms.js';
+import { openProxy } from './proxy.js';
 import { runCheck, checkSummary, openCheck, openActivity, renderBanner } from './panels.js';
 import { openViewer, openLogs } from './viewer.js';
 import { loadUpdate, onUpdate, renderUpdateChip, openUpdate } from './update.js';
@@ -152,13 +153,13 @@ function render() {
   $('reconnectBtn').hidden = !stale;
   $('grid').classList.toggle('stale', stale && !!list);
 
-  // ?open=create | check | activity | update | settings:<i> | delete:<i> | viewer:<i> | logs:<i>  (deep links, screenshots)
+  // ?open=create | check | activity | update | settings:<i> | delete:<i> | proxy:<i> | viewer:<i> | logs:<i>  (deep links, screenshots)
   if (!opened && list) {
     opened = true;
     const [k, a] = (params.get('open') || '').split(':');
     const i = Number(a);
     const fn = { create: openCreate, check: openCheck, activity: openActivity, update: openUpdate, settings: () => openSettings(i), delete: () => openDelete(i),
-      viewer: () => openViewer(i), logs: () => openLogs(i, params.get('kind')) }[k];
+      proxy: () => openProxy(i), viewer: () => openViewer(i), logs: () => openLogs(i, params.get('kind')) }[k];
     if (fn) setTimeout(fn, 30);
   }
 }
@@ -203,6 +204,10 @@ const events = connectEvents({
   },
   job: A.onJob,
   update: onUpdate,
+  proxy(d) {
+    S.proxyMarks = Object.fromEntries((d.marks || []).map((m) => [m.index, m]));
+    update();
+  },
   log(l) {
     S.logs.push(l);
     if (S.logs.length > 600) S.logs.splice(0, 100);

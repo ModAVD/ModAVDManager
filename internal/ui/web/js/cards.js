@@ -7,6 +7,7 @@ import { label, uptime, stripInst, pct, cfgText } from './format.js';
 import * as A from './actions.js';
 import { openMenu } from './ui.js';
 import { openSettings, openDelete } from './forms.js';
+import { openProxy, markOf } from './proxy.js';
 import { openViewer, openLogs } from './viewer.js';
 import { openActivity } from './panels.js';
 
@@ -131,6 +132,8 @@ function makeCard(i) {
     h('div', { class: 'prog' }, h('div', { class: 'prog-row' }, h('span', { class: 'spin' }), c.progMsg), c.progBar),
     c.peek);
   c.title = h('h2', { class: 'card-title', id: `card-t-${i}` });
+  // 按应用走代理 is on: the mark opens its dialog; red when the guest says it is not working
+  c.pmark = btn('pmark', [icon('shield'), h('span', { text: '代理' })], () => openProxy(i), { hidden: true });
   c.sub = h('div', { class: 'card-sub' });
   c.lmsg = h('div', { class: 'card-sub card-lmsg' });
   c.cfg = h('div', { class: 'card-cfg', title: '内存 · CPU 核数 · 帧率 · 数据盘上限（按实际写入增长）' });
@@ -156,7 +159,7 @@ function makeCard(i) {
   c.lbar = h('div', { class: 'bar card-lbar', 'aria-hidden': 'true' }, c.lfill);
   c.el = h('article', { class: 'card', 'aria-labelledby': `card-t-${i}` }, c.screen,
     h('div', { class: 'card-body' },
-      h('div', { class: 'card-head' }, h('div', { class: 'card-titles' }, c.title, c.sub, c.lmsg), c.pill),
+      h('div', { class: 'card-head' }, h('div', { class: 'card-titles' }, h('div', { class: 'card-tline' }, c.title, c.pmark), c.sub, c.lmsg), c.pill),
       c.cfg,
       h('div', { class: 'adb' }, h('span', { class: 'adb-label', text: 'ADB' }), c.adb, c.copy),
       c.notes),
@@ -195,6 +198,13 @@ function updateCard(c, inst) {
   attr(c.more, 'aria-label', `更多操作：${name}`);
   attr(c.view, 'aria-label', `打开「${name}」的画面`);
   attr(c.peek, 'aria-label', `打开「${name}」的画面`);
+  const pm = markOf(inst);
+  c.pmark.hidden = !pm;
+  if (pm) {
+    attr(c.pmark, 'class', 'pmark tone-' + pm.tone);
+    c.pmark.title = '按应用走代理：' + pm.text;
+    attr(c.pmark, 'aria-label', '按应用走代理：' + pm.text);
+  }
   renderNotes(c, inst, v);
 
   if (!live) {
@@ -292,6 +302,7 @@ function menuItems(c) {
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },
     { label: '设置…', icon: 'sliders', disabled: fresh, run: () => openSettings(i) },
+    { label: '按应用走代理…', icon: 'shield', disabled: fresh, run: () => openProxy(i) },
     { label: '删除…', icon: 'trash', danger: true, disabled: running || busy, hint: running || busy ? '先关机' : '', run: () => openDelete(i) },
   ];
 }

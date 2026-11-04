@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/appproxy"
 	"modavd/internal/emu"
 )
 
@@ -29,6 +30,12 @@ type backend interface {
 	Serial(i int) string
 	// RootInfo describes the root without asking any instance (GET /api/info).
 	RootInfo() emu.RootInfo
+	// The per-app proxy (emu/appproxy.go). SuggestAppProxy and ProbeAppProxy are emu's functions of those names: they
+	// ask the host, not an instance.
+	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
+	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
+	SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error)
+	ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error)
 }
 
 // managerBackend adapts *emu.Manager.
@@ -41,6 +48,14 @@ func (b managerBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...
 }
 
 func (b managerBackend) Serial(i int) string { return b.Root.Ports().Serial(i) }
+
+func (managerBackend) SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error) {
+	return emu.SuggestAppProxy(ctx)
+}
+
+func (managerBackend) ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error) {
+	return emu.ProbeAppProxy(ctx, server, withUDP)
+}
 
 // RootInfo is what emu fills into ListResult / CheckResult (emu's own helper is unexported); List would cost an adb
 // call per running instance.

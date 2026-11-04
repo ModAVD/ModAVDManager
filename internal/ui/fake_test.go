@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/appproxy"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
@@ -41,9 +43,24 @@ type fake struct {
 	stops     []emu.StopOptions
 	shells    []string
 	shellCode int
+	shellOut  string
+	shellErr  error
 	installs  []fakeInstall
-	startGate chan struct{} // Start waits here (after its first progress) when set
-	stopGate  chan struct{}
+
+	// the per-app proxy: AppProxy answers proxy[i] (a fresh unset one when missing); SetAppProxy records the change,
+	// applies it to proxy[i] and answers with proxyApplied ("next_boot" when "")
+	proxy        map[int]*emu.AppProxyResult
+	proxySets    []appproxy.Change
+	proxyApplied string
+	proxyErr     error // SetAppProxy fails with it
+	proxyCalls   atomic.Int32
+	proxyAsked   []int // the index of each AppProxy call
+	suggest      *emu.AppProxySuggestion
+	suggestErr   error
+	probes       []string // "server udp=true|false"
+	probeErr     error
+	startGate    chan struct{} // Start waits here (after its first progress) when set
+	stopGate     chan struct{}
 
 	shot        adb.Result
 	shotDelay   time.Duration
@@ -59,7 +76,7 @@ type fakeInstall struct {
 }
 
 func newFake() *fake {
-	f := &fake{instances: map[int]emu.InstanceInfo{}, infoErr: map[int]error{}}
+	f := &fake{instances: map[int]emu.InstanceInfo{}, infoErr: map[int]error{}, proxy: map[int]*emu.AppProxyResult{}}
 	f.put(3, emu.StatusOffline)
 	f.put(4, emu.StatusOffline)
 	return f
@@ -223,7 +240,73 @@ func (b fakeBackend) Shell(ctx context.Context, i int, command string, timeout t
 	b.f.mu.Lock()
 	defer b.f.mu.Unlock()
 	b.f.shells = append(b.f.shells, command)
-	return &emu.ShellResult{ExitCode: b.f.shellCode, Output: ""}, nil
+	if b.f.shellErr != nil {
+		return nil, b.f.shellErr
+	}
+	return &emu.ShellResult{ExitCode: b.f.shellCode, Output: b.f.shellOut}, nil
+}
+
+func (b fakeBackend) AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error) {
+	b.f.proxyCalls.Add(1)
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.proxyAsked = append(b.f.proxyAsked, i)
+	if _, ok := b.f.instances[i]; !ok {
+		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+	}
+	return b.f.proxyOf(i), nil
+}
+
+// proxyOf is a copy of proxy[i] (the caller holds mu).
+func (f *fake) proxyOf(i int) *emu.AppProxyResult {
+	r := &emu.AppProxyResult{Index: i, Apps: []string{}, Notes: []string{}}
+	if p := f.proxy[i]; p != nil {
+		*r = *p
+		r.Apps = append([]string{}, p.Apps...)
+	}
+	return r
+}
+
+func (b fakeBackend) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.proxySets = append(b.f.proxySets, c)
+	if b.f.proxyErr != nil {
+		return nil, b.f.proxyErr
+	}
+	r := b.f.proxyOf(i)
+	if c.Enabled != nil {
+		r.Enabled = *c.Enabled
+	}
+	if c.Server != nil {
+		r.Server = *c.Server
+	}
+	if c.Apps != nil {
+		r.Apps = append([]string{}, *c.Apps...)
+	}
+	r.Applied = b.f.proxyApplied
+	if r.Applied == "" {
+		r.Applied = "next_boot"
+	}
+	b.f.proxy[i] = r
+	return b.f.proxyOf(i), nil
+}
+
+func (b fakeBackend) SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	return b.f.suggest, b.f.suggestErr
+}
+
+func (b fakeBackend) ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.probes = append(b.f.probes, fmt.Sprintf("%s udp=%t", server, withUDP))
+	if b.f.probeErr != nil {
+		return nil, b.f.probeErr
+	}
+	return &emu.AppProxyProbe{Server: server, HostAddr: "127.0.0.1:7890",
+		ProbeResult: appproxy.ProbeResult{Kind: "socks5", UDP: "ok"}, Notes: []string{}}, nil
 }
 
 func (b fakeBackend) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
@@ -303,6 +386,7 @@ func newHarness(t *testing.T, mod func(*Options)) *harness {
 	s.port = h.ts.Listener.Addr().(*net.TCPAddr).Port
 	h.ts.Start()
 	go s.pollLoop()
+	go s.proxyLoop()
 	h.client = &http.Client{
 		Timeout:       15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

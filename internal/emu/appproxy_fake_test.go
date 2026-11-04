@@ -29,6 +29,7 @@ import (
 //	pending  the SHA-256 of the modavd-proxyd.new pushed and not yet put in place
 //	config   the config.json last put in place
 //	tamper   when present, putting the pushed daemon in place leaves another file there instead
+//	mute     when present, root commands fail the way a guest that does not answer does
 //	rules    the rules a start reports (default ok)
 //	root     one line per root command: "<cmd>" when it ran, "refused <cmd>" when its hash check stopped it,
 //	         "unchecked <cmd>" when it came without one, "replace" for the swap
@@ -106,6 +107,10 @@ func fakeProxyGuest(args []string) (handled bool, code int) {
 		return false, 0
 	}
 	script := strings.TrimSuffix(strings.TrimPrefix(cmd, "su 0 sh -c '"), "'")
+	if _, err := os.Stat(filepath.Join(dir, "mute")); err == nil {
+		fmt.Println("error: closed")
+		return true, 1
+	}
 	if strings.Contains(script, "mv -f "+proxyExe+".new "+proxyExe) {
 		appendLine("root", "replace")
 		if _, err := os.Stat(filepath.Join(dir, "tamper")); err == nil {
@@ -271,9 +276,15 @@ func TestPutAppProxyGuest(t *testing.T) {
 	g.reset()
 	g.set("sum", strings.Repeat("ef", 32))
 	setProxyMeta(t, m, six, appproxy.Setting{Server: on.Server, Apps: on.Apps})
-	m.setupAppProxy(ctx, six)
+	var lines []string
+	m.withLog(func(_ logx.Level, msg string) { lines = append(lines, msg) }).setupAppProxy(ctx, six)
 	if got := g.lines("root"); !slices.Equal(got, []string{"replace", "stop"}) {
 		t.Errorf("off at boot: root commands %q", got)
+	}
+	// the stop does not say whether a daemon ran before, so the line does not claim one was stopped
+	if !slices.Contains(lines, "实例 6 按应用走代理：已关，客体里没有在跑的客体程序，也没有它的规则") ||
+		slices.ContainsFunc(lines, func(s string) bool { return strings.Contains(s, "已停") }) {
+		t.Errorf("off at boot: messages %q", lines)
 	}
 	// no daemon there: nothing to stop, nothing run
 	g.reset()
@@ -297,8 +308,20 @@ func TestPutAppProxyGuest(t *testing.T) {
 	g.reset()
 	g.set("sum", strings.Repeat("12", 32))
 	var notes []string
-	if st := m.guestStatus(ctx, six, &notes); st != nil || len(notes) != 1 || !strings.Contains(notes[0], "不一样") {
-		t.Errorf("query of another daemon: %+v %q", st, notes)
+	if st, why := m.guestStatus(ctx, six, &notes); st != nil || why != "" || len(notes) != 1 || !strings.Contains(notes[0], "不一样") {
+		t.Errorf("query of another daemon: %+v %q %q", st, why, notes)
+	}
+	// a guest that does not answer: no status, and why (which a guest without the daemon has none of)
+	g.set("sum", g.daemon.sum)
+	g.set("mute", "1")
+	notes = nil
+	if st, why := m.guestStatus(ctx, six, &notes); st != nil || !strings.Contains(why, "没有正常回答") || len(notes) != 0 {
+		t.Errorf("a guest that does not answer: %+v %q %q", st, why, notes)
+	}
+	os.Remove(filepath.Join(g.dir, "mute"))
+	g.set("sum", "")
+	if st, why := m.guestStatus(ctx, six, &notes); st != nil || why != "" || len(notes) != 0 {
+		t.Errorf("no daemon there: %+v %q %q", st, why, notes)
 	}
 	if got := g.lines("root"); !slices.Equal(got, []string{"refused status"}) {
 		t.Errorf("query: root commands %q", got)

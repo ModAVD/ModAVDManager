@@ -171,6 +171,64 @@ func TestAppProxySetting(t *testing.T) {
 	}
 }
 
+// TestProbeAppProxy: the manager's 检测. No UDP proxy here (a real one would send the DNS query out).
+func TestProbeAppProxy(t *testing.T) {
+	ctx := context.Background()
+	socks := startTestProxy(t, testproxy.ModeSOCKS5NoUDP)
+	httpP := startTestProxy(t, testproxy.ModeHTTP)
+	port := func(p *testproxy.Proxy) string { return fmt.Sprint(p.Addr().Port()) }
+
+	// no kind: the one that answers; loopback becomes the guest's 10.0.2.2, and the notes say so
+	r, err := ProbeAppProxy(ctx, " localhost:"+port(socks), true)
+	if err != nil || r.Server != "socks5://10.0.2.2:"+port(socks) || r.HostAddr != "127.0.0.1:"+port(socks) || r.Kind != "socks5" ||
+		r.UDP != "unsupported" || len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "10.0.2.2") {
+		t.Fatalf("no kind: %+v %v", r, err)
+	}
+	// a kind that is not the one there: replaced, and said
+	r, err = ProbeAppProxy(ctx, "socks5://127.0.0.1:"+port(httpP), false)
+	if err != nil || r.Server != "http://10.0.2.2:"+port(httpP) || r.Kind != "http" || r.UDP != "" || len(r.Notes) != 2 ||
+		!strings.Contains(r.Notes[1], "改成了 http://10.0.2.2:"+port(httpP)) {
+		t.Fatalf("other kind: %+v %v", r, err)
+	}
+	// the guest's own address: probed on the host's loopback, kept as it is
+	r, err = ProbeAppProxy(ctx, "http://10.0.2.2:"+port(httpP), false)
+	if err != nil || r.Server != "http://10.0.2.2:"+port(httpP) || r.HostAddr != "127.0.0.1:"+port(httpP) || len(r.Notes) != 0 {
+		t.Fatalf("guest address: %+v %v", r, err)
+	}
+	for in, code := range map[string]string{
+		"":                                       errs.Usage,
+		"auto":                                   errs.Usage,
+		"proxy.lan:1080":                         errs.InvalidArgument,
+		"ftp://127.0.0.1:21":                     errs.InvalidArgument,
+		fmt.Sprintf("127.0.0.1:%d", deadPort(t)): errs.ProxyUnavailable,
+	} {
+		if r, err := ProbeAppProxy(ctx, in, false); errs.CodeOf(err) != code {
+			t.Errorf("%q: %+v %v, want %s", in, r, err, code)
+		}
+	}
+}
+
+// TestSuggestAppProxy: the manager's 从系统代理读取 (environment variables only: a test cannot set the Windows proxy).
+func TestSuggestAppProxy(t *testing.T) {
+	ctx := context.Background()
+	socks := startTestProxy(t, testproxy.ModeSOCKS5NoUDP)
+	noHostProxy(t)
+	t.Setenv("ALL_PROXY", fmt.Sprintf("socks5://user:pw@127.0.0.1:%d", socks.Addr().Port()))
+	r, err := SuggestAppProxy(ctx)
+	if err != nil || r.Server != fmt.Sprintf("socks5://10.0.2.2:%d", socks.Addr().Port()) || len(r.Notes) != 2 ||
+		!strings.Contains(r.Notes[0], "ALL_PROXY") || !strings.Contains(r.Notes[0], "账号密码") || !strings.Contains(r.Notes[1], "10.0.2.2") {
+		t.Fatalf("ALL_PROXY: %+v %v", r, err)
+	}
+	// an HTTP proxy that does not answer now: taken as set, and said
+	noHostProxy(t)
+	dead := deadPort(t)
+	t.Setenv("HTTP_PROXY", fmt.Sprintf("http://127.0.0.1:%d", dead))
+	r, err = SuggestAppProxy(ctx)
+	if err != nil || r.Server != fmt.Sprintf("http://10.0.2.2:%d", dead) || !strings.Contains(r.Notes[0], "现在连不上") {
+		t.Fatalf("HTTP_PROXY down: %+v %v", r, err)
+	}
+}
+
 func TestSettingValueKeepsOtherKeys(t *testing.T) {
 	old, err := jsonord.Parse([]byte(`{"server": "socks5://10.0.2.2:1", "future": 1, "dns": "8.8.8.8:53"}`))
 	if err != nil {

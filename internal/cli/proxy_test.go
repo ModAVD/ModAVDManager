@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"modavd/internal/appproxy"
 	"modavd/internal/emu"
@@ -75,5 +76,37 @@ func TestFormatAppProxy(t *testing.T) {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("missing %q in\n%s", want, b.String())
 		}
+	}
+
+	// the guest did not answer
+	b.Reset()
+	formatAppProxy(&b, &emu.AppProxyResult{Index: 2, Apps: []string{}, GuestError: "客体程序没有正常回答"})
+	if !strings.Contains(b.String(), "客体：问不到状态（客体程序没有正常回答）") {
+		t.Errorf("guest error:\n%s", b.String())
+	}
+
+	// the last connection failed: said as the last one, with when, and when one last went through
+	b.Reset()
+	errAt := time.Date(2026, 11, 3, 23, 40, 5, 0, time.UTC)
+	okAt := errAt.Add(-7 * time.Second)
+	formatProxyGuest(&b, &appproxy.Status{Running: true, PID: 7, Rules: appproxy.RulesOK,
+		Server: appproxy.ServerStatus{TCP: "failed", UDP: "ok", LastError: "超时",
+			LastErrorAt: errAt.Format(time.RFC3339), LastOKAt: okAt.Format(time.RFC3339)}})
+	out = b.String()
+	for _, want := range []string{"TCP 最近一次没连上，UDP 可用",
+		"最近的错误（" + errAt.Local().Format("01-02 15:04:05") + "）：超时；上次连上是 " + okAt.Local().Format("01-02 15:04:05")} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "连不上") {
+		t.Errorf("one failed connection said as 连不上:\n%s", out)
+	}
+	// never went through, no times: still the error
+	b.Reset()
+	formatProxyGuest(&b, &appproxy.Status{Running: true, Rules: appproxy.RulesOK,
+		Server: appproxy.ServerStatus{TCP: "failed", UDP: "unknown", LastError: "connection refused"}})
+	if out := b.String(); !strings.Contains(out, "最近的错误：connection refused\n") {
+		t.Errorf("no times:\n%s", out)
 	}
 }

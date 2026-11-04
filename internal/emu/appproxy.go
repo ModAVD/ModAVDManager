@@ -45,7 +45,9 @@ type AppProxyResult struct {
 	Notes []string `json:"notes"`
 	// Guest is the daemon's state while the instance runs and the guest answers; null otherwise.
 	Guest *appproxy.Status `json:"guest"`
-	Error string           `json:"error"`
+	// GuestError: the instance runs, but its guest could not be asked (adb or su failed); Guest is null then.
+	GuestError string `json:"guest_error"`
+	Error      string `json:"error"`
 }
 
 // AppProxySummary is the per-app proxy in InstanceInfo: from mas-avd.json only, no adb.
@@ -61,8 +63,9 @@ type AppProxyTestResult struct {
 	Server   string `json:"server"`    // as the guest reaches it
 	HostAddr string `json:"host_addr"` // where the host probed it (10.0.2.2 is the host's 127.0.0.1)
 	appproxy.ProbeResult
-	Guest *appproxy.Status `json:"guest"` // as for AppProxyResult
-	Notes []string         `json:"notes"` // never null; as for AppProxyResult
+	Guest      *appproxy.Status `json:"guest"` // as for AppProxyResult
+	GuestError string           `json:"guest_error"`
+	Notes      []string         `json:"notes"` // never null; as for AppProxyResult
 }
 
 const (
@@ -150,7 +153,7 @@ func (m *Manager) AppProxy(ctx context.Context, i int) (*AppProxyResult, error) 
 	}
 	res := newAppProxyResult(i, s)
 	if m.guestUp(ctx, i) {
-		res.Guest = m.guestStatus(ctx, i, &res.Notes)
+		res.Guest, res.GuestError = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil
 }
@@ -299,9 +302,81 @@ func (m *Manager) TestAppProxy(ctx context.Context, i int) (*AppProxyTestResult,
 		res.UDPError = strings.TrimSpace(res.UDPError + fmt.Sprintf("（设的是 %s，那个端口说的是 %s）", srv.Scheme, res.Kind))
 	}
 	if m.guestUp(ctx, i) {
-		res.Guest = m.guestStatus(ctx, i, &res.Notes)
+		res.Guest, res.GuestError = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil
+}
+
+// AppProxyProbe is a proxy address probed from the host before it is saved (the manager's 检测).
+type AppProxyProbe struct {
+	Server   string `json:"server"`    // as the guest reaches it, with the kind that answered
+	HostAddr string `json:"host_addr"` // where the host probed it
+	appproxy.ProbeResult
+	Notes []string `json:"notes"` // never null
+}
+
+// ProbeAppProxy probes an address as typed (with or without its kind; localhost and 127.x are the host's) from the
+// host: what speaks there and, withUDP, UDP through a SOCKS5 proxy (one DNS query to appproxy.DefaultDNS). Server comes
+// back with the kind that answered, which replaces a typed one: SOCKS5 on an http:// address (a mixed port) also
+// carries UDP, and an HTTP proxy on a socks5:// address would take nothing.
+func ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*AppProxyProbe, error) {
+	v := strings.TrimSpace(server)
+	if v == "" || strings.EqualFold(v, appproxy.Auto) {
+		return nil, errs.New(errs.Usage, "没有给代理地址").WithAdvice("写成 socks5://127.0.0.1:端口 或 http://127.0.0.1:端口")
+	}
+	typed := strings.Contains(v, "://")
+	if !typed {
+		v = "socks5://" + v // the kind is whatever answers below
+	}
+	srv, changed, err := appproxy.GuestServer(v)
+	if err != nil {
+		return nil, errs.New(errs.InvalidArgument, err.Error())
+	}
+	resolver, _ := (&appproxy.Config{}).Resolver()
+	res := &AppProxyProbe{HostAddr: hostAddr(srv.Addr).String(), Notes: []string{}}
+	if res.ProbeResult, err = appproxy.Probe(ctx, hostAddr(srv.Addr), withUDP, resolver); err != nil {
+		return nil, errs.New(errs.ProxyUnavailable, err.Error())
+	}
+	found := appproxy.Server{Scheme: res.Kind, Addr: srv.Addr}
+	res.Server = found.String()
+	if changed {
+		res.Notes = append(res.Notes, fmt.Sprintf("实例里连宿主要用 %s，代理地址记成 %s", appproxy.HostLoopback, res.Server))
+	}
+	if typed && srv.Scheme != res.Kind {
+		res.Notes = append(res.Notes, fmt.Sprintf("写的是 %s://，这个端口说的是 %s，改成了 %s", srv.Scheme, kindName(res.Kind), res.Server))
+	}
+	return res, nil
+}
+
+// AppProxySuggestion is the host's own proxy as the guest reaches it (the manager's 从系统代理读取).
+type AppProxySuggestion struct {
+	Server string   `json:"server"`
+	Notes  []string `json:"notes"` // where it was found; never null
+}
+
+// SuggestAppProxy is the address appproxy.Auto stands for: the host's proxy setting, its kind probed when the setting
+// does not say SOCKS5. errs.ProxyUnavailable when none is set, or its kind is unknown and nothing answers there.
+func SuggestAppProxy(ctx context.Context) (*AppProxySuggestion, error) {
+	found, note, err := autoServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	srv, changed, err := appproxy.GuestServer(found)
+	if err != nil {
+		return nil, errs.New(errs.ProxyUnavailable, err.Error())
+	}
+	res := &AppProxySuggestion{Server: srv.String(), Notes: []string{note}}
+	if changed {
+		res.Notes = append(res.Notes, fmt.Sprintf("实例里连宿主要用 %s，代理地址记成 %s", appproxy.HostLoopback, res.Server))
+	}
+	return res, nil
+}
+
+func kindName(kind string) string {
+	if kind == "socks5" {
+		return "SOCKS5"
+	}
+	return "HTTP 代理"
 }
 
 // hostAddr is where the host reaches a proxy the guest reaches at a: the emulator's 10.0.2.2 is the host's loopback.
@@ -521,18 +596,23 @@ func (m *Manager) stopAppProxy(ctx context.Context, i int) (*appproxy.Status, er
 	return m.proxyDaemon(ctx, i, d.sum, "stop", proxyGuestWait)
 }
 
-// guestStatus is the daemon's status for a query, nil when it cannot be asked; a daemon other than this modavd's is
-// not run (it is replaced the next time the setting is applied), which notes says.
-func (m *Manager) guestStatus(ctx context.Context, i int, notes *[]string) *appproxy.Status {
+// guestStatus is the daemon's status for a query. nil when there is none to ask: no daemon in the guest, or one other
+// than this modavd's, which is not run (it is replaced the next time the setting is applied) and notes says so. nil
+// with the reason when the guest did not answer (adb or su failed), which says nothing of what runs there.
+func (m *Manager) guestStatus(ctx context.Context, i int, notes *[]string) (*appproxy.Status, string) {
 	d, err := daemonFile()
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	st, err := m.proxyDaemon(ctx, i, d.sum, "status", proxyStatusWait)
-	if errors.Is(err, errOtherDaemon) {
+	switch {
+	case err == nil, errs.CodeOf(err) == errs.NotFound:
+		return st, ""
+	case errors.Is(err, errOtherDaemon):
 		*notes = append(*notes, errs.As(err).Message+"；下次开机或改设置时换上")
+		return nil, ""
 	}
-	return st
+	return nil, errs.As(err).Message
 }
 
 // errOtherDaemon: the guest's daemon is not the one this modavd carries, so it was not run.
@@ -580,8 +660,13 @@ func (m *Manager) setupAppProxy(ctx context.Context, i int) {
 	case err != nil:
 		m.Log.Warnf("实例 %d 按应用走代理没设上：%s", i, errs.As(err).Message)
 	case !s.Active():
-		if st != nil {
-			m.Log.Infof("实例 %d 按应用走代理：已关，客体程序已停", i)
+		// st is from the stop run because the guest has the daemon's file; whether one was running is not known
+		switch {
+		case st == nil:
+		case st.RulesError != "" || st.Rules != appproxy.RulesOff:
+			m.Log.Warnf("实例 %d 按应用走代理已关，但客体里的规则没撤干净：%s", i, orText(st.RulesError, "规则状态 "+st.Rules))
+		default:
+			m.Log.Infof("实例 %d 按应用走代理：已关，客体里没有在跑的客体程序，也没有它的规则", i)
 		}
 	default:
 		m.Log.Infof("实例 %d 按应用走代理：%s（%.1f 秒）", i, guestSummary(s, st), time.Since(t).Seconds())

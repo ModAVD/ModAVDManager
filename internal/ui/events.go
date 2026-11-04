@@ -132,6 +132,13 @@ func (h *hub) storeList(res *emu.ListResult) []byte {
 	return data
 }
 
+// latest is the cached list, however old; nil when there is none.
+func (h *hub) latest() *emu.ListResult {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.list
+}
+
 // cachedListJSON is the cached list when younger than maxAge.
 func (h *hub) cachedListJSON(maxAge time.Duration) ([]byte, bool) {
 	h.mu.Lock()
@@ -212,6 +219,7 @@ func (s *server) refreshInstances() {
 	if data := s.hub.storeList(res); data != nil {
 		s.hub.send("instances", data)
 	}
+	s.marks.kick()
 }
 
 type logEvent struct {
@@ -269,6 +277,9 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fl.Flush()
 		s.hub.requestRefresh() // the poller sends it to every stream, this one included
+	}
+	if data := s.marks.last(); data != nil && !write("proxy", data) {
+		return
 	}
 
 	ping := time.NewTicker(s.pingEvery)

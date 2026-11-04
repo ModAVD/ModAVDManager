@@ -32,6 +32,16 @@ var gameNames = [][2]string{
 	{"com.miHoYo.enterprise.NGHSoD", "崩坏3（官服）"},
 }
 
+// GameName is the Chinese name of a game package gameNames knows (the manager's app list shows it too).
+func GameName(pkg string) (string, bool) {
+	for _, g := range gameNames {
+		if strings.EqualFold(g[0], pkg) {
+			return g[1], true
+		}
+	}
+	return "", false
+}
+
 // notGames: $NotGames, apps that come with the emulator.
 var notGames = []string{"de.jrpie.android.launcher"}
 
@@ -448,11 +458,8 @@ func gamesOf(ctx context.Context, t configTarget) []string {
 			}
 		}
 		name := pkg
-		for _, g := range gameNames {
-			if strings.EqualFold(g[0], pkg) {
-				name = g[1]
-				break
-			}
+		if n, ok := GameName(pkg); ok {
+			name = n
 		}
 		if version != "" {
 			games = append(games, name+" "+version)

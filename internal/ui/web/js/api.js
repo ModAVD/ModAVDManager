@@ -46,6 +46,7 @@ export const api = {
   get: (p, o) => request('GET', p, undefined, o),
   post: (p, b = {}, o) => request('POST', p, b, o),
   patch: (p, b) => request('PATCH', p, b),
+  put: (p, b) => request('PUT', p, b),
   del: (p) => request('DELETE', p, {}), // non-GET bodies are JSON (API.md), even an empty one
 };
 
@@ -67,7 +68,7 @@ export function connectEvents(on) {
         on.lost(true);
       } else on.lost(false);
     };
-    for (const type of ['instances', 'job', 'log', 'update']) {
+    for (const type of ['instances', 'job', 'log', 'update', 'proxy']) {
       me.addEventListener(type, (ev) => {
         if (me !== es) return;
         let d;

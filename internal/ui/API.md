@@ -24,7 +24,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | `busy`、`already_exists`、`port_conflict` | 409 |
 | `not_ready`、`precheck_failed`、`unsupported` | 422 |
 | `canceled` | 499 |
-| `launch_failed` | 502 |
+| `launch_failed`、`update_unavailable`、`update_rejected`、`proxy_unavailable` | 502 |
 | `timeout` | 504 |
 | 其余 | 500 |
 
@@ -45,6 +45,11 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是 1280×720 显示的像素）或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
 | GET | `/api/instances/{i}/screenshot` | | `image/png`（`adb exec-out screencap -p`），`Cache-Control: no-store`；没开机回 409 |
 | GET | `/api/instances/{i}/log?kind=emulator\|logcat&lines=300` | | `text/plain; charset=utf-8`，最新那份日志的末尾；没有回 404 |
+| GET | `/api/instances/{i}/proxy` | | `ProxyView`，见下 |
+| PUT | `/api/instances/{i}/proxy` | `{enabled?: bool, server?: string, apps?: [string]}` | `ProxyView`：给出的项换成新值，没给的不变；一项都没给回 400 `usage`。`server` 可以不写协议（探测出来）或写 `auto`（取这台电脑的代理设置）；第一次打开没给地址也按 `auto`。地址探测不到回 502 `proxy_unavailable`。实例开着就马上生效，几秒内回 |
+| GET | `/api/instances/{i}/packages` | | `{"packages":[{"package","name","uid","system"}]}`：实例里装的第三方应用，加上装了的话「Google Play 服务」（`system: true`）；`name` 是认得的游戏的中文名和「Google Play 服务」，其余是 `""`。认得的游戏在前，然后按包名排。没开机回 409 `busy` |
+| GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
+| POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
 | POST | `/api/open` | `{what: "root"\|"logs"\|"instance", index?}` | `{}`，在资源管理器里打开 |
 | GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
 | GET | `/api/jobs` | | `{"jobs":[Job]}`，新的在前，最多 50 个 |
@@ -58,7 +63,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 `{i}` 是实例编号（0–9，5 除外）。
 
 - JSON 请求体：不认识的字段回 400 `usage`（拼错的字段名页面能直接看到）；空请求体等于全用默认值；PATCH 一个字段都没给回 400 `usage`。
-- 截图、输入遇到实例没开机：409，code 是 `busy`。
+- 截图、输入、列应用遇到实例没开机：409，code 是 `busy`。
 
 ### Job
 
@@ -92,9 +97,25 @@ data: {"time":"…","level":"info|warn|error","msg":"…","job_id":"j12"}   不�
 event: update
 data: <UpdateView>          检查、设置有变化时
 
+event: proxy
+data: {"marks":[ProxyMark]} 按应用走代理的卡片标记，全量；连上时发一次（有过的话），之后有变化时
+
 event: ping
 data: {}                    每 15 秒
 ```
+
+### 按应用走代理 `ProxyView`、`ProxyMark`
+
+`ProxyView` 是 `AppProxyResult` 的全部字段（和 `modavd proxy <i> --json` 的 `data` 相同：`index`、`enabled`、`server`、`apps`、`dns`、`applied`、`notes`、`guest`、`guest_error`、`error`；`guest_error` 是实例开着但问不到客体时的原因），加上 `mark`：实例开着、开完了机、没在开机或关机、设置开着且名单不空时是一个 `ProxyMark`，否则是 `null`。
+
+- `applied`：GET 是 `""`；PUT 是 `now`（客体里已生效）、`failed`（客体没接受，`error` 说为什么）、`booting`（正在开机，开完马上生效）、`next_boot`（没开机）、`off`（关了，客体里不留它的程序和规则）。
+- `ProxyMark` 是 `{"index","tone","text"}`：
+  - `ok`：客体里的程序在跑、规则就位，代理通着。
+  - `warn`：规则缺了几条、正在补；或者客体最近一次经代理的连接没成功，但这台电脑上能连到代理（可能是目标本身没回应）；或者这次没问到客体（adb、su 没回应）。
+  - `err`：名单里的应用现在断网或直连：客体里没有它在跑、规则挂不上，或者代理连不上（客体最近一次连接失败，这台电脑上也连不上）。
+  - `text` 是给人看的一句话。
+- 卡片的标记：页面连着时，服务每 30 秒问一次每个开着这个设置、已开机的实例（一条 root 命令），实例的状态或设置一变就马上问；正在开机、关机或做开机后设置的不问。GET、PUT 的结果也会更新标记。
+- 没开机的实例没有 `ProxyMark`：页面按 `InstanceInfo.app_proxy`（只读配置的概要）显示「下次开机生效」。
 
 ### 更新 `UpdateView`
 

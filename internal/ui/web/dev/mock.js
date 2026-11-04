@@ -1,7 +1,8 @@
 // Mock backend for design work: ?mock=normal|empty|notready|busy|many replaces fetch('/api/…') and EventSource with
 // an in-memory fake that follows internal/ui/API.md. Extra params: drop=1 (the event stream drops after 1.5 s and
-// stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500). window.__mockShots counts
-// screenshot requests per instance. Never used in production: the server does not serve /dev/.
+// stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500), proxyfail=1 (instance 0's
+// guest says its proxy does not answer). window.__mockShots counts screenshot requests per instance. Never used in
+// production: the server does not serve /dev/.
 // Screens are drawn on a canvas: abstract shapes only, no real game content.
 
 const ROOT = 'X:\\ModAVD';
@@ -47,11 +48,56 @@ function mk(i, title, o = {}) {
     initialized, launcher: initialized ? 'µLauncher' : '',
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
+    app_proxy: null,
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
+  if (o.proxy) setProxy(inst, { enabled: true, server: 'socks5://10.0.2.2:7890', apps: o.proxy });
   return inst;
 }
+
+// ---- 按应用走代理: the setting per instance, the guest's apps, the cards' marks (the proxy event)
+const PKGS = [
+  { package: 'com.hypergryph.arknights', name: '明日方舟（官服）', uid: 10123, system: false },
+  { package: 'com.shenlan.m.reverse1999', name: '重返未来：1999', uid: 10131, system: false },
+  { package: 'com.example.globalgame', name: '', uid: 10140, system: false },
+  { package: 'de.jrpie.android.launcher', name: '', uid: 10101, system: false },
+  { package: 'com.google.android.gms', name: 'Google Play 服务', uid: 10120, system: true },
+];
+
+function setProxy(inst, s) {
+  inst._.proxy = s;
+  inst.app_proxy = { enabled: s.enabled, server: s.server, apps: s.apps.length };
+}
+
+function proxyActive(inst) {
+  const s = inst._.proxy;
+  return !!s && s.enabled && s.apps.length > 0;
+}
+
+function proxyMark(inst) {
+  if (!proxyActive(inst) || inst.status !== 'online' || inst.busy) return null;
+  const s = inst._.proxy;
+  if (db.proxyfail && inst.index === 0) return { index: inst.index, tone: 'err', text: '代理连不上（名单里的应用现在断网）：127.0.0.1:7890 上没有程序在听' };
+  const missing = s.apps.filter((p) => !PKGS.some((k) => k.package === p)).length;
+  return { index: inst.index, tone: 'ok', text: `已生效：${s.apps.length} 个应用${missing ? `（${missing} 个还没装）→ ` : ' → '}${s.server}` };
+}
+
+function proxyGuest(inst) {
+  if (!proxyActive(inst) || inst.status !== 'online') return null;
+  const s = inst._.proxy;
+  return { version: '0.4.0', running: true, pid: 2012, rules: 'ok', rules_error: '', error: '',
+    server: { url: s.server, tcp: db.proxyfail && inst.index === 0 ? 'failed' : 'ok', udp: 'ok', last_error: '', last_error_at: '', last_ok_at: iso() },
+    apps: s.apps.map((p) => ({ package: p, uid: (PKGS.find((k) => k.package === p) || {}).uid || 0 })),
+    counters: { tcp: 42, tcp_failed: 0, udp_sessions: 3, udp_dropped: 0, dns: 17, dns_failed: 0, bytes_up: 81234, bytes_down: 1203450 } };
+}
+
+function proxyView(inst, applied = '', notes = []) {
+  const s = inst._.proxy || { enabled: false, server: '', apps: [] };
+  return { index: inst.index, enabled: s.enabled, server: s.server, apps: [...s.apps], dns: '', applied, notes, guest: proxyGuest(inst), guest_error: '', error: '', mark: proxyMark(inst) };
+}
+
+const marks = () => ({ marks: [...db.insts.values()].map(proxyMark).filter(Boolean) });
 
 function oldJob(kind, i, state, agoSec, tookSec, extra = {}) {
   const t0 = now() - agoSec * 1000;
@@ -121,8 +167,8 @@ function setup(sc) {
     return;
   }
   // normal
-  mk(0, '明日方舟 · 主号', { status: 'online', upMin: 133, scene: 0 });
-  mk(1, '星穹铁道', { status: 'offline', mem: 6144 });
+  mk(0, '明日方舟 · 主号', { status: 'online', upMin: 133, scene: 0, proxy: ['com.example.globalgame', 'com.google.android.gms'] });
+  mk(1, '星穹铁道', { status: 'offline', mem: 6144, proxy: ['com.miHoYo.hkrpg'] });
   mk(8, '重返未来 1999', { status: 'starting', upMin: 0.3, scene: 2 });
   oldJob('stop', 1, 'done', 5400, 7, { result: { index: 1, name: 'mas_1', method: 'graceful', synced: true, seconds: 6.9, warnings: [] } });
   oldJob('start', 0, 'done', 133 * 60, 38, { result: { launched: true, boot_seconds: 19.2, total_seconds: 37.6, first_boot: false, warnings: [], zygote_restarted: false } });
@@ -578,7 +624,22 @@ async function screenshot(inst) {
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const fail = (status, code, message, advice = '') => json({ error: { code, message, advice } }, status);
-const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, canceled: 499, launch_failed: 502, timeout: 504 };
+const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, canceled: 499, launch_failed: 502, proxy_unavailable: 502, timeout: 504 };
+const PKG = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+
+// what speaks at a typed proxy address: 7890 / 7897 a mixed port, 7891 an HTTP proxy, anything else nothing
+function probeAt(server) {
+  const m = /^(?:(socks5h?|http):\/\/)?(localhost|\d+\.\d+\.\d+\.\d+):(\d+)$/i.exec((server || '').trim());
+  if (!m) return ['invalid_argument', `代理地址要写成 socks5://IP:端口 或 http://IP:端口，收到「${server}」`];
+  const host = /^(localhost|127\.)/i.test(m[2]) ? '10.0.2.2' : m[2];
+  const port = Number(m[3]);
+  const kind = port === 7891 ? 'http' : [7890, 7897].includes(port) ? 'socks5' : null;
+  if (!kind) return ['proxy_unavailable', `127.0.0.1:${port} 上没有程序在听（连接被拒绝）`, '代理软件开着时再试'];
+  const notes = [];
+  if (host !== m[2]) notes.push(`实例里连宿主要用 10.0.2.2，代理地址记成 ${kind}://${host}:${port}`);
+  if (m[1] && m[1].toLowerCase().replace('socks5h', 'socks5') !== kind) notes.push(`写的是 ${m[1]}://，这个端口说的是 ${kind === 'socks5' ? 'SOCKS5' : 'HTTP 代理'}，改成了 ${kind}://${host}:${port}`);
+  return { server: `${kind}://${host}:${port}`, host_addr: `127.0.0.1:${port}`, kind, udp: kind === 'socks5' ? 'ok' : 'unsupported', notes };
+}
 const errResp = (code, message, advice) => fail(STATUS_OF[code] || 500, code, message, advice);
 
 function validate(b, create) {
@@ -623,6 +684,15 @@ async function handle(url, init) {
     return json(checkResult());
   }
   if (p === '/api/jobs') return json({ jobs: clone(db.jobs.slice(0, 50)) });
+  if (p === '/api/proxy/suggest') {
+    await sleep(200);
+    return json({ server: 'socks5://10.0.2.2:7890', notes: ['代理地址取自Windows 代理设置：127.0.0.1:7890', '实例里连宿主要用 10.0.2.2，代理地址记成 socks5://10.0.2.2:7890'] });
+  }
+  if (p === '/api/proxy/probe' && method === 'POST') {
+    await sleep(600);
+    const r = probeAt(body.server);
+    return Array.isArray(r) ? errResp(...r) : json(r);
+  }
   let m = /^\/api\/jobs\/([^/]+)(\/cancel)?$/.exec(p);
   if (m) {
     const j = db.jobs.find((x) => x.id === decodeURIComponent(m[1]));
@@ -715,6 +785,43 @@ async function handle(url, init) {
     const blob = await screenshot(inst);
     return new Response(blob, { status: 200, headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' } });
   }
+  if (act === 'proxy' && method === 'GET') return json(proxyView(inst));
+  if (act === 'proxy' && method === 'PUT') {
+    if (body.enabled == null && body.server == null && body.apps == null) return errResp('usage', '没有要改的设置', '至少给出 enabled、server、apps 中的一项');
+    const s = { ...(inst._.proxy || { enabled: false, server: '', apps: [] }) };
+    const notes = [];
+    if (body.enabled != null) s.enabled = body.enabled;
+    if (body.server != null || (s.enabled && !s.server)) {
+      if (body.server == null || body.server === 'auto') {
+        s.server = 'socks5://10.0.2.2:7890';
+        notes.push('代理地址取自Windows 代理设置：127.0.0.1:7890');
+      } else {
+        await sleep(400);
+        const r = probeAt(body.server);
+        if (Array.isArray(r)) return errResp(...r);
+        s.server = r.server;
+        notes.push(...r.notes);
+      }
+    }
+    if (body.apps != null) {
+      const bad = body.apps.find((x) => !PKG.test(x));
+      if (bad) return errResp('invalid_argument', `不是安卓包名：「${bad}」`);
+      if (body.apps.length > 64) return errResp('invalid_argument', '名单里最多 64 个应用');
+      s.apps = [...new Set(body.apps)];
+    }
+    await sleep(inst.status === 'online' ? 900 : 150);
+    setProxy(inst, s);
+    emit('instances', list());
+    emit('proxy', marks());
+    const applied = inst.status === 'online' ? (proxyActive(inst) ? 'now' : 'off') : inst.running ? 'booting' : proxyActive(inst) ? 'next_boot' : 'off';
+    log('info', `已写入实例 ${i} 的按应用走代理：${s.enabled ? '开' : '关'}，${s.server || '没有地址'}，${s.apps.length} 个应用`);
+    return json(proxyView(inst, applied, notes));
+  }
+  if (act === 'packages') {
+    if (inst.status !== 'online') return errResp('busy', `实例 ${i} 没有开机`, '开机后才能列出装了哪些应用；没开机时可以手填包名');
+    await sleep(500);
+    return json({ packages: clone(PKGS) });
+  }
   if (act === 'log') {
     const kind = url.searchParams.get('kind') || 'emulator';
     const lines = Number(url.searchParams.get('lines') || 300);
@@ -757,6 +864,7 @@ class MockEventSource {
     db.streams.add(this);
     this.fire('open', new Event('open'));
     this._send('instances', JSON.stringify(list()));
+    this._send('proxy', JSON.stringify(marks()));
     if (!db.replayed) {
       // the scenario's history, so the activity panel has lines to show (the real server only streams new ones)
       db.replayed = true;
@@ -788,6 +896,7 @@ export function install(scenario, params) {
   db.offline = params.get('offline') === '1';
   db.drop = params.get('drop') === '1';
   db.shotfail = params.get('shotfail') === '1';
+  db.proxyfail = params.get('proxyfail') === '1';
   window.__mockShots = {};
   setup(scenario);
   const real = window.fetch.bind(window);
@@ -797,7 +906,7 @@ export function install(scenario, params) {
     return handle(url, init);
   };
   window.EventSource = MockEventSource;
-  setInterval(() => emit('instances', list()), 3000);
+  setInterval(() => { emit('instances', list()); emit('proxy', marks()); }, 3000);
   setInterval(() => emit('ping', {}), 15000);
   console.info(`[mock] scenario "${scenario}" with ${db.insts.size} instances`);
 }

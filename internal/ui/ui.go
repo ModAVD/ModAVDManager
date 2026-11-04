@@ -57,6 +57,7 @@ type Options struct {
 	web        fs.FS
 	openPath   func(path string) error
 	launch     func(url string) (*Window, error)
+	proxyEvery time.Duration
 }
 
 const (
@@ -90,7 +91,7 @@ type server struct {
 	launch     func(url string) (*Window, error)
 	mux        *http.ServeMux
 
-	pollEvery, pingEvery, exitEvery, idleExit, closeGrace, stopWait time.Duration
+	pollEvery, pingEvery, exitEvery, idleExit, closeGrace, stopWait, proxyEvery time.Duration
 
 	// ctx ends with the server (event streams, screenshot captures); jobCtx only when Run's own context ends, since
 	// a closed window waits for running jobs.
@@ -106,6 +107,7 @@ type server struct {
 	shots shotCache
 	check checkCache
 	upd   *updatePanel // update.go
+	marks *proxyMarks  // proxy.go
 }
 
 func newServer(opt Options) (*server, error) {
@@ -161,13 +163,18 @@ func newServer(opt Options) (*server, error) {
 		idleExit:   idle,
 		closeGrace: windowCloseGrace,
 		stopWait:   startStopWait,
+		proxyEvery: proxyEvery,
 		hub:        newHub(),
+		marks:      newProxyMarks(),
 	}
 	if s.openPath == nil {
 		s.openPath = shellOpen
 	}
 	if s.launch == nil {
 		s.launch = LaunchWindow
+	}
+	if opt.proxyEvery > 0 {
+		s.proxyEvery = opt.proxyEvery
 	}
 	s.upd = &updatePanel{}
 	s.mgr = newBackend(lg.Tee(s.eventLogSink("")))
@@ -215,6 +222,7 @@ func Run(ctx context.Context, opt Options) error {
 		}
 	}()
 	go s.pollLoop()
+	go s.proxyLoop()
 	cleanUploads(s.log)
 
 	base := fmt.Sprintf("http://127.0.0.1:%d/", s.port)
