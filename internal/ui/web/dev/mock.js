@@ -638,7 +638,7 @@ async function handle(url, init) {
     }
     return json(clone(j));
   }
-  m = /^\/api\/instances\/(\d+)(?:\/([a-z]+))?$/.exec(p);
+  m = /^\/api\/instances\/(\d+)(?:\/([a-z-]+))?$/.exec(p);
   if (!m) return errResp('not_found', '没有这个接口：' + p);
   const i = Number(m[1]);
   const inst = db.insts.get(i);
@@ -696,6 +696,37 @@ async function handle(url, init) {
     const j = newJob('install', i);
     log('info', `实例 ${i} 开始安装 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）`, j.id);
     setTimeout(() => finishJob(j, { index: i, apk: f.name, package: 'com.example.' + f.name.replace(/\.apk$/i, '').replace(/\W+/g, '').toLowerCase(), output: 'Success' }), 3000);
+    return json(j, 202);
+  }
+  if (act === 'disk-info' || act === 'disk-trim' || act === 'disk-compact') {
+    if (busyJob) return errResp('busy', `实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '做别的事'}（任务 ${busyJob.id}），等它做完再试`);
+    const GB = 2 ** 30;
+    const d = (inst._.disk ||= { logical: 64 * GB, onDisk: 12 * GB, alloc: 9.6 * GB });
+    const j = newJob(act, i);
+    // like the real job: emu decides by the instance state, so a trim of a stopped instance (or a compact of a running one) fails in the job
+    if (act === 'disk-info') {
+      step(j, 'disk_info', `实例 ${i} 正在查看磁盘占用`, 0);
+      setTimeout(() => {
+        const running = inst.running;
+        finishJob(j, { index: i, overlay: `${inst.path}\\userdata-qemu.img.qcow2`, running, needs_shutdown: running, logical_bytes: d.logical, on_disk_bytes: d.onDisk, cluster_bytes: 65536,
+          ...(running ? {} : { allocated_bytes: Math.round(d.alloc), reclaimable_bytes: Math.max(0, Math.round(d.onDisk - d.alloc)) }) });
+      }, 500);
+    } else if (act === 'disk-trim') {
+      step(j, 'disk_trim', `实例 ${i} 正在回收磁盘空间`, 0);
+      setTimeout(() => {
+        if (inst.status !== 'online') return failJob(j, 'unsupported', `魔改 AVD 实例 ${i} 没有在运行，请先开机再回收磁盘空间`, '');
+        d.alloc = Math.max(3 * GB, d.alloc - 1.5 * GB);
+        finishJob(j, { index: i, discard_max_bytes: 2 * GB });
+      }, 1800);
+    } else {
+      step(j, 'disk_compact', `实例 ${i} 正在整理磁盘（重写数据盘文件，要几分钟）`, 0);
+      setTimeout(() => {
+        if (inst.running) return failJob(j, 'busy', `魔改 AVD 实例 ${i} 未关闭，无法整理磁盘`, `先 modavd stop ${i}，关机后再整理`);
+        const before = d.onDisk;
+        d.onDisk = Math.min(before, d.alloc + 0.1 * GB);
+        finishJob(j, { index: i, overlay: `${inst.path}\\userdata-qemu.img.qcow2`, before_on_disk_bytes: Math.round(before), after_on_disk_bytes: Math.round(d.onDisk), freed_bytes: Math.round(before - d.onDisk) });
+      }, 5000);
+    }
     return json(j, 202);
   }
   if (act === 'input') {

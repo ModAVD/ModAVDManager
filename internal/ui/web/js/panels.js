@@ -4,7 +4,7 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod } from './format.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -179,7 +179,7 @@ export function openActivity() {
   if (actCtl) return;
   const list = h('ul', { class: 'jobs' });
   const empty = h('div', { class: 'act-empty' }, icon('pulse'), h('p', { text: '还没有任务' }),
-    h('p', { class: 'muted', text: '新建、开机、关机和安装 APK 都会显示在这里。' }));
+    h('p', { class: 'muted', text: '新建、开机、关机、安装 APK 和磁盘操作都会显示在这里。' }));
   const logBox = h('div', { class: 'loglines', role: 'log', 'aria-label': '最近的消息' });
   const ctl = openDialog({
     title: '活动', sub: ' ', cls: 'drawer', light: true,
@@ -261,7 +261,8 @@ function updateJob(r, j) {
   if (running) {
     const p = j.progress;
     const n = pct(p);
-    setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…' : '进行中…'));
+    setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…'
+      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在回收磁盘空间…' : j.kind === 'disk-compact' ? '正在整理磁盘…' : '进行中…'));
     setText(r.pctEl, n == null ? '' : Math.round(n) + '%');
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
@@ -309,6 +310,9 @@ function resultText(j) {
   if (!r) return '';
   if (j.kind === 'stop') return `${stopMethod(r.method)}${r.seconds ? `，${dur(r.seconds)}` : ''}。`;
   if (j.kind === 'install') return `已装好 ${r.package || r.apk || 'APK'}${r.output ? `（${r.output.trim()}）` : ''}`;
+  if (j.kind === 'disk-info') return diskInfoText(r);
+  if (j.kind === 'disk-trim') return diskTrimText();
+  if (j.kind === 'disk-compact') return diskCompactText(r);
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
     r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';

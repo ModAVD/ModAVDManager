@@ -3,7 +3,7 @@
 //
 // One server manages one root. Every request must carry our own Host (127.0.0.1 or localhost with our port), so a
 // DNS-rebound name never reaches the API; /api/* also needs the login cookie and, unless GET, our own Origin. Long
-// operations (create, start, stop, install) run as jobs and report through the event stream (/api/events). The manager
+// operations (create, start, stop, install, disk-info / disk-trim / disk-compact) run as jobs and report through the event stream (/api/events). The manager
 // boots instances with their window only and has no restart: headless boots, and switching between the two, are not
 // its to do (the CLI boots headless; a running instance is never switched).
 //

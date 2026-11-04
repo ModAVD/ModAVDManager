@@ -3,10 +3,10 @@
 import { api } from './api.js';
 import { S, update, instance } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
-import { quoted, dur } from './format.js';
+import { quoted, dur, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import { openActivity } from './panels.js';
 
-const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建' };
+const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
 const isBoot = (j) => j.kind === 'start';
 const activity = { label: '查看活动', run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
@@ -39,6 +39,10 @@ function notify(job) {
   } else if (job.kind === 'create') toast({ title: `${who}新建好了`, text: '初始化已做完，已关机；第一次开机和平常一样快。' });
   else if (job.kind === 'stop') toast({ title: `${who}已关机` });
   else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
+  // the sizes are the answer, so they stay long enough to read
+  else if (job.kind === 'disk-info') toast({ tone: 'info', title: `${who}的磁盘占用`, text: diskInfoText(r), timeout: 9000 });
+  else if (job.kind === 'disk-trim') toast({ title: `${who}已回收磁盘空间`, text: diskTrimText(), timeout: 6000 });
+  else if (job.kind === 'disk-compact') toast({ title: `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
 }
 
 async function run(i, kind, body) {
@@ -71,6 +75,13 @@ export async function install(i, file) {
   const fd = new FormData();
   fd.append('apk', file, file.name);
   if (await run(i, 'install', fd)) toast({ tone: 'info', title: '正在安装', text: `${file.name} → ${quoted(instance(i), i)}` });
+}
+
+// 磁盘占用 reads only and works on or off; 回收磁盘空间 needs the instance booted; 整理磁盘 (copies the whole data disk, minutes) needs it off
+export const diskInfo = (i) => run(i, 'disk-info', {});
+export const diskTrim = (i) => run(i, 'disk-trim', {});
+export async function diskCompact(i) {
+  if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: '正在整理磁盘', text: `${quoted(instance(i), i)}要几分钟，期间不能开机`, timeout: 5000 });
 }
 
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));
