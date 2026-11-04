@@ -104,7 +104,10 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 
 	started := time.Now()
 	res := &StopResult{Index: i, Name: in.Name}
-	p, ok := mm.qemuOf(i)
+	p, ok, err := mm.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
 	// launching: p appeared while we waited for a start, so Android cannot be up yet (see the header comment).
 	launching := false
 	if !ok && mm.lockHeld(i, "start") {
@@ -115,7 +118,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 		mm.Log.Infof("魔改 AVD 实例 %d 正在开机，等模拟器起来再关（最多 %.0f 秒）", i, startingQemuWait.Seconds())
 		var found, starting bool
 		p, found, starting, err = waitStartingQemu(ctx, startingQemuWait, startingQemuPoll,
-			func() (win.Process, bool) { return mm.qemuOf(i) }, func() bool { return mm.lockHeld(i, "start") })
+			func() (win.Process, bool, error) { return mm.qemuOf(i) }, func() bool { return mm.lockHeld(i, "start") })
 		if err != nil {
 			return nil, err
 		}
@@ -160,18 +163,20 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 // found: its qemu appeared. stillStarting: no qemu, and the start lock is still held at the end; false when the start
 // let go without one (it failed, or was canceled before launching), so the instance is simply offline. A cancel ends
 // the wait with errs.Canceled.
-func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func() (win.Process, bool),
+func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func() (win.Process, bool, error),
 	starting func() bool) (p win.Process, found, stillStarting bool, err error) {
 	deadline := time.Now().Add(wait)
 	for {
-		if p, ok := find(); ok {
+		if p, ok, err := find(); err != nil {
+			return win.Process{}, false, false, err
+		} else if ok {
 			return p, true, false, nil
 		}
 		if !starting() {
 			// A start that launched qemu and then failed leaves it running (a cancel never ends qemu): look once
 			// more, it may have appeared between the two checks.
-			p, ok := find()
-			return p, ok, false, nil
+			p, ok, err := find()
+			return p, ok, false, err
 		}
 		left := time.Until(deadline)
 		if left <= 0 {

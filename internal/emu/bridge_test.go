@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,17 +25,92 @@ func TestBridgeScriptRejectsRelativeSystemRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(m.Root.Dir, "tools", bridgeScriptName), []byte("# test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, systemRoot := range []string{"relative", ""} {
+	saved := bridgeCommandContext
+	t.Cleanup(func() { bridgeCommandContext = saved })
+	for _, systemRoot := range []string{"relative", "", `C:Windows`, `\Windows`} {
 		t.Run(systemRoot, func(t *testing.T) {
 			t.Setenv("SystemRoot", systemRoot)
+			called := false
+			bridgeCommandContext = func(context.Context, string, ...string) *exec.Cmd {
+				called = true
+				return exec.Command("missing-powershell.exe")
+			}
 			run, err := m.runBridgeScript(context.Background(), 1, "verify", false)
+			if called {
+				t.Fatal("invalid SystemRoot reached PowerShell command creation")
+			}
 			if errs.CodeOf(err) != errs.Internal {
 				t.Fatalf("SystemRoot=%q: error=%v, want internal", systemRoot, err)
 			}
-			if run.Code != -1 {
-				t.Fatalf("SystemRoot=%q: run=%+v, relative PowerShell may have run", systemRoot, run)
+			if run.Code != -1 || run.LogFile != "" {
+				t.Fatalf("SystemRoot=%q: run=%+v", systemRoot, run)
+			}
+			if _, err := os.Stat(m.Root.LogsDir()); !os.IsNotExist(err) {
+				t.Fatalf("invalid SystemRoot created logs: %v", err)
 			}
 		})
+	}
+}
+
+func TestBridgeScriptAbsoluteSystemRootRuns(t *testing.T) {
+	m := New(managerTestRoot(t, 1), nil)
+	if err := os.MkdirAll(filepath.Join(m.Root.Dir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.Root.Dir, "tools", bridgeScriptName), []byte("# test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemRoot := t.TempDir()
+	t.Setenv("SystemRoot", systemRoot)
+	t.Setenv("MODAVD_TEST_BRIDGE_PROCESS", "1")
+	saved := bridgeCommandContext
+	t.Cleanup(func() { bridgeCommandContext = saved })
+	called := 0
+	bridgeCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		called++
+		want := filepath.Join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+		if name != want {
+			t.Fatalf("PowerShell=%q, want %q", name, want)
+		}
+		if len(args) != 6 || args[4] != "-Command" || !strings.Contains(args[5], bridgeScriptName) {
+			t.Fatalf("PowerShell arguments=%q", args)
+		}
+		return exec.CommandContext(ctx, exe, "-test.run=^TestBridgeScriptProcess$")
+	}
+	run, err := m.runBridgeScript(context.Background(), 1, "verify", false)
+	if err != nil || called != 1 || run.Code != 0 || run.Last != "bridge test output" {
+		t.Fatalf("run=%+v, calls=%d, error=%v", run, called, err)
+	}
+	out, err := os.ReadFile(run.LogFile)
+	if err != nil || strings.TrimSpace(string(out)) != "bridge test output" {
+		t.Fatalf("script log=%q, error=%v", out, err)
+	}
+}
+
+func TestBridgeScriptProcess(t *testing.T) {
+	if os.Getenv("MODAVD_TEST_BRIDGE_PROCESS") != "1" {
+		return
+	}
+	fmt.Println("bridge test output")
+	os.Exit(0)
+}
+
+func TestBridgeScriptWindowsPowerShell(t *testing.T) {
+	m := New(managerTestRoot(t, 1), nil)
+	if err := os.MkdirAll(filepath.Join(m.Root.Dir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.Root.Dir, "tools", bridgeScriptName),
+		[]byte("Write-Output 'bridge PowerShell output'; exit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run, err := m.runBridgeScript(context.Background(), 1, "verify", false)
+	if err != nil || run.Code != 0 || run.Last != "bridge PowerShell output" || run.LogFile == "" {
+		t.Fatalf("run=%+v, error=%v", run, err)
 	}
 }
 
@@ -108,11 +185,11 @@ func TestBridgeKeepsWindowMode(t *testing.T) {
 			window bool
 		}{{"windowed", &windowed, true}, {"headless", &headless, false}, {"off", nil, false}} {
 			var starts []StartOptions
-			bridgeFindQemu = func(*Manager, int) (win.Process, bool) {
+			bridgeFindQemu = func(*Manager, int) (win.Process, bool, error) {
 				if run.qemu == nil {
-					return win.Process{}, false
+					return win.Process{}, false, nil
 				}
-				return *run.qemu, true
+				return *run.qemu, true, nil
 			}
 			// the instance's qemu is not really there: the stops before the boots find it offline
 			bridgeStart = func(_ *Manager, _ context.Context, _ int, opt StartOptions) (*StartResult, error) {

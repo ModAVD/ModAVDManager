@@ -448,8 +448,8 @@ func TestQemuMatchedByPortPlan(t *testing.T) {
 	fakeQemu(t, exeDir, 6, 20060, false, "") // a mas_6 on the default plan's ports, not under our SDK: not ours
 	other := fakeQemu(t, exeDir, 7, 21070, true, filepath.Join(t.TempDir(), "avd", "mas_7.avd"))
 
-	if found := scanQemuOf([]*root.Root{r}, []int{6, 7}); found[6].PID != ours.PID || found[7].PID != 0 {
-		t.Errorf("scanQemuOf = %v, want 6 -> pid %d and no 7", found, ours.PID)
+	if found, err := scanQemuOf([]*root.Root{r}, []int{6, 7}); err != nil || found[6].PID != ours.PID || found[7].PID != 0 {
+		t.Errorf("scanQemuOf = %v, error=%v, want 6 -> pid %d and no 7", found, err, ours.PID)
 	}
 	if p, ok := adb.QemuOnAdbPort(r, 21060); !ok || p.PID != ours.PID {
 		t.Errorf("QemuOnAdbPort(21060) = %v %v, want pid %d", p, ok, ours.PID)

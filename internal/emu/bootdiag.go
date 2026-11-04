@@ -64,7 +64,8 @@ func (m *Manager) saveBootFailure(ctx context.Context, i int, err error) error {
 	if !bootFailed(ctx, err) || m.stopping(i) {
 		return err
 	}
-	if _, found := startFindQemu(m, i); !found {
+	// no scan (an unsupported host): nothing to save; the boot's own error stays the one returned
+	if _, found, ferr := startFindQemu(m, i); ferr != nil || !found {
 		return err
 	}
 	dir := m.collectBootFailure(i, err)

@@ -51,7 +51,10 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 	}
 	// Released right after adb install below; the deferred Unlock covers the early returns (it is idempotent).
 	defer guestLock.Unlock()
-	_, running := m.qemuOf(i)
+	_, running, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
 	if !running || !m.bootCompleted(ctx, i, statusAdbTimeout, true) {
 		if err := ctxErr(ctx); err != nil {
 			return nil, err

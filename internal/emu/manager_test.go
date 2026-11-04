@@ -63,14 +63,14 @@ func TestQemuScanHookAndRunning(t *testing.T) {
 	}
 	t.Cleanup(func() { qemuScan = saved })
 
-	if p, ok := m.qemuOf(3); !ok || p.PID != 4242 {
-		t.Errorf("m.qemuOf(3) = %v %v", p, ok)
+	if p, ok, err := m.qemuOf(3); err != nil || !ok || p.PID != 4242 {
+		t.Errorf("m.qemuOf(3) = %v %v %v", p, ok, err)
 	}
-	if _, ok := m.qemuOf(2); ok {
-		t.Error("m.qemuOf(2) found a process")
+	if _, ok, err := m.qemuOf(2); err != nil || ok {
+		t.Errorf("m.qemuOf(2): found=%v err=%v", ok, err)
 	}
-	if p, ok := m.qemuOf(4); !ok || p.PID != 4242 {
-		t.Errorf("m.qemuOf(4) = %v %v", p, ok)
+	if p, ok, err := m.qemuOf(4); err != nil || !ok || p.PID != 4242 {
+		t.Errorf("m.qemuOf(4) = %v %v %v", p, ok, err)
 	}
 	asked = nil
 	running, err := m.Running(context.Background())
@@ -108,11 +108,11 @@ func TestScanQemuFreshRoot(t *testing.T) {
 		}
 	}
 	m := New(managerTestRoot(t, all...), nil)
-	if found := m.scanQemu(all); len(found) != 0 {
-		t.Errorf("scanQemu on a fresh root found %v", found)
+	if found, err := m.scanQemu(all); err != nil || len(found) != 0 {
+		t.Errorf("scanQemu on a fresh root found %v, error=%v", found, err)
 	}
-	if _, ok := m.findQemu(0); ok {
-		t.Error("findQemu(0) on a fresh root found a process")
+	if _, ok, err := m.findQemu(0); err != nil || ok {
+		t.Errorf("findQemu(0): found=%v, error=%v", ok, err)
 	}
 	saved := qemuScan
 	qemuScan = nil // the real scan
@@ -121,11 +121,11 @@ func TestScanQemuFreshRoot(t *testing.T) {
 	if err != nil || len(running) != 0 {
 		t.Errorf("Running on a fresh root = %v, %v", running, err)
 	}
-	if found := (&Manager{}).scanQemu(all); len(found) != 0 {
-		t.Errorf("scanQemu without a root found %v", found)
+	if found, err := (&Manager{}).scanQemu(all); err != nil || len(found) != 0 {
+		t.Errorf("scanQemu without a root found %v, error=%v", found, err)
 	}
-	if found := scanQemuOf(nil, all); len(found) != 0 {
-		t.Errorf("scanQemuOf without roots found %v", found)
+	if found, err := scanQemuOf(nil, all); err != nil || len(found) != 0 {
+		t.Errorf("scanQemuOf without roots found %v, error=%v", found, err)
 	}
 }
 
@@ -172,7 +172,11 @@ func TestScanQemuRealInstances(t *testing.T) {
 		if !adb.QemuBelongsTo(owner, p, i) {
 			t.Errorf("qemu %d (%s) does not belong to its own root %s", p.PID, avdDir, owner.Dir)
 		}
-		if got, ok := scanQemuOf([]*root.Root{owner}, []int{i})[i]; !ok || got.PID != p.PID {
+		found, err := scanQemuOf([]*root.Root{owner}, []int{i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := found[i]; !ok || got.PID != p.PID {
 			// another qemu of the same root and index would be a broken machine state; report it all the same
 			t.Errorf("scanQemuOf(%s, %d) = %v %v, want pid %d", owner.Dir, i, got, ok, p.PID)
 		}

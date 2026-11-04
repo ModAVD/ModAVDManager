@@ -31,7 +31,7 @@ func TestSaveBootFailure(t *testing.T) {
 	running := true
 	saved := startFindQemu
 	t.Cleanup(func() { startFindQemu = saved })
-	startFindQemu = func(*Manager, int) (win.Process, bool) { return win.Process{PID: 1}, running }
+	startFindQemu = func(*Manager, int) (win.Process, bool, error) { return win.Process{PID: 1}, running, nil }
 
 	failure := errs.New(errs.Timeout, "魔改 AVD 实例 6 启动超时")
 	diagDirs := func() []string {

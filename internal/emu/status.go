@@ -29,17 +29,21 @@ var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
 }
 
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
-func (m *Manager) qemus(indexes []int) map[int]win.Process {
+func (m *Manager) qemus(indexes []int) (map[int]win.Process, error) {
 	if qemuScan != nil {
-		return qemuScan(indexes)
+		return qemuScan(indexes), nil
 	}
 	return m.scanQemu(indexes)
 }
 
 // qemuOf is the qemu process of instance i of m's root, through qemuScan.
-func (m *Manager) qemuOf(i int) (win.Process, bool) {
-	p, ok := m.qemus([]int{i})[i]
-	return p, ok
+func (m *Manager) qemuOf(i int) (win.Process, bool, error) {
+	procs, err := m.qemus([]int{i})
+	if err != nil {
+		return win.Process{}, false, err
+	}
+	p, ok := procs[i]
+	return p, ok, nil
 }
 
 // Running is the indexes of this root's instances whose qemu runs, ascending: one process scan and no adb at all
@@ -60,7 +64,10 @@ func (m *Manager) Running(ctx context.Context) ([]int, error) {
 	for k, in := range insts {
 		indexes[k] = in.Index
 	}
-	procs := m.qemus(indexes)
+	procs, err := m.qemus(indexes)
+	if err != nil {
+		return nil, err
+	}
 	running := make([]int, 0, len(procs))
 	for _, i := range indexes {
 		if _, ok := procs[i]; ok {
@@ -84,7 +91,10 @@ func (m *Manager) List(ctx context.Context) (*ListResult, error) {
 	for k, in := range insts {
 		indexes[k] = in.Index
 	}
-	procs := m.qemus(indexes)
+	procs, err := m.qemus(indexes)
+	if err != nil {
+		return nil, err
+	}
 	res := &ListResult{RootInfo: m.rootInfo(), Instances: make([]InstanceInfo, len(insts))}
 	// AUTO-MAS asks the running instances one after another; each getprop may take up to statusAdbTimeout, so ask them
 	// all at once (re-registration is serialized per serial inside adb.Client anyway). A private server that is down
@@ -114,7 +124,11 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 		return nil, err
 	}
 	var p *win.Process
-	if q, ok := m.qemuOf(i); ok {
+	q, ok, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		p = &q
 	}
 	info := m.instanceInfo(ctx, in, p, nil)
