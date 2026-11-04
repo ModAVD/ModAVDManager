@@ -141,11 +141,16 @@ func collectBootDiag(ctx context.Context, dir, header string, total time.Duratio
 	return got
 }
 
+// bootDiagStatus is an item's line of summary.txt; res.Out is adb's stderr (or why adb did not run): a guest early in
+// its boot answers dumpsys with "Can't find service" there and exit code 0.
 func bootDiagStatus(res adb.Result, n int64) string {
+	why := strings.Join(strings.Fields(res.Out), " ")
 	if res.Code == 0 {
+		if why != "" {
+			return fmt.Sprintf("成功，%d 字节（%s）", n, why)
+		}
 		return fmt.Sprintf("成功，%d 字节", n)
 	}
-	why := strings.Join(strings.Fields(res.Out), " ")
 	if why == "" {
 		why = "没有说明"
 	}

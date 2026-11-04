@@ -38,6 +38,8 @@ func TestCollectBootDiag(t *testing.T) {
 			return adb.Result{Code: 1, Out: "su: not found"}
 		case args[1] == "ps -A":
 			return adb.Result{Code: 1, Out: "error: closed"}
+		case strings.HasPrefix(args[1], "dumpsys"):
+			return adb.Result{Out: "Can't find service: activity"}
 		}
 		io.WriteString(w, "ok\n")
 		return adb.Result{}
@@ -87,6 +89,7 @@ func TestCollectBootDiag(t *testing.T) {
 		fmt.Sprintf("dmesg.txt：退出码 1（su: not found），收到 %d 字节", len(dmesg)),
 		"ps.txt：退出码 1（error: closed），收到 0 字节",
 		"getprop.txt：成功，3 字节",
+		"dumpsys-activity-processes.txt：成功，0 字节（Can't find service: activity）",
 	} {
 		if !strings.Contains(summary, line) {
 			t.Errorf("summary.txt has no %q:\n%s", line, summary)
