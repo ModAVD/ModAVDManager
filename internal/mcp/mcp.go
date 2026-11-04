@@ -16,7 +16,8 @@
 //
 // Shutdown, at EOF on in or when ctx ends: nothing more is written, and every call is canceled (start / stop just stop
 // waiting) except the tools that write files without stopping half way (create / update / delete_instance,
-// install_apk, compact_disk). The process exits right after Serve returns, so those get up to shutdownWait (30 s) to finish first:
+// install_apk, compact_disk, set_app_proxy). The process exits right after Serve returns, so those get up to
+// shutdownWait (30 s) to finish first:
 // an avd.Delete cut in the middle leaves an instance directory without config.ini that modavd no longer lists nor
 // deletes, an update cut between config.ini and mas-avd.json leaves the two out of step. Within the same bound Serve
 // waits for the canceled calls to return and for their managers' background work (backend.Wait, at most hookWait each
