@@ -148,6 +148,25 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 {"mcpServers": {"modavd": {"command": "D:\\ModAVD\\tools\\modavd.exe", "args": ["mcp", "--root", "D:\\ModAVD"]}}}
 ```
 
+### 在 Claude Code 里实测过的
+
+2026-11-03，Claude Code 2.1.317（命令行版）连 modavd 0.3.0，用 `claude -p --mcp-config <文件> --strict-mcp-config`，只在这一次调用里加载 modavd，共跑了 5 次：
+
+| 做了什么 | 结果 |
+| --- | --- |
+| 一次按顺序调 7 个工具：`list_instances`、`get_instance`、`create_instance`（3 GB、4 核）、`update_instance`、`start_instance`、`stop_instance`、`delete_instance` | 前 6 个都成功；`delete_instance` 在 `-p` 下被拦（见下） |
+| 只调 `start_instance`，开完机 claude 正常退出（跑了两次） | 模拟器还在，`list` 是 online，它的父进程链里没有 claude 和 modavd；之后 `modavd stop` 正常关机 |
+| `MCP_TOOL_TIMEOUT` 设得比开机短，`start_instance` 开到一半超时，claude 退出 | 模拟器照常开完机，但开机后的设置没做完；再运行一次 `modavd start <i>` 就补完了 |
+| 模拟器起来 8 秒后直接结束 claude 进程 | `modavd mcp` 5 秒内自己退出，模拟器照常开完机 |
+
+- 协商到的协议有 2025-11-25 和 2026-07-28 两种，都能用。
+- `delete_instance` 带 `anthropic/requiresUserInteraction` 标记，在 `-p` 下一定被拦，实例不删，这是这个标记要的效果。在无人值守的脚本里删实例，用命令行 `delete <i> --yes`。
+- 经 MCP 新建时中途断开，新建就做不完，记成失败；用 `create --resume N` 重做。
+- 还没在 Claude Code 里核对的：
+  - `check_host`、`shell`、`install_apk`、`set_window_visible` 这几个工具没调过；
+  - 没有专门用 `MCP_PROTOCOL_NEGOTIATION=legacy` 跑一轮；
+  - `start_instance` 的 `notifications/progress` 是否逐条递增没核对，`-p` 的输出里只看得到 Claude Code 自己每 30 秒一条的心跳。
+
 ## 管理器 ModAVD.exe
 
 双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。

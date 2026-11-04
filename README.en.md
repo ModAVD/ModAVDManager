@@ -148,6 +148,25 @@ Or in the project's `.mcp.json`:
 {"mcpServers": {"modavd": {"command": "D:\\ModAVD\\tools\\modavd.exe", "args": ["mcp", "--root", "D:\\ModAVD"]}}}
 ```
 
+### Tested in Claude Code
+
+On 2026-11-03, Claude Code 2.1.317 (the command-line version) was connected to modavd 0.3.0 with `claude -p --mcp-config <file> --strict-mcp-config`, which loads modavd for that one call only. Five runs in all:
+
+| What was done | Result |
+| --- | --- |
+| Seven tools called in order in one run: `list_instances`, `get_instance`, `create_instance` (3 GB, 4 cores), `update_instance`, `start_instance`, `stop_instance`, `delete_instance` | The first six succeeded; `delete_instance` was blocked under `-p` (see below) |
+| Only `start_instance`, and claude exited normally once the instance had booted (run twice) | The emulator was still running, `list` showed it online, and its parent process chain had neither claude nor modavd in it; a later `modavd stop` shut it down normally |
+| `MCP_TOOL_TIMEOUT` set shorter than a boot, so `start_instance` timed out halfway and claude exited | The emulator finished booting, but the setup after boot was not done; running `modavd start <i>` once more completed it |
+| The claude process killed 8 seconds after the emulator came up | `modavd mcp` exited by itself within 5 seconds, and the emulator finished booting |
+
+- Two protocol versions were negotiated, 2025-11-25 and 2026-07-28; both work.
+- `delete_instance` carries the `anthropic/requiresUserInteraction` mark, so under `-p` it is always blocked and the instance is not deleted. That is what the mark is for. To delete an instance from an unattended script, use the command line `delete <i> --yes`.
+- If a create started over MCP is disconnected halfway, it cannot finish and is recorded as failed; redo it with `create --resume N`.
+- Not yet checked in Claude Code:
+  - the tools `check_host`, `shell`, `install_apk` and `set_window_visible` have not been called;
+  - there was no dedicated run with `MCP_PROTOCOL_NEGOTIATION=legacy`;
+  - whether the `notifications/progress` of `start_instance` increase one by one was not checked: the `-p` output only shows Claude Code's own heartbeat every 30 seconds.
+
 ## The manager ModAVD.exe
 
 Double-click `ModAVD.exe` in the package root: it starts a local server that listens on 127.0.0.1 only, then opens a window in Edge's app mode (`msedge --app`, built into Win10 / 11); if Edge is not found, it uses the default browser. The pages are HTML / CSS / JS embedded in the exe and need no network; it goes online only when you click "Check for updates" (`检查更新`) in "Settings" (`设置`).
