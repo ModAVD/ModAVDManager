@@ -149,18 +149,20 @@ func (m *Manager) AppProxy(ctx context.Context, i int) (*AppProxyResult, error) 
 		return nil, err
 	}
 	res := newAppProxyResult(i, s)
-	if m.guestUp(ctx, i) {
+	if up, err := m.guestUp(ctx, i); err != nil {
+		return nil, err
+	} else if up {
 		res.Guest = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil
 }
 
 // guestUp: instance i runs and Android has booted.
-func (m *Manager) guestUp(ctx context.Context, i int) bool {
-	if _, ok := m.qemuOf(i); !ok {
-		return false
+func (m *Manager) guestUp(ctx context.Context, i int) (bool, error) {
+	if _, ok, err := m.qemuOf(i); err != nil || !ok {
+		return false, err
 	}
-	return m.bootCompleted(ctx, i, statusAdbTimeout, true)
+	return m.bootCompleted(ctx, i, statusAdbTimeout, true), nil
 }
 
 // SetAppProxy changes instance i's per-app proxy and, while it runs, applies it at once. An address the host has to
@@ -235,7 +237,11 @@ func (m *Manager) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*A
 		}
 	}
 
-	switch _, running := m.qemuOf(i); {
+	_, running, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
+	switch {
 	case !running:
 		res.Applied = "next_boot"
 		if !next.Active() {
@@ -298,7 +304,9 @@ func (m *Manager) TestAppProxy(ctx context.Context, i int) (*AppProxyTestResult,
 	if res.Kind != srv.Scheme {
 		res.UDPError = strings.TrimSpace(res.UDPError + fmt.Sprintf("（设的是 %s，那个端口说的是 %s）", srv.Scheme, res.Kind))
 	}
-	if m.guestUp(ctx, i) {
+	if up, err := m.guestUp(ctx, i); err != nil {
+		return nil, err
+	} else if up {
 		res.Guest = m.guestStatus(ctx, i, &res.Notes)
 	}
 	return res, nil

@@ -91,7 +91,9 @@ func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) 
 	if _, err := m.instance(i); err != nil {
 		return nil, err
 	}
-	if _, running := m.qemuOf(i); !running {
+	if _, running, err := m.qemuOf(i); err != nil {
+		return nil, err
+	} else if !running {
 		return nil, errs.Newf(errs.Unsupported,
 			"魔改 AVD 实例 %d 没有在运行，请先开机再回收磁盘空间", i)
 	}
@@ -288,7 +290,10 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		return nil, errs.Newf(errs.NotFound, "实例 %d 没有数据盘覆盖层: %s", i, overlay).
 			WithAdvice("实例还没开过机，或数据盘不是这种格式")
 	}
-	_, running := m.qemuOf(i)
+	_, running, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
 	res := &DiskInfoResult{Index: i, Overlay: overlay, Running: running, NeedsShutdown: running}
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
@@ -330,7 +335,9 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 	}
 	defer startLock.Unlock()
 	// With the lock held, re-check: a start that finished between the first scan and the lock leaves qemu running.
-	if _, running := m.qemuOf(i); running {
+	if _, running, err := m.qemuOf(i); err != nil {
+		return nil, err
+	} else if running {
 		res.Running, res.NeedsShutdown = true, true
 		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
 		return res, nil
@@ -654,7 +661,9 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, err
 	}
 	defer unlock()
-	if _, running := m.qemuOf(i); running {
+	if _, running, err := m.qemuOf(i); err != nil {
+		return nil, err
+	} else if running {
 		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法整理磁盘", i).
 			WithAdvice(fmt.Sprintf("先 modavd stop %d，关机后再整理", i))
 	}
