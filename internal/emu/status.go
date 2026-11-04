@@ -37,9 +37,14 @@ func (m *Manager) qemus(indexes []int) map[int]win.Process {
 }
 
 // qemuOf is the qemu process of instance i of m's root, through qemuScan.
-func (m *Manager) qemuOf(i int) (win.Process, bool) {
+func (m *Manager) qemuOf(i int) (win.Process, bool, error) {
+	// The best-effort scan below treats snapshot failures as no processes. Reject an
+	// unsupported host first, so callers cannot mistake it for an offline instance.
+	if err := requireWindows(); err != nil {
+		return win.Process{}, false, err
+	}
 	p, ok := m.qemus([]int{i})[i]
-	return p, ok
+	return p, ok, nil
 }
 
 // Running is the indexes of this root's instances whose qemu runs, ascending: one process scan and no adb at all
@@ -114,7 +119,11 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 		return nil, err
 	}
 	var p *win.Process
-	if q, ok := m.qemuOf(i); ok {
+	q, ok, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		p = &q
 	}
 	info := m.instanceInfo(ctx, in, p, nil)

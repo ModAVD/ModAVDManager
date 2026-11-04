@@ -951,13 +951,13 @@ func TestStopReportsItsQemu(t *testing.T) {
 func TestWaitStartingQemu(t *testing.T) {
 	ctx := context.Background()
 	qemu := win.Process{PID: 4242}
-	none := func() (win.Process, bool) { return win.Process{}, false }
+	none := func() (win.Process, bool, error) { return win.Process{}, false, nil }
 	always := func() bool { return true }
 	const poll = 10 * time.Millisecond
 
 	// The qemu appears on the third look while the start holds its lock.
 	looks := 0
-	find := func() (win.Process, bool) { looks++; return qemu, looks >= 3 }
+	find := func() (win.Process, bool, error) { looks++; return qemu, looks >= 3, nil }
 	p, found, starting, err := waitStartingQemu(ctx, 5*time.Second, poll, find, always)
 	if err != nil || !found || starting || p.PID != 4242 || looks != 3 {
 		t.Fatalf("appears: %+v %v %v %v looks %d", p, found, starting, err, looks)
@@ -972,7 +972,7 @@ func TestWaitStartingQemu(t *testing.T) {
 
 	// The start lets go right after launching: the look after it finds the qemu.
 	looks = 0
-	find = func() (win.Process, bool) { looks++; return qemu, looks >= 2 }
+	find = func() (win.Process, bool, error) { looks++; return qemu, looks >= 2, nil }
 	if _, found, starting, _ := waitStartingQemu(ctx, 5*time.Second, poll, find, func() bool { return false }); !found || starting {
 		t.Fatalf("launched then let go: %v %v", found, starting)
 	}
@@ -988,6 +988,20 @@ func TestWaitStartingQemu(t *testing.T) {
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 	if _, _, _, err := waitStartingQemu(cctx, 5*time.Second, poll, none, always); errs.CodeOf(err) != errs.Canceled {
 		t.Fatalf("cancel: %v", err)
+	}
+
+	for _, failAt := range []int{1, 2} {
+		looks = 0
+		find = func() (win.Process, bool, error) {
+			looks++
+			if looks == failAt {
+				return win.Process{}, false, errs.New(errs.Unsupported, "test scan unsupported")
+			}
+			return win.Process{}, false, nil
+		}
+		if _, _, _, err := waitStartingQemu(ctx, time.Second, poll, find, func() bool { return false }); errs.CodeOf(err) != errs.Unsupported {
+			t.Errorf("scan error on look %d: %v", failAt, err)
+		}
 	}
 }
 

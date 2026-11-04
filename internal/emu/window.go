@@ -51,15 +51,22 @@ var setEmulatorWindowsVisible = win.SetEmulatorWindowsVisible
 // SetWindowVisible shows / hides the window of an instance booted with one (AUTO-MAS setVisible): the main window
 // and the side toolbar get SW_SHOW / SW_HIDE. Hiding does not stop rendering or the screenshot channel (10-04: the
 // shared-memory frame counter kept going at ~51 fps while hidden). A headless instance has no window and cannot get
-// one after boot: that is Windows 0, not an error. Window failures are only logged, never returned: scripts call this
+// one after boot: that is Windows 0, not an error. Unsupported hosts return errs.Unsupported before any query.
+// On Windows, window failures are only logged, never returned: scripts call this
 // every round in silent mode and an error would fail the whole run. The windows are those of the instance's qemu
 // process, not looked up by title: the title is going to change (ModAVD/ModAVD#58).
 func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*WindowResult, error) {
+	if err := requireWindows(); err != nil {
+		return nil, err
+	}
 	if _, err := m.instance(i); err != nil {
 		return nil, err
 	}
 	res := &WindowResult{Index: i, Visible: visible}
-	p, ok := m.qemuOf(i)
+	p, ok, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return res, nil
 	}

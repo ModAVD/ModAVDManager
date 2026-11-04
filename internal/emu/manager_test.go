@@ -63,14 +63,14 @@ func TestQemuScanHookAndRunning(t *testing.T) {
 	}
 	t.Cleanup(func() { qemuScan = saved })
 
-	if p, ok := m.qemuOf(3); !ok || p.PID != 4242 {
-		t.Errorf("m.qemuOf(3) = %v %v", p, ok)
+	if p, ok, err := m.qemuOf(3); err != nil || !ok || p.PID != 4242 {
+		t.Errorf("m.qemuOf(3) = %v %v %v", p, ok, err)
 	}
-	if _, ok := m.qemuOf(2); ok {
-		t.Error("m.qemuOf(2) found a process")
+	if _, ok, err := m.qemuOf(2); err != nil || ok {
+		t.Errorf("m.qemuOf(2): found=%v err=%v", ok, err)
 	}
-	if p, ok := m.qemuOf(4); !ok || p.PID != 4242 {
-		t.Errorf("m.qemuOf(4) = %v %v", p, ok)
+	if p, ok, err := m.qemuOf(4); err != nil || !ok || p.PID != 4242 {
+		t.Errorf("m.qemuOf(4) = %v %v %v", p, ok, err)
 	}
 	asked = nil
 	running, err := m.Running(context.Background())

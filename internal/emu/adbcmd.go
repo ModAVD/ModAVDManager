@@ -26,7 +26,9 @@ func (m *Manager) Shell(ctx context.Context, i int, command string, timeout time
 	if strings.TrimSpace(command) == "" {
 		return nil, errs.New(errs.InvalidArgument, "要执行的命令是空的")
 	}
-	if _, ok := m.qemuOf(i); !ok {
+	if _, ok, err := m.qemuOf(i); err != nil {
+		return nil, err
+	} else if !ok {
 		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 没有在运行", i)
 	}
 	res := m.shell(ctx, i, command, timeout)
@@ -52,7 +54,9 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	}
 	serial := m.Root.Ports().Serial(i)
 	// What adb.Run does on "device not found": bring a running instance back onto a restarted private server.
-	if _, running := m.qemuOf(i); running && m.ADB.GetState(ctx, serial, statusAdbTimeout) != "device" {
+	if _, running, err := m.qemuOf(i); err != nil {
+		return 1, err
+	} else if running && m.ADB.GetState(ctx, serial, statusAdbTimeout) != "device" {
 		m.ADB.Reregister(ctx, serial)
 	}
 
