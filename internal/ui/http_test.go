@@ -94,9 +94,18 @@ func TestErrorStatusMapping(t *testing.T) {
 		h.f.infoErr[3] = errs.New(code, "测试错误 "+code).WithAdvice("建议 " + code)
 		h.f.mu.Unlock()
 		e := expectError(t, h.do("GET", "/api/instances/3", nil), status, code)
-		if e.Message != "测试错误 "+code || e.Advice != "建议 "+code {
+		if e.Message != "测试错误 "+code || e.Advice != "建议 "+code || e.Details != nil {
 			t.Errorf("%s: body %+v", code, e)
 		}
+	}
+	// details (a failed boot's guest state, ModAVD/ModAVD#79), also of an error wrapped around the one that has them
+	h.f.mu.Lock()
+	h.f.infoErr[3] = errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_3-20261104-100000-bootfail`), "外层")
+	h.f.mu.Unlock()
+	if e := expectError(t, h.do("GET", "/api/instances/3", nil), 504, errs.Timeout); e.Details[errs.BootDiagDir] !=
+		`D:\r\logs\mas_3-20261104-100000-bootfail` {
+		t.Errorf("details: %+v", e)
 	}
 	// a plain Go error is internal
 	h.f.mu.Lock()

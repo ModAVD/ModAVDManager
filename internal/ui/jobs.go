@@ -20,6 +20,10 @@ const (
 	kindInstall = "install"
 	kindCreate  = "create"
 
+	kindDiskInfo    = "disk-info"
+	kindDiskTrim    = "disk-trim"
+	kindDiskCompact = "disk-compact"
+
 	stateRunning  = "running"
 	stateDone     = "done"
 	stateFailed   = "failed"
@@ -40,6 +44,12 @@ func kindLabel(kind string) string {
 		return "安装 APK"
 	case kindCreate:
 		return "新建"
+	case kindDiskInfo:
+		return "查看磁盘占用"
+	case kindDiskTrim:
+		return "回收磁盘空间"
+	case kindDiskCompact:
+		return "整理磁盘"
 	}
 	return kind
 }

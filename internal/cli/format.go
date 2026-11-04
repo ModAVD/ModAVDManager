@@ -597,6 +597,60 @@ func formatBridge(w io.Writer, r *emu.BridgeResult) {
 	}
 }
 
+func formatDisk(w io.Writer, r *emu.DiskTrimResult) {
+	fmt.Fprintf(w, "实例 %d 已触发磁盘回收（trim）\n", r.Index)
+}
+
+// formatDiskHuman picks the text form of a `disk` result by its type (trim and info return different results).
+func formatDiskHuman(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.DiskTrimResult:
+		if r != nil {
+			formatDisk(w, r)
+		}
+	case *emu.DiskInfoResult:
+		if r != nil {
+			formatDiskInfo(w, r)
+		}
+	case *emu.DiskCompactResult:
+		if r != nil {
+			formatDiskCompact(w, r)
+		}
+	}
+}
+
+func formatDiskCompact(w io.Writer, r *emu.DiskCompactResult) {
+	fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，省下 %s\n",
+		r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), fmtBytesGB(r.FreedBytes))
+}
+
+// fmtBytesGB is a byte count in GB with one decimal ("12.3 GB").
+func fmtBytesGB(b int64) string {
+	return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
+}
+
+func formatDiskInfo(w io.Writer, r *emu.DiskInfoResult) {
+	kv := func(k, v string) { fmt.Fprintf(w, "%s：%s\n", k, v) }
+	state := "已关机"
+	if r.Running {
+		state = "运行中"
+	}
+	kv("实例", strconv.Itoa(r.Index)+"（"+state+"）")
+	if r.LogicalBytes > 0 {
+		kv("数据盘逻辑大小", fmtBytesGB(r.LogicalBytes))
+	}
+	kv("覆盖层在宿主上占用", fmtBytesGB(r.OnDiskBytes))
+	if r.AllocatedBytes != nil {
+		kv("已分配（客体实际数据）", fmtBytesGB(*r.AllocatedBytes))
+	}
+	if r.ReclaimableBytes != nil {
+		kv("估计可回收", fmtBytesGB(*r.ReclaimableBytes))
+	}
+	for _, s := range r.Warnings {
+		fmt.Fprintln(w, "注意："+s)
+	}
+}
+
 func formatShell(w io.Writer, r *emu.ShellResult) {
 	if r.Output == "" {
 		return

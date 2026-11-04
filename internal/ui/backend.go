@@ -23,6 +23,11 @@ type backend interface {
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)
 	Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
+	// DiskTrim / DiskInfo / DiskCompact are the data-disk reclaim (modavd disk): trim needs the instance booted,
+	// info works either way, compact needs it shut down.
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
+	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
 	// Serial is instance i's adb serial in the root's port plan.

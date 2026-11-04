@@ -1,2 +1,2 @@
-# what the package scripts wrote, byte for byte (CRLF from WriteAllLines, LF from adb): never converted
+# what the package scripts wrote, byte for byte (CRLF from WriteAllLines and from adb.exe's text mode): never converted
 golden/** -text

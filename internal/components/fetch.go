@@ -180,6 +180,13 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 	return custom, nil
 }
 
+// JSONNeedsLicense is the errs.Usage error of a fetch with JSON but without AcceptLicense: nobody can answer the
+// license question then. The CLI gives it before looking for the root; Fetch gives it again before going online.
+func JSONNeedsLicense() *errs.Error {
+	return errs.New(errs.Usage, "--json 模式必须同时给 --accept-license，不能进入交互").
+		WithAdvice("先让用户看过并同意《Android 软件开发套件许可协议》，再带 --accept-license 运行")
+}
+
 // Fetch downloads and installs the components of r that are not complete (see the package comment). Error codes:
 // Unsupported (no catalogue on this host), InvalidArgument (options), PrecheckFailed (a non-ASCII path, not enough
 // space), NotReady (not a ModAVD root, or sdkRoot set), Busy (another fetch runs), Usage (JSON without
@@ -277,8 +284,8 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 		return res, nil
 	}
 	if f.o.JSON && !f.o.AcceptLicense {
-		return nil, errs.New(errs.Usage, "--json 模式必须同时给 --accept-license，不能进入交互").
-			WithAdvice("先让用户看过并同意《Android 软件开发套件许可协议》，再带 --accept-license 运行")
+		// the CLI refuses this before it even looks for the root (JSONNeedsLicense); this is the second line
+		return nil, JSONNeedsLicense()
 	}
 	if err := f.checkSpace(todo); err != nil {
 		return nil, err

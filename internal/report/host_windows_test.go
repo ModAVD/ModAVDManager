@@ -1,16 +1,80 @@
 package report
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"modavd/internal/win"
 )
+
+// TestCIMPartsApart: every WMI class runs in a cim.ps1 process of its own, once, on first use: one that fails or
+// times out (here av) loses only its own rows, and a part nobody asks for never runs.
+func TestCIMPartsApart(t *testing.T) {
+	answers := map[string]string{
+		"os":       `[{"caption":"Microsoft Windows 11 Pro","version":"10.0.26200","build":"26200","arch":"64 位","totalKB":33554432,"freeKB":16777216}]`,
+		"cpu":      `[{"name":"Test CPU","cores":8,"threads":16,"vt":true}]`,
+		"cs":       `[{"hypervisor":true}]`,
+		"gpu":      `[{"name":"Test GPU","driver":"32.0.15.1","pnp":"PCI\\VEN_10DE","date":"2026-01-02"}]`,
+		"features": `[{"name":"HypervisorPlatform","state":1}]`,
+	}
+	old := cimRunner
+	t.Cleanup(func() { cimRunner = old })
+	var mu sync.Mutex
+	runs := map[string]int{}
+	cimRunner = func(ctx context.Context, part, letter string) (map[string]json.RawMessage, error) {
+		mu.Lock()
+		runs[part+"|"+letter]++
+		mu.Unlock()
+		if part == "av" {
+			return nil, errors.New("WMI 查询（av）60 秒没有结果")
+		}
+		a, ok := answers[part]
+		if !ok {
+			return nil, errors.New("unexpected part " + part)
+		}
+		return map[string]json.RawMessage{part: json.RawMessage(a)}, nil
+	}
+	h := &winHost{cim: map[string]*cimRun{}}
+	ctx := context.Background()
+	if _, err := h.Antivirus(ctx); err == nil || !strings.Contains(err.Error(), "av") {
+		t.Fatalf("av: %v", err)
+	}
+	o, err := h.OS(ctx)
+	if err != nil || o.Caption != "Microsoft Windows 11 Pro" || o.TotalVisibleKB != 33554432 {
+		t.Fatalf("os after av failed: %+v, %v", o, err)
+	}
+	if cpus, err := h.Processors(ctx); err != nil || len(cpus) != 1 || *cpus[0].Cores != 8 {
+		t.Fatalf("cpu: %+v, %v", cpus, err)
+	}
+	if cs, err := h.ComputerSystem(ctx); err != nil || cs.HypervisorPresent == nil || !*cs.HypervisorPresent {
+		t.Fatalf("cs: %+v, %v", cs, err)
+	}
+	if gpus, err := h.VideoControllers(ctx); err != nil || len(gpus) != 1 || gpus[0].DriverDate != "2026-01-02" {
+		t.Fatalf("gpu: %+v, %v", gpus, err)
+	}
+	h.OS(ctx)
+	h.Antivirus(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	want := map[string]int{"av|": 1, "os|": 1, "cpu|": 1, "cs|": 1, "gpu|": 1} // features never asked for
+	if len(runs) != len(want) {
+		t.Fatalf("runs %v, want %v", runs, want)
+	}
+	for k, n := range want {
+		if runs[k] != n {
+			t.Fatalf("runs %v, want %v", runs, want)
+		}
+	}
+}
 
 // TestPebHelper is the child of TestProcessPathAsStarted: it waits to be killed.
 func TestPebHelper(t *testing.T) {

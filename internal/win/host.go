@@ -178,6 +178,80 @@ func DiskFree(path string) (uint64, error) {
 	return free, nil
 }
 
+// VolumeFileSystem is the file-system name of the volume that holds path ("NTFS", "ReFS", "exFAT", "FAT32", ...),
+// via GetVolumePathNameW (path -> the volume's mount point) then GetVolumeInformationW. Compact uses it to run only
+// on journaled file systems, where a write-through replace is a single transaction and the swap is atomic.
+func VolumeFileSystem(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	p, err := syscall.UTF16PtrFromString(abs)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	mount := make([]uint16, syscall.MAX_PATH+1)
+	if r, e := call(procGetVolumePathNameW, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&mount[0])),
+		uintptr(len(mount))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("找不到 %s 所在的卷: %v", path, e))
+	}
+	fsName := make([]uint16, 64)
+	if r, e := call(procGetVolumeInformationW, uintptr(unsafe.Pointer(&mount[0])), 0, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&fsName[0])), uintptr(len(fsName))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 所在卷的文件系统: %v", path, e))
+	}
+	return syscall.UTF16ToString(fsName), nil
+}
+
+// GetCompressedFileSize is the bytes the file at path really occupies on the volume (GetCompressedFileSizeW): for a
+// sparse or NTFS-compressed file that is less than its length. For a plain file it is the length rounded up to the
+// cluster.
+func GetCompressedFileSize(path string) (uint64, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	if err := procGetCompressedFileSizeW.Find(); err != nil {
+		return 0, errs.Wrap(errs.Internal, err, "读不到文件占用的磁盘空间: "+err.Error())
+	}
+	const invalidFileSize = 0xFFFFFFFF
+	var high uint32
+	low, _, e := procGetCompressedFileSizeW.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&high)))
+	// INVALID_FILE_SIZE is also a legal low word of a file larger than 4 GiB: only the last error tells them apart.
+	if uint32(low) == invalidFileSize {
+		if en, ok := e.(syscall.Errno); ok && en != 0 {
+			if en == syscall.ERROR_FILE_NOT_FOUND || en == syscall.ERROR_PATH_NOT_FOUND {
+				return 0, errs.Wrap(errs.NotFound, e, "找不到文件: "+path)
+			}
+			return 0, errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 占用的磁盘空间: %v", path, e))
+		}
+	}
+	return uint64(high)<<32 | uint64(uint32(low)), nil
+}
+
+// MoveFileReplaceThrough renames src over dst (MoveFileExW, REPLACE_EXISTING |
+// WRITE_THROUGH): dst is replaced and both the rename and the pending writes are
+// flushed to disk before it returns, so a crash leaves either the old file or the
+// new one, never a torn mix. Used to swap in a freshly compacted disk image.
+func MoveFileReplaceThrough(src, dst string) error {
+	s, err := syscall.UTF16PtrFromString(src)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "源路径不可用: "+src)
+	}
+	d, err := syscall.UTF16PtrFromString(dst)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "目标路径不可用: "+dst)
+	}
+	const moveReplaceExisting = 0x1
+	const moveWriteThrough = 0x8
+	r, e := call(procMoveFileExW, uintptr(unsafe.Pointer(s)), uintptr(unsafe.Pointer(d)),
+		moveReplaceExisting|moveWriteThrough)
+	if r == 0 {
+		return errs.Wrap(errs.Internal, e, fmt.Sprintf("换文件失败（%s → %s）: %v", src, dst, e))
+	}
+	return nil
+}
+
 type memoryStatusEx struct {
 	Length               uint32
 	MemoryLoad           uint32

@@ -32,6 +32,9 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/instances/{i}/start", s.handleStart)
 	m.HandleFunc("POST /api/instances/{i}/stop", s.handleStop)
 	m.HandleFunc("POST /api/instances/{i}/install", s.handleInstall)
+	m.HandleFunc("POST /api/instances/{i}/disk-info", s.handleDiskInfo)
+	m.HandleFunc("POST /api/instances/{i}/disk-trim", s.handleDiskTrim)
+	m.HandleFunc("POST /api/instances/{i}/disk-compact", s.handleDiskCompact)
 	m.HandleFunc("POST /api/instances/{i}/resume", s.handleResumeCreate)
 	m.HandleFunc("POST /api/instances/{i}/input", s.handleInput)
 	m.HandleFunc("GET /api/instances/{i}/screenshot", s.handleScreenshot)
@@ -93,9 +96,10 @@ func (s *server) handleNoAPI(w http.ResponseWriter, r *http.Request) {
 // ---- responses ---------------------------------------------------------------------------------------------------
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf
 }
 
 func newErrorBody(err error) *errorBody {
@@ -103,7 +107,7 @@ func newErrorBody(err error) *errorBody {
 		return nil
 	}
 	e := errs.As(err)
-	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice}
+	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // httpStatus is the status table of API.md.
@@ -143,13 +147,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, err error) {
 	e := newErrorBody(err)
-	writeErrorStatus(w, httpStatus(e.Code), e.Code, e.Message, e.Advice)
+	writeErrorBody(w, httpStatus(e.Code), *e)
 }
 
 func writeErrorStatus(w http.ResponseWriter, status int, code, message, advice string) {
+	writeErrorBody(w, status, errorBody{Code: code, Message: message, Advice: advice})
+}
+
+func writeErrorBody(w http.ResponseWriter, status int, e errorBody) {
 	body, _ := json.Marshal(struct {
 		Error errorBody `json:"error"`
-	}{errorBody{Code: code, Message: message, Advice: advice}})
+	}{e})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	w.Write(append(body, '\n'))

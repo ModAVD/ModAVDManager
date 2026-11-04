@@ -85,7 +85,7 @@ export function viewState(inst) {
 
 const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
   creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
-const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败' };
+const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败', 'disk-info': '查看磁盘占用失败', 'disk-trim': '回收磁盘空间失败', 'disk-compact': '整理磁盘失败' };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -203,14 +203,15 @@ function updateCard(c, inst) {
     c.next = 0;
     c.hold = null;
   }
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install';
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact';
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
   setText(c.phText, v.key === 'error' ? '上次开机没有成功' : v.key === 'createfail' ? '新建时的初始化没做完' : live ? '正在取画面…' : '未开机');
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
+    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…'
+      : v.kind === 'disk-trim' ? '正在回收磁盘空间…' : v.kind === 'disk-compact' ? '正在整理磁盘…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     const n = cp ?? pct(p);
@@ -288,6 +289,11 @@ function menuItems(c) {
       : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
+    // 磁盘占用 reads only (on or off); 回收 needs the guest booted; 整理 rewrites the data disk file, so the instance must be off.
+    // Any job running on the instance blocks all three (the server would answer busy).
+    { label: '磁盘占用', icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
+    { label: '回收磁盘空间', icon: 'refresh', disabled: inst.status !== 'online' || !!v.kind, hint: inst.status !== 'online' ? '开机后可用' : '', run: () => A.diskTrim(i) },
+    { label: '整理磁盘', icon: 'disk', disabled: inst.status !== 'offline' || !!v.kind, hint: inst.status !== 'offline' ? '关机后可用' : '', run: () => A.diskCompact(i) },
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },

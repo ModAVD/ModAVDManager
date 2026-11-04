@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -42,6 +43,9 @@ type fake struct {
 	shells    []string
 	shellCode int
 	installs  []fakeInstall
+	disk      []string      // "info 3", "trim 3", "compact 3" in call order
+	diskErr   error         // returned by every disk call when set
+	diskGate  chan struct{} // DiskCompact waits here when set
 	startGate chan struct{} // Start waits here (after its first progress) when set
 	stopGate  chan struct{}
 
@@ -235,6 +239,55 @@ func (b fakeBackend) InstallAPK(ctx context.Context, i int, apkPath string) (*em
 	b.f.installs = append(b.f.installs, fakeInstall{apkPath, string(data)})
 	b.f.mu.Unlock()
 	return &emu.InstallResult{Index: i, APK: apkPath, Package: "com.example", Output: "Success"}, nil
+}
+
+// diskCall records one disk call and returns the injected error, if any.
+func (b fakeBackend) diskCall(what string, i int) error {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.disk = append(b.f.disk, fmt.Sprintf("%s %d", what, i))
+	return b.f.diskErr
+}
+
+func (b fakeBackend) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	if err := b.diskCall("info", i); err != nil {
+		return nil, err
+	}
+	in, _ := b.f.get(i)
+	allocated, reclaimable := int64(10<<30), int64(2<<30)
+	res := &emu.DiskInfoResult{Index: i, Overlay: `C:\fake\userdata-qemu.img.qcow2`, Running: in.Running,
+		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536}
+	if in.Running {
+		res.NeedsShutdown = true
+	} else {
+		res.AllocatedBytes, res.ReclaimableBytes = &allocated, &reclaimable
+	}
+	return res, nil
+}
+
+func (b fakeBackend) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	if err := b.diskCall("trim", i); err != nil {
+		return nil, err
+	}
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2 << 30}, nil
+}
+
+func (b fakeBackend) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	if err := b.diskCall("compact", i); err != nil {
+		return nil, err
+	}
+	b.f.mu.Lock()
+	gate := b.f.diskGate
+	b.f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, canceledErr(ctx)
+		}
+	}
+	return &emu.DiskCompactResult{Index: i, Overlay: `C:\fake\userdata-qemu.img.qcow2`,
+		BeforeOnDiskBytes: 12 << 30, AfterOnDiskBytes: 10 << 30, FreedBytes: 2 << 30}, nil
 }
 
 func (b fakeBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result {

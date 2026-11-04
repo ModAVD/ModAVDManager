@@ -261,6 +261,24 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+func TestQemuImgExe(t *testing.T) {
+	r := newRoot(t)
+	exe := r.Dir + `\sdk\emulator\qemu-img.exe`
+	got, err := r.QemuImgExe()
+	if got != exe || errs.CodeOf(err) != errs.NotReady {
+		t.Errorf("missing: (%q, %v)", got, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.QemuImgExe(); got != exe || err != nil {
+		t.Errorf("present: (%q, %v)", got, err)
+	}
+}
+
 func TestPaths(t *testing.T) {
 	r := newRoot(t)
 	d := r.Dir

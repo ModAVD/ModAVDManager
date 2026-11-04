@@ -71,11 +71,15 @@ var (
 	procGetProcessAffinityMask           = modkernel32.NewProc("GetProcessAffinityMask")
 	procOpenFileMappingW                 = modkernel32.NewProc("OpenFileMappingW")
 	procGetDiskFreeSpaceExW              = modkernel32.NewProc("GetDiskFreeSpaceExW")
+	procGetVolumePathNameW               = modkernel32.NewProc("GetVolumePathNameW")
+	procGetVolumeInformationW            = modkernel32.NewProc("GetVolumeInformationW")
+	procGetCompressedFileSizeW           = modkernel32.NewProc("GetCompressedFileSizeW")
 	procGlobalMemoryStatusEx             = modkernel32.NewProc("GlobalMemoryStatusEx")
 	procLockFileEx                       = modkernel32.NewProc("LockFileEx")
 	procUnlockFileEx                     = modkernel32.NewProc("UnlockFileEx")
 	procGetProcessId                     = modkernel32.NewProc("GetProcessId")
 	procQueryFullProcessImageNameW       = modkernel32.NewProc("QueryFullProcessImageNameW")
+	procMoveFileExW                      = modkernel32.NewProc("MoveFileExW")
 
 	procNtQueryInformationProcess = modntdll.NewProc("NtQueryInformationProcess")
 	procRtlNtStatusToDosError     = modntdll.NewProc("RtlNtStatusToDosError")
@@ -86,6 +90,7 @@ var (
 	procGetWindowThreadProcessId = moduser32.NewProc("GetWindowThreadProcessId")
 	procGetClassNameW            = moduser32.NewProc("GetClassNameW")
 	procGetWindowTextW           = moduser32.NewProc("GetWindowTextW")
+	procGetWindow                = moduser32.NewProc("GetWindow")
 	procShowWindowAsync          = moduser32.NewProc("ShowWindowAsync")
 
 	// shell32 CommandLineToArgvW is syscall.CommandLineToArgv (its typed result keeps go vet's unsafeptr check quiet).

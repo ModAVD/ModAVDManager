@@ -345,6 +345,7 @@ func (f *fetcher) download(ctx context.Context, c root.SDKComponent) (string, er
 	}
 	var reasons []string
 	rejected := true // every mirror delivered a whole file with the wrong SHA-1
+	only416 := true  // every try was refused with HTTP 416: no mirror can continue the part
 	for _, m := range f.mirrors {
 		target := m.Base + c.URL
 		f.say("  镜像：" + m.Name)
@@ -362,6 +363,10 @@ func (f *fetcher) download(ctx context.Context, c root.SDKComponent) (string, er
 			}
 			f.warn(fmt.Sprintf("  第 %d 次下载出错（%s）：%s", attempt, m.Name, err.Error()))
 			reasons = append(reasons, fmt.Sprintf("%s 下载：%s", m.Name, err.Error()))
+			var fe *fetchError
+			if !errors.As(err, &fe) || fe.status != http.StatusRequestedRangeNotSatisfiable {
+				only416 = false
+			}
 			if switchMirror(err) {
 				break
 			}
@@ -388,6 +393,7 @@ func (f *fetcher) download(ctx context.Context, c root.SDKComponent) (string, er
 		if sha != c.SHA1 {
 			f.warn(fmt.Sprintf("  SHA-1 不对：%s，应为 %s；丢弃，换下一个镜像", sha, c.SHA1))
 			reasons = append(reasons, fmt.Sprintf("%s 校验：SHA-1 为 %s，应为 %s", m.Name, sha, c.SHA1))
+			only416 = false
 			os.Remove(part)
 			continue
 		}
@@ -401,6 +407,10 @@ func (f *fetcher) download(ctx context.Context, c root.SDKComponent) (string, er
 	code, advice := errs.ComponentsUnavailable, netAdvice("检查网络后再运行一次")
 	if rejected {
 		code, advice = errs.ComponentsRejected, "检查网络后再运行一次"
+	}
+	if only416 && len(reasons) > 0 {
+		// Every mirror's file is shorter than the part: kept as it may be valid, but no run would get past it.
+		advice = "所有镜像都不能从已下的部分接着下；删掉 " + part + " 后再运行一次"
 	}
 	return "", errs.New(code, "所有镜像都没下成："+strings.Join(reasons, "；")).WithAdvice(advice)
 }
@@ -434,11 +444,11 @@ func (f *fetcher) downloadOne(ctx context.Context, rawURL, part string, c root.S
 	resp, err := f.get(ctx, rawURL, existing, what)
 	var fe *fetchError
 	if existing > 0 && errors.As(err, &fe) && fe.status == http.StatusRequestedRangeNotSatisfiable {
-		// The mirror cannot continue from there (its file is shorter, or it counts differently): start over.
-		f.warn(fmt.Sprintf("  这个镜像不能从 %s 处接着下（HTTP 416），删掉已下的部分，从头下载", formatSize(float64(existing))))
-		os.Remove(part)
-		existing = 0
-		resp, err = f.get(ctx, rawURL, 0, what)
+		// The mirror's file is shorter than the part (a part longer than the component was dropped above), so it is not
+		// the right file and a start from 0 there would only fail the size check: the next mirror resumes the part
+		// instead (the script's 'HTTP 4\d\d'). The part may be the only valid half of a 1.5 GB download.
+		return &fetchError{msg: fmt.Sprintf("这个镜像不能从 %s 处接着下（HTTP 416，它的文件比已下的部分还短），已下的部分留着",
+			formatSize(float64(existing))), next: true, status: fe.status}
 	}
 	if err != nil {
 		return err

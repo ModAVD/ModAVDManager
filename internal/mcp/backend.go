@@ -21,6 +21,9 @@ type backend interface {
 	SetWindowVisible(ctx context.Context, i int, visible bool) (*emu.WindowResult, error)
 	Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
+	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
 	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
 	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
 	// Wait waits up to timeout for the background work the manager started (the logcat restart after a

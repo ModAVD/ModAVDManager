@@ -123,6 +123,7 @@ func TestBusyAndStopWhileStart(t *testing.T) {
 	expectError(t, h.do("POST", "/api/instances/3/install", nil, withHeader("Content-Type", "multipart/form-data; boundary=x")),
 		http.StatusConflict, errs.Busy)
 	expectError(t, h.do("DELETE", "/api/instances/3?confirm=1", nil), http.StatusConflict, errs.Busy)
+	expectError(t, h.do("POST", "/api/instances/3/disk-trim", "{}"), http.StatusConflict, errs.Busy)
 	// another instance is not affected
 	expect(t, h.do("POST", "/api/instances/4/start", nil), http.StatusAccepted, nil)
 

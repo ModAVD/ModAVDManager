@@ -377,6 +377,9 @@ type RunOptions struct {
 	TotalTimeout bool
 	// Raw keeps stdout bytes and stderr text apart (exec-out screencap ...).
 	Raw bool
+	// Stdout, when set, gets stdout as it arrives instead of the Result (Out is then the stderr text): what came before
+	// a timeout or a failure stays there (logcat -d of a guest that hangs).
+	Stdout io.Writer
 }
 
 // Run is `adb -P <port> [-s serial] args...` with stdin NUL, no console window, Env(); the process is killed at the
@@ -433,12 +436,12 @@ func (c *Client) runOnce(ctx context.Context, opt RunOptions, args []string) Res
 		cmdArgs = append(cmdArgs, "-s", opt.Serial)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	return c.execAdb(ctx, opt.Raw, limit, timeout, args, cmdArgs)
+	return c.execAdb(ctx, opt.Raw, opt.Stdout, limit, timeout, args, cmdArgs)
 }
 
-// execAdb runs adb.exe cmdArgs for at most limit. The timeout message names args (without -P / -s) and the whole
-// timeout, like AUTO-MAS.
-func (c *Client) execAdb(ctx context.Context, raw bool, limit, timeout time.Duration, args, cmdArgs []string) Result {
+// execAdb runs adb.exe cmdArgs for at most limit, stdout into out when it is set (RunOptions.Stdout). The timeout
+// message names args (without -P / -s) and the whole timeout, like AUTO-MAS.
+func (c *Client) execAdb(ctx context.Context, raw bool, out io.Writer, limit, timeout time.Duration, args, cmdArgs []string) Result {
 	timedOut := func() Result {
 		return failed(raw, fmt.Sprintf("adb %s 超时（%.0f 秒）", strings.Join(args, " "), timeout.Seconds()))
 	}
@@ -465,11 +468,14 @@ func (c *Client) execAdb(ctx context.Context, raw bool, limit, timeout time.Dura
 		return err
 	}
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	if raw {
-		cmd.Stderr = &stderr
-	} else {
-		cmd.Stderr = &stdout // the same writer: os/exec gives the child one pipe for both, so the order is kept
+	switch {
+	case out != nil:
+		cmd.Stdout, cmd.Stderr = out, &stderr
+	case raw:
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	default:
+		// the same writer: os/exec gives the child one pipe for both, so the order is kept
+		cmd.Stdout, cmd.Stderr = &stdout, &stdout
 	}
 	err := cmd.Run()
 	if cmd.ProcessState == nil {
@@ -485,6 +491,10 @@ func (c *Client) execAdb(ctx context.Context, raw bool, limit, timeout time.Dura
 		return timedOut()
 	}
 	code := cmd.ProcessState.ExitCode()
+	if out != nil {
+		text := strings.TrimSpace(decodeOutput(stderr.Bytes()))
+		return Result{Code: code, Out: text, Stderr: text}
+	}
 	if raw {
 		text := strings.TrimSpace(decodeOutput(stderr.Bytes()))
 		return Result{Code: code, Out: text, Stdout: stdout.Bytes(), Stderr: text}
