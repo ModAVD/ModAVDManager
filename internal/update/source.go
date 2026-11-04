@@ -382,9 +382,15 @@ func hashOr(p string) string {
 // fetch preserves MirrorChyan's fresh-download policy; GitHub can resume a verified range.
 func (u *Updater) fetch(ctx context.Context, r *release, part, label string) error {
 	last := time.Time{}
+	fresh := r.source == SourceMirrorChyan
+	// Keep update's original policy: a full .part has not passed verification yet. Download it again, including
+	// when the source supplies no SHA-256. Only the verified final file is reused by download above.
+	if st, err := os.Stat(part); err == nil && st.Size() >= r.size {
+		fresh = true
+	}
 	d := download.Client{HTTP: u.client(), StallTimeout: u.stallTimeout}
 	return d.File(ctx, download.FileOptions{URL: r.url, Path: part, Label: label, Size: r.size,
-		Fresh: r.source == SourceMirrorChyan,
+		Fresh: fresh,
 		Progress: func(done int64) {
 			if time.Since(last) >= 500*time.Millisecond || done == r.size {
 				last = time.Now()

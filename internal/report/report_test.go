@@ -145,7 +145,7 @@ func TestZipStageOrderAndFilter(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "x.zip")
-	entries, err := zipStage(dst, stage)
+	entries, err := zipStage(context.Background(), dst, stage)
 	if err != nil {
 		t.Fatal(err)
 	}

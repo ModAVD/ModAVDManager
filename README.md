@@ -74,7 +74,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `disk <i> compact` | 整理数据盘：关机状态下把覆盖层重写一遍、丢掉已释放的簇、把文件缩小；转换后先校验再原子替换，原盘在替换成功前不动；仅在 NTFS/ReFS 卷上进行，实例有快照、或剩余空间不够放下新文件时拒绝 |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
-| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；Ctrl+C 返回 `canceled` 并清理暂存目录，`--keep-stage` 则保留并在错误中给出路径 |
+| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
 | `components [status]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看或补全 Google 组件（adb 和系统镜像），做的是「补全组件.bat」做的事（见「补全 Google 组件」） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |

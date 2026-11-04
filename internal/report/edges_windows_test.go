@@ -63,7 +63,7 @@ func TestZipLocalWallClock(t *testing.T) {
 				t.Fatal(err)
 			}
 			dst := filepath.Join(t.TempDir(), "zip")
-			if _, err := zipStage(dst, stage); err != nil {
+			if _, err := zipStage(context.Background(), dst, stage); err != nil {
 				t.Fatal(err)
 			}
 			z, err := zip.OpenReader(dst)

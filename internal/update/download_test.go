@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"modavd/internal/buildinfo"
+	"modavd/internal/errs"
 	"modavd/internal/logx"
 )
 
@@ -105,5 +106,54 @@ func TestMirrorDownloadsAlwaysStartFresh(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	if err != nil || string(b) != "abcdef" || hits.Load() != 2 {
 		t.Fatal(fmt.Sprint(err), string(b), hits.Load())
+	}
+}
+
+func TestFullUpdatePartIsDownloadedAgain(t *testing.T) {
+	for _, tc := range []struct{ name, part, digest string }{
+		{"bad cache", "badbad", hashBytes([]byte("abcdef"))},
+		{"complete cache", "abcdef", hashBytes([]byte("abcdef"))},
+		{"no source digest", "badbad", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				if r.Header.Get("Range") != "" {
+					t.Errorf("complete part must restart: %v", r.Header)
+				}
+				io.WriteString(w, "abcdef")
+			}))
+			defer srv.Close()
+			u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop()}
+			if err := os.MkdirAll(u.l.download(), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(u.l.downloadAt("test.zip")+".part", []byte(tc.part), 0600); err != nil {
+				t.Fatal(err)
+			}
+			path, err := u.download(context.Background(), &release{source: SourceGitHub, url: srv.URL, assetName: "test.zip", size: 6, sha256: tc.digest})
+			if err != nil {
+				t.Fatalf("healthy source requested %d times: %v", hits.Load(), err)
+			}
+			b, err := os.ReadFile(path)
+			if err != nil || string(b) != "abcdef" || hits.Load() != 1 {
+				t.Fatalf("hits=%d bytes=%q err=%v", hits.Load(), b, err)
+			}
+		})
+	}
+}
+
+func TestUpdateStillRejectsBadSourceDigest(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); io.WriteString(w, "badbad") }))
+	defer srv.Close()
+	u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop()}
+	path, err := u.download(context.Background(), &release{source: SourceGitHub, url: srv.URL, assetName: "test.zip", size: 6, sha256: hashBytes([]byte("abcdef"))})
+	if path != "" || errs.CodeOf(err) != errs.UpdateRejected || hits.Load() != 1 {
+		t.Fatalf("path=%q hits=%d err=%v", path, hits.Load(), err)
+	}
+	if _, err := os.Stat(u.l.downloadAt("test.zip") + ".part"); !os.IsNotExist(err) {
+		t.Fatalf("bad part remains: %v", err)
 	}
 }

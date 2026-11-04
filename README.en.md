@@ -71,7 +71,7 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 | `bridge <i> install\|uninstall\|verify` | Install, uninstall or check the arm64 execution bridge; it is installed automatically at start, so you normally do not run it by hand (see below) |
 | `check [--memory M]` | Computer check before starting |
 | `report-config [--no-clipboard]` | Copy the computer configuration and the game info from the running instances (read-only) |
-| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | Collect a problem report and zip it (read-only). Ctrl+C returns `canceled` and removes staging; `--keep-stage` preserves it and includes its path in the error |
+| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | Collect a problem report and zip it (read-only). Ctrl+C before ZIP completion returns `canceled`, deletes the unfinished ZIP and removes staging; `--keep-stage` preserves staging and includes its path in the error |
 | `components [status]`, `components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | View or fetch the Google components (adb and the system image); does what `补全组件.bat` (fetches the Google components) does (see "Fetching the Google components") |
 | `window <i> show\|hide`, `install <i> <apk>`, `shell <i> <command>`, `adb <i> -- <args>` | Window, install an APK, guest command, adb passthrough |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | Update the whole ModAVD package in the root folder, using the update source from "Settings" (`设置`) (see "Updating ModAVD") |

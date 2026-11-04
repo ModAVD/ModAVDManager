@@ -84,6 +84,18 @@ CASES = [
      [('_ = os.RemoveAll(stage)', '// removal disabled')]),
     ("crash base dedup", "internal/report/collect.go", "report", "TestCollectMatchesScript",
      [('full = longPath(full)', 'full = full')]),
+    ("complete update part", "internal/update/source.go", "update", "TestFullUpdatePartIsDownloadedAgain",
+     [('st.Size() >= r.size', 'st.Size() > r.size')]),
+    ("downloaded SHA-256", "internal/update/source.go", "update", "TestUpdateStillRejectsBadSourceDigest",
+     [('r.sha256 != "" && hashOr(part) != r.sha256', 'false')]),
+    ("packing context", "internal/report/collect.go", "report", "TestCollectCanceledDuringPacking",
+     [('zipStage(ctx, zipPath, stage)', 'zipStage(context.Background(), zipPath, stage)')]),
+    ("packing read cancellation", "internal/report/collect.go", "report", "TestCollectCanceledDuringPacking",
+     [('io.Copy(w, zipReader{ctx: ctx, r: in})', 'io.Copy(w, in)')]),
+    ("unfinished ZIP cleanup", "internal/report/collect.go", "report", "TestCollectCanceledDuringPacking",
+     [('os.Remove(dst)', '_ = dst')]),
+    ("ZIP close cancellation", "internal/report/collect.go", "report", "TestZipStageCanceledAtCompletion",
+     [('err = ctx.Err()', 'err = nil')]),
 ]
 
 
