@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,7 @@ type scenarioFile struct {
 }
 
 type scenario struct {
+	CollectOnly  bool
 	Now          string
 	Root         string
 	Env          map[string]string
@@ -121,6 +123,53 @@ type scenario struct {
 	ListenersErr, EventsErr string
 }
 
+// scenarioData resolves shallow overrides so each failure scenario changes just the query being tested.
+func scenarioData(t *testing.T, all map[string]json.RawMessage, name string) json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(all[name], &fields); err != nil {
+		t.Fatal(err)
+	}
+	if raw, ok := fields["extends"]; ok {
+		var base string
+		if err := json.Unmarshal(raw, &base); err != nil {
+			t.Fatal(err)
+		}
+		var inherited map[string]json.RawMessage
+		if err := json.Unmarshal(scenarioData(t, all, base), &inherited); err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range fields {
+			inherited[key] = value
+		}
+		fields = inherited
+	}
+	b, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func collectScenarios(t *testing.T) []string {
+	b, err := os.ReadFile("testdata/scenarios.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for name := range all {
+		if name != "comment" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // fixture is one scenario set up on disk.
 type fixture struct {
 	sc      *scenario
@@ -151,7 +200,7 @@ func loadScenario(t *testing.T, name, base, rootRel string, adbPort int) *scenar
 		t.Fatal(err)
 	}
 	var head struct{ Root string }
-	if err := json.Unmarshal(probe[name], &head); err != nil {
+	if err := json.Unmarshal(scenarioData(t, probe, name), &head); err != nil {
 		t.Fatalf("scenario %s: %v", name, err)
 	}
 	if rootRel == "" {
@@ -170,7 +219,7 @@ func loadScenario(t *testing.T, name, base, rootRel string, adbPort int) *scenar
 		t.Fatal(err)
 	}
 	sc := &scenario{}
-	if err := json.Unmarshal(all[name], sc); err != nil {
+	if err := json.Unmarshal(scenarioData(t, all, name), sc); err != nil {
 		t.Fatalf("scenario %s: %v", name, err)
 	}
 	sc.Root = rootRel

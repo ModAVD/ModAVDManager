@@ -1,5 +1,5 @@
 // Package hostproxy is the proxy the manager's own downloads use (components fetch, update): HTTPS_PROXY /
-// HTTP_PROXY / NO_PROXY when any of them is set, else the static proxy of the Windows Internet settings (the proxy
+// HTTP_PROXY when a proxy address is set, else the static proxy of the Windows Internet settings (the proxy
 // set by hand under "Internet Options" or Settings > Network > Proxy, which is also where proxy programs put theirs).
 // A proxy auto-config script (PAC, WPAD) is not evaluated: set HTTPS_PROXY for such a network (Advice says so).
 // Loopback targets (local test mirrors) always go direct.
@@ -15,9 +15,9 @@ import (
 
 var envKeys = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"}
 
-// envSet: one of the proxy variables is set, so the environment decides alone.
+// envSet: a proxy address is set, so the environment decides alone. NO_PROXY only adds bypasses.
 func envSet() bool {
-	for _, k := range envKeys {
+	for _, k := range envKeys[:4] {
 		if os.Getenv(k) != "" {
 			return true
 		}
@@ -30,7 +30,7 @@ func ForRequest(req *http.Request) (*url.URL, error) {
 	if envSet() {
 		return http.ProxyFromEnvironment(req)
 	}
-	if isLoopback(req.URL.Hostname()) {
+	if isLoopback(req.URL.Hostname()) || bypassEnv(req.URL) {
 		return nil, nil
 	}
 	s := system()
@@ -38,6 +38,61 @@ func ForRequest(req *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	return proxyFor(req.URL, s.server, s.override), nil
+}
+
+// bypassEnv applies NO_PROXY to the system proxy too. Match hosts, optional ports, IPs and CIDRs using the
+// environment convention: example.com includes subdomains, .example.com matches subdomains only.
+func bypassEnv(u *url.URL) bool {
+	list := os.Getenv("NO_PROXY")
+	if list == "" {
+		list = os.Getenv("no_proxy")
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	ip := net.ParseIP(host)
+	for _, entry := range strings.Split(list, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "*" {
+			return true
+		}
+		if entry == "" {
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			if ip != nil && network.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if h, p, err := net.SplitHostPort(entry); err == nil {
+			if p != port {
+				continue
+			}
+			entry = h
+		}
+		entry = strings.Trim(entry, "[]")
+		if address := net.ParseIP(entry); address != nil {
+			if ip != nil && address.Equal(ip) {
+				return true
+			}
+			continue
+		}
+		entry = strings.TrimPrefix(entry, "*")
+		if strings.HasPrefix(entry, ".") {
+			if strings.HasSuffix(host, entry) {
+				return true
+			}
+		} else if host == entry || strings.HasSuffix(host, "."+entry) {
+			return true
+		}
+	}
+	return false
 }
 
 // Advice is the hint for a failed download when the proxy may be the cause: "" unless no proxy was used because the

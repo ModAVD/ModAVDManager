@@ -106,7 +106,7 @@
             "dumpsys package COM.MIHOYO.HKRPG 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=3.5.0\n", "err": "Broken pipe\n"},
             "getprop": {"out": "[ro.build.version.sdk]: [34]\n[ro.product.model]: [中文型号]\n[sys.boot_completed]: [1]\n"},
             "dumpsys window": {"out": "WINDOW MANAGER WINDOWS (dumpsys window windows)\n  Window #0 Window{1a2b u0 StatusBar}:\n  mCurrentFocus=Window{2bce772 u0 de.jrpie.android.launcher/de.jrpie.android.launcher.ui.HomeActivity}\n  mFocusedApp=ActivityRecord{fb750ba u0 de.jrpie.android.launcher/.ui.HomeActivity t6}\n  mInputMethodWindow=null\n"},
-            "export ANDROID_LOG_TAGS=\"''\"; exec logcat '-d' '-b' 'crash'": {"out": "", "err": "logcat: Unable to open log device '/dev/log/crash'\n", "exit": 1}
+            "export ANDROID_LOG_TAGS=''; exec logcat '-d' '-b' 'crash'": {"out": "", "err": "logcat: Unable to open log device '/dev/log/crash'\n", "exit": 1}
           },
           "exec": {"screencap -p": {"b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="}}
         },
@@ -116,7 +116,7 @@
             "getprop sys.boot_completed": {"out": "0\n"},
             "getprop": {"out": "[sys.boot_completed]: [0]\n", "err": "warning: no shell_v2\n"},
             "dumpsys window": {"out": "WINDOW MANAGER\n"},
-            "export ANDROID_LOG_TAGS=\"''\"; exec logcat '-d' '-b' 'crash'": {"out": "--------- beginning of crash\n"}
+            "export ANDROID_LOG_TAGS=''; exec logcat '-d' '-b' 'crash'": {"out": "--------- beginning of crash\n"}
           },
           "exec": {"screencap -p": {"b64": "ZXJyb3I6IG5vIGRpc3BsYXkK"}}
         },
@@ -274,6 +274,187 @@
       {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/a.dmp", "size": 300, "mtime": "2026-01-14 09:00:00"},
       {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/b.dmp", "size": 200, "mtime": "2026-01-13 09:00:00"},
       {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/c.dmp", "size": 100, "mtime": "2026-01-12 09:00:00"}
+    ]
+  }
+,
+  "failure-os": {
+    "extends": "full",
+    "collectOnly": true,
+    "osErr": "test os unavailable"
+  },
+  "failure-currentVersion": {
+    "extends": "full",
+    "collectOnly": true,
+    "currentVersionErr": "test currentVersion unavailable"
+  },
+  "failure-cpus": {
+    "extends": "full",
+    "collectOnly": true,
+    "cpusErr": "test cpus unavailable"
+  },
+  "failure-cs": {
+    "extends": "full",
+    "collectOnly": true,
+    "csErr": "test cs unavailable"
+  },
+  "failure-gpus": {
+    "extends": "full",
+    "collectOnly": true,
+    "gpusErr": "test gpus unavailable"
+  },
+  "failure-features": {
+    "extends": "full",
+    "collectOnly": true,
+    "featuresErr": "test features unavailable"
+  },
+  "failure-av": {
+    "extends": "full",
+    "collectOnly": true,
+    "avErr": "test av unavailable"
+  },
+  "failure-disk": {
+    "extends": "full",
+    "collectOnly": true,
+    "diskErr": "test disk unavailable"
+  },
+  "failure-drive": {
+    "extends": "full",
+    "collectOnly": true,
+    "driveErr": "test drive unavailable"
+  },
+  "failure-processes": {
+    "extends": "full",
+    "collectOnly": true,
+    "processesErr": "test processes unavailable"
+  },
+  "failure-listeners": {
+    "extends": "full",
+    "collectOnly": true,
+    "listenersErr": "test listeners unavailable"
+  },
+  "failure-events": {
+    "extends": "full",
+    "collectOnly": true,
+    "eventsErr": "test events unavailable"
+  },
+  "failure-accel": {
+    "extends": "full",
+    "collectOnly": true,
+    "run": {
+      "emulator.exe": {
+        "timeout": true
+      }
+    }
+  },
+  "empty-branches": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "files": [
+      {
+        "path": "root/sdk/emulator/source.properties",
+        "text": "Pkg.Revision=37.2.10\nPkg.BuildId=mas-37\n"
+      },
+      {
+        "path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/old.dmp",
+        "text": "old dump",
+        "mtime": "2026-01-01 00:00:00"
+      },
+      {
+        "path": "tmp/AndroidEmulator/emu-crash-37.2.10.db/reports/foreign.dmp",
+        "text": "foreign"
+      },
+      {
+        "path": "mas/AUTO-MAS.exe",
+        "text": "fake"
+      }
+    ],
+    "processes": [
+      {
+        "ProcessId": 5000,
+        "Name": "AUTO-MAS.exe",
+        "ExecutablePath": "{{MAS}}\\AUTO-MAS.exe"
+      }
+    ]
+  },
+  "logs-and-mas": {
+    "extends": "full",
+    "collectOnly": true,
+    "uninstall": {
+      "HKLM": [],
+      "WOW": [],
+      "HKCU": []
+    },
+    "limits": {
+      "logCap": 1000000,
+      "masTail": 1000000,
+      "dumpMax": 1000000
+    }
+  },
+  "live-no-devices": {
+    "extends": "full",
+    "collectOnly": true,
+    "adb": {
+      "devices": "",
+      "serials": {}
+    }
+  },
+  "live-no-server": {
+    "extends": "full",
+    "collectOnly": true,
+    "listeners": []
+  },
+  "mas-missing-logs": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "uninstall": {
+      "HKLM": [
+        {
+          "DisplayName": "AUTO-MAS",
+          "InstallLocation": "{{MAS}}",
+          "DisplayVersion": "test"
+        }
+      ],
+      "WOW": [],
+      "HKCU": []
+    },
+    "files": [
+      {
+        "path": "mas/debug",
+        "dir": true
+      }
+    ]
+  },
+  "crash-boundary": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "limits": {
+      "logCap": 6000,
+      "masTail": 2000,
+      "dumpMax": 16
+    },
+    "files": [
+      {
+        "path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/a.dmp",
+        "b64": "AAECAwQFBgcICQoLDA0ODw==",
+        "mtime": "2026-01-08 12:00:00"
+      },
+      {
+        "path": "tmp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/b.dmp",
+        "size": 17,
+        "mtime": "2026-01-14 09:00:00"
+      }
     ]
   }
 }

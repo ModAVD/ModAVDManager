@@ -1,0 +1,81 @@
+{{BOM}}魔改 AVD 问题信息
+隐私提示：问题包只保存在本机，脚本不会上传。
+- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。
+- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。
+- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。
+- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。
+生成时间：2026-01-15 12:00:00 +08:00
+PowerShell：{{PSVERSION}}
+
+== ModAVD 目录 ==
+路径：{{BASE}}\root
+所在盘：{{DRIVE}}:\ 剩余 100.00 GB / 共 476.94 GB（NTFS）
+adb server 端口：20050（mas-avd.json 没有配置，按默认）
+SDK：{{BASE}}\root\sdk（包内 sdk）
+
+== 模拟器版本 ==
+emulator：Pkg.Revision=37.2.10  Pkg.BuildId=mas-37
+platform-tools：Pkg.Revision=
+系统镜像：没找到 system-images\…\source.properties
+
+== 本机 ==
+Windows：Microsoft Windows 11 Pro  Version=10.0.26100  BuildNumber=26100  UBR=4351  64-bit
+CPU：Fake CPU 8 Cores  物理核 8  逻辑核 16  VirtualizationFirmwareEnabled=True
+HypervisorPresent=False（为 True 时 VirtualizationFirmwareEnabled 显示 False 是正常的）
+内存：共 15.88 GB，可用 7.94 GB
+显卡：Fake GPU  DriverVersion=1.2.3.4  DriverDate=2025-06-01
+
+== 虚拟化相关 Windows 功能（InstallState 1=已开 2=未开 3=缺失；仅供参考，能不能用看下一节 accel-check） ==
+HypervisorPlatform：InstallState=1（已开）
+VirtualMachinePlatform：没查到
+Microsoft-Hyper-V-All：没查到
+
+== emulator -accel-check ==
+跳过：没有 {{BASE}}\root\sdk\emulator\emulator.exe
+
+== 杀毒软件（SecurityCenter2） ==
+Windows Defender  productState=0x061100
+
+== 实例 ==
+还没有实例（avd 目录不存在或里面没有 *.ini）。
+没有 mas-avd.json
+
+== 正在运行的 qemu-system 进程 ==
+没有
+
+== 正在监听的 adb server ==
+没有
+
+== 模拟器日志（logs\） ==
+没有 logs 目录
+
+== 模拟器崩溃转储 ==
+收集范围：仅 ModAVD 的 emu-crash-<version>-mas.db；近 7 天内最新 3 份
+近 7 天没有
+
+== AUTO-MAS ==
+安装目录：{{BASE}}\mas（来自正在运行的 AUTO-MAS.exe）
+版本：
+安装目录下没有 debug 文件夹
+
+== 近 7 天 Application 日志（ID 1000/1001/1002，含 qemu / emulator / adb / AUTO-MAS） ==
+没有
+
+== 现场 ==
+没有实例在运行，跳过
+
+== 收集过程 ==
+收集耗时：0.0 秒
+  ModAVD 目录与版本：0.0 秒
+  Windows / CPU / 内存 / 显卡：0.0 秒
+  虚拟化功能：0.0 秒
+  加速检查（emulator -accel-check）：0.0 秒
+  杀毒软件：0.0 秒
+  实例列表与实例文件：0.0 秒
+  正在运行的模拟器与 adb：0.0 秒
+  模拟器日志：0.0 秒
+  模拟器崩溃转储：0.0 秒
+  AUTO-MAS 日志：0.0 秒
+  系统事件日志：0.0 秒
+  现场截图与状态：0.0 秒
+各节都没出错。

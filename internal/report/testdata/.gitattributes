@@ -1,2 +1,3 @@
 # what the package scripts wrote, byte for byte (CRLF from WriteAllLines and from adb.exe's text mode): never converted
-golden/** -text
+# Trailing spaces and CRLF are part of the script's captured output, checked byte for byte by the tests.
+golden/** -text whitespace=-blank-at-eol,cr-at-eol

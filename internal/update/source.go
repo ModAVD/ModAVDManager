@@ -9,10 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"modavd/internal/buildinfo"
+	"modavd/internal/download"
 	"modavd/internal/errs"
 	"modavd/internal/hostproxy"
 	"modavd/internal/jsonord"
@@ -89,20 +87,11 @@ func sourceError(format string, args ...any) *errs.Error {
 }
 
 func (u *Updater) client() *http.Client {
-	if u.httpClient != nil {
-		return u.httpClient
+	if u.httpClient == nil {
+		return download.NewHTTPClient(0)
 	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:                 hostproxy.ForRequest, // the same proxy as components fetch
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       30 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}}
+	return u.httpClient
 }
-
-func userAgent() string { return userAgentApp + "/" + buildinfo.Version }
 
 // ---- GitHub
 
@@ -115,10 +104,11 @@ func (u *Updater) githubLatest(ctx context.Context) (*release, error) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", userAgent())
+	req.Header.Set("User-Agent", download.UserAgent())
+	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := u.client().Do(req)
 	if err != nil {
-		return nil, sourceError("连不上 GitHub（%s）", netErrText(err, "")).WithAdvice(hostproxy.Advice())
+		return nil, sourceError("连不上 GitHub（%s）", download.NetError(err, "")).WithAdvice(hostproxy.Advice())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -212,10 +202,11 @@ func (u *Updater) mirrorLatest(ctx context.Context, cdk string, base *Version) (
 	ctx, cancel := context.WithTimeout(ctx, apiTimeout)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(api, "/")+"/"+mirrorRID+"/latest?"+q.Encode(), nil)
-	req.Header.Set("User-Agent", userAgent())
+	req.Header.Set("User-Agent", download.UserAgent())
+	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := u.client().Do(req)
 	if err != nil {
-		return nil, &mirrorError{Msg: "连不上 Mirror 酱（" + netErrText(err, cdk) + "）"}
+		return nil, &mirrorError{Msg: "连不上 Mirror 酱（" + download.NetError(err, cdk) + "）"}
 	}
 	defer resp.Body.Close()
 	var payload struct {
@@ -280,19 +271,6 @@ func (u *Updater) mirrorLatest(ctx context.Context, cdk string, base *Version) (
 	return r, nil
 }
 
-// netErrText is a transport error without anything secret: the URL (which holds the CDK) is dropped.
-func netErrText(err error, cdk string) string {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		err = ue.Err
-	}
-	s := fmt.Sprintf("%T: %v", err, err)
-	if cdk != "" {
-		s = strings.ReplaceAll(s, cdk, "***")
-	}
-	return s
-}
-
 // ---- release notes
 
 var machineLineRe = regexp.MustCompile(`^<!--\s*modavd:\s*(\{.*\})\s*-->$`)
@@ -348,9 +326,6 @@ func (u *Updater) download(ctx context.Context, r *release) (string, error) {
 	}
 	var lastErr error
 	for attempt := 1; attempt <= downloadAttempts; attempt++ {
-		if mirror {
-			os.Remove(part)
-		}
 		lastErr = u.fetch(ctx, r, part, label)
 		if lastErr == nil {
 			break
@@ -404,67 +379,19 @@ func hashOr(p string) string {
 	return s
 }
 
-// fetch downloads into part, appending to it when the server honours a range (GitHub).
+// fetch preserves MirrorChyan's fresh-download policy; GitHub can resume a verified range.
 func (u *Updater) fetch(ctx context.Context, r *release, part, label string) error {
-	done := int64(0)
-	if st, err := os.Stat(part); err == nil {
-		done = st.Size()
-		if done >= r.size {
-			os.Remove(part)
-			done = 0
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url, nil)
-	if err != nil {
-		return errors.New("下载地址不对")
-	}
-	req.Header.Set("User-Agent", userAgent())
-	if done > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", done))
-	}
-	resp, err := u.client().Do(req)
-	if err != nil {
-		return errors.New(netErrText(err, ""))
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	if resp.StatusCode == http.StatusPartialContent && done > 0 {
-		flags = os.O_WRONLY | os.O_APPEND
-	} else {
-		done = 0
-	}
-	f, err := os.OpenFile(part, flags, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	buf := make([]byte, 1<<20)
-	last := time.Now()
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if done+int64(n) > r.size {
-				return fmt.Errorf("收到的比 %d 字节多", r.size)
-			}
-			if _, err := f.Write(buf[:n]); err != nil {
-				return err
-			}
-			done += int64(n)
+	last := time.Time{}
+	d := download.Client{HTTP: u.client(), StallTimeout: u.stallTimeout}
+	return d.File(ctx, download.FileOptions{URL: r.url, Path: part, Label: label, Size: r.size,
+		Fresh: r.source == SourceMirrorChyan,
+		Progress: func(done int64) {
 			if time.Since(last) >= 500*time.Millisecond || done == r.size {
 				last = time.Now()
 				u.progress("downloading", label, float64(done)*100/float64(r.size), done, r.size)
 			}
-		}
-		if rerr == io.EOF {
-			return f.Sync()
-		}
-		if rerr != nil {
-			return errors.New(netErrText(rerr, ""))
-		}
-	}
+		},
+	})
 }
 
 // hashBytes is SHA-256 in lower hex.

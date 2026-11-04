@@ -19,7 +19,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"modavd/internal/download"
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
@@ -58,6 +60,7 @@ type Updater struct {
 	// test hooks
 	githubAPI, mirrorAPI string
 	httpClient           *http.Client
+	stallTimeout         time.Duration
 	scan                 func(programs bool) ([]processUse, error)
 }
 
@@ -73,7 +76,7 @@ func New(r *root.Root, log *logx.Logger, opt Options) *Updater {
 	if log == nil {
 		log = logx.Nop()
 	}
-	return &Updater{Root: r, Log: log, Opt: opt, l: layout{root: r.Dir}}
+	return &Updater{Root: r, Log: log, Opt: opt, l: layout{root: r.Dir}, httpClient: download.NewHTTPClient(0)}
 }
 
 func (u *Updater) progress(stage, msg string, percent float64, done, total int64) {

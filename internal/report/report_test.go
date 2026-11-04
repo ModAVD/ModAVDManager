@@ -217,7 +217,7 @@ func TestAdbLiveCommands(t *testing.T) {
 	adb := startFakeAdb(t, scenarioAdb{Serials: map[string]scenarioSerial{
 		"emulator-20010": {Features: "cmd,shell_v2", Shell: map[string]scenarioShell{
 			"getprop": {Out: "a\n", Err: "b\n", Exit: &exit3},
-			`export ANDROID_LOG_TAGS="''"; exec logcat '-d' '-b' 'crash'`: {Out: "crash\n"},
+			`export ANDROID_LOG_TAGS=''; exec logcat '-d' '-b' 'crash'`: {Out: "crash\n"},
 		}, Exec: map[string]struct{ B64 string }{"screencap -p": {B64: "iVBORw=="}}},
 		"emulator-20030": {Features: "cmd", Shell: map[string]scenarioShell{"getprop": {Out: "a\n", Err: "b\n", Exit: &exit3}}},
 	}})

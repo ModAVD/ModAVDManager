@@ -183,6 +183,7 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (*
 	if opt.explorer == nil {
 		opt.explorer = openExplorer
 	}
+	rootDir = longPath(rootDir)
 	start := opt.now()
 	stamp := start.Format("20060102-150405")
 	outDir := opt.OutDir
@@ -206,6 +207,7 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (*
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "建不了暂存目录："+err.Error())
 	}
+	stageDir = longPath(stageDir)
 	stage := filepath.Join(stageDir, "modavd-collect-"+stamp+"-"+strconv.Itoa(opt.pid))
 	if err := os.Mkdir(stage, 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "建不了暂存目录："+err.Error())
@@ -234,8 +236,13 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (*
 	c.step("现场截图与状态", c.live)
 	if err := ctx.Err(); err != nil {
 		// Ctrl+C: no half-collected zip; the stage directory is ours to remove
-		_ = os.RemoveAll(stage)
-		return nil, errs.Wrap(errs.Canceled, err, "已取消")
+		e := errs.Wrap(errs.Canceled, err, "已取消")
+		if opt.KeepStage {
+			e.WithAdvice("收集到的文件留在：" + stage)
+		} else {
+			_ = os.RemoveAll(stage)
+		}
+		return nil, e
 	}
 
 	elapsed := opt.now().Sub(start).Seconds()
@@ -1536,6 +1543,8 @@ func addZipFile(zw *zip.Writer, path, name string) error {
 		return err
 	}
 	h.Name, h.Method = name, zip.Deflate
+	// FileInfoHeader converts the timestamp to UTC; the package script stores local DOS fields.
+	h.Modified = fi.ModTime().In(time.Local)
 	w, err := zw.CreateHeader(h)
 	if err != nil {
 		return err

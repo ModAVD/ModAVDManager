@@ -1,0 +1,126 @@
+{{BOM}}魔改 AVD 问题信息
+隐私提示：问题包只保存在本机，脚本不会上传。
+- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。
+- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。
+- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。
+- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。
+生成时间：2026-01-15 12:00:00 +08:00
+PowerShell：{{PSVERSION}}
+
+== ModAVD 目录 ==
+路径：{{BASE}}\root
+所在盘：{{DRIVE}}:\ 剩余 206.38 GB / 共 953.87 GB（NTFS）
+adb server 端口：{{ADBPORT}}（mas-avd.json 的 adbServerPort）
+SDK：{{BASE}}\root\sdk（包内 sdk）
+
+== 模拟器版本 ==
+emulator：Pkg.Revision=37.2.10  Pkg.BuildId=mas-36
+platform-tools：Pkg.Revision=37.0.1
+系统镜像 system-images\android-34\google_apis\x86_64：Pkg.Revision=14 ApiLevel=34 Abi=x86_64 TagId=google_apis Desc=System Image x86_64 with Google APIs.
+
+== 本机 ==
+Windows：Microsoft Windows 11 专业版  Version=10.0.26200  BuildNumber=26200  UBR=7019  64 位
+CPU：Intel(R) Core(TM) i7-12700K   CPU @ 3.60GHz  物理核 12  逻辑核 20  VirtualizationFirmwareEnabled=True
+CPU：Fake Socket 2  物理核   逻辑核   VirtualizationFirmwareEnabled=
+HypervisorPresent=True（为 True 时 VirtualizationFirmwareEnabled 显示 False 是正常的）
+内存：共 31.92 GB，可用 11.50 GB
+显卡：Parsec Virtual Display Adapter  DriverVersion=0.45.0.0  DriverDate=2024-01-25
+显卡：NVIDIA GeForce RTX 4070  DriverVersion=32.0.15.6094  DriverDate=2024-08-14
+显卡：Intel(R) UHD Graphics 770  DriverVersion=31.0.101.5186  DriverDate=
+
+== 虚拟化相关 Windows 功能（InstallState 1=已开 2=未开 3=缺失；仅供参考，能不能用看下一节 accel-check） ==
+HypervisorPlatform：InstallState=2（未开）
+VirtualMachinePlatform：InstallState=1（已开）
+Microsoft-Hyper-V-All：InstallState=3（缺失）
+
+== emulator -accel-check ==
+退出码：0
+  accel:
+  0
+  WHPX(10.0.26200) is installed and usable.
+  accel
+  WARNING | fake warning
+
+== 杀毒软件（SecurityCenter2） ==
+Windows Defender  productState=0x061100
+Fake AV  productState=0x041000
+
+== 实例 ==
+mas_1：hw.ramSize=6144M  hw.cpu.ncore=6  hw.lcd=1280x720 density=240  image.sysdir.1=system-images\android-34\google_apis\x86_64\
+mas_10：hw.ramSize=3072M  hw.cpu.ncore=  hw.lcd=x density=  image.sysdir.1=
+mas_3：残缺——有 mas_3.ini，但缺少 mas_3.avd 目录
+mas_4：hw.ramSize=  hw.cpu.ncore=  hw.lcd=x density=  image.sysdir.1=
+  警告：mas_4.avd 里没有 config.ini
+mas_7：残缺——mas_7.avd 里 config.ini、hardware-qemu.ini、emulator-user.ini 一个都没有（多半是删实例删到一半）
+
+== 正在运行的 qemu-system 进程 ==
+pid 4100  启动于 2026-01-15 11:58:00
+  {{BASE}}\root\sdk\emulator\qemu\windows-x86_64\qemu-system-x86_64-headless.exe -avd mas_1 -no-snapshot -gpu host -ports 20010,20011 -grpc 20012 -no-window
+pid 4300  启动于 2026-01-15 11:50:30
+  qemu 命令行读不到（多半是 AUTO-MAS 以管理员运行），现场按 adb 设备列表推算
+pid 4400  启动于 
+  qemu -avd other_avd -port 20090
+
+== 正在监听的 adb server ==
+[本节出错] 正在运行的模拟器与 adb：test listeners unavailable
+
+== 模拟器日志（logs\） ==
+mas_1：模拟器日志 8 份，logcat 3 份（各取最新 8 份）
+mas_10：模拟器日志 1 份，logcat 0 份（各取最新 8 份）
+mas_3：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
+mas_4：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
+mas_7：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
+modavd-bridge-1：模拟器日志 1 份，logcat 0 份（各取最新 8 份）
+原始总量超过 5.9 KB，丢掉了最旧的 2 份
+共复制 11 份，4.6 KB
+启动卡死线程转储（startup-*-hang-threads.txt）：取了最新 3 份：startup-odd-hang-threads.txt、startup-mas_1-20260112-080000-hang-threads.txt、startup-mas_1-20260111-080000-hang-threads.txt
+补全组件日志（fetch-components.log）：已收
+
+== 模拟器崩溃转储 ==
+收集范围：仅 ModAVD 的 emu-crash-<version>-mas.db；近 7 天内最新 3 份
+{{BASE}}\local\Temp\AndroidEmulator\emu-crash-37.2.10-mas.db\reports\r1.dmp  2026-01-14 09:00:00  1000 B
+{{BASE}}\local\Temp\AndroidEmulator\emu-crash-37.2.10-mas.db\reports\r2.dmp  2026-01-13 09:00:00  4.9 KB（超过 2.9 KB，没拿）
+{{BASE}}\local\Temp\AndroidEmulator\emu-crash-37.2.11-mas.db\pending\r3.dmp  2026-01-12 09:00:00  800 B
+
+== AUTO-MAS ==
+安装目录：{{BASE}}\mas\（来自卸载注册表）
+版本：v5.8.0-beta.2
+app.log：4.9 KB，只取了最后 2.0 KB
+frontend.log：500 B
+app.2026-01-12_10-00-00_000002.log.zip：400 B
+
+== 近 7 天 Application 日志（ID 1000/1001/1002，含 qemu / emulator / adb / AUTO-MAS） ==
+2026-01-14 10:00:00  ID 1000  Application Error
+    Faulting application name: qemu-system-x86_64.exe, version: 0.0.0.0
+    Faulting module name: ntdll.dll, version: 10.0.26100.1
+    Exception code: 0xc0000005
+    Fault offset: 0x0000000000001234
+    Faulting process id: 0x1004
+    Faulting application start time: 0x01db0000
+2026-01-12 08:30:00  ID 1002  Application Hang
+    The program adb.exe version 0.0.0.0 stopped interacting with Windows and was closed.
+2026-01-11 07:00:00  ID 1000  Application Error
+    Faulting application name: AUTO-MAS.exe
+2026-01-10 06:00:00  ID 1001  Windows Error Reporting
+    P1: Emulator-Check.exe
+
+== 现场 ==
+[本节出错] 现场截图与状态：test listeners unavailable
+
+== 收集过程 ==
+收集耗时：0.0 秒
+  ModAVD 目录与版本：0.0 秒
+  Windows / CPU / 内存 / 显卡：0.0 秒
+  虚拟化功能：0.0 秒
+  加速检查（emulator -accel-check）：0.0 秒
+  杀毒软件：0.0 秒
+  实例列表与实例文件：0.0 秒
+  正在运行的模拟器与 adb：0.0 秒
+  模拟器日志：0.0 秒
+  模拟器崩溃转储：0.0 秒
+  AUTO-MAS 日志：0.0 秒
+  系统事件日志：0.0 秒
+  现场截图与状态：0.0 秒
+出错的节：
+  正在运行的模拟器与 adb：test listeners unavailable
+  现场截图与状态：test listeners unavailable

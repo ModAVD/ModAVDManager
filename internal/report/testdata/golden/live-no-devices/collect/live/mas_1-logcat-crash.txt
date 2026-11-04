@@ -1,0 +1,3 @@
+
+# stderr:
+adb: device 'emulator-20010' not found

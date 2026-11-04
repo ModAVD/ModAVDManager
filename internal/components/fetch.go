@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"modavd/internal/buildinfo"
+	"modavd/internal/download"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
@@ -51,8 +52,8 @@ var (
 
 // Defaults and limits of the three timeouts (the script's -ConnectTimeoutSec, -StallTimeoutSec, -ManifestTimeoutSec).
 const (
-	DefaultConnectTimeout  = 20 * time.Second
-	DefaultStallTimeout    = 30 * time.Second
+	DefaultConnectTimeout  = download.DefaultConnectTimeout
+	DefaultStallTimeout    = download.DefaultStallTimeout
 	DefaultManifestTimeout = 40 * time.Second
 	MaxConnectTimeout      = 600 * time.Second
 	MaxStallTimeout        = 600 * time.Second
@@ -115,7 +116,8 @@ type fetcher struct {
 	mirrors []Mirror
 	client  *http.Client
 	logFile *os.File
-	where   string // what the run was doing, for the log when it fails (the script's $Where)
+	asides  []string // old directories moved during this run, also included in errors
+	where   string   // what the run was doing, for the log when it fails (the script's $Where)
 }
 
 // CheckTimeouts fills in the defaults and checks the script's ranges (1-600 s, 1-600 s, 1-1800 s).
@@ -224,6 +226,15 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	var lock *win.FileLock
 	defer func() {
 		if err != nil {
+			if len(f.asides) > 0 {
+				e := *errs.As(err)
+				e.Advice = strings.TrimSuffix(e.Advice, "。")
+				if e.Advice != "" {
+					e.Advice += "。"
+				}
+				e.Advice += "原有目录已保留在：" + strings.Join(f.asides, "、")
+				err = &e
+			}
 			f.failed(err, lock != nil)
 		}
 		lock.Unlock()
@@ -312,6 +323,9 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 		}
 		f.say("  解压安装…")
 		aside, err := f.install(ctx, c, zipFile)
+		if aside != "" {
+			f.asides = append(f.asides, setAsideRel(f.sdk, aside))
+		}
 		if err != nil {
 			return nil, err
 		}

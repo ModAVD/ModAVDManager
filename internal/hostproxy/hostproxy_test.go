@@ -113,8 +113,31 @@ func TestAdvice(t *testing.T) {
 		}
 	}
 	noEnv(t, settings{autoConfig: true})
-	t.Setenv("no_proxy", "mirrors.example") // any of the variables, NO_PROXY alone too: the environment decides
-	if !envSet() || Advice() != "" {
+	t.Setenv("no_proxy", "mirrors.example") // bypasses alone do not disable the system proxy or PAC advice
+	if envSet() || Advice() == "" {
 		t.Error("NO_PROXY alone")
+	}
+}
+
+func TestOnlyNoProxyKeepsSystemProxy(t *testing.T) {
+	noEnv(t, settings{enabled: true, server: "127.0.0.1:7890"})
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		t.Setenv(key, "example.com,.internal.test,10.0.0.0/8,[2001:db8::1]:443,port.test:8443")
+		for target, direct := range map[string]bool{
+			"https://api.github.com/x": false, "https://example.com": true, "https://a.example.com": true,
+			"https://notexample.com": false, "https://internal.test": false, "https://a.internal.test": true,
+			"https://10.2.3.4": true, "https://[2001:db8::1]": true, "http://[2001:db8::1]": false,
+			"https://port.test:8443": true, "https://port.test": false,
+		} {
+			got, err := ForRequest(&http.Request{URL: mustURL(t, target)})
+			if err != nil || (got == nil) != direct || got != nil && got.String() != "http://127.0.0.1:7890" {
+				t.Errorf("%s %s: %v %v", key, target, got, err)
+			}
+		}
+		t.Setenv(key, "*")
+		if got, _ := ForRequest(&http.Request{URL: mustURL(t, "https://api.github.com")}); got != nil {
+			t.Fatal(got)
+		}
+		t.Setenv(key, "")
 	}
 }

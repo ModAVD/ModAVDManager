@@ -182,7 +182,7 @@ type adbResult struct {
 //
 //	exec-out <cmd>      exec:<cmd> (raw bytes, exit code 0)
 //	shell <cmd>         shell,v2,raw:<cmd> (stdout, stderr and the exit code apart), shell:<cmd> without shell_v2
-//	logcat <args>       shell,v2:export ANDROID_LOG_TAGS="''"; exec logcat '<arg>'... (adb's logcat())
+//	logcat <args>       shell,v2:export ANDROID_LOG_TAGS=''; exec logcat '<arg>'... (adb's logcat())
 //
 // Stdout goes to w when it is set (the screenshot), else into the result. A refused request is exit code 1 with the
 // server's message as stderr, as adb.exe prints it; a server that went away is exit code 1 too (adb.exe would start
@@ -226,7 +226,7 @@ func adbLiveRun(ctx context.Context, port int, serial string, w io.Writer, kind 
 		cmd := strings.Join(args, " ")
 		typ := ",raw"
 		if kind == "logcat" {
-			cmd = `export ANDROID_LOG_TAGS="''"; exec logcat`
+			cmd = `export ANDROID_LOG_TAGS=''; exec logcat`
 			for _, a := range args {
 				cmd += " " + shellQuote(a)
 			}

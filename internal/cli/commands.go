@@ -924,7 +924,7 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 			continue
 		}
 		n := inv.intOpt(t.name)
-		if n < 1 || time.Duration(n)*time.Second > t.max {
+		if n < 1 || int64(n) > int64(t.max/time.Second) {
 			return o, errs.Newf(errs.InvalidArgument, "--%s 要在 1–%.0f 秒之间，收到 %d", t.name, t.max.Seconds(), n)
 		}
 		*t.d = time.Duration(n) * time.Second

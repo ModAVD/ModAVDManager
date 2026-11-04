@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/buildinfo"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
@@ -416,7 +417,7 @@ func TestFetchInstallsThenSkips(t *testing.T) {
 		t.Fatalf("requests %+v", reqs)
 	}
 	for _, q := range reqs {
-		if q.encoding != "identity" || q.agent != "ModAVD-fetch-components/1.0" || q.rng != "" {
+		if q.encoding != "identity" || q.agent != "ModAVDManager/"+buildinfo.Version || q.rng != "" {
 			t.Errorf("request %+v", q)
 		}
 	}
@@ -532,7 +533,7 @@ func TestFetchResumesPart(t *testing.T) {
 }
 
 // TestFetchCompletePart: a .part that already has every byte (the run was killed during the SHA-1 or before the
-// rename) needs no request; a complete one with the wrong SHA-1 is dropped and the next mirror starts over.
+// rename) needs no request; a complete one with the wrong SHA-1 is dropped before trying the first mirror.
 func TestFetchCompletePart(t *testing.T) {
 	pt := ptZip(t, adbBody)
 	setup(t, ptSpec(pt))
@@ -555,7 +556,7 @@ func TestFetchCompletePart(t *testing.T) {
 	if out.err != nil {
 		t.Fatal(out.err)
 	}
-	if z := b.zipReqs(); len(a.zipReqs()) != 0 || len(z) != 1 || z[0].rng != "" || !out.warned("SHA-1 不对") {
+	if z := a.zipReqs(); len(b.zipReqs()) != 0 || len(z) != 1 || z[0].rng != "" || !out.warned("SHA-1 不对") {
 		t.Fatalf("requests %+v %+v", a.zipReqs(), z)
 	}
 }

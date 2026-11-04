@@ -18,7 +18,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ScriptDir,
     [Parameter(Mandatory = $true)][string]$Work,
-    [string]$Out
+    [string]$Out,
+    [switch]$OnlyCollect
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Out) { $Out = Join-Path $PSScriptRoot 'golden' }
@@ -87,7 +88,7 @@ function Get-NetTCPConnection {
     }
     return $all
 }
-function netstat { foreach ($l in @(MockListeners)) { '  TCP    {0}:{1}    0.0.0.0:0    LISTENING    {2}' -f $l.LocalAddress, $l.LocalPort, $l.OwningProcess } }
+function netstat { MockFail 'listeners'; foreach ($l in @(MockListeners)) { '  TCP    {0}:{1}    0.0.0.0:0    LISTENING    {2}' -f $l.LocalAddress, $l.LocalPort, $l.OwningProcess } }
 function Get-Partition { [CmdletBinding()] param([string]$DriveLetter) MockFail 'disk'; New-Object PSObject -Property @{ DiskNumber = 0 } }
 function Get-Disk { [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)]$InputObject) process { New-Object PSObject -Property @{ Number = 0; BusType = $MockScenario.disk.BusType } } }
 function Get-PhysicalDisk { [CmdletBinding()] param() New-Object PSObject -Property @{ DeviceId = '0'; MediaType = $MockScenario.disk.MediaType } }
@@ -186,8 +187,8 @@ function Invoke-Native {
             } elseif ($cmd[0] -eq 'shell') {
                 $res = AdbTextMode (MockShell $s (($cmd[1..($cmd.Count - 1)]) -join ' '))
             } elseif ($cmd[0] -eq 'logcat') {
-                # adb's logcat(): export ANDROID_LOG_TAGS="''"; exec logcat '<arg>'...
-                $key = 'export ANDROID_LOG_TAGS="' + "''" + '"; exec logcat'
+                # adb's logcat(): export ANDROID_LOG_TAGS=''; exec logcat '<arg>'...
+                $key = "export ANDROID_LOG_TAGS=''; exec logcat"
                 foreach ($x in $cmd[1..($cmd.Count - 1)]) { $key += " '" + ($x -replace "'", "'\''") + "'" }
                 $res = AdbTextMode (MockShell $s $key)
             } else { throw ('mock: unexpected adb ' + ($a -join ' ')) }
@@ -279,6 +280,12 @@ function Normalize([string]$Text, [string]$Base) {
 }
 
 function Write-Golden([string]$Path, [string]$Text) {
+    # A derived scenario reuses byte-identical auxiliary text from its base; the test still compares each entry.
+    if ($sc -and $sc.extends -and $Path.StartsWith($collectGold + '\') -and (Split-Path -Leaf $Path) -ne 'summary.txt') {
+        $relative = $Path.Substring($collectGold.Length + 1)
+        $parent = Join-Path (Join-Path (Join-Path $Out ([string]$sc.extends)) 'collect') $relative
+        if ((Test-Path -LiteralPath $parent) -and [IO.File]::ReadAllText($parent, $Utf8) -ceq $Text) { return }
+    }
     [void](New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force)
     [IO.File]::WriteAllText($Path, $Text, $Utf8)
 }
@@ -290,11 +297,28 @@ $ciPath = Join-Path $ScriptDir 'collect-info.ps1'
 $rcText = [IO.File]::ReadAllText($rcPath, [Text.Encoding]::UTF8)
 $ciText = [IO.File]::ReadAllText($ciPath, [Text.Encoding]::UTF8)
 $rawAll = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'scenarios.json'), [Text.Encoding]::UTF8)
+# Apply the same shallow scenario overrides as scenarioData in the Go tests.
+$all = $rawAll | ConvertFrom-Json
+function Resolve-Scenario([string]$Name) {
+    $sc = $all.$Name
+    $merged = [ordered]@{}
+    if ($sc.extends) {
+        $base = Resolve-Scenario ([string]$sc.extends)
+        foreach ($p in $base.PSObject.Properties) { $merged[$p.Name] = $p.Value }
+    }
+    foreach ($p in $sc.PSObject.Properties) { $merged[$p.Name] = $p.Value }
+    [pscustomobject]$merged
+}
+$resolved = [ordered]@{}
+foreach ($p in $all.PSObject.Properties) {
+    if ($p.Name -ne 'comment') { $resolved[$p.Name] = Resolve-Scenario $p.Name }
+}
+$rawAll = $resolved | ConvertTo-Json -Depth 100
 $names = @(($rawAll | ConvertFrom-Json).PSObject.Properties | Where-Object { $_.Name -ne 'comment' } | ForEach-Object { $_.Name })
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Recurse -Force }
+# Output is updated per scenario; preserve report-config goldens for -OnlyCollect.
 $hashes = @(
     ('{0}  report-config.ps1' -f (Get-FileHash -LiteralPath $rcPath -Algorithm SHA256).Hash.ToLowerInvariant()),
     ('{0}  collect-info.ps1' -f (Get-FileHash -LiteralPath $ciPath -Algorithm SHA256).Hash.ToLowerInvariant())
@@ -342,8 +366,14 @@ foreach ($name in $names) {
     $envs['TMP'] = $envs['TEMP']
     [void](New-Item -ItemType Directory -Path $envs['TEMP'] -Force)
     $gold = Join-Path $Out $name
+    $collectGold = [IO.Path]::GetFullPath((Join-Path $gold 'collect'))
+    $outPrefix = [IO.Path]::GetFullPath($Out).TrimEnd('\') + '\'
+    if (-not $collectGold.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'golden path escaped output directory' }
+    if (Test-Path -LiteralPath $collectGold) { Remove-Item -LiteralPath $collectGold -Recurse -Force }
 
-    Write-Golden (Join-Path $gold 'report-config.txt') (Normalize (Run-PS $rc @('-Root', $root) $envs) $base)
+    if (-not $OnlyCollect -and -not $sc.collectOnly) {
+        Write-Golden (Join-Path $gold 'report-config.txt') (Normalize (Run-PS $rc @('-Root', $root) $envs) $base)
+    }
 
     $outDir = Join-Path $base 'out'
     $stage = Join-Path $base 'stage'

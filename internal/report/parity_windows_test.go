@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -84,10 +85,35 @@ func setLimits(t *testing.T, sc *scenario) {
 	t.Cleanup(func() { logCapBytes, masLogTailBytes, dumpMaxBytes = a, b, c })
 }
 
+// Derived scenarios store only changed generated text. The generator verifies byte equality before omitting a file.
+func goldenSource(t *testing.T, name string, parts ...string) string {
+	t.Helper()
+	p := goldenPath(name, parts...)
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	b, err := os.ReadFile("testdata/scenarios.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scenarios map[string]json.RawMessage
+	if err := json.Unmarshal(b, &scenarios); err != nil {
+		t.Fatal(err)
+	}
+	var sc struct{ Extends string }
+	if err := json.Unmarshal(scenarios[name], &sc); err != nil {
+		t.Fatal(err)
+	}
+	if sc.Extends == "" {
+		t.Fatalf("no golden for %s", p)
+	}
+	return goldenSource(t, sc.Extends, parts...)
+}
+
 // golden reads a golden file with its placeholders filled in for f; bom says the script wrote a UTF-8 BOM.
 func (f *fixture) golden(t *testing.T, scenario string, parts ...string) (text string, bom bool) {
 	t.Helper()
-	b, err := os.ReadFile(goldenPath(scenario, parts...))
+	b, err := os.ReadFile(goldenSource(t, scenario, parts...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +250,7 @@ func runCollect(t *testing.T, f *fixture) (*CollectResult, []string, map[string]
 // shortname: %TEMP% is %LOCALAPPDATA%\Temp by an 8.3 short name; the script finds its crash dumps once, by the long
 // name.
 func TestCollectMatchesScript(t *testing.T) {
-	for _, name := range []string{"full", "bare", "shortname"} {
+	for _, name := range collectScenarios(t) {
 		t.Run(name, func(t *testing.T) {
 			useGoldenZone(t, name)
 			f := newFixture(t, name, testTempDir(t), "")
@@ -250,29 +276,19 @@ func TestCollectMatchesScript(t *testing.T) {
 				t.Error("summary.txt lines do not all end with CRLF")
 			}
 
-			// the files the script writes itself (copies are the sources' bytes, checked below)
-			err := filepath.WalkDir(goldenPath(name, "collect"), func(p string, d os.DirEntry, err error) error {
-				if err != nil || d.IsDir() || d.Name() == "summary.txt" {
-					return err
+			// Compare every generated text entry, including unchanged references inherited from a base scenario.
+			for _, entry := range names {
+				if !(strings.HasSuffix(entry, "_files.txt") || strings.HasPrefix(entry, "live/") && strings.HasSuffix(entry, ".txt")) {
+					continue
 				}
-				rel, _ := filepath.Rel(goldenPath(name, "collect"), p)
-				entry := filepath.ToSlash(rel)
-				want, bom := f.golden(t, name, "collect", rel)
-				got, ok := files[entry]
-				if !ok {
-					t.Errorf("%s missing from the zip", entry)
-					return nil
-				}
+				want, bom := f.golden(t, name, "collect", filepath.FromSlash(entry))
+				got := files[entry]
 				if bom {
 					want = "\ufeff" + want
 				}
 				if string(got) != want {
 					t.Errorf("%s:\n got  %q\n want %q", entry, got, want)
 				}
-				return nil
-			})
-			if err != nil {
-				t.Fatal(err)
 			}
 
 			// copies: byte for byte, AUTO-MAS logs only their tail, the screenshot as the device sent it

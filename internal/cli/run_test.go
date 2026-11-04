@@ -867,7 +867,7 @@ func TestHelp(t *testing.T) {
 			t.Errorf("help lacks %s", c.name)
 		}
 	}
-	for _, s := range []string{"--root", "--json", "--quiet", "--verbose", "退出码", "mas_3"} {
+	for _, s := range []string{"--root", "--json", "--quiet", "--verbose", "退出码", "license_declined", "9 更新或组件下载不可用、校验未通过", "mas_3"} {
 		if !strings.Contains(r.stdout, s) {
 			t.Errorf("help lacks %q", s)
 		}

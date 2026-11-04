@@ -74,7 +74,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `disk <i> compact` | 整理数据盘：关机状态下把覆盖层重写一遍、丢掉已释放的簇、把文件缩小；转换后先校验再原子替换，原盘在替换成功前不动；仅在 NTFS/ReFS 卷上进行，实例有快照、或剩余空间不够放下新文件时拒绝 |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
-| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读） |
+| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；Ctrl+C 返回 `canceled` 并清理暂存目录，`--keep-stage` 则保留并在错误中给出路径 |
 | `components [status]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看或补全 Google 组件（adb 和系统镜像），做的是「补全组件.bat」做的事（见「补全 Google 组件」） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
@@ -214,7 +214,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
 - `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
 - 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。
-- 代理和 `components fetch` 是同一套规则，见下一节的「代理」。
+- 下载和 `components fetch` 共用续传、响应校验和超时处理，见下一节；默认连接等待 20 秒、读数据停顿 30 秒，`update` 暂不提供超时参数。GitHub 保留 `.part` 供下次续传；Mirror 酱地址按一次性地址处理，每次尝试从头下载。代理规则也相同。
 
 ## 补全 Google 组件
 
@@ -222,11 +222,11 @@ ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google A
 
 - 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
 - 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。
-- 先下成 `downloads\*.part`，中断了再运行会接着下（`Range`）；已经下满的直接校验。服务器的回答先核对再动 `.part`：200 要大小相符，206 要正好从已有的位置接着给。校验大小和 SHA-1 后才改名。请求头带 `Accept-Encoding: identity`，服务器回压缩过的内容一律不收。HTTP 4xx、大小不符、压缩过的内容、超时马上换下一个镜像（`.part` 留着让下一个接着下）；其余错误同一个镜像最多试 3 次，中间等 3 秒。
-- 解压到 `sdk\.staging\`，整包解完、核对完（关键文件、adb 三个文件钉住的 SHA-256、版本）再挪到位；缺 `source.properties` 就补写。原来不完整的目录改名为 `<目录>.incomplete-<时间>` 留着，不删，确认没用后自己删掉。Ctrl+C 随时能停，不留下装到一半的组件。
+- 组件和更新共用下载实现：先写 `.part`，中断后用 `Range` 续传。200 要大小相符，续传收到 200 时清空旧数据、从 0 计数；206 要核对起点、终点和总大小；416 保留已有部分。请求带 `Accept-Encoding: identity`，拒绝压缩响应；重定向最多 10 次，User-Agent 为 `ModAVDManager/<版本>`。组件写入 `downloads\`，完整的本地 `.part` 先校验，坏的从第一个镜像重下；大小和 SHA-1 都通过才改名。HTTP 4xx、大小不符、压缩过的内容、超时马上换下一个镜像（`.part` 留着让下一个接着下）；其余错误同一个镜像最多试 3 次，中间等 3 秒。
+- 解压到 `sdk\.staging\`，整包解完、核对完（关键文件、adb 三个文件钉住的 SHA-256、版本）再挪到位；缺 `source.properties` 就补写。原来不完整的目录改名为 `<目录>.incomplete-<时间>` 留着，重名时加 `-2`、`-3` 等后缀；后续组件失败时，JSON 错误的 `advice` 也会列出已迁移的位置。确认没用后自己删掉。Ctrl+C 随时能停，不留下装到一半的组件。
 - 已经齐全的组件跳过；默认装好就删 zip，`--keep-downloads` 保留。
 - 路径里有非 ASCII 字符、不是 ModAVD 根目录、`mas-avd.json` 设了 `sdkRoot`、空间不够（下载加解压再留 500 MB），先拒绝。`--test-free-space-mb` 只给测试用，假装只剩这么多 MB。
-- 超时：`--connect-timeout`（连接、TLS 握手、收到响应头，1–600 秒，默认 20）、`--stall-timeout`（一个字节都没收到，1–600 秒，默认 30）、`--manifest-timeout`（取清单整体，1–1800 秒，默认 40）。代理：设了 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 就照环境变量，否则用 Windows「Internet 选项」里手动设的代理；自动配置脚本（PAC）不支持，这时请设 `HTTPS_PROXY`。
+- 超时与 `update` 共用，`components fetch` 可用 `--connect-timeout`（连接、TLS 握手、收到响应头，1–600 秒，默认 20）、`--stall-timeout`（一个字节都没收到，1–600 秒，默认 30）、`--manifest-timeout`（取清单整体，1–1800 秒，默认 40）。代理：设了 `HTTPS_PROXY` / `HTTP_PROXY` 就照环境变量，否则用 Windows「Internet 选项」里手动设的代理；`NO_PROXY` 对两者都生效，只设它不会禁用系统代理；自动配置脚本（PAC）不支持，这时请设 `HTTPS_PROXY`。
 - 只写 `downloads\`、`logs\fetch-components.log`（和同目录的 `.lock`，一个根目录同时只跑一个）、`sdk\` 下的两个组件目录和 `sdk\.staging\`。不碰 adb server，不写注册表，不要管理员。日志里每次下载只记开始和结束，进度只显示不记。
 - 只有 Windows 有组件清单；macOS、Linux 返回 `unsupported`（退出码 4）。
 - 退出码：没同意许可协议是 2（`license_declined`）；路径有中文、空间不够是 4（`precheck_failed`），不是 ModAVD 根目录或设了 `sdkRoot` 也是 4（`not_ready`）；正在补全是 5（`busy`）；许可协议或组件从哪个镜像都没下成是 9（`components_unavailable`），下载的 zip 在每个镜像上 SHA-1 都不对、或者解压后没通过核对也是 9（`components_rejected`）；读不出剩余空间是 1。

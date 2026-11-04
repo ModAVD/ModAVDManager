@@ -78,7 +78,10 @@ func (f *fetcher) install(ctx context.Context, c root.SDKComponent, zipPath stri
 	f.where = `把解压好的 ` + c.FetchName + ` 挪到 sdk\` + c.Target
 	target := c.Dir(f.sdk)
 	if _, err := os.Lstat(target); err == nil {
-		setAside = asideName(target)
+		setAside, err = asideName(target, time.Now())
+		if err != nil {
+			return "", errs.Wrap(errs.Internal, err, "选不了旧目录迁移位置："+err.Error())
+		}
 		if err := os.Rename(target, setAside); err != nil {
 			return "", errs.Wrap(errs.Internal, err, `挪不开原有的 sdk\`+c.Target+"："+err.Error())
 		}
@@ -102,12 +105,14 @@ func (f *fetcher) install(ctx context.Context, c root.SDKComponent, zipPath stri
 }
 
 // asideName is <target>.incomplete-<yyyyMMdd-HHmmss>, with -2, -3 ... when that is taken.
-func asideName(target string) string {
-	base := target + ".incomplete-" + time.Now().Format("20060102-150405")
+func asideName(target string, now time.Time) (string, error) {
+	base := target + ".incomplete-" + now.Format("20060102-150405")
 	name := base
 	for n := 2; ; n++ {
 		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
-			return name
+			return name, nil
+		} else if err != nil {
+			return "", err
 		}
 		name = fmt.Sprintf("%s-%d", base, n)
 	}

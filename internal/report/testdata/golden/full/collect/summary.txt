@@ -4,7 +4,7 @@
 - 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。
 - 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。
 - 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。
-生成时间：2026-01-15 12:00:00 +01:00
+生成时间：2026-01-15 12:00:00 +08:00
 PowerShell：{{PSVERSION}}
 
 == ModAVD 目录 ==

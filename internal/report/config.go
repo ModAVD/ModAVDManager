@@ -145,6 +145,7 @@ var (
 
 // buildConfig builds the lines in the script's order.
 func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
+	rootDir = longPath(rootDir)
 	res := &ConfigResult{CPUs: []string{}, GPUs: []string{}, Instances: []ConfigInstance{}}
 	var lines []string
 	L := func(s string) { lines = append(lines, s) }
@@ -152,13 +153,17 @@ func buildConfig(ctx context.Context, rootDir string, h Host) *ConfigResult {
 	// The disk kind is a PowerShell run of its own; it runs while the rest is read.
 	letter := driveLetter(rootDir)
 	type kindResult struct{ bus, media string }
+	diskCtx, cancelDisk := context.WithCancel(ctx)
+	diskDone := make(chan struct{})
+	defer func() { cancelDisk(); <-diskDone }()
 	kindCh := make(chan *kindResult, 1)
 	go func() {
+		defer close(diskDone)
 		if letter == "" {
 			kindCh <- nil
 			return
 		}
-		bus, media, err := h.DiskKind(ctx, letter)
+		bus, media, err := h.DiskKind(diskCtx, letter)
 		if err != nil {
 			kindCh <- nil
 			return

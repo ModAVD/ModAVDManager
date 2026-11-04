@@ -103,6 +103,9 @@ func TestComponentsArgumentsBeforeRoot(t *testing.T) {
 		{"components", "status", "--accept-license"},
 		{"components", "fetch", "--connect-timeout", "0"},
 		{"components", "fetch", "--connect-timeout", "601"},
+		{"components", "fetch", "--accept-license", "--connect-timeout", "18446744074"},
+		{"components", "fetch", "--accept-license", "--stall-timeout", "9223372036854775807"},
+		{"components", "fetch", "--accept-license", "--manifest-timeout", "18446744074"},
 		{"components", "fetch", "--stall-timeout", "601"},
 		{"components", "fetch", "--manifest-timeout", "1801"},
 		{"components", "fetch", "--manifest-timeout", "0"},
@@ -113,7 +116,11 @@ func TestComponentsArgumentsBeforeRoot(t *testing.T) {
 		{"components", "fetch", "--keep-downloads"},
 	} {
 		h := newHarness()
-		calls := h.useRoot(componentsRoot(t))
+		calls := new(int)
+		h.resolve = func(string) (*root.Root, error) {
+			*calls++
+			return nil, errs.New(errs.Internal, "unexpected root lookup")
+		}
 		res := h.run(t, nil, append([]string{"--json"}, args...)...)
 		code := envelope(t, res.stdout)["error"].(map[string]any)["code"]
 		if res.code != 2 || (code != errs.Usage && code != errs.InvalidArgument) || *calls != 0 {
