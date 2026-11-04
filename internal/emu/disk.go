@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/adb"
 	"modavd/internal/errs"
 	"modavd/internal/win"
 )
@@ -64,6 +65,20 @@ func parseDiscardMaxBytes(out string) (int64, bool) {
 	return n, true
 }
 
+// probeDiscardMax reads the data disk's advertised discard limit in the guest (vdcDiscardMaxPath, root-only). ok is
+// false when it could not be read (adb failed, the file is missing); the caller checks ctx itself. timeout 0 is the
+// default of m.su.
+func (m *Manager) probeDiscardMax(ctx context.Context, i int, timeout time.Duration) (int64, bool) {
+	probe := m.su(ctx, i, "cat "+vdcDiscardMaxPath, timeout)
+	return parseDiscardMaxBytes(probe.Out)
+}
+
+// runIdleMaint triggers the guest's vold idle maintenance (it runs fstrim on the mounted file systems). Shared by
+// DiskTrim and the best-effort trim after boot (autotrim.go).
+func (m *Manager) runIdleMaint(ctx context.Context, i int, timeout time.Duration) adb.Result {
+	return m.su(ctx, i, "sm idle-maint run", timeout)
+}
+
 // DiskTrim triggers a guest FITRIM on /data (via vold idle maintenance) so the
 // virtio-blk discard path frees the qcow2 clusters behind deleted files. The
 // instance must be running and booted. errs.Unsupported when the instance is
@@ -90,11 +105,10 @@ func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) 
 
 	// Gate on the emulator actually advertising discard on /data: an old build
 	// reports 0 here, and a trim would silently do nothing.
-	probe := m.su(ctx, i, "cat "+vdcDiscardMaxPath, 0)
+	maxBytes, ok := m.probeDiscardMax(ctx, i, 0)
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
-	maxBytes, ok := parseDiscardMaxBytes(probe.Out)
 	if !ok || maxBytes <= 0 {
 		return nil, errs.Newf(errs.Unsupported,
 			"这个模拟器版本不支持回收磁盘空间（客体数据盘没有 discard）").
@@ -104,7 +118,7 @@ func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) 
 	// vold idle maintenance runs fstrim on the mounted file systems. (The exact
 	// mechanism may be refined to a targeted FITRIM after on-device testing,
 	// ModAVD/ModAVD#2 §4.3.)
-	res := m.su(ctx, i, "sm idle-maint run", diskTrimTimeout)
+	res := m.runIdleMaint(ctx, i, diskTrimTimeout)
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}

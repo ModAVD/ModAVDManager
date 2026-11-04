@@ -182,6 +182,9 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		},
 		// 10) orientation: the display stays landscape (persistent; set every boot so old instances get it)
 		func() { m.setupOrientation(ctx, i) },
+		// 10b) hand the clusters the guest freed back to the host, at most once a day (best effort, see autotrim.go);
+		//      before the Vulkan fix, whose zygote restart is deliberately the last step
+		func() { m.autoTrim(ctx, i, mode) },
 		func() {
 			// 11) the guest Vulkan fix. Must be last: mounting it restarts zygote, system_server and every app
 			prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 客体 Vulkan 驱动补丁", i), progressVulkanFix)
