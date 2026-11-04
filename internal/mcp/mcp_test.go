@@ -196,6 +196,25 @@ func (f *fake) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.Inst
 	return &emu.InstallResult{Index: i, APK: apkPath, Package: "com.example", Output: "Success"}, nil
 }
 
+func (f *fake) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	f.record("disk info %d", i)
+	allocated, reclaim := int64(8<<30), int64(4<<30)
+	return &emu.DiskInfoResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536, AllocatedBytes: &allocated,
+		ReclaimableBytes: &reclaim}, nil
+}
+
+func (f *fake) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	f.record("disk trim %d", i)
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 4 << 20}, nil
+}
+
+func (f *fake) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	f.record("disk compact %d", i)
+	return &emu.DiskCompactResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		BeforeOnDiskBytes: 12 << 30, AfterOnDiskBytes: 8 << 30, FreedBytes: 4 << 30}, nil
+}
+
 // fakeConn is what one tool call gets: the shared fake plus that call's logger.
 type fakeConn struct {
 	*fake
@@ -480,7 +499,7 @@ func TestLegacySession(t *testing.T) {
 			t.Fatalf("legacy tools/list has %s", k)
 		}
 	}
-	if n := len(r["tools"].([]any)); n != 11 {
+	if n := len(r["tools"].([]any)); n != 14 {
 		t.Fatalf("%d tools", n)
 	}
 
@@ -545,7 +564,7 @@ func TestModernSession(t *testing.T) {
 
 	r := result(t, h.request(1, "tools/list", modernParams(nil, nil)))
 	if r["resultType"] != "complete" || r["ttlMs"] != float64(listTTLMs) || r["cacheScope"] != "public" ||
-		r["_meta"] == nil || len(r["tools"].([]any)) != 11 {
+		r["_meta"] == nil || len(r["tools"].([]any)) != 14 {
 		t.Fatalf("tools/list %v", r)
 	}
 
@@ -743,6 +762,9 @@ func TestToolCalls(t *testing.T) {
 		{"set_window_visible", map[string]any{"index": 1, "visible": false}, "window 1 false"},
 		{"shell", map[string]any{"index": 1, "command": "getprop sys.boot_completed", "timeout_s": 10}, "shell 1"},
 		{"install_apk", map[string]any{"index": 1, "apk_path": `D:\apk\game.apk`}, "install 1 D:\\apk\\game.apk"},
+		{"disk_info", map[string]any{"index": 1}, "disk info 1"},
+		{"trim_disk", map[string]any{"index": 1}, "disk trim 1"},
+		{"compact_disk", map[string]any{"index": 1}, "disk compact 1"},
 	}
 	for n, c := range cases {
 		tool := tools[c.name]
@@ -1092,7 +1114,7 @@ func TestCancelStart(t *testing.T) {
 	<-started
 
 	// the read loop is free while the instance boots
-	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 11 {
+	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 14 {
 		t.Fatal("tools/list during boot")
 	}
 
@@ -1374,7 +1396,7 @@ func TestWaitsForManagerAfterCall(t *testing.T) {
 func TestKeptTools(t *testing.T) {
 	for _, tool := range toolDefs() {
 		want := tool.Name == "create_instance" || tool.Name == "update_instance" || tool.Name == "delete_instance" ||
-			tool.Name == "install_apk"
+			tool.Name == "install_apk" || tool.Name == "compact_disk"
 		if tool.keep != want {
 			t.Errorf("%s: keep %v", tool.Name, tool.keep)
 		}
@@ -1433,7 +1455,8 @@ func TestToolDefinitions(t *testing.T) {
 		t.Fatal("tool list differs between eras / calls")
 	}
 	want := []string{"list_instances", "get_instance", "check_host", "create_instance", "update_instance",
-		"delete_instance", "start_instance", "stop_instance", "set_window_visible", "shell", "install_apk"}
+		"delete_instance", "start_instance", "stop_instance", "set_window_visible", "shell", "install_apk",
+		"disk_info", "trim_disk", "compact_disk"}
 	if len(tools) != len(want) {
 		t.Fatalf("%d tools", len(tools))
 	}
@@ -1491,6 +1514,9 @@ func TestToolDefinitions(t *testing.T) {
 		"delete_instance": {false, true, true},
 		"start_instance":  {false, false, true},
 		"stop_instance":   {false, true, true},
+		"disk_info":       {true, nil, nil},
+		"trim_disk":       {false, false, true},
+		"compact_disk":    {false, true, false},
 	} {
 		ann := byName[name]["annotations"].(map[string]any)
 		if ann["readOnlyHint"] != hints[0] || ann["destructiveHint"] != hints[1] || ann["idempotentHint"] != hints[2] {

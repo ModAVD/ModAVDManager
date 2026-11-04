@@ -137,7 +137,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 modavd mcp --root D:\ModAVD
 ```
 
-同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`。
+同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）。
 
 在 Claude Code 里注册（PowerShell 里 `--` 要加引号，否则会被吞掉）：
 

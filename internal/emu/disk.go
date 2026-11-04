@@ -51,7 +51,7 @@ type DiskTrimResult struct {
 	// DiscardMaxBytes is the data disk's advertised discard limit (guest
 	// /sys/block/vdc/queue/discard_max_bytes); >0 confirms the emulator's
 	// discard path is live.
-	DiscardMaxBytes int64 `json:"discardMaxBytes"`
+	DiscardMaxBytes int64 `json:"discard_max_bytes"`
 }
 
 // parseDiscardMaxBytes reads the number printed by cat of a sysfs
@@ -142,21 +142,21 @@ type DiskInfoResult struct {
 	// Running is true when the instance's qemu is up. The overlay is then open in qemu: AllocatedBytes and
 	// ReclaimableBytes are left out (NeedsShutdown), qemu-img is not run on it.
 	Running       bool `json:"running"`
-	NeedsShutdown bool `json:"needsShutdown"`
+	NeedsShutdown bool `json:"needs_shutdown"`
 	// LogicalBytes is the virtual size of the disk (qcow2 header); 0 when it could not be read.
-	LogicalBytes int64 `json:"logicalBytes,omitempty"`
+	LogicalBytes int64 `json:"logical_bytes,omitempty"`
 	// OnDiskBytes is what the overlay occupies on the host volume (GetCompressedFileSize: a sparse file counts only
 	// its data).
-	OnDiskBytes int64 `json:"onDiskBytes"`
+	OnDiskBytes int64 `json:"on_disk_bytes"`
 	// ClusterBytes is the qcow2 cluster size.
-	ClusterBytes int64 `json:"clusterBytes,omitempty"`
+	ClusterBytes int64 `json:"cluster_bytes,omitempty"`
 	// AllocatedBytes is the guest data the overlay really holds (allocated clusters x cluster size, qemu-img check);
 	// nil while the instance runs.
-	AllocatedBytes *int64 `json:"allocatedBytes,omitempty"`
+	AllocatedBytes *int64 `json:"allocated_bytes,omitempty"`
 	// ReclaimableBytes estimates what a compact would save: OnDiskBytes minus AllocatedBytes (the rewritten image is
 	// about AllocatedBytes plus a little metadata, so the real saving is slightly less). nil while the instance runs
 	// or when the image check found errors.
-	ReclaimableBytes *int64   `json:"reclaimableBytes,omitempty"`
+	ReclaimableBytes *int64   `json:"reclaimable_bytes,omitempty"`
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
@@ -356,9 +356,9 @@ const userdataCompactTmp = userdataOverlay + ".compact.tmp"
 type DiskCompactResult struct {
 	Index             int    `json:"index"`
 	Overlay           string `json:"overlay"`
-	BeforeOnDiskBytes int64  `json:"beforeOnDiskBytes"`
-	AfterOnDiskBytes  int64  `json:"afterOnDiskBytes"`
-	FreedBytes        int64  `json:"freedBytes"`
+	BeforeOnDiskBytes int64  `json:"before_on_disk_bytes"`
+	AfterOnDiskBytes  int64  `json:"after_on_disk_bytes"`
+	FreedBytes        int64  `json:"freed_bytes"`
 }
 
 // qemuImgInfoResult is the part of `qemu-img info --output=json` compact reads.

@@ -1033,7 +1033,7 @@ func TestDiskTrim(t *testing.T) {
 	if m := envelope(t, r.stdout); m["ok"] != true {
 		t.Errorf("json: %s", r.stdout)
 	}
-	if !strings.Contains(r.stdout, `"discardMaxBytes":2147483648`) {
+	if !strings.Contains(r.stdout, `"discard_max_bytes":2147483648`) {
 		t.Errorf("json data: %s", r.stdout)
 	}
 	// an unknown action is a usage error and reaches no manager
@@ -1057,7 +1057,7 @@ func TestDiskCompact(t *testing.T) {
 	if m := envelope(t, r.stdout); m["ok"] != true {
 		t.Errorf("json: %s", r.stdout)
 	}
-	for _, s := range []string{`"freedBytes":1073741824`, `"beforeOnDiskBytes":3221225472`, `"afterOnDiskBytes":2147483648`} {
+	for _, s := range []string{`"freed_bytes":1073741824`, `"before_on_disk_bytes":3221225472`, `"after_on_disk_bytes":2147483648`} {
 		if !strings.Contains(r.stdout, s) {
 			t.Errorf("json data lacks %s: %s", s, r.stdout)
 		}
@@ -1079,8 +1079,8 @@ func TestDiskInfo(t *testing.T) {
 	if m := envelope(t, r.stdout); m["ok"] != true {
 		t.Errorf("json: %s", r.stdout)
 	}
-	for _, s := range []string{`"logicalBytes":8589934592`, `"onDiskBytes":3221225472`, `"allocatedBytes":2147483648`,
-		`"reclaimableBytes":1073741824`, `"needsShutdown":false`} {
+	for _, s := range []string{`"logical_bytes":8589934592`, `"on_disk_bytes":3221225472`, `"allocated_bytes":2147483648`,
+		`"reclaimable_bytes":1073741824`, `"needs_shutdown":false`} {
 		if !strings.Contains(r.stdout, s) {
 			t.Errorf("json data lacks %s: %s", s, r.stdout)
 		}
@@ -1093,8 +1093,8 @@ func TestDiskInfo(t *testing.T) {
 		t.Errorf("running text: code %d stdout %q", r.code, r.stdout)
 	}
 	r = h.run(t, nil, "--json", "disk", "4", "info")
-	if strings.Contains(r.stdout, "allocatedBytes") || strings.Contains(r.stdout, "reclaimableBytes") ||
-		!strings.Contains(r.stdout, `"needsShutdown":true`) {
+	if strings.Contains(r.stdout, "allocated_bytes") || strings.Contains(r.stdout, "reclaimable_bytes") ||
+		!strings.Contains(r.stdout, `"needs_shutdown":true`) {
 		t.Errorf("running json: %s", r.stdout)
 	}
 }

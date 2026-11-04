@@ -16,7 +16,7 @@
 //
 // Shutdown, at EOF on in or when ctx ends: nothing more is written, and every call is canceled (start / stop just stop
 // waiting) except the tools that write files without stopping half way (create / update / delete_instance,
-// install_apk). The process exits right after Serve returns, so those get up to shutdownWait (30 s) to finish first:
+// install_apk, compact_disk). The process exits right after Serve returns, so those get up to shutdownWait (30 s) to finish first:
 // an avd.Delete cut in the middle leaves an instance directory without config.ini that modavd no longer lists nor
 // deletes, an update cut between config.ini and mas-avd.json leaves the two out of step. Within the same bound Serve
 // waits for the canceled calls to return and for their managers' background work (backend.Wait, at most hookWait each
@@ -62,7 +62,8 @@ var instructions = fmt.Sprintf("Manages the ModAVD (patched Android Emulator) in
 	"is fixed by the server's --root; instances are numbered 0-%d except %d. Always shut instances down with "+
 	"stop_instance, which syncs the guest disk first: never kill emulator or qemu processes, that loses recently "+
 	"written game data. start_instance can take minutes and reports progress; delete_instance permanently removes "+
-	"an instance with all its game data.", root.MaxIndex, root.ReservedIndex)
+	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk reclaims "+
+	"unused space of a running instance, compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
 
 // progressEvery throttles progress notifications that do not complete a step.
 const progressEvery = time.Second

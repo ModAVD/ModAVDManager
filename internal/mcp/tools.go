@@ -438,6 +438,49 @@ func toolDefs() []*toolDef {
 				}
 				return b.InstallAPK(ctx, i, *path)
 			})),
+
+		newTool("disk_info", "Get data disk size",
+			"Report the size of an instance's data disk (the qcow2 overlay): virtual size, what it occupies on the "+
+				"host, and, for a stopped instance, the guest data it really holds and the estimated saving of "+
+				"compact_disk. A running instance only gets the host size (needs_shutdown=true): the allocated and "+
+				"reclaimable figures need the instance offline. Read-only.",
+			readOnly(), reflect.TypeFor[emu.DiskInfoResult](), []prop{indexProp(true)},
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+				i, err := a.reqInt("index")
+				if err != nil {
+					return nil, err
+				}
+				return b.DiskInfo(ctx, i)
+			}),
+
+		newTool("trim_disk", "Trim data disk",
+			"Trigger one reclaim of the unused space in a running, booted instance's data disk (guest fstrim via "+
+				"idle maintenance), so the host file can shrink as deleted game data is discarded. The instance "+
+				"must be online and the emulator must support discard (an old emulator build without it fails "+
+				"with unsupported). Safe to repeat; takes up to about 2 minutes. To shrink the file fully, stop "+
+				"the instance and use compact_disk.",
+			mutating(false, true), reflect.TypeFor[emu.DiskTrimResult](), []prop{indexProp(true)},
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+				i, err := a.reqInt("index")
+				if err != nil {
+					return nil, err
+				}
+				return b.DiskTrim(ctx, i)
+			}),
+
+		finishing(newTool("compact_disk", "Compact data disk",
+			"Rewrite a stopped instance's data disk so it keeps only the clusters still in use, then swap it in "+
+				"(the original stays untouched until the final replace). The instance must be offline (stop it "+
+				"with stop_instance first; a running one fails with busy) and must have no snapshots. Can take "+
+				"several minutes for a large disk; use disk_info first to see what it would save.",
+			mutating(true, false), reflect.TypeFor[emu.DiskCompactResult](), []prop{indexProp(true)},
+			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
+				i, err := a.reqInt("index")
+				if err != nil {
+					return nil, err
+				}
+				return b.DiskCompact(ctx, i)
+			})),
 	}
 }
 
