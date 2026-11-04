@@ -128,9 +128,16 @@ func TestDiskCompactIntegration(t *testing.T) {
 		t.Fatal("content changed across compact")
 	}
 
-	// A second compact on the already-compact overlay still succeeds (idempotent, nothing corrupted).
+	// A stray temp from an interrupted run is removed and compact still runs (ModAVD/ModAVD#2 P2-1, R-1).
+	strayTmp := filepath.Join(avdDir, userdataCompactTmp)
+	if err := os.WriteFile(strayTmp, []byte("half-written junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := m.DiskCompact(ctx, i); err != nil {
-		t.Fatalf("second DiskCompact: %v", err)
+		t.Fatalf("DiskCompact with a stray temp present: %v", err)
+	}
+	if _, err := os.Stat(strayTmp); !os.IsNotExist(err) {
+		t.Errorf("stray temp not cleared: %v", err)
 	}
 }
 

@@ -202,8 +202,13 @@ func parseQemuImgCheck(out []byte) (qemuImgCheck, error) {
 	if err := json.NewDecoder(bytes.NewReader(out[start:])).Decode(&c); err != nil {
 		return c, errs.Wrap(errs.Internal, err, "读不懂 qemu-img check 的输出: "+err.Error())
 	}
-	if c.AllocatedClusters == nil || *c.AllocatedClusters < 0 {
-		return c, errs.New(errs.Internal, "qemu-img check 的输出里没有 allocated-clusters")
+	// qemu-img omits allocated-clusters when it is 0 (an empty image); a clean decode with it missing means 0, not an
+	// error (ModAVD/ModAVD#2 R-3). Callers gate on check-errors/corruptions before they use the count.
+	if c.AllocatedClusters == nil {
+		zero := int64(0)
+		c.AllocatedClusters = &zero
+	} else if *c.AllocatedClusters < 0 {
+		return c, errs.New(errs.Internal, "qemu-img check 的 allocated-clusters 不合理")
 	}
 	return c, nil
 }
@@ -373,8 +378,8 @@ const (
 
 // userdataCompactTmp is the scratch file compact converts into before swapping it over the overlay. Its name is no
 // longer than the overlay's, so the temp path can never overflow MAX_PATH where the overlay path itself fits
-// (ModAVD/ModAVD#2 P3-3). A stray one from an interrupted run is validated and cleared on the next run
-// (clearStrayCompactTmp), never deleted unseen.
+// (ModAVD/ModAVD#2 P3-3). A stray one from an interrupted run is removed on the next run (clearStrayCompactTmp); on
+// NTFS/ReFS the original overlay is intact whenever a temp is present, so the temp is never the only copy.
 const userdataCompactTmp = "userdata-qemu.cmp"
 
 // compactFileSystems are the journaled file systems compact runs on: a write-through replace is one transaction
@@ -592,41 +597,20 @@ func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clu
 	return *chk.AllocatedClusters * clusterBytes, nil
 }
 
-// clearStrayCompactTmp deals with a temp file left by an interrupted earlier compact, before a new run reuses the
-// path. On the journaled file systems compact runs on the overlay is always the intact disk when a temp is present
-// (the swap is atomic), so the temp is at most a half-written or stale copy; it is still never deleted unseen
-// (ModAVD/ModAVD#2 P2-1): a temp that will not open as qcow2 is dropped, one that opens and matches the current
-// overlay is dropped, and one that opens but differs stops the run with both files kept for the user to resolve.
-func (m *Manager) clearStrayCompactTmp(ctx context.Context, overlay, tmp string) error {
-	if _, err := os.Stat(tmp); err != nil {
+// clearStrayCompactTmp removes a temp file left by an interrupted earlier compact, before a new run reuses the path.
+// Compact runs only on NTFS/ReFS, where the final swap is one atomic transaction, so whenever a temp is present the
+// overlay is still the intact original (the swap never completed): the temp is at most a half-written or stale copy
+// and is always safe to drop (ModAVD/ModAVD#2 P2-1, R-1). os.Lstat (not Stat) so a symlink at the name -- even a
+// dangling one -- is seen and its link entry removed here, never followed by the convert below (R-2).
+func (m *Manager) clearStrayCompactTmp(tmp string) error {
+	if _, err := os.Lstat(tmp); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return errs.Wrap(errs.Internal, err, "查看整理临时文件失败: "+err.Error())
 	}
-	m.Log.Infof("发现上次整理遗留的临时文件 %s，先检查再决定去留", tmp)
-	out, failure, err := m.runQemuImgCheck(ctx, tmp)
-	if err != nil {
-		return err
-	}
-	if failure != "" {
-		m.Log.Infof("整理临时文件打不开（上次转换没写完），删除：%s", tmp)
-		return removeCompactTmp(tmp)
-	}
-	if chk, perr := parseQemuImgCheck(out); perr != nil || chk.CheckErrors > 0 || chk.Corruptions > 0 {
-		m.Log.Infof("整理临时文件检查没通过，删除：%s", tmp)
-		return removeCompactTmp(tmp)
-	}
-	equal, err := m.compareEqual(ctx, overlay, tmp)
-	if err != nil {
-		return err
-	}
-	if equal {
-		m.Log.Infof("整理临时文件和当前数据盘内容一致，删除：%s", tmp)
-		return removeCompactTmp(tmp)
-	}
-	return errs.New(errs.Internal, "发现上次整理遗留的临时文件，和当前数据盘内容不一致，为安全起见没有删除任何文件").
-		WithAdvice(fmt.Sprintf("请确认数据盘 %s 能正常开机后，手动删除 %s 再重试整理", overlay, tmp))
+	m.Log.Infof("删除上次整理遗留的临时文件（数据盘是完整的原盘，未受影响）：%s", tmp)
+	return removeCompactTmp(tmp)
 }
 
 // removeCompactTmp deletes a compact temp file; a missing file is not an error.
@@ -646,7 +630,7 @@ func removeCompactTmp(tmp string) error {
 // them), and refuses when the volume lacks room for the copy (so a convert cannot fill
 // it and stall other instances). The original is untouched until the final replace, so
 // a crash at any earlier point leaves a working instance (a stray temp from an
-// interrupted run is validated and cleared on the next run, never deleted unseen).
+// interrupted run is removed on the next run; the original is intact on NTFS/ReFS).
 // errs.Busy when the instance is running or a lock is held; errs.Unsupported for a
 // non-journaled volume, snapshots, a missing backing or too little free space.
 func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, error) {
@@ -704,9 +688,10 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	}
 
 	// Clear a temp left by an interrupted earlier run first, so the space it would free counts toward the room check
-	// below (it may be as large as the whole copy); it is validated, not deleted unseen (ModAVD/ModAVD#2 P2-1).
+	// below (it may be as large as the whole copy). On NTFS/ReFS the original is intact whenever a temp is present,
+	// so the temp is never the only copy (ModAVD/ModAVD#2 P2-1).
 	tmp := filepath.Join(in.Dir, userdataCompactTmp)
-	if err := m.clearStrayCompactTmp(ctx, overlay, tmp); err != nil {
+	if err := m.clearStrayCompactTmp(tmp); err != nil {
 		return nil, err
 	}
 

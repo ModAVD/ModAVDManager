@@ -74,12 +74,16 @@ func TestParseQemuImgCheck(t *testing.T) {
 	if err != nil || *c.AllocatedClusters != 5 || c.CheckErrors != 2 || c.Corruptions != 2 || c.ImageEndOffset != nil {
 		t.Errorf("corrupt = %+v, %v", c, err)
 	}
+	// qemu-img omits allocated-clusters for an empty image: a clean decode without it means 0, not an error (R-3).
+	c, err = parseQemuImgCheck([]byte(`{"check-errors": 0, "total-clusters": 131072}`))
+	if err != nil || c.AllocatedClusters == nil || *c.AllocatedClusters != 0 {
+		t.Errorf("no clusters = %+v, %v", c, err)
+	}
 	for name, in := range map[string]string{
-		"empty":       "",
-		"no json":     "qemu-img: Could not open",
-		"truncated":   `{"allocated-clusters": `,
-		"no clusters": `{"check-errors": 0}`,
-		"negative":    `{"allocated-clusters": -1}`,
+		"empty":     "",
+		"no json":   "qemu-img: Could not open",
+		"truncated": `{"allocated-clusters": `,
+		"negative":  `{"allocated-clusters": -1}`,
 	} {
 		if _, err := parseQemuImgCheck([]byte(in)); err == nil {
 			t.Errorf("%s: no error", name)
