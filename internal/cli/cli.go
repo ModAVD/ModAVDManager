@@ -24,6 +24,7 @@
 //	window <i> show|hide                                  emu.WindowResult
 //	disk <i> trim                                         emu.DiskTrimResult {index,discardMaxBytes}
 //	disk <i> info                                         emu.DiskInfoResult {index,overlay,running,needsShutdown,logicalBytes,onDiskBytes,allocatedBytes?,reclaimableBytes?}
+//	disk <i> compact                                      emu.DiskCompactResult {index,overlay,beforeOnDiskBytes,afterOnDiskBytes,freedBytes}
 //	install <i> <apk>                                     emu.InstallResult
 //	shell <i> [--timeout S] <command...>                  emu.ShellResult
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
@@ -100,6 +101,7 @@ type manager interface {
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
 	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
 	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
 	EnsureServers(ctx context.Context) (*emu.ServersResult, error)
 	// Running is the indexes whose qemu runs, from the process table only (no adb).
 	Running(ctx context.Context) ([]int, error)

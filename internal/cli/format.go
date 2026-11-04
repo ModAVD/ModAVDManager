@@ -605,7 +605,16 @@ func formatDiskHuman(w io.Writer, data any) {
 		if r != nil {
 			formatDiskInfo(w, r)
 		}
+	case *emu.DiskCompactResult:
+		if r != nil {
+			formatDiskCompact(w, r)
+		}
 	}
+}
+
+func formatDiskCompact(w io.Writer, r *emu.DiskCompactResult) {
+	fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，省下 %s\n",
+		r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), fmtBytesGB(r.FreedBytes))
 }
 
 // fmtBytesGB is a byte count in GB with one decimal ("12.3 GB").

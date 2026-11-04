@@ -204,6 +204,29 @@ func GetCompressedFileSize(path string) (uint64, error) {
 	return uint64(high)<<32 | uint64(uint32(low)), nil
 }
 
+// MoveFileReplaceThrough renames src over dst (MoveFileExW, REPLACE_EXISTING |
+// WRITE_THROUGH): dst is replaced and both the rename and the pending writes are
+// flushed to disk before it returns, so a crash leaves either the old file or the
+// new one, never a torn mix. Used to swap in a freshly compacted disk image.
+func MoveFileReplaceThrough(src, dst string) error {
+	s, err := syscall.UTF16PtrFromString(src)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "源路径不可用: "+src)
+	}
+	d, err := syscall.UTF16PtrFromString(dst)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "目标路径不可用: "+dst)
+	}
+	const moveReplaceExisting = 0x1
+	const moveWriteThrough = 0x8
+	r, e := call(procMoveFileExW, uintptr(unsafe.Pointer(s)), uintptr(unsafe.Pointer(d)),
+		moveReplaceExisting|moveWriteThrough)
+	if r == 0 {
+		return errs.Wrap(errs.Internal, e, fmt.Sprintf("换文件失败（%s → %s）: %v", src, dst, e))
+	}
+	return nil
+}
+
 type memoryStatusEx struct {
 	Length               uint32
 	MemoryLoad           uint32

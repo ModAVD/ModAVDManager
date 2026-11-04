@@ -183,6 +183,13 @@ func (f *fakeManager) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult,
 		ClusterBytes: 65536, AllocatedBytes: &alloc, ReclaimableBytes: &rec}, nil
 }
 
+func (f *fakeManager) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	f.record("disk-compact " + itoa(i))
+	const gb = int64(1) << 30
+	return &emu.DiskCompactResult{Index: i, Overlay: "x", BeforeOnDiskBytes: 3 * gb,
+		AfterOnDiskBytes: 2 * gb, FreedBytes: gb}, nil
+}
+
 func (f *fakeManager) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
 	f.record("install " + itoa(i) + " " + apkPath)
 	if f.install != nil {
@@ -1029,11 +1036,31 @@ func TestDiskTrim(t *testing.T) {
 	if !strings.Contains(r.stdout, `"discardMaxBytes":2147483648`) {
 		t.Errorf("json data: %s", r.stdout)
 	}
-	// anything but trim is a usage error and reaches no manager
+	// an unknown action is a usage error and reaches no manager
 	h = newHarness()
-	r = h.run(t, nil, "disk", "3", "compact")
+	r = h.run(t, nil, "disk", "3", "flatten")
 	if r.code != 2 || len(h.fake.callList()) != 0 {
 		t.Errorf("bad action: code %d calls %q stderr %q", r.code, h.fake.callList(), r.stderr)
+	}
+}
+
+func TestDiskCompact(t *testing.T) {
+	h := newHarness()
+	r := h.run(t, nil, "disk", "3", "compact")
+	if r.code != 0 || r.stdout != "实例 3 整理磁盘完成：覆盖层占用 3.0 GB → 2.0 GB，省下 1.0 GB\n" {
+		t.Errorf("text: code %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+	}
+	if got := h.fake.callList(); len(got) != 1 || got[0] != "disk-compact 3" {
+		t.Errorf("calls = %q", got)
+	}
+	r = h.run(t, nil, "--json", "disk", "mas_3", "COMPACT")
+	if m := envelope(t, r.stdout); m["ok"] != true {
+		t.Errorf("json: %s", r.stdout)
+	}
+	for _, s := range []string{`"freedBytes":1073741824`, `"beforeOnDiskBytes":3221225472`, `"afterOnDiskBytes":2147483648`} {
+		if !strings.Contains(r.stdout, s) {
+			t.Errorf("json data lacks %s: %s", s, r.stdout)
+		}
 	}
 }
 

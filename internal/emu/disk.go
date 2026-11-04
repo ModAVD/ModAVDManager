@@ -1,11 +1,12 @@
 package emu
 
-// modavd disk <id>: reclaim the space the guest freed on /data. `trim` triggers
-// a guest FITRIM at runtime so the emulator's virtio-blk discard path frees the
-// qcow2 clusters behind deleted files (ModAVD/ModAVD#2). `info` reports the data
-// disk's sizes (what a reclaim could save); `compact` lands in a later commit. trim is only useful once the emulator advertises
-// discard on the data disk (the mas/discard emulator build); an older build
-// reports no discard and trim returns errs.Unsupported with a clear message.
+// modavd disk <id>: reclaim the space the guest freed on /data (ModAVD/ModAVD#2).
+// `trim` triggers a guest FITRIM at runtime so the emulator's virtio-blk discard
+// path frees the qcow2 clusters behind deleted files; `info` reports the data disk's
+// sizes (what a reclaim could save); `compact` rewrites the overlay offline to drop
+// the freed clusters and shrink the file. trim is only useful once the emulator
+// advertises discard on the data disk (the mas/discard emulator build); an older
+// build reports no discard and trim returns errs.Unsupported with a clear message.
 
 import (
 	"bytes"
@@ -320,4 +321,279 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 	rec := reclaimable(res.OnDiskBytes, alloc)
 	res.AllocatedBytes, res.ReclaimableBytes = &alloc, &rec
 	return res, nil
+}
+
+// ---- compact -----------------------------------------------------------------
+
+const (
+	// diskInfoTimeout bounds a quick `qemu-img info`.
+	diskInfoTimeout = time.Minute
+	// diskConvertTimeout bounds `qemu-img convert` of a multi-GB data disk.
+	diskConvertTimeout = 30 * time.Minute
+	// diskCompareTimeout bounds `qemu-img compare` of the before/after images.
+	diskCompareTimeout = 20 * time.Minute
+)
+
+// userdataCompactTmp is the scratch file compact converts into before swapping it
+// over the overlay; a stray one from an interrupted run is removed on the next run.
+const userdataCompactTmp = userdataOverlay + ".compact.tmp"
+
+// DiskCompactResult reports `modavd disk <id> compact`.
+type DiskCompactResult struct {
+	Index             int    `json:"index"`
+	Overlay           string `json:"overlay"`
+	BeforeOnDiskBytes int64  `json:"beforeOnDiskBytes"`
+	AfterOnDiskBytes  int64  `json:"afterOnDiskBytes"`
+	FreedBytes        int64  `json:"freedBytes"`
+}
+
+// qemuImgInfoResult is the part of `qemu-img info --output=json` compact reads.
+type qemuImgInfoResult struct {
+	BackingFilename    string            `json:"backing-filename"`
+	BackingFilenameFmt string            `json:"backing-filename-format"`
+	Snapshots          []json.RawMessage `json:"snapshots"`
+}
+
+// lockInstanceForCompact takes the per-instance locks that keep anyone from booting,
+// stopping, bridging or creating instance i while compact rewrites its data disk;
+// errs.Busy when any is already held. The returned func releases them; call it once.
+func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
+	kinds := []struct{ kind, what string }{
+		{"start", "正在启动"},
+		{"stop", "正在关闭"},
+		{"bridge", "正在装卸执行桥"},
+		{"create", "正在新建"},
+	}
+	var locks []*win.FileLock
+	unlock := func() {
+		for k := len(locks) - 1; k >= 0; k-- {
+			locks[k].Unlock()
+		}
+	}
+	for _, kw := range kinds {
+		path := m.lockPath(i, kw.kind)
+		l, ok, err := win.TryLock(path)
+		if err != nil {
+			unlock()
+			return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
+		}
+		if !ok {
+			unlock()
+			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法整理磁盘", i, kw.what)
+		}
+		locks = append(locks, l)
+	}
+	return unlock, nil
+}
+
+// runQemuImg runs qemu-img with args and returns its stdout, stderr and the process
+// exit code. err is non-nil only when qemu-img did not run to the end (missing, not
+// startable, canceled, timed out); a non-zero exit with err==nil is the caller's to
+// interpret. The image must not be open in a running qemu.
+func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ...string) (stdout, stderr []byte, code int, err error) {
+	exe, err := m.Root.QemuImgExe()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, exe, args...)
+	var so, se bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &so, &se
+	win.HideConsoleCmd(cmd)
+	cmd.WaitDelay = 2 * time.Second
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, nil, 0, errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
+	}
+	if cctx.Err() == context.DeadlineExceeded {
+		return nil, nil, 0, errs.Newf(errs.Timeout, "qemu-img %s %.0f 分钟没跑完", args[0], timeout.Minutes())
+	}
+	if cmd.ProcessState == nil {
+		return nil, nil, 0, errs.Wrap(errs.Internal, runErr, "运行不了 qemu-img: "+runErr.Error())
+	}
+	return so.Bytes(), se.Bytes(), cmd.ProcessState.ExitCode(), nil
+}
+
+// qemuImgFail picks the most useful tail of a failed qemu-img run (stderr first).
+func qemuImgFail(stdout, stderr []byte) string {
+	return orText(tail(strings.TrimSpace(string(stderr)), 300),
+		orText(tail(strings.TrimSpace(string(stdout)), 300), "没有输出"))
+}
+
+// qemuImgInfo reads the overlay's backing filename, backing format and whether it has
+// internal snapshots from `qemu-img info --output=json`.
+func (m *Manager) qemuImgInfo(ctx context.Context, image string) (*qemuImgInfoResult, error) {
+	so, se, code, err := m.runQemuImg(ctx, diskInfoTimeout, "info", "--output=json", image)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, errs.Newf(errs.Internal, "qemu-img info 失败（退出码 %d）: %s", code, qemuImgFail(so, se))
+	}
+	start := bytes.IndexByte(so, '{')
+	if start < 0 {
+		return nil, errs.New(errs.Internal, "qemu-img info 没有输出 JSON")
+	}
+	var r qemuImgInfoResult
+	if err := json.NewDecoder(bytes.NewReader(so[start:])).Decode(&r); err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "读不懂 qemu-img info 的输出: "+err.Error())
+	}
+	return &r, nil
+}
+
+// verifyCompacted checks the converted image is sound (qemu-img check: no errors or
+// corruptions) and holds the same guest-visible content as the original (qemu-img
+// compare), before it is swapped in.
+func (m *Manager) verifyCompacted(ctx context.Context, orig, tmp string) error {
+	out, failure, err := m.runQemuImgCheck(ctx, tmp)
+	if err != nil {
+		return err
+	}
+	if failure != "" {
+		return errs.Newf(errs.Internal, "整理后的数据盘检查没通过：%s，放弃替换，原盘未动", failure)
+	}
+	chk, err := parseQemuImgCheck(out)
+	if err != nil {
+		return err
+	}
+	if chk.CheckErrors > 0 || chk.Corruptions > 0 {
+		return errs.Newf(errs.Internal, "整理后的数据盘有 %d 处检查错误、%d 处损坏，放弃替换，原盘未动",
+			chk.CheckErrors, chk.Corruptions)
+	}
+	// compare the effective content (overlay + backing); exit 0 means identical.
+	so, se, code, err := m.runQemuImg(ctx, diskCompareTimeout, "compare", orig, tmp)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return errs.Newf(errs.Internal,
+			"整理前后的数据盘内容对不上（qemu-img compare 退出码 %d）：%s，放弃替换，原盘未动",
+			code, qemuImgFail(so, se))
+	}
+	return nil
+}
+
+// syncFile flushes the file's pending writes to disk (FlushFileBuffers on Windows).
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	serr := f.Sync()
+	if cerr := f.Close(); serr == nil {
+		serr = cerr
+	}
+	return serr
+}
+
+// dirHasEntries is true when path is a directory with at least one entry.
+func dirHasEntries(path string) bool {
+	es, err := os.ReadDir(path)
+	return err == nil && len(es) > 0
+}
+
+// DiskCompact offline-compacts instance i's data disk: it converts the overlay to a
+// fresh qcow2 that keeps only the clusters still in use (same backing), checks and
+// compares the copy, then atomically swaps it in with a write-through replace. The
+// instance must be powered off; compact holds its start/stop/bridge/create locks so
+// nothing boots it mid-rewrite. It refuses when the data disk or the instance has
+// snapshots (the convert would drop them). The original is untouched until the final
+// replace, so a crash at any earlier point leaves a working instance (a stray
+// .compact.tmp is removed on the next run). errs.Busy when the instance is running or
+// a lock is held; errs.Unsupported for snapshots or a missing backing.
+func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, error) {
+	if err := requireWindows(); err != nil {
+		return nil, err
+	}
+	in, err := m.instance(i)
+	if err != nil {
+		return nil, err
+	}
+	overlay := filepath.Join(in.Dir, userdataOverlay)
+	if !regularFile(overlay) {
+		return nil, errs.Newf(errs.NotFound, "实例 %d 没有数据盘覆盖层: %s", i, overlay).
+			WithAdvice("实例还没开过机，或数据盘不是这种格式")
+	}
+	unlock, err := m.lockInstanceForCompact(i)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if _, running := m.qemuOf(i); running {
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法整理磁盘", i).
+			WithAdvice(fmt.Sprintf("先 modavd stop %d，关机后再整理", i))
+	}
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+
+	info, err := m.qemuImgInfo(ctx, overlay)
+	if err != nil {
+		return nil, err
+	}
+	if len(info.Snapshots) > 0 {
+		return nil, errs.Newf(errs.Unsupported, "数据盘里有 %d 个内部快照，整理磁盘会丢掉它们", len(info.Snapshots)).
+			WithAdvice("先删掉快照再整理")
+	}
+	if dirHasEntries(filepath.Join(in.Dir, "snapshots")) {
+		return nil, errs.New(errs.Unsupported, "实例里有内存快照（snapshots 目录非空），整理磁盘会和它们对不上").
+			WithAdvice("先删掉快照再整理")
+	}
+	if info.BackingFilename == "" {
+		return nil, errs.New(errs.Unsupported, "数据盘没有 backing，不整理（避免把整盘复制进来）")
+	}
+	if info.BackingFilenameFmt == "" {
+		return nil, errs.New(errs.Internal, "读不到数据盘 backing 的格式，不整理")
+	}
+	backingName := filepath.Base(info.BackingFilename)
+
+	before, err := win.GetCompressedFileSize(overlay)
+	if err != nil {
+		return nil, err
+	}
+
+	tmp := filepath.Join(in.Dir, userdataCompactTmp)
+	_ = os.Remove(tmp) // clear a stray temp from an interrupted run
+
+	// convert: a fresh overlay holding only the live clusters, same backing. -B skips
+	// the backing's data; -T none keeps the host cache out of a tens-of-GB copy.
+	so, se, code, err := m.runQemuImg(ctx, diskConvertTimeout, "convert", "-T", "none",
+		"-O", "qcow2", "-B", backingName, "-o", "backing_fmt="+info.BackingFilenameFmt, overlay, tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return nil, err
+	}
+	if code != 0 {
+		_ = os.Remove(tmp)
+		return nil, errs.Newf(errs.Internal, "qemu-img convert 失败（退出码 %d）: %s", code, qemuImgFail(so, se))
+	}
+
+	if err := m.verifyCompacted(ctx, overlay, tmp); err != nil {
+		_ = os.Remove(tmp)
+		return nil, err
+	}
+
+	// flush the copy's data, then atomically replace the original (write-through).
+	if err := syncFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return nil, errs.Wrap(errs.Internal, err, "刷新整理后的数据盘失败")
+	}
+	if err := win.MoveFileReplaceThrough(tmp, overlay); err != nil {
+		_ = os.Remove(tmp)
+		return nil, err
+	}
+
+	after, err := win.GetCompressedFileSize(overlay)
+	if err != nil {
+		return nil, err
+	}
+	m.Log.Infof("魔改 AVD 实例 %d 整理磁盘完成：占用 %s → %s", i, gib(int64(before)), gib(int64(after)))
+	return &DiskCompactResult{
+		Index:             i,
+		Overlay:           overlay,
+		BeforeOnDiskBytes: int64(before),
+		AfterOnDiskBytes:  int64(after),
+		FreedBytes:        reclaimable(int64(before), int64(after)),
+	}, nil
 }

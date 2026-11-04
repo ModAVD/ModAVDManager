@@ -77,6 +77,7 @@ var (
 	procUnlockFileEx                     = modkernel32.NewProc("UnlockFileEx")
 	procGetProcessId                     = modkernel32.NewProc("GetProcessId")
 	procQueryFullProcessImageNameW       = modkernel32.NewProc("QueryFullProcessImageNameW")
+	procMoveFileExW                      = modkernel32.NewProc("MoveFileExW")
 
 	procNtQueryInformationProcess = modntdll.NewProc("NtQueryInformationProcess")
 	procRtlNtStatusToDosError     = modntdll.NewProc("RtlNtStatusToDosError")
