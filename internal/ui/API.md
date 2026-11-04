@@ -13,7 +13,7 @@
 
 ## 错误
 
-HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}`，`code` 是 `internal/errs` 的错误码。状态码：
+HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","details":{…}}}`，`code` 是 `internal/errs` 的错误码；`details` 只在有额外的机读信息时出现（现在只有开机失败时客体现场的目录 `boot_diag_dir`，见 README）。任务（jobs）的 `error` 也一样。状态码：
 
 | code | HTTP |
 | --- | --- |

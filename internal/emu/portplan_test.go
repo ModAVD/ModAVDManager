@@ -130,12 +130,18 @@ func fakeAdbClientMain(args []string) int {
 	case strings.Contains(all, "get-state"):
 		fmt.Println("device")
 	case strings.Contains(all, "sys.boot_completed"):
-		fmt.Println("1")
+		if os.Getenv(fakeAdbNoBootEnv) == "" {
+			fmt.Println("1")
+		}
 	case strings.Contains(all, "KEYCODE_HOME"): // guestHomeScript: what is in front
 		fmt.Println(cmp.Or(os.Getenv(fakeAdbHomeEnv), "home"))
 	case strings.Contains(all, guestShutdownCommand):
 		code, _ := strconv.Atoi(os.Getenv(fakeAdbSvcExitEnv))
 		return code
+	case strings.Contains(all, "logcat -d -b all"): // bootdiag.go
+		fmt.Println("11-04 10:00:00.000 E zygote: fake")
+	case strings.HasSuffix(all, "shell getprop"):
+		fmt.Println("[sys.boot_completed]: []")
 	}
 	return 0
 }
@@ -145,6 +151,7 @@ func fakeAdbClientMain(args []string) int {
 const (
 	fakeAdbHomeEnv    = "MODAVD_EMU_FAKE_ADB_HOME"
 	fakeAdbSvcExitEnv = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
+	fakeAdbNoBootEnv  = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
 )
 
 func freeTCPPort(t *testing.T) int {

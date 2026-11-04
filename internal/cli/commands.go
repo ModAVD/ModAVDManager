@@ -361,9 +361,10 @@ type StatusResult struct {
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
 type ErrorInfo struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice,omitempty"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice,omitempty"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf: boot_diag_dir ...
 }
 
 func errorInfo(err error) ErrorInfo {
@@ -372,7 +373,7 @@ func errorInfo(err error) ErrorInfo {
 	if msg == "" {
 		msg = e.Code
 	}
-	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice}
+	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // StopFailure is one instance stop --all could not stop.

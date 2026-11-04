@@ -91,4 +91,7 @@ func writeHumanError(w io.Writer, e *errs.Error) {
 	if e.Advice != "" {
 		fmt.Fprintf(w, "建议：%s\n", e.Advice)
 	}
+	if dir := errs.DetailsOf(e)[errs.BootDiagDir]; dir != "" {
+		fmt.Fprintf(w, "开机失败时的客体现场：%s\n", dir)
+	}
 }

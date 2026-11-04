@@ -854,6 +854,16 @@ func TestNewManagerError(t *testing.T) {
 	}
 }
 
+// TestErrorTextBootDiag: a failed boot's guest state (ModAVD/ModAVD#79) is named after the code, also when the error
+// that has it is wrapped.
+func TestErrorTextBootDiag(t *testing.T) {
+	e := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_1-20261104-100000-bootfail`), "实例 1 启动超时")
+	if got, want := errorText(e), "实例 1 启动超时\n错误码: timeout\n开机失败时的客体现场: D:\\r\\logs\\mas_1-20261104-100000-bootfail"; got != want {
+		t.Errorf("errorText = %q, want %q", got, want)
+	}
+}
+
 // TestServePublic drives the exported Serve (the emu.Manager adapter) with managers that cannot be built.
 func TestServePublic(t *testing.T) {
 	calls := 0

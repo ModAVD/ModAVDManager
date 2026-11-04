@@ -291,7 +291,7 @@ func TestRealAdb(t *testing.T) {
 		// return (WaitDelay) instead of waiting for the server to exit.
 		killServer(t, adbExe, testScriptPort)
 		start := time.Now()
-		res := c.execAdb(ctx, false, 15*time.Second, 15*time.Second, []string{"start-server"},
+		res := c.execAdb(ctx, false, nil, 15*time.Second, 15*time.Second, []string{"start-server"},
 			[]string{"-P", strconv.Itoa(testScriptPort), "start-server"})
 		elapsed := time.Since(start)
 		t.Logf("self-started server: %d %q in %v", res.Code, res.Out, elapsed)

@@ -92,10 +92,16 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 **机读输出**（`--json`）：
 
-- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
+- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice","details"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
 - **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
+- **错误的 `details`**：`error` 有额外的机读信息时多一个 `details` 对象，没有就不出现。现在只有 `boot_diag_dir`：开机超时、开机后设置失败等情况下，客体现场存放的目录。
+  - 开机失败、模拟器还在时，`start` 和 `create`（包括 MCP 和管理器发起的）在返回前把客体的 `logcat -d -b all`、`dmesg`、`getprop`、`ps -A`、`/proc/meminfo`、`dumpsys activity processes` 前 300 行存进 `logs\mas_<i>-<时间>-bootfail\`，各项是否收到写在同目录的 `summary.txt` 里。
+  - 每项单独限时，一共最多 30 秒；超时或出错时，已经读到的部分也留着。
+  - 取消（Ctrl+C、MCP 取消）、开机中途被关机、模拟器已经不在时不收。
+  - 每台实例留最新 3 个这样的目录，大小算进 `logs\` 的 1 GiB 总量。`collect-info` 把最新的 3 个收进问题包，合计到了 100 MB 就不再往下收。
+  - 这些文件可能带账号信息，只存在本机。文本模式出错时，最后一行写这个目录。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。`stop` 不拦，等于中止新建（记为失败）。

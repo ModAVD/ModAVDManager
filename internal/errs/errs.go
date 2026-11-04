@@ -6,6 +6,7 @@ package errs
 import (
 	"errors"
 	"fmt"
+	"maps"
 )
 
 const (
@@ -35,10 +36,18 @@ const (
 	ComponentsRejected    = "components_rejected"    // a download failed its checks (SHA-1 on every mirror; files, pins, version unpacked)
 )
 
+// Keys of Error.Details.
+const (
+	BootDiagDir = "boot_diag_dir" // where a failed boot's guest state was saved (logs\<instance>-<time>-bootfail)
+)
+
 type Error struct {
 	Code    string
 	Message string
 	Advice  string
+	// Details are machine-readable facts besides the message (BootDiagDir ...): --json's error.details, the manager
+	// API's, MCP's error text. Read them with DetailsOf, which also finds those of the errors this one wraps.
+	Details map[string]string
 	Cause   error
 }
 
@@ -68,6 +77,38 @@ func Wrap(code string, err error, message string) *Error {
 func (e *Error) WithAdvice(advice string) *Error {
 	e.Advice = advice
 	return e
+}
+
+// WithDetail is a copy of As(err) with the detail key set (err itself is left as it is).
+func WithDetail(err error, key, value string) *Error {
+	e := *As(err)
+	d := make(map[string]string, len(e.Details)+1)
+	maps.Copy(d, e.Details)
+	d[key] = value
+	e.Details = d
+	return &e
+}
+
+// DetailsOf merges the Details of every *Error in err's chain (errors.Unwrap), an outer one's value winning; nil when
+// there are none. So a wrapper (create wrapping the start that failed) still names what the inner error found out.
+func DetailsOf(err error) map[string]string {
+	var out map[string]string
+	for ; err != nil; err = errors.Unwrap(err) {
+		e, ok := err.(*Error)
+		if !ok {
+			continue
+		}
+		for k, v := range e.Details {
+			if _, set := out[k]; set {
+				continue
+			}
+			if out == nil {
+				out = make(map[string]string)
+			}
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // CodeOf returns the code of the first *Error in err's chain, Internal for any other non-nil error, "" for nil.

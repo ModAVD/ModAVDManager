@@ -93,9 +93,10 @@ func (s *server) handleNoAPI(w http.ResponseWriter, r *http.Request) {
 // ---- responses ---------------------------------------------------------------------------------------------------
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf
 }
 
 func newErrorBody(err error) *errorBody {
@@ -103,7 +104,7 @@ func newErrorBody(err error) *errorBody {
 		return nil
 	}
 	e := errs.As(err)
-	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice}
+	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // httpStatus is the status table of API.md.
@@ -143,13 +144,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, err error) {
 	e := newErrorBody(err)
-	writeErrorStatus(w, httpStatus(e.Code), e.Code, e.Message, e.Advice)
+	writeErrorBody(w, httpStatus(e.Code), *e)
 }
 
 func writeErrorStatus(w http.ResponseWriter, status int, code, message, advice string) {
+	writeErrorBody(w, status, errorBody{Code: code, Message: message, Advice: advice})
+}
+
+func writeErrorBody(w http.ResponseWriter, status int, e errorBody) {
 	body, _ := json.Marshal(struct {
 		Error errorBody `json:"error"`
-	}{errorBody{Code: code, Message: message, Advice: advice}})
+	}{e})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	w.Write(append(body, '\n'))

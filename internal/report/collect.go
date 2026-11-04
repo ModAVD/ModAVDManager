@@ -30,6 +30,8 @@ var (
 	logCapBytes     int64 = 300 * mb // $LogCapBytes: emulator logs and logcats together
 	masLogTailBytes int64 = 30 * mb  // $MasLogTailBytes: only the end of a longer AUTO-MAS log
 	dumpMaxBytes    int64 = 100 * mb // $DumpMaxBytes: larger crash dumps are listed, not taken
+	// modavd's own: the failed boots' directories (bootDiagDirs); not in the script
+	bootDiagCapBytes int64 = 100 * mb
 )
 
 const (
@@ -939,7 +941,60 @@ func (c *collector) emulatorLogs() error {
 	} else {
 		c.L("补全组件日志（fetch-components.log）：没有")
 	}
+	c.bootDiagDirs(logDir)
 	return nil
+}
+
+var bootDiagName = regexp.MustCompile(`(?i)^.+-([0-9]{8}-[0-9]{6})-bootfail$`)
+
+// bootDiagDirs copies the guest state of failed boots (modavd start / create, logs\<instance>-<time>-bootfail\): the
+// newest 3 by the time in the name, outside the cap like the thread dumps, but no more once they reach
+// bootDiagCapBytes (the newest is always taken). collect-info.ps1 does not know them, so nothing is said when there
+// are none.
+func (c *collector) bootDiagDirs(logDir string) {
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && bootDiagName.MatchString(e.Name()) {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) == 0 {
+		return
+	}
+	stamp := func(n string) string { return bootDiagName.FindStringSubmatch(n)[1] }
+	sort.SliceStable(dirs, func(i, j int) bool {
+		if d := cultureCompare(stamp(dirs[i]), stamp(dirs[j])); d != 0 {
+			return d > 0
+		}
+		return cultureCompare(dirs[i], dirs[j]) > 0
+	})
+	var taken []string
+	var total int64
+	for _, d := range dirs {
+		if len(taken) == 3 || (len(taken) > 0 && total >= bootDiagCapBytes) {
+			break
+		}
+		files, err := listFiles(filepath.Join(logDir, d))
+		if err != nil {
+			c.L("  读不了 " + d + "：" + errText(err))
+			continue
+		}
+		for _, f := range files {
+			got, err := copyShared(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), 0)
+			if err != nil {
+				c.L("  复制 " + d + `\` + f.Name() + " 失败：" + errText(err))
+				continue
+			}
+			total += got
+		}
+		taken = append(taken, d)
+	}
+	c.L(fmt.Sprintf("开机失败时的客体现场（*-bootfail）：共 %d 个，取了最新 %d 个，%s：%s", len(dirs), len(taken),
+		formatSize(float64(total)), strings.Join(taken, "、")))
 }
 
 // newestByName: the files whose name matches re, by name descending (Sort-Object Name -Descending), at most n.

@@ -680,9 +680,14 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 	return data, b, nil
 }
 
-// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code.
+// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code (and
+// where a failed boot's guest state went).
 func errorText(e *errs.Error) string {
-	return e.Error() + "\n错误码: " + e.Code
+	text := e.Error() + "\n错误码: " + e.Code
+	if dir := errs.DetailsOf(e)[errs.BootDiagDir]; dir != "" {
+		text += "\n开机失败时的客体现场: " + dir
+	}
+	return text
 }
 
 // progressFunc forwards emu.Progress as notifications/progress. Values must strictly increase: a new step jumps
