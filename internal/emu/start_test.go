@@ -17,6 +17,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -202,7 +203,7 @@ func TestBootSetupZero(t *testing.T) {
 
 func markerTestManager(t *testing.T) *Manager {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)

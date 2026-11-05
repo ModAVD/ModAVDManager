@@ -10,6 +10,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // TestFetchUnsupportedPlatform: darwin and linux have no catalogue; the code (not just the text) says so, before
@@ -17,7 +18,7 @@ import (
 func TestFetchUnsupportedPlatform(t *testing.T) {
 	old := fetchGOOS
 	t.Cleanup(func() { fetchGOOS = old })
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +157,7 @@ func TestLicenseText(t *testing.T) {
 
 // TestSetAsideRel: the result names a set-aside directory relative to the root.
 func TestSetAsideRel(t *testing.T) {
-	sdk := filepath.Join(t.TempDir(), "sdk")
+	sdk := filepath.Join(testutil.TempDir(t), "sdk")
 	got := setAsideRel(sdk, filepath.Join(sdk, "platform-tools.incomplete-20261101-120000"))
 	if got != filepath.Join("sdk", "platform-tools.incomplete-20261101-120000") || setAsideRel(sdk, "") != "" {
 		t.Fatal(got)

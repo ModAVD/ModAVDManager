@@ -14,13 +14,14 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // TestCollectBootDiag: every item gets its file (also what a command that timed out or failed wrote), an item without
 // output gets none, summary.txt says what came of each; each shell command reaches adb as one argument, logcat with
 // its own longer limit.
 func TestCollectBootDiag(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	type call struct {
 		args    []string
 		timeout time.Duration
@@ -100,7 +101,7 @@ func TestCollectBootDiag(t *testing.T) {
 // TestCollectBootDiagTotal: once the whole limit is used up, the items left are not run; each item's limit is what is
 // left of the whole when that is shorter.
 func TestCollectBootDiagTotal(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	var limits []time.Duration
 	run := func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result {
 		limits = append(limits, timeout)
@@ -125,7 +126,7 @@ func TestCollectBootDiagNothing(t *testing.T) {
 	run := func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result {
 		return adb.Result{Code: -1, Out: "error: device offline"}
 	}
-	if collectBootDiag(context.Background(), t.TempDir(), "h", time.Minute, run) {
+	if collectBootDiag(context.Background(), testutil.TempDir(t), "h", time.Minute, run) {
 		t.Fatal("collectBootDiag = true without any output")
 	}
 }

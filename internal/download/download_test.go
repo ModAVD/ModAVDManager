@@ -17,6 +17,7 @@ import (
 
 	"modavd/internal/buildinfo"
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 func TestFileProtocol(t *testing.T) {
@@ -52,7 +53,7 @@ func TestFileProtocol(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			part := filepath.Join(t.TempDir(), "x.part")
+			part := filepath.Join(testutil.TempDir(t), "x.part")
 			if err := os.WriteFile(part, []byte("abc"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +97,7 @@ func TestStallAndCancellation(t *testing.T) {
 			}))
 			defer srv.Close()
 			d := Client{HTTP: NewHTTPClient(0), StallTimeout: 50 * time.Millisecond}
-			p := filepath.Join(t.TempDir(), "part")
+			p := filepath.Join(testutil.TempDir(t), "part")
 			err := d.File(ctx, FileOptions{URL: srv.URL, Path: p, Size: 6, Progress: func(int64) {
 				if cancelNow {
 					cancel()
@@ -131,7 +132,7 @@ func TestRedirectLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	d := Client{HTTP: NewHTTPClient(0)}
-	err := d.File(ctx, FileOptions{URL: srv.URL, Path: filepath.Join(t.TempDir(), "part"), Size: 1})
+	err := d.File(ctx, FileOptions{URL: srv.URL, Path: filepath.Join(testutil.TempDir(t), "part"), Size: 1})
 	if err == nil || !strings.Contains(err.Error(), "重定向超过 10 次") || hits != 10 {
 		t.Fatalf("hits %d: %v", hits, err)
 	}

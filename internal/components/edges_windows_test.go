@@ -14,10 +14,11 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 func TestAsideNameCollisionsAndError(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "platform-tools")
+	base := filepath.Join(testutil.TempDir(t), "platform-tools")
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	want := base + ".incomplete-20260102-030405"
 	for _, suffix := range []string{"", "-2", "-3"} {

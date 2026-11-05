@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"modavd/internal/testutil"
 )
 
 func TestScriptsHaveNoCR(t *testing.T) {
@@ -52,7 +54,7 @@ func noTempFiles(t *testing.T, dir string) {
 }
 
 func TestLocalFileContentAddressed(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "modavd-guest") // created by LocalFile
+	dir := filepath.Join(testutil.TempDir(t), "modavd-guest") // created by LocalFile
 	want, b := contentPath(t, dir, IdlePoll)
 	got, err := LocalFile(dir, IdlePoll)
 	if err != nil {
@@ -101,7 +103,7 @@ func TestLocalFileContentAddressed(t *testing.T) {
 
 // TestLocalFileDamaged: other bytes under a content address are replaced by the right ones.
 func TestLocalFileDamaged(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	want, b := contentPath(t, dir, CPUInfoBind)
 	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
 		t.Fatal(err)
@@ -122,7 +124,7 @@ func TestLocalFileDamaged(t *testing.T) {
 // TestLocalFileConcurrent: many writers at once (goroutines here; processes share the same path logic) all succeed
 // with the same complete file.
 func TestLocalFileConcurrent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	want, b := contentPath(t, dir, WifiFastpath)
 	var wg sync.WaitGroup
 	errs := make([]error, 16)
@@ -144,7 +146,7 @@ func TestLocalFileConcurrent(t *testing.T) {
 
 // TestMoveNoReplace: an existing target is never replaced; a missing one is created.
 func TestMoveNoReplace(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	from, to := filepath.Join(dir, "a.tmp"), filepath.Join(dir, "a")
 	os.WriteFile(from, []byte("new"), 0o644)
 	os.WriteFile(to, []byte("old"), 0o644)

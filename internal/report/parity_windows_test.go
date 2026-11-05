@@ -19,30 +19,26 @@ import (
 
 	"modavd/internal/buildinfo"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // The outputs compared line by line with what report-config.ps1 and collect-info.ps1 print for the same scenario
 // (testdata/golden, written by testdata/gen_golden.ps1 from the scripts themselves).
 
 // testTempDir is a fresh directory, removed afterwards: under $MODAVD_TEST_TMP\report when that is set, otherwise
-// t.TempDir(). Its 8.3 short names are expanded (%TEMP% is an 8.3 short name on GitHub's runners), as the
+// the default OS temporary directory. Its 8.3 short names are expanded (%TEMP% is an 8.3 short name on GitHub's runners), as the
 // scripts' [IO.Path]::GetFullPath expands them in the paths they print.
 func testTempDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return longPath(t.TempDir())
+		return longPath(testutil.TempDir(t))
 	}
 	base := filepath.Join(env, "report")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp(base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return longPath(dir)
+	return longPath(testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-"))
 }
 
 func goldenPath(scenario string, parts ...string) string {

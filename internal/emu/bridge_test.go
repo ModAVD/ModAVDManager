@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -64,7 +65,7 @@ func TestBridgeScriptAbsoluteSystemRootRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	systemRoot := t.TempDir()
+	systemRoot := testutil.TempDir(t)
 	t.Setenv("SystemRoot", systemRoot)
 	t.Setenv("MODAVD_TEST_BRIDGE_PROCESS", "1")
 	saved := bridgeCommandContext
@@ -234,7 +235,7 @@ func TestBridgeKeepsWindowMode(t *testing.T) {
 // TestPayloadHashes: the payload's SHA-256 by guest target, as the guest's sha256sum prints it; a missing file means
 // no answer (the script would not install from that payload either).
 func TestPayloadHashes(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	want := map[string]string{}
 	for k, f := range bridgePayload {
 		data := []byte(strings.Repeat(f.name, k+1))

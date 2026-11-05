@@ -10,11 +10,12 @@ import (
 
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 func TestSingleInstanceState(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", t.TempDir())
-	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", testutil.TempDir(t))
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestSingleInstanceState(t *testing.T) {
 }
 
 func TestLogRotation(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "logs")
+	dir := filepath.Join(testutil.TempDir(t), "logs")
 	l := openLogFile(dir)
 	defer l.Close()
 	log := logx.New(l.sink(logx.Info))

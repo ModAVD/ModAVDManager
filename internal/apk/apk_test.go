@@ -15,6 +15,7 @@ import (
 	"unicode/utf16"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // ---- a small binary XML writer -------------------------------------------------------------------------------------
@@ -336,7 +337,7 @@ type entry struct {
 
 func writeZip(t *testing.T, entries ...entry) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.apk")
+	path := filepath.Join(testutil.TempDir(t), "test.apk")
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -387,7 +388,7 @@ func TestReadManifestZip(t *testing.T) {
 }
 
 func TestReadManifestRejects(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	text := filepath.Join(dir, "not.apk")
 	if err := os.WriteFile(text, []byte("this is not a zip file"), 0o644); err != nil {
 		t.Fatal(err)

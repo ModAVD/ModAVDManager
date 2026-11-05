@@ -22,11 +22,12 @@ import (
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // TestManagerBackendSerial: the real backend counts the serial of the screenshot from the root's port plan.
 func TestManagerBackendSerial(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	meta := `{"portBase": 21000, "adbServerPort": 21099, "scriptAdbServerPort": 21098}`
 	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ func TestLogTail(t *testing.T) {
 }
 
 func TestTailLinesLimits(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	p := filepath.Join(dir, "big.log")
 	var b bytes.Buffer
 	// ~180-byte lines: 1 MB holds fewer than maxLogLines of them, so the byte cap is what cuts
@@ -315,7 +316,7 @@ func multipartBody(t *testing.T, field, name, content string) ([]byte, string) {
 }
 
 func TestInstallUpload(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	t.Setenv("TMP", tmp)
 	t.Setenv("TEMP", tmp)
 	h := newHarness(t, nil)

@@ -31,6 +31,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -125,22 +126,19 @@ func setup(t *testing.T, specs ...root.SDKComponent) {
 	diskFree = func(string) (uint64, error) { return 1 << 40, nil }
 }
 
-// tempRoot is a ModAVD root (sdk\emulator\emulator.exe) under $MODAVD_TEST_TMP\components when set, else t.TempDir();
+// tempRoot is a ModAVD root (sdk\emulator\emulator.exe) under $MODAVD_TEST_TMP\components when set, else the OS temp directory;
 // sub adds directories under it. Skipped when the base path is not ASCII: fetch refuses such a root.
 func tempRoot(t *testing.T, sub ...string) *root.Root {
 	t.Helper()
-	base := t.TempDir()
+	var base string
 	if env := os.Getenv("MODAVD_TEST_TMP"); env != "" {
 		d := filepath.Join(env, "components")
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		dir, err := os.MkdirTemp(d, "t-")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
-		base = dir
+		base = testutil.MkdirTemp(t, d, "t-")
+	} else {
+		base = testutil.TempDir(t)
 	}
 	if !isASCII(base) {
 		t.Skip("临时目录的路径里有非 ASCII 字符，补全组件会拒绝；把 MODAVD_TEST_TMP 设成只含英文的目录再测")

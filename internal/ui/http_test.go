@@ -12,6 +12,7 @@ import (
 
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 func TestLoginCookieFlow(t *testing.T) {
@@ -312,7 +313,7 @@ func TestEmbeddedPage(t *testing.T) {
 // TestUpdateSettings: the settings' update part — read without going online, source and CDK saved (the CDK never
 // comes back), installing left to the command line.
 func TestUpdateSettings(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("LOCALAPPDATA", testutil.TempDir(t))
 	h := newHarness(t, nil)
 	var v map[string]any
 	expect(t, h.do("GET", "/api/update", nil), http.StatusOK, &v)

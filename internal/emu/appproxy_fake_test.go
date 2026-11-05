@@ -20,6 +20,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 )
 
 // The fake adb client (portplan_test.go) plays a guest for the per-app proxy when MODAVD_EMU_FAKE_ADB_PROXY names a
@@ -162,8 +163,8 @@ type proxyGuest struct {
 
 func newProxyGuest(t *testing.T, content string) *proxyGuest {
 	t.Helper()
-	g := &proxyGuest{dir: t.TempDir()}
-	local := filepath.Join(t.TempDir(), appproxy.DaemonName)
+	g := &proxyGuest{dir: testutil.TempDir(t)}
+	local := filepath.Join(testutil.TempDir(t), appproxy.DaemonName)
 	if err := os.WriteFile(local, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

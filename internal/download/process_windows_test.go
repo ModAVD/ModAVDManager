@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -50,7 +51,7 @@ func TestFileResumesAfterProcessKilled(t *testing.T) {
 		w.Write(payload[half:])
 	}))
 	defer srv.Close()
-	path := filepath.Join(t.TempDir(), "resume.part")
+	path := filepath.Join(testutil.TempDir(t), "resume.part")
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

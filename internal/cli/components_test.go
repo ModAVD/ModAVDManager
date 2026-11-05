@@ -18,23 +18,21 @@ import (
 	"modavd/internal/components"
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
-// componentsRoot is a ModAVD root (sdk\emulator\emulator.exe) under $MODAVD_TEST_TMP\cli when set, else t.TempDir().
+// componentsRoot is a ModAVD root (sdk\emulator\emulator.exe) under $MODAVD_TEST_TMP\cli when set, else the OS temp directory.
 func componentsRoot(t *testing.T) *root.Root {
 	t.Helper()
-	dir := t.TempDir()
+	var dir string
 	if env := os.Getenv("MODAVD_TEST_TMP"); env != "" {
 		base := filepath.Join(env, "cli")
 		if err := os.MkdirAll(base, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		d, err := os.MkdirTemp(base, "t-")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.RemoveAll(d) })
-		dir = d
+		dir = testutil.MkdirTemp(t, base, "t-")
+	} else {
+		dir = testutil.TempDir(t)
 	}
 	for k := 0; k < len(dir); k++ {
 		if dir[k] >= 0x80 {

@@ -9,13 +9,15 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"modavd/internal/testutil"
 )
 
 // TestBootDiagDirs: the failed boots' directories (logs\<instance>-<time>-bootfail) go into logs\ of the package, the
 // newest 3 by the time in the name, no more once bootDiagCapBytes is reached (the newest always); without any,
 // nothing is written to the summary (collect-info.ps1 does not know them, so the comparison with it stays as it was).
 func TestBootDiagDirs(t *testing.T) {
-	rootDir := t.TempDir()
+	rootDir := testutil.TempDir(t)
 	logDir := filepath.Join(rootDir, "logs")
 	mk := func(name string, size int) {
 		d := filepath.Join(logDir, name)
@@ -44,7 +46,7 @@ func TestBootDiagDirs(t *testing.T) {
 	// the whole logs section, as collect runs it
 	collectLogs := func() *collector {
 		t.Helper()
-		c := &collector{root: rootDir, stage: t.TempDir()}
+		c := &collector{root: rootDir, stage: testutil.TempDir(t)}
 		if err := c.emulatorLogs(); err != nil {
 			t.Fatal(err)
 		}

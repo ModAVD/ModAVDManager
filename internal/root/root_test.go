@@ -19,13 +19,14 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/testutil"
 )
 
 // ---- helpers -----------------------------------------------------------------------------------------------------
 
 func newRoot(t *testing.T) *Root {
 	t.Helper()
-	r, err := New(t.TempDir())
+	r, err := New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func python(t *testing.T, script string, input any) []byte {
 	if _, err := os.Stat(py); err != nil {
 		t.Skipf("no Python at %s", py)
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	in, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +211,7 @@ func TestPortBase(t *testing.T) {
 // ---- resolve -----------------------------------------------------------------------------------------------------
 
 func TestResolve(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	rootDir := filepath.Join(base, "ModAVD")
 	writeFile(t, filepath.Join(rootDir, "tools", "modavd.exe"), nil)
 	if err := os.MkdirAll(filepath.Join(rootDir, "sdk"), 0o755); err != nil {
@@ -837,7 +838,7 @@ func TestComponentsAndEnsureMetadata(t *testing.T) {
 	}
 
 	// sdkRoot moves the SDK components; launcher / ime stay in the root.
-	dev := filepath.Join(t.TempDir(), "sdk-mas36")
+	dev := filepath.Join(testutil.TempDir(t), "sdk-mas36")
 	fakeSDK(t, dev, "mas-36", true)
 	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": `+jsonString(dev)+`}`))
 	comps = r.Components()
@@ -879,7 +880,7 @@ func TestMissingError(t *testing.T) {
 func TestSelfBuiltMarkAcrossChunks(t *testing.T) {
 	old := selfBuiltChunk
 	defer func() { selfBuiltChunk = old }()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	mark := SelfBuiltMark
 	for chunk := 1; chunk <= 3*len(mark); chunk++ {
 		selfBuiltChunk = chunk

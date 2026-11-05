@@ -18,6 +18,7 @@ import (
 	"modavd/internal/buildinfo"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 )
 
 func TestDownloadStallRetriesAndResumes(t *testing.T) {
@@ -38,7 +39,7 @@ func TestDownloadStallRetriesAndResumes(t *testing.T) {
 		io.WriteString(w, "def")
 	}))
 	defer srv.Close()
-	u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop(), stallTimeout: 50 * time.Millisecond}
+	u := &Updater{l: layout{root: testutil.TempDir(t)}, Log: logx.Nop(), stallTimeout: 50 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	path, err := u.download(ctx, &release{source: SourceGitHub, url: srv.URL, assetName: "test.zip", size: 6, sha256: hashBytes([]byte("abcdef"))})
@@ -75,7 +76,7 @@ func TestUpdateRejectsWrongContentRange(t *testing.T) {
 		io.WriteString(w, "cdef")
 	}))
 	defer srv.Close()
-	p := filepath.Join(t.TempDir(), "part")
+	p := filepath.Join(testutil.TempDir(t), "part")
 	os.WriteFile(p, []byte("abc"), 0600)
 	u := &Updater{}
 	err := u.fetch(context.Background(), &release{url: srv.URL, size: 6}, p, "test")
@@ -99,7 +100,7 @@ func TestMirrorDownloadsAlwaysStartFresh(t *testing.T) {
 		io.WriteString(w, "abcdef")
 	}))
 	defer srv.Close()
-	u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop()}
+	u := &Updater{l: layout{root: testutil.TempDir(t)}, Log: logx.Nop()}
 	os.MkdirAll(u.l.download(), 0700)
 	os.WriteFile(u.l.downloadAt("test.zip")+".part", []byte("oldold"), 0600)
 	p, err := u.download(context.Background(), &release{source: SourceMirrorChyan, url: srv.URL, assetName: "test.zip", size: 6, sha256: hashBytes([]byte("abcdef"))})
@@ -125,7 +126,7 @@ func TestFullUpdatePartIsDownloadedAgain(t *testing.T) {
 				io.WriteString(w, "abcdef")
 			}))
 			defer srv.Close()
-			u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop()}
+			u := &Updater{l: layout{root: testutil.TempDir(t)}, Log: logx.Nop()}
 			if err := os.MkdirAll(u.l.download(), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -148,7 +149,7 @@ func TestUpdateStillRejectsBadSourceDigest(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); io.WriteString(w, "badbad") }))
 	defer srv.Close()
-	u := &Updater{l: layout{root: t.TempDir()}, Log: logx.Nop()}
+	u := &Updater{l: layout{root: testutil.TempDir(t)}, Log: logx.Nop()}
 	path, err := u.download(context.Background(), &release{source: SourceGitHub, url: srv.URL, assetName: "test.zip", size: 6, sha256: hashBytes([]byte("abcdef"))})
 	if path != "" || errs.CodeOf(err) != errs.UpdateRejected || hits.Load() != 1 {
 		t.Fatalf("path=%q hits=%d err=%v", path, hits.Load(), err)

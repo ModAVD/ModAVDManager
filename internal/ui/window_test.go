@@ -18,13 +18,14 @@ import (
 
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // The manager window must not bring the user's browser in: no Windows-account sign-in, no sync, no extensions, and
 // no Edge on the user's own profile once the window closes (startup boost).
 func TestEdgeArgsKeepUserBrowserOut(t *testing.T) {
 	const url = "http://127.0.0.1:1234/?t=abc"
-	profile := filepath.Join(t.TempDir(), "p")
+	profile := filepath.Join(testutil.TempDir(t), "p")
 	args := edgeArgs(url, profile)
 	for _, want := range []string{"--app=" + url, "--user-data-dir=" + profile, "--disable-sync", "--disable-extensions",
 		"--no-first-run"} {
@@ -232,7 +233,7 @@ func holdOpen(t *testing.T, path string, lockfile bool) func() {
 
 // Only appData\ui-edge goes: not the new profile, not the state files, not a folder with a similar name.
 func TestRemoveOldEdgeProfileOnlyThatFolder(t *testing.T) {
-	appData := t.TempDir()
+	appData := testutil.TempDir(t)
 	old := filepath.Join(appData, oldEdgeProfile)
 	fakeOldProfile(t, old)
 	keep := []string{`ui-edge2\Default\Preferences`, `ui-edge2\Local State`, "ui-46fbca8bcf6316d5.json",
@@ -277,7 +278,7 @@ func TestRemoveOldEdgeProfileInUse(t *testing.T) {
 		{"open database", `Default\History`, false}, // no lockfile check: the rename refuses
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			appData := t.TempDir()
+			appData := testutil.TempDir(t)
 			old := filepath.Join(appData, oldEdgeProfile)
 			fakeOldProfile(t, old)
 			release := holdOpen(t, filepath.Join(old, c.file), c.lockfile)
@@ -301,7 +302,7 @@ func TestRemoveOldEdgeProfileInUse(t *testing.T) {
 
 // A deletion cut short (power cut, a file the virus scanner held) is finished on the next start.
 func TestRemoveOldEdgeProfileLeftover(t *testing.T) {
-	appData := t.TempDir()
+	appData := testutil.TempDir(t)
 	trash := filepath.Join(appData, oldEdgeProfile+".deleting")
 	fakeOldProfile(t, trash)
 	release := holdOpen(t, filepath.Join(trash, `Default\History`), false)
@@ -322,8 +323,8 @@ func TestRemoveOldEdgeProfileLeftover(t *testing.T) {
 
 // ui-edge that is not a plain folder (a junction someone made, a file) is left alone, and so is what it points to.
 func TestRemoveOldEdgeProfileNotPlainFolder(t *testing.T) {
-	appData := t.TempDir()
-	target := filepath.Join(t.TempDir(), "elsewhere")
+	appData := testutil.TempDir(t)
+	target := filepath.Join(testutil.TempDir(t), "elsewhere")
 	fakeOldProfile(t, target)
 	old := filepath.Join(appData, oldEdgeProfile)
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", old, target).CombinedOutput(); err != nil {
@@ -360,7 +361,7 @@ func TestRemoveOldEdgeProfileNotPlainFolder(t *testing.T) {
 // The deletion runs after the window opened and never holds the manager up: Run opens the window and exits as usual
 // while it is still stuck.
 func TestRunOpensWindowDespiteOldProfile(t *testing.T) {
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

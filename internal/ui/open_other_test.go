@@ -12,12 +12,13 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 func TestOpenUnsupportedBeforeSideEffects(t *testing.T) {
 	for _, body := range []string{`{"what":"root"}`, `{"what":"logs"}`, `{"what":"instance","index":1}`} {
 		t.Run(body, func(t *testing.T) {
-			r, err := root.New(t.TempDir())
+			r, err := root.New(testutil.TempDir(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,7 +47,7 @@ func TestOpenUnsupportedBeforeSideEffects(t *testing.T) {
 }
 
 func TestShellOpenUnsupported(t *testing.T) {
-	if err := shellOpen(t.TempDir()); errs.CodeOf(err) != errs.Unsupported {
+	if err := shellOpen(testutil.TempDir(t)); errs.CodeOf(err) != errs.Unsupported {
 		t.Fatalf("shellOpen: %v, want unsupported", err)
 	}
 }

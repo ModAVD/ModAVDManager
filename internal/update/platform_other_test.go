@@ -12,10 +12,11 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 func TestWriteOperationsUnsupportedWithoutWrites(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)

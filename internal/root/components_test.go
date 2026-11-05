@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"modavd/internal/testutil"
 )
 
 func putFile(t *testing.T, path, body string) {
@@ -105,7 +107,7 @@ func hash(s string) string {
 func TestComplete(t *testing.T) {
 	pinned := SDKComponent{ID: "platform-tools", Version: "37.0.1", StatusFiles: []string{"adb.exe"},
 		KeyFiles: []string{"adb.exe", "AdbWinApi.dll"}, KeyHashes: map[string]string{"adb.exe": strings.ToUpper(hash("adb")), "AdbWinApi.dll": hash("dll")}}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	reset := func() {
 		os.RemoveAll(dir)
 		putFile(t, filepath.Join(dir, "adb.exe"), "adb")
@@ -150,7 +152,7 @@ func TestComplete(t *testing.T) {
 	}
 
 	image := SDKComponent{ID: "system-image", Version: "14", StatusFiles: []string{"system.img"}, KeyFiles: []string{"system.img", "vendor.img"}}
-	dir = t.TempDir()
+	dir = testutil.TempDir(t)
 	putFile(t, filepath.Join(dir, "system.img"), "x")
 	putFile(t, filepath.Join(dir, "vendor.img"), "x")
 	if !image.Complete(dir) {
@@ -169,7 +171,7 @@ func TestComplete(t *testing.T) {
 // TestPresentIsAUTOMASRule: check's rule stays AUTO-MAS's (the status files exist, any size), looser than Complete.
 func TestPresentIsAUTOMASRule(t *testing.T) {
 	pt := WindowsComponents()[0]
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if pt.Present(dir) {
 		t.Fatal("empty directory")
 	}
@@ -180,7 +182,7 @@ func TestPresentIsAUTOMASRule(t *testing.T) {
 }
 
 func TestRevision(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if Revision(dir) != "" {
 		t.Fatal("no file")
 	}
@@ -200,7 +202,7 @@ func TestRevision(t *testing.T) {
 
 // TestComponentsUseTable: check and status take the directory and the files from the table.
 func TestComponentsUseTable(t *testing.T) {
-	r, err := New(t.TempDir())
+	r, err := New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,11 +8,12 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // Only Windows is implemented: everything else says so with errs.Unsupported (exit code 4), even with a host given.
 func TestUnsupportedOffWindows(t *testing.T) {
-	r := &root.Root{Dir: t.TempDir()}
+	r := &root.Root{Dir: testutil.TempDir(t)}
 	ctx := context.Background()
 	_, err := BuildConfig(ctx, r, ConfigOptions{NoClipboard: true, Host: &fakeHost{sc: &scenario{}}})
 	check := func(what string, err error) {
@@ -22,7 +23,7 @@ func TestUnsupportedOffWindows(t *testing.T) {
 		}
 	}
 	check("BuildConfig", err)
-	_, err = Collect(ctx, r, CollectOptions{OutDir: t.TempDir(), StageDir: t.TempDir(), NoExplorer: true})
+	_, err = Collect(ctx, r, CollectOptions{OutDir: testutil.TempDir(t), StageDir: testutil.TempDir(t), NoExplorer: true})
 	check("Collect", err)
 	_, err = newHost()
 	check("newHost", err)

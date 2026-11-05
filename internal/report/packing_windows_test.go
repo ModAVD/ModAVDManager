@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // Cancel once some ZIP data is observable on disk. No timer or changes to the packing implementation are needed.
@@ -80,11 +81,11 @@ func TestCollectCanceledDuringPacking(t *testing.T) {
 func TestZipStageAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	dst := filepath.Join(t.TempDir(), "existing.zip")
+	dst := filepath.Join(testutil.TempDir(t), "existing.zip")
 	if err := os.WriteFile(dst, []byte("previous report"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := zipStage(ctx, dst, t.TempDir()); !errors.Is(err, context.Canceled) {
+	if _, err := zipStage(ctx, dst, testutil.TempDir(t)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("want canceled: %v", err)
 	}
 	if b, err := os.ReadFile(dst); err != nil || string(b) != "previous report" {
@@ -95,9 +96,9 @@ func TestZipStageAlreadyCanceled(t *testing.T) {
 func TestZipStageCanceledAtCompletion(t *testing.T) {
 	base, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ctx := &cancelOnZIPData{Context: base, cancel: cancel, path: filepath.Join(t.TempDir(), "report.zip")}
+	ctx := &cancelOnZIPData{Context: base, cancel: cancel, path: filepath.Join(testutil.TempDir(t), "report.zip")}
 	// An empty ZIP writes its first bytes only during Close, after all entry reads have finished.
-	names, err := zipStage(ctx, ctx.path, t.TempDir())
+	names, err := zipStage(ctx, ctx.path, testutil.TempDir(t))
 	if !errors.Is(err, context.Canceled) || names != nil || ctx.atBytes.Load() == 0 {
 		t.Fatalf("close-time cancel ignored: %v %v %d", names, err, ctx.atBytes.Load())
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // deleteAccess is the DELETE access right: a handle with it is what a pending rename or delete holds.
@@ -33,7 +34,7 @@ func openForDelete(t *testing.T, path string) {
 // through with OpenShared and fails with os.Open. A replace over the open file fails either way (only logged: that is
 // Windows' rename, nothing modavd can change).
 func TestOpenSharedAllowsDelete(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	inst := filepath.Join(dir, "avd", "mas_3.avd")
 	target := filepath.Join(inst, "config.ini")
 	writeFile(t, target, []byte("old"))
@@ -78,7 +79,7 @@ func TestSharedReadsDoNotBlockDelete(t *testing.T) {
 	props := filepath.Join(r.SDK(), "emulator", "source.properties")
 	writeFile(t, props, []byte("Pkg.Revision=37.2.10\r\nPkg.BuildId=mas-35\r\n"))
 	writeFile(t, r.ManifestPath(), []byte(`{"version": "v0.35.2"}`))
-	exe := filepath.Join(t.TempDir(), "qemu-system-x86_64-headless.exe")
+	exe := filepath.Join(testutil.TempDir(t), "qemu-system-x86_64-headless.exe")
 	writeFile(t, exe, []byte("xx"+SelfBuiltMark+"yy"))
 	for _, p := range []string{r.MetadataPath(), props, r.ManifestPath(), exe} {
 		openForDelete(t, p)

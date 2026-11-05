@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"modavd/internal/testutil"
 )
 
 // TestBridgeGuestHashScriptSh runs the guest script in a POSIX sh with sha256sum (the macOS / Linux CI, macOS through
@@ -26,14 +28,14 @@ func TestBridgeGuestHashScriptSh(t *testing.T) {
 		if err != nil || runtime.GOOS == "windows" {
 			t.Skip("no sha256sum")
 		}
-		bin := t.TempDir()
+		bin := testutil.TempDir(t)
 		wrapper := "#!/bin/sh\nexec '" + shasum + "' -a 256 \"$@\"\n"
 		if err := os.WriteFile(filepath.Join(bin, "sha256sum"), []byte(wrapper), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if strings.ContainsAny(dir, " \t") {
 		t.Skip("the temporary directory has a space in its path (the guest's never do)")
 	}

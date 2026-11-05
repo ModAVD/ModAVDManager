@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // The test binary doubles as the processes the tests start: TestMain routes these first arguments before any test
@@ -77,23 +78,18 @@ func testExe(t *testing.T) string {
 }
 
 // workDir is a fresh directory, removed afterwards: under $MODAVD_TEST_TMP\win when that is set (to keep test data on a
-// chosen drive), otherwise t.TempDir().
+// chosen drive), otherwise the default OS temporary directory.
 func workDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
 	base := filepath.Join(env, "win")
 	if err := os.MkdirAll(base, 0o755); err != nil {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
-	d, err := os.MkdirTemp(base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
-	return d
+	return testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
 }
 
 func waitFor(timeout time.Duration, cond func() bool) bool {

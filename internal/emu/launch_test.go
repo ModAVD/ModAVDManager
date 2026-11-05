@@ -15,6 +15,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -62,7 +63,7 @@ func lastEnv(env []string, key string) (string, bool) {
 }
 
 func TestEmulatorEnv(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +90,7 @@ func TestEmulatorEnv(t *testing.T) {
 }
 
 func TestLogTail(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "mas_0-20261028-150405.log")
 	var b strings.Builder
 	for k := 1; k <= 12; k++ {
@@ -140,7 +141,7 @@ func TestOutputLines(t *testing.T) {
 }
 
 func TestFileContains(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mas_1-x.log")
+	path := filepath.Join(testutil.TempDir(t), "mas_1-x.log")
 	text := "INFO    | something\nINFO    | modavd_ime: host input method pipe service registered\n"
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
@@ -213,7 +214,7 @@ func TestRuntimeAvdDir(t *testing.T) {
 	if !ok || self.Created == 0 {
 		t.Fatal("cannot read our own process")
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "pid_"+strconv.Itoa(os.Getpid())+".ini")
 	if got := runtimeAvdDir(dir, self); got != "" {
 		t.Errorf("no file: %q", got)
@@ -249,10 +250,10 @@ func TestRuntimeAvdDir(t *testing.T) {
 // TestRuntimeAvdDirDiscoveryDir: otherRootInstance reads the directory adb.QemuBelongsTo reads
 // (adb.EmulatorDiscoveryDir: under LOCALAPPDATA, TEMP never matters), so both see the same runtime file.
 func TestRuntimeAvdDirDiscoveryDir(t *testing.T) {
-	local := t.TempDir()
+	local := testutil.TempDir(t)
 	t.Setenv("LOCALAPPDATA", local)
-	t.Setenv("TEMP", t.TempDir())
-	t.Setenv("TMP", t.TempDir())
+	t.Setenv("TEMP", testutil.TempDir(t))
+	t.Setenv("TMP", testutil.TempDir(t))
 	want := filepath.Join(local, "Temp", "avd", "running")
 	if got := adb.EmulatorDiscoveryDir(); got != want {
 		t.Fatalf("EmulatorDiscoveryDir = %q, want %q", got, want)

@@ -17,6 +17,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 const (
@@ -129,7 +130,7 @@ func TestHostImeInstallAction(t *testing.T) {
 }
 
 func TestFileSHA256(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "x.apk")
+	f := filepath.Join(testutil.TempDir(t), "x.apk")
 	if err := os.WriteFile(f, []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +571,7 @@ func TestRecheckHostIme(t *testing.T) {
 
 // TestSetupHostImeSkips: the quiet and the warned skips before the guest is touched (no adb here at all).
 func TestSetupHostImeSkips(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +618,7 @@ func TestSetupHostImeSkips(t *testing.T) {
 }
 
 func TestHostImeChannel(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)

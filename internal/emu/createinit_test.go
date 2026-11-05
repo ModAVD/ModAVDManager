@@ -14,6 +14,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -570,7 +571,7 @@ func TestCreatePlanOfSetup(t *testing.T) {
 // TestCreateProgressBootLog: within the boot wait the emulator's log moves the bar, milestone by milestone, and
 // only there.
 func TestCreateProgressBootLog(t *testing.T) {
-	log := filepath.Join(t.TempDir(), "mas_6.log")
+	log := filepath.Join(testutil.TempDir(t), "mas_6.log")
 	write := func(s string) {
 		if err := os.WriteFile(log, []byte(s), 0o644); err != nil {
 			t.Fatal(err)
@@ -623,7 +624,7 @@ func TestCreateProgressBootLog(t *testing.T) {
 	if d := got[len(got)-1].Done; d != booted {
 		t.Fatalf("after the boot: %d, want %d", d, booted)
 	}
-	if bootLogShare(filepath.Join(t.TempDir(), "missing.log")) != 0 || bootLogShare("") != 0 {
+	if bootLogShare(filepath.Join(testutil.TempDir(t), "missing.log")) != 0 || bootLogShare("") != 0 {
 		t.Fatal("a missing log has milestones")
 	}
 }

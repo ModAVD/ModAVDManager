@@ -13,6 +13,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -32,7 +33,7 @@ func gateTree(t *testing.T, dir string) []string {
 }
 
 func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +65,7 @@ func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
 }
 
 func TestQemuOfRejectsUnsupportedHost(t *testing.T) {
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestQemuOfRejectsUnsupportedHost(t *testing.T) {
 }
 
 func TestQemuScanRejectsUnsupportedCommandLine(t *testing.T) {
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestBridgeGuestArchInputs(t *testing.T) {
 }
 
 func TestBridgeWantedUsesConfig(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)

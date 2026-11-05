@@ -14,6 +14,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -116,14 +117,14 @@ func TestSaveBootFailure(t *testing.T) {
 // booting, times out with the guest state saved and named in the error; the same start canceled during the wait
 // saves nothing.
 func TestStartTimeoutSavesBootDiag(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", t.TempDir()) // the fake's emulator runtime file
+	t.Setenv("LOCALAPPDATA", testutil.TempDir(t)) // the fake's emulator runtime file
 	r, _ := portPlanRoot(t)
 	m := New(r, logx.Nop())
 	six := 6
 	if _, err := m.Create(context.Background(), CreateRequest{filesOnly: true, Index: &six}); err != nil {
 		t.Fatal(err)
 	}
-	fakeQemu(t, t.TempDir(), 6, 21060, true, filepath.Join(r.AvdHome(), "mas_6.avd"))
+	fakeQemu(t, testutil.TempDir(t), 6, 21060, true, filepath.Join(r.AvdHome(), "mas_6.avd"))
 	t.Setenv(fakeAdbNoBootEnv, "1")
 	diagDirs := func() []string {
 		matches, _ := filepath.Glob(filepath.Join(r.LogsDir(), "mas_6-*-bootfail"))

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -44,7 +45,7 @@ func names(t *testing.T, dir string) []string {
 }
 
 func TestPruneLogDirPerInstance(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for k := 0; k < 12; k++ {
 		mkLog(t, dir, fmt.Sprintf("mas_0-20261028-1200%02d.log", k), 10, k)
 	}
@@ -70,7 +71,36 @@ func TestPruneLogDirPerInstance(t *testing.T) {
 	if removed != 2 || freed != 10+20 {
 		t.Errorf("removed %d freed %d, want 2 / 30", removed, freed)
 	}
-	got := names(t, dir)
+	// Deletion on Windows can leave short-lived .tmp entries. Wait for the
+	// expected counts and then check the removed names below;
+	// persistent extra or missing files must still fail this assertion.
+	want := map[string]int{"mas_0": 11, "logcat": 10, "mas_1": 12, "other": 2}
+	var got []string
+	var count map[string]int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got = names(t, dir)
+		count = map[string]int{}
+		for _, n := range got {
+			switch {
+			case len(n) > 6 && n[:6] == "mas_0-":
+				count["mas_0"]++
+			case len(n) > 13 && n[:13] == "logcat-mas_0-":
+				count["logcat"]++
+			case len(n) > 6 && n[:6] == "mas_1-":
+				count["mas_1"]++
+			default:
+				count["other"]++
+			}
+		}
+		if reflect.DeepEqual(count, want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("left %v, want %v (%q)", count, want, got)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	for _, gone := range []string{"mas_0-20261028-120001.log", "logcat-mas_0-20261028-120000.txt"} {
 		for _, n := range got {
 			if n == gone {
@@ -78,28 +108,10 @@ func TestPruneLogDirPerInstance(t *testing.T) {
 			}
 		}
 	}
-	count := map[string]int{}
-	for _, n := range got {
-		switch {
-		case len(n) > 6 && n[:6] == "mas_0-":
-			count["mas_0"]++
-		case len(n) > 13 && n[:13] == "logcat-mas_0-":
-			count["logcat"]++
-		case len(n) > 6 && n[:6] == "mas_1-":
-			count["mas_1"]++
-		default:
-			count["other"]++
-		}
-	}
-	// 10 kept + the open one
-	want := map[string]int{"mas_0": 11, "logcat": 10, "mas_1": 12, "other": 2}
-	if !reflect.DeepEqual(count, want) {
-		t.Errorf("left %v, want %v (%q)", count, want, got)
-	}
 }
 
 func TestPruneLogDirTotalSize(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	// oldest first: a(100) b(100) c(100) d(100, open) e(100); limit 250
 	mkLog(t, dir, "mas_1-a.log", 100, 1)
 	mkLog(t, dir, "logcat-mas_2-b.txt", 100, 2)
@@ -152,7 +164,7 @@ func mkDiag(t *testing.T, dir, name string, minute int) {
 // keep of the logs; their size counts toward the total, and they go oldest first like the logs. Directories that do
 // not look like ours stay.
 func TestPruneLogDirBootDiag(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for k := 0; k < 5; k++ {
 		mkDiag(t, dir, fmt.Sprintf("mas_0-20261028-1200%02d-bootfail", k), k)
 	}
@@ -183,14 +195,14 @@ func TestPruneLogDirBootDiag(t *testing.T) {
 }
 
 func TestPruneLogDirMissing(t *testing.T) {
-	removed, freed, err := pruneLogDir(filepath.Join(t.TempDir(), "logs"), 0, 10, 1<<30, logx.Nop())
+	removed, freed, err := pruneLogDir(filepath.Join(testutil.TempDir(t), "logs"), 0, 10, 1<<30, logx.Nop())
 	if removed != 0 || freed != 0 || err != nil {
 		t.Errorf("missing dir: %d %d %v", removed, freed, err)
 	}
 }
 
 func TestPruneLogDirLogsRemoval(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for k := 0; k < 11; k++ {
 		mkLog(t, dir, fmt.Sprintf("mas_6-x%02d.log", k), 1<<20, k)
 	}
@@ -210,7 +222,7 @@ func TestPruneLogDirLogsRemoval(t *testing.T) {
 }
 
 func TestFileInUse(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := mkLog(t, dir, "mas_0-x.log", 5, 0)
 	if busy, gone := fileInUse(path); busy || gone {
 		t.Errorf("closed file: busy %v gone %v", busy, gone)
@@ -250,7 +262,7 @@ func TestManagedLogNames(t *testing.T) {
 }
 
 func TestOpenLogFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	mkLog(t, dir, "logcat-mas_2-a.txt", 1, 1)
 	open := mkLog(t, dir, "logcat-mas_2-b.txt", 1, 2)
 	mkLog(t, dir, "logcat-mas_2-c.txt", 1, 3) // newest, closed

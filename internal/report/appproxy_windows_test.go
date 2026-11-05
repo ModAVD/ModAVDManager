@@ -11,6 +11,7 @@ import (
 	"modavd/internal/appproxy"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // TestCollectAppProxy: a running instance with a per-app proxy set also gets the daemon's state and log; the others
@@ -54,7 +55,7 @@ func TestCollectAppProxy(t *testing.T) {
 }
 
 func TestAppProxyInstances(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	p := filepath.Join(dir, root.MetadataFile)
 	write := func(s string) {
 		t.Helper()

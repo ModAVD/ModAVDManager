@@ -14,6 +14,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -120,7 +121,7 @@ func TestDeleteHalfInstances(t *testing.T) {
 	deleted(".ini only, after all", 6)
 
 	// A junction as the leftover directory is not followed; what it points to stays.
-	target := filepath.Join(t.TempDir(), "elsewhere")
+	target := filepath.Join(testutil.TempDir(t), "elsewhere")
 	writeTestFile(t, filepath.Join(target, "userdata-qemu.img"), "someone else's disk")
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", avd.Dir(m.Root, 7), target).CombinedOutput(); err != nil {
 		t.Skipf("mklink /J: %v %s", err, out)

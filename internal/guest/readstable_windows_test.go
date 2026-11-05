@@ -8,12 +8,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"modavd/internal/testutil"
 )
 
 // TestReadStableWaitsForSharingViolation: a file another handle holds without read sharing (a writer that has just
 // moved it into place) is read once that handle is closed, not reported as ERROR_SHARING_VIOLATION.
 func TestReadStableWaitsForSharingViolation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "held.sh")
+	path := filepath.Join(testutil.TempDir(t), "held.sh")
 	if err := os.WriteFile(path, []byte("payload"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,7 @@ func TestReadStableWaitsForSharingViolation(t *testing.T) {
 
 	// Other errors are not retried.
 	t0 = time.Now()
-	if _, err := readStable(filepath.Join(t.TempDir(), "missing.sh")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := readStable(filepath.Join(testutil.TempDir(t), "missing.sh")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing: %v", err)
 	}
 	if d := time.Since(t0); d > 40*time.Millisecond {

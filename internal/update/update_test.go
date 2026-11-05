@@ -23,6 +23,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // pkgFiles is a ModAVD package of build n: the emulator, a script, a licence and (optionally) more.
@@ -55,7 +56,7 @@ func manifestFor(n int, files map[string]string) []byte {
 // writeRoot lays out an installed root of build n (with its manifest) and returns it.
 func writeRoot(t *testing.T, n int, extra map[string]string) *root.Root {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	files := pkgFiles(n, extra)
 	for rel, body := range files {
 		p := filepath.Join(dir, filepath.FromSlash(rel))
@@ -157,7 +158,7 @@ func (f *fakeSources) updater(r *root.Root) *Updater {
 // withSettings points the user settings at a temp file.
 func withSettings(t *testing.T, source, cdk string) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "update-settings.json")
+	p := filepath.Join(testutil.TempDir(t), "update-settings.json")
 	saved := settingsPath
 	settingsPath = func() string { return p }
 	t.Cleanup(func() { settingsPath = saved })

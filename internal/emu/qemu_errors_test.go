@@ -8,6 +8,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -22,7 +23,7 @@ func injectQemuSnapshotError(t *testing.T, err error) *int {
 }
 
 func TestQemuScanErrors(t *testing.T) {
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestQemuScanErrors(t *testing.T) {
 }
 
 func TestQemuWaitsPropagateUnsupported(t *testing.T) {
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

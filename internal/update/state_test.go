@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"modavd/internal/testutil"
 )
 
 func TestRemoveBestEffortReportsFailedReparseRemoval(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "link")
+	p := filepath.Join(testutil.TempDir(t), "link")
 	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

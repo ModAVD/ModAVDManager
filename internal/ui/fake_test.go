@@ -27,6 +27,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 const testToken = "test-token-0123456789"
@@ -407,7 +408,7 @@ type harness struct {
 
 func newHarness(t *testing.T, mod func(*Options)) *harness {
 	t.Helper()
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

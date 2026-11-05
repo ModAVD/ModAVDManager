@@ -14,6 +14,7 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 	"modavd/internal/vkfix"
 	"modavd/internal/win"
 )
@@ -424,7 +425,7 @@ func TestVulkanFixConstants(t *testing.T) {
 }
 
 func TestWriteFileReplace(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, vkfix.CacheName)
 	if err := writeFileReplace(path, []byte("first"), "1-0"); err != nil {
 		t.Fatal(err)

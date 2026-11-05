@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"modavd/internal/appproxy"
+	"modavd/internal/testutil"
 )
 
 // TestReplaceDaemonScriptSh runs the script that swaps in a new daemon in a POSIX sh with a /proc that shows a
@@ -28,7 +29,7 @@ func TestReplaceDaemonScriptSh(t *testing.T) {
 	if err != nil {
 		t.Skip("no sleep")
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if strings.ContainsAny(dir, " \t") {
 		t.Skip("the temporary directory has a space in its path (the guest's never do)")
 	}

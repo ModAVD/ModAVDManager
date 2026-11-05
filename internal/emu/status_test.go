@@ -14,6 +14,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -220,21 +221,16 @@ func TestInstallResultLine(t *testing.T) {
 }
 
 // opsTestTempDir is a fresh directory, removed after the test: under $MODAVD_TEST_TMP\emu-ops when that is set (to keep
-// test data on a chosen drive), otherwise t.TempDir().
+// test data on a chosen drive), otherwise the default OS temporary directory.
 func opsTestTempDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
 	base := filepath.Join(env, "emu-ops")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp(base, "t-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return testutil.MkdirTemp(t, base, "t-")
 }

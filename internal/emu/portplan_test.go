@@ -21,6 +21,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -441,12 +442,12 @@ func TestLaunchPlanPorts(t *testing.T) {
 // (and listening on 21061), not one of mas_6 on the default plan's 20060; a qemu of another root's mas_7 on 21070 is
 // that other root's instance on our ports; the host tuning counts our qemu's vCPUs from our instance.
 func TestQemuMatchedByPortPlan(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", t.TempDir()) // the fakes' emulator runtime files
+	t.Setenv("LOCALAPPDATA", testutil.TempDir(t)) // the fakes' emulator runtime files
 	m, r := portPlanTestRoot(t, 6, 7)
-	exeDir := t.TempDir()
+	exeDir := testutil.TempDir(t)
 	ours := fakeQemu(t, exeDir, 6, 21060, true, filepath.Join(r.AvdHome(), "mas_6.avd"))
 	fakeQemu(t, exeDir, 6, 20060, false, "") // a mas_6 on the default plan's ports, not under our SDK: not ours
-	other := fakeQemu(t, exeDir, 7, 21070, true, filepath.Join(t.TempDir(), "avd", "mas_7.avd"))
+	other := fakeQemu(t, exeDir, 7, 21070, true, filepath.Join(testutil.TempDir(t), "avd", "mas_7.avd"))
 
 	if found, err := scanQemuOf([]*root.Root{r}, []int{6, 7}); err != nil || found[6].PID != ours.PID || found[7].PID != 0 {
 		t.Errorf("scanQemuOf = %v, error=%v, want 6 -> pid %d and no 7", found, err, ours.PID)

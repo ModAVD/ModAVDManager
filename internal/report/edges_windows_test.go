@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -56,13 +57,13 @@ func TestZipLocalWallClock(t *testing.T) {
 			time.Local = time.FixedZone("test", offset)
 			defer func() { time.Local = saved }()
 			when := time.Date(2026, 1, 2, 3, 4, 6, 0, time.Local)
-			stage := t.TempDir()
+			stage := testutil.TempDir(t)
 			p := filepath.Join(stage, "summary.txt")
 			os.WriteFile(p, []byte("clock"), 0600)
 			if err := os.Chtimes(p, when, when); err != nil {
 				t.Fatal(err)
 			}
-			dst := filepath.Join(t.TempDir(), "zip")
+			dst := filepath.Join(testutil.TempDir(t), "zip")
 			if _, err := zipStage(context.Background(), dst, stage); err != nil {
 				t.Fatal(err)
 			}

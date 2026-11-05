@@ -15,27 +15,23 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
 // tempDir is a fresh directory for one test, removed afterwards: under $MODAVD_TEST_TMP\adb when that is set (to keep
-// test data on a chosen drive), otherwise t.TempDir().
+// test data on a chosen drive), otherwise the default OS temporary directory.
 func tempDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
 	base := filepath.Join(env, "adb")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp(base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
 }
 
 func TestEnvKey(t *testing.T) {
