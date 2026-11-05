@@ -639,7 +639,7 @@ func removeCompactTmp(tmp string) error {
 // a crash at any earlier point leaves a working instance (a stray temp from an
 // interrupted run is removed on the next run; the original is intact on NTFS/ReFS).
 // errs.Busy when the instance is running or a lock is held; errs.Unsupported for a
-// non-journaled volume, snapshots, a missing backing or too little free space.
+// linked overlay, non-journaled volume, snapshots, a missing backing or too little free space.
 func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
@@ -649,7 +649,18 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, err
 	}
 	overlay := filepath.Join(in.Dir, userdataOverlay)
-	if !regularFile(overlay) {
+	st, err := os.Lstat(overlay)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, errs.Wrap(errs.Internal, err, "查看数据盘覆盖层失败: "+overlay+": "+err.Error())
+	}
+	if err == nil {
+		// Check the filesystem entry before locks, qemu-img or scratch cleanup.
+		// A qcow2 backing reference is not a filesystem link and remains supported.
+		if err := checkCompactOverlayLinks(overlay, st); err != nil {
+			return nil, err
+		}
+	}
+	if err != nil || !st.Mode().IsRegular() {
 		return nil, errs.Newf(errs.NotFound, "实例 %d 没有数据盘覆盖层: %s", i, overlay).
 			WithAdvice("实例还没开过机，或数据盘不是这种格式")
 	}
