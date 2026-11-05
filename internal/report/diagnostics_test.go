@@ -158,7 +158,7 @@ func TestDiagnosticDumpsAgeDedupBudgetAndCancellation(t *testing.T) {
 	c.ctx = ctx
 	c.opt.beforeBoundedRead = cancel
 	dst := filepath.Join(stage, "canceled")
-	if _, err := c.copyBounded(filepath.Join(dir, "logs", "mas_1-crashdumps", "unique.dmp"), dst, 6); err == nil {
+	if _, _, err := c.copyBounded(filepath.Join(dir, "logs", "mas_1-crashdumps", "unique.dmp"), dst, 6); err == nil {
 		t.Fatal("cancellation ignored")
 	}
 	if _, err := os.Stat(dst); !os.IsNotExist(err) {
@@ -200,7 +200,7 @@ func TestDiagnosticRejectsLinkAndFailedCleanup(t *testing.T) {
 	putDiagnosticFile(t, target, "secret")
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink(target, link); err == nil {
-		if _, err := c.copyBounded(link, filepath.Join(dir, "out"), 6); err == nil {
+		if _, _, err := c.copyBounded(link, filepath.Join(dir, "out"), 6); err == nil {
 			t.Fatal("followed symlink")
 		}
 	}
@@ -219,7 +219,7 @@ func TestDiagnosticDumpSourceChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sourceUnchanged(p, before, before.Size()) {
+	if !sourceUnchanged(p, before, before, before.Size()) {
 		t.Fatal("unchanged source rejected")
 	}
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
@@ -230,7 +230,191 @@ func TestDiagnosticDumpSourceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if sourceUnchanged(p, before, before.Size()) {
+	if sourceUnchanged(p, before, before, before.Size()) {
 		t.Fatal("changed dump accepted")
+	}
+}
+
+func TestDiagnosticLogGrowthIsReported(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diagnostic=%t", enabled), func(t *testing.T) {
+			dir, stage := testutil.TempDir(t), testutil.TempDir(t)
+			source := filepath.Join(dir, "logs", "mas_1-20261105-120000.log")
+			putDiagnosticFile(t, source, "before")
+			c := &collector{ctx: context.Background(), root: dir, stage: stage, diagnostics: map[int]diagnostics.State{1: {Enabled: enabled}}}
+			c.opt.beforeBoundedRead = func() {
+				f, err := os.OpenFile(source, os.O_APPEND|os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.WriteString(" latest-error"); err != nil {
+					t.Fatal(err)
+				}
+				if err = f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.emulatorLogs(); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(stage, "logs", filepath.Base(source)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != "before" {
+				t.Fatalf("copy = %q", b)
+			}
+			lines := strings.Join(c.lines, "\n")
+			if !strings.Contains(lines, filepath.Base(source)+"：仅复制前 6 字节，复制结束时源文件 19 字节（快照截断）") {
+				t.Fatalf("missing snapshot notice: %s", lines)
+			}
+		})
+	}
+}
+
+func TestBoundedCopyRejectsReplacementBeforeOpen(t *testing.T) {
+	dir := testutil.TempDir(t)
+	source := filepath.Join(dir, "source.log")
+	target := filepath.Join(dir, "replacement.log")
+	putDiagnosticFile(t, source, "PUBLIC")
+	putDiagnosticFile(t, target, "SECRET")
+	c := &collector{ctx: context.Background()}
+	c.opt.beforeBoundedOpen = func() {
+		if err := os.Rename(source, filepath.Join(dir, "original.log")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(target, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dst := filepath.Join(dir, "stage", "out.log")
+	if _, _, err := c.copyBounded(source, dst, 6); err == nil {
+		t.Fatal("copied replacement file")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("destination exists: %v", err)
+	}
+}
+
+func TestDumpCopyBindsSelectedFileToOpenHandle(t *testing.T) {
+	dir := testutil.TempDir(t)
+	source := filepath.Join(dir, "dump.dmp")
+	original := filepath.Join(dir, "original")
+	replacement := filepath.Join(dir, "replacement")
+	putDiagnosticFile(t, source, "PUBLIC")
+	putDiagnosticFile(t, replacement, "SECRET")
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for _, p := range []string{source, replacement} {
+		if err := os.Chtimes(p, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := boundedSnapshot(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(source, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, source); err != nil {
+		t.Fatal(err)
+	}
+	c := &collector{ctx: context.Background()}
+	c.opt.beforeBoundedRead = func() {
+		if err := os.Rename(source, replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(original, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, opened, err := c.copyBounded(source, filepath.Join(dir, "stage", "dump.dmp"), selected.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceUnchanged(source, selected, opened, n) {
+		t.Fatal("accepted replacement despite restored selected pathname")
+	}
+}
+
+func TestBoundedCopyWithActiveWriter(t *testing.T) {
+	dir := testutil.TempDir(t)
+	source := filepath.Join(dir, "live.log")
+	putDiagnosticFile(t, source, "active")
+	writer, err := os.OpenFile(source, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	c := &collector{ctx: context.Background()}
+	dst := filepath.Join(dir, "stage", "live.log")
+	if _, _, err := c.copyBounded(source, dst, 6); err != nil {
+		t.Fatalf("live writer prevented collection: %v", err)
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "active" {
+		t.Fatalf("copy=%q err=%v", b, err)
+	}
+}
+
+func TestBoundedCopyRejectsReplacementSymlink(t *testing.T) {
+	dir := testutil.TempDir(t)
+	source := filepath.Join(dir, "source.log")
+	target := filepath.Join(dir, "secret")
+	putDiagnosticFile(t, source, "PUBLIC")
+	putDiagnosticFile(t, target, "SECRET")
+	probe := filepath.Join(dir, "probe")
+	if err := os.Symlink(target, probe); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	c := &collector{ctx: context.Background()}
+	c.opt.beforeBoundedOpen = func() {
+		if err := os.Rename(source, filepath.Join(dir, "original.log")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dst := filepath.Join(dir, "stage", "out.log")
+	if _, _, err := c.copyBounded(source, dst, 6); err == nil {
+		t.Fatal("copied replacement link target")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("destination exists: %v", err)
+	}
+}
+
+func TestDumpCopyRejectsChangedCandidate(t *testing.T) {
+	dir := testutil.TempDir(t)
+	source := filepath.Join(dir, "dump.dmp")
+	replacement := filepath.Join(dir, "replacement")
+	putDiagnosticFile(t, source, "PUBLIC")
+	putDiagnosticFile(t, replacement, "SECRET")
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for _, p := range []string{source, replacement} {
+		if err := os.Chtimes(p, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := boundedSnapshot(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(source, filepath.Join(dir, "original")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, source); err != nil {
+		t.Fatal(err)
+	}
+	c := &collector{ctx: context.Background()}
+	n, opened, err := c.copyBounded(source, filepath.Join(dir, "stage", "dump.dmp"), selected.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceUnchanged(source, selected, opened, n) {
+		t.Fatal("accepted a same-size replacement for the selected dump")
 	}
 }

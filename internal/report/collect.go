@@ -62,6 +62,7 @@ type CollectOptions struct {
 	pid               int
 	explorer          func(path string) error
 	beforeLogCopy     func()
+	beforeBoundedOpen func()
 	beforeBoundedRead func()
 }
 
@@ -993,7 +994,7 @@ func (c *collector) emulatorLogs() error {
 		var used int64
 		for _, k := range candidates {
 			limit := min(k.len, capBytes-used)
-			got, err := c.copyBounded(k.path, filepath.Join(c.stage, root.LogsDir, k.file.Name()), limit)
+			got, _, err := c.copyBounded(k.path, filepath.Join(c.stage, root.LogsDir, k.file.Name()), limit)
 			if err != nil {
 				c.L("  复制 " + k.file.Name() + " 失败：" + errText(err))
 				continue
@@ -1116,7 +1117,7 @@ func (c *collector) bootDiagDirs(logDir string) {
 			if f.Size() > diagnosticBootCapBytes-diagBytes[i] {
 				c.L("  " + d + `\` + f.Name() + "：诊断开机现场预算不足，截断")
 			}
-			got, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), min(f.Size(), diagnosticBootCapBytes-diagBytes[i]))
+			got, _, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), min(f.Size(), diagnosticBootCapBytes-diagBytes[i]))
 			if err != nil {
 				c.L("  复制 " + d + `\` + f.Name() + " 失败：" + errText(err))
 				continue
@@ -1151,7 +1152,7 @@ func (c *collector) bootDiagDirs(logDir string) {
 			continue
 		}
 		for _, f := range files {
-			got, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), f.Size())
+			got, _, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), f.Size())
 			if err != nil {
 				c.L("  复制 " + d + `\` + f.Name() + " 失败：" + errText(err))
 				continue
@@ -1220,8 +1221,16 @@ func (c *collector) crashDumps() error {
 				continue
 			}
 			for _, f := range findFiles(filepath.Join(b, db.Name()), func(n string) bool { return strings.HasSuffix(strings.ToLower(n), ".dmp") }) {
-				if !f.info.ModTime().Before(since) {
-					dumps = append(dumps, dump{path: f.path, db: db.Name(), info: f.info})
+				if !f.info.Mode().IsRegular() {
+					continue
+				}
+				info, err := boundedSnapshot(f.path)
+				if err != nil {
+					c.L("  无法读取转储 " + f.path + "：" + errText(err))
+					continue
+				}
+				if !info.ModTime().Before(since) {
+					dumps = append(dumps, dump{path: f.path, db: db.Name(), info: info})
 				}
 			}
 		}
@@ -1241,11 +1250,11 @@ func (c *collector) crashDumps() error {
 			continue
 		}
 		dst := filepath.Join(c.stage, "crash", d.db, d.info.Name())
-		n, err := c.copyBounded(d.path, dst, d.info.Size())
+		n, opened, err := c.copyBounded(d.path, dst, d.info.Size())
 		if err != nil {
 			return err
 		}
-		if !sourceUnchanged(d.path, d.info, n) {
+		if !sourceUnchanged(d.path, d.info, opened, n) {
 			if err := c.discardStageFile(dst); err != nil {
 				return err
 			}
@@ -1300,12 +1309,22 @@ func (c *collector) diagnosticDumps() error {
 			if err != nil {
 				return err
 			}
-			sort.SliceStable(files, func(a, b int) bool { return files[a].ModTime().After(files[b].ModTime()) })
-			var taken, skipped, duplicates int
+			var snapshots []fs.FileInfo
 			for _, f := range files {
-				if !f.Mode().IsRegular() || !strings.HasSuffix(strings.ToLower(f.Name()), ".dmp") || f.ModTime().Before(c.opt.now().Add(-diagnostics.MaxAge)) {
+				if !f.Mode().IsRegular() || !strings.HasSuffix(strings.ToLower(f.Name()), ".dmp") {
 					continue
 				}
+				info, err := boundedSnapshot(filepath.Join(dir, f.Name()))
+				if err != nil {
+					return err
+				}
+				if !info.ModTime().Before(c.opt.now().Add(-diagnostics.MaxAge)) {
+					snapshots = append(snapshots, info)
+				}
+			}
+			sort.SliceStable(snapshots, func(a, b int) bool { return snapshots[a].ModTime().After(snapshots[b].ModTime()) })
+			var taken, skipped, duplicates int
+			for _, f := range snapshots {
 				remaining := diagnosticLogCapBytes - c.diagnosticBytes[i]
 				if f.Size() > remaining {
 					skipped++
@@ -1313,11 +1332,11 @@ func (c *collector) diagnosticDumps() error {
 					continue
 				}
 				dst := filepath.Join(c.stage, root.LogsDir, root.AvdName(i)+"-crashdumps", f.Name())
-				n, err := c.copyBounded(filepath.Join(dir, f.Name()), dst, f.Size())
+				n, opened, err := c.copyBounded(filepath.Join(dir, f.Name()), dst, f.Size())
 				if err != nil {
 					return err
 				}
-				if !sourceUnchanged(filepath.Join(dir, f.Name()), f, n) {
+				if !sourceUnchanged(filepath.Join(dir, f.Name()), f, opened, n) {
 					if err := c.discardStageFile(dst); err != nil {
 						return err
 					}
@@ -1362,9 +1381,29 @@ func (c *collector) diagnosticDumps() error {
 	return errors.Join(failures...)
 }
 
-func sourceUnchanged(path string, before fs.FileInfo, copied int64) bool {
+// FileInfo from directory listings may load its identity lazily on Windows. Pin dump identity
+// at selection time so a replacement before copy cannot become the selected file retroactively.
+func boundedSnapshot(path string) (fs.FileInfo, error) {
+	f, err := openBoundedSource(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("不是常规文件：%s", path)
+	}
+	return info, nil
+}
+
+func sourceUnchanged(path string, before, opened fs.FileInfo, copied int64) bool {
 	after, err := os.Lstat(path)
-	return err == nil && after.Mode().IsRegular() && copied == before.Size() && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && os.SameFile(before, after)
+	return err == nil && after.Mode().IsRegular() && copied == before.Size() &&
+		opened.Size() == before.Size() && opened.ModTime().Equal(before.ModTime()) && os.SameFile(before, opened) &&
+		after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && os.SameFile(opened, after)
 }
 
 func (c *collector) fileDigest(path string, size int64) ([32]byte, error) {
@@ -1673,40 +1712,57 @@ func diagnosticIndex(name string) (int, bool) {
 
 // copyBounded copies at most the size planned for this file, even if a live source grows.
 // Failed partial files are removed so neither the budget nor the ZIP can contain unaccounted bytes.
-func (c *collector) copyBounded(src, dst string, limit int64) (int64, error) {
+func (c *collector) copyBounded(src, dst string, limit int64) (int64, fs.FileInfo, error) {
 	if c.ctx != nil {
 		if err := c.ctx.Err(); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
-	fi, err := os.Lstat(src)
+	pathInfo, err := os.Lstat(src)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	if !fi.Mode().IsRegular() {
-		return 0, fmt.Errorf("不是常规文件：%s", src)
+	if !pathInfo.Mode().IsRegular() {
+		return 0, nil, fmt.Errorf("不是常规文件：%s", src)
+	}
+	// Pin the identity before any later path lookup. On Windows Lstat's file ID is lazy,
+	// so SameFile(Lstat, opened) alone can identify a replacement instead of the original.
+	pinned, err := openBoundedSource(src)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer pinned.Close()
+	pinnedInfo, err := pinned.Stat()
+	if err != nil {
+		return 0, nil, err
+	}
+	if !pinnedInfo.Mode().IsRegular() {
+		return 0, nil, fmt.Errorf("不是常规文件：%s", src)
 	}
 	if limit < 0 {
 		limit = 0
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return 0, err
+		return 0, nil, err
+	}
+	if c.opt.beforeBoundedOpen != nil {
+		c.opt.beforeBoundedOpen()
 	}
 	in, err := root.OpenShared(src)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer in.Close()
-	fi, err = in.Stat()
+	opened, err := in.Stat()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	if !fi.Mode().IsRegular() {
-		return 0, fmt.Errorf("不是常规文件：%s", src)
+	if !opened.Mode().IsRegular() || !os.SameFile(pinnedInfo, opened) {
+		return 0, nil, fmt.Errorf("源文件在打开前发生替换：%s", src)
 	}
 	out, err := os.Create(dst)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	ctx := c.ctx
 	if ctx == nil {
@@ -1719,13 +1775,19 @@ func (c *collector) copyBounded(src, dst string, limit int64) (int64, error) {
 	if e := out.Close(); err == nil {
 		err = e
 	}
+	if err == nil {
+		opened, err = in.Stat()
+	}
 	if err != nil {
 		if cleanupErr := c.discardStageFile(dst); cleanupErr != nil {
-			return 0, cleanupErr
+			return 0, nil, cleanupErr
 		}
-		return 0, err
+		return 0, nil, err
 	}
-	return n, nil
+	if opened.Size() > n {
+		c.L(fmt.Sprintf("  %s：仅复制前 %d 字节，复制结束时源文件 %d 字节（快照截断）", src, n, opened.Size()))
+	}
+	return n, opened, nil
 }
 
 func (c *collector) discardStageFile(path string) error {
