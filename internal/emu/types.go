@@ -144,6 +144,7 @@ type UpdateRequest struct {
 }
 
 type UpdateResult struct {
+	Warnings           []string            `json:"warnings,omitempty"`
 	DiagnosticsCleanup *DiagnosticsCleanup `json:"diagnostics_cleanup,omitempty"`
 	Instance           InstanceInfo        `json:"instance"`
 	Applied            map[string]any      `json:"applied"` // option name -> new value

@@ -8,13 +8,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"modavd/internal/logx"
-	"modavd/internal/root"
 	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
@@ -359,30 +356,6 @@ func TestLogcatCommandLine(t *testing.T) {
 			t.Errorf("%s matched", name)
 		}
 	}
-}
-
-// findLogcatProcesses is a test observer of the host's `adb -P <port> -s <serial> logcat` processes, whoever started them: a record of
-// our own would not do, a capture an earlier modavd started keeps running.
-func (m *Manager) findLogcatProcesses(serial string) ([]win.Process, error) {
-	procs, err := win.ListProcesses()
-	if err != nil {
-		return nil, err
-	}
-	port := strconv.Itoa(m.Root.AdbServerPort())
-	var found []win.Process
-	for _, p := range procs {
-		if !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
-			continue
-		}
-		cmdline, err := p.CommandLine()
-		if err != nil {
-			continue
-		}
-		if logcatCmdlineMatches(cmdline, port, serial) {
-			found = append(found, p)
-		}
-	}
-	return found, nil
 }
 
 // endProcesses kills procs and waits up to timeout in all for them to be gone.

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"modavd/internal/diagnostics"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
@@ -24,6 +23,10 @@ const LogcatCaptureArg = "__logcat"
 
 // Rotate at the first newline at or beyond 256 MiB, so a record never spans two files.
 const logcatSegmentBytes int64 = 256 << 20
+
+const capturePollInterval = 2 * time.Second
+
+var errLogcatPresent = errors.New("已有其它 logcat 采集，保持外部采集")
 
 // logcatWriter owns the only host output handle. adb keeps writing to the same pipe during every rotation.
 // The next file is opened before the previous one is closed; pruning therefore always sees the active file busy.
@@ -180,12 +183,12 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		cancel()
 	}()
 	for ctx.Err() == nil {
-		states, err := diagnostics.Read(r)
-		if err != nil {
-			m.Log.Warnf("实例 %d 读不了诊断策略，日志采集未切换: %v", i, err)
-			return 1
+		// Check again after each owned stream ends. An external watchdog can fill the restart gap.
+		if err := m.logcatStartGuard(i); err != nil {
+			m.Log.Warnf("实例 %d 不起重复采集: %v", i, err)
+			return 0
 		}
-		policy := states[i]
+		policy := m.diagnosticPolicy(i)
 		if _, err := m.applyDiagnosticGuest(ctx, i); err != nil {
 			m.Log.Warnf("实例 %d 客体日志缓冲区设置失败: %v", i, err)
 		}
@@ -203,10 +206,11 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 			}
 		}
 		captureCtx, stopCapture := context.WithCancel(ctx)
-		server := m.privateServerProcess()
+		server := captureServerProcess(m)
 		watchDone := make(chan struct{})
 		go func() {
-			ticker := time.NewTicker(100 * time.Millisecond)
+			observedServer := server
+			ticker := time.NewTicker(capturePollInterval)
 			defer ticker.Stop()
 			for {
 				select {
@@ -215,17 +219,17 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 				case <-captureCtx.Done():
 					return
 				case <-ticker.C:
-					current, readErr := diagnostics.Read(r)
-					nextServer := m.privateServerProcess()
-					if readErr == nil && current[i] != policy || nextServer.PID != server.PID || nextServer.Created != server.Created {
+					current := m.diagnosticPolicy(i)
+					if current != policy || captureServerChanged(&observedServer, captureServerProcess(m)) {
 						stopCapture()
 						return
 					}
 				}
 			}
 		}()
+		// Buffer setup/dmesg can take seconds. Inspect the process table immediately before starting adb as well.
 		err = captureLogcatStarted(captureCtx, r.AdbExe(), diagnosticLogcatArgs(r.AdbServerPort(), r.Ports().Serial(i), policy.Enabled),
-			m.ADB.Env(), w, m.captureStarted(i, q, policy, server))
+			m.ADB.Env(), w, func() error { return m.logcatStartGuard(i) }, m.captureStarted(i, q, policy, server))
 		stoppedForChange := captureCtx.Err() != nil
 		close(watchDone)
 		stopCapture()
@@ -235,6 +239,9 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 			break
 		}
 		if !stoppedForChange {
+			if errors.Is(err, errLogcatPresent) {
+				return 0
+			}
 			if err != nil {
 				m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
 				return 1
@@ -246,10 +253,21 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 }
 
 func captureLogcat(ctx context.Context, exe string, args, env []string, output io.Writer) error {
-	return captureLogcatStarted(ctx, exe, args, env, output, nil)
+	return captureLogcatStarted(ctx, exe, args, env, output, nil, nil)
 }
 
-func captureLogcatStarted(ctx context.Context, exe string, args, env []string, output io.Writer, started func(int) error) error {
+func (m *Manager) logcatStartGuard(i int) error {
+	processes, err := m.findLogcatProcesses(m.Root.Ports().Serial(i))
+	if err != nil {
+		return err
+	}
+	if len(processes) > 0 {
+		return errLogcatPresent
+	}
+	return nil
+}
+
+func captureLogcatStarted(ctx context.Context, exe string, args, env []string, output io.Writer, beforeStart func() error, started func(int) error) error {
 	r, pipe, err := os.Pipe()
 	if err != nil {
 		return err
@@ -258,6 +276,12 @@ func captureLogcatStarted(ctx context.Context, exe string, args, env []string, o
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = filepath.Dir(exe), env, pipe, pipe
 	win.HideConsoleCmd(cmd)
+	if beforeStart != nil {
+		if err := beforeStart(); err != nil {
+			pipe.Close()
+			return err
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		pipe.Close()
 		return err

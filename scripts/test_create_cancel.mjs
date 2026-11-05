@@ -236,6 +236,15 @@ test('enabling diagnostics patches a boolean immediately without a deletion prev
   assert.doesNotMatch(h.toasts[0].title + h.toasts[0].text, /下次开机/);
 });
 
+test('diagnostic save displays the external capture warning from its result', async () => {
+  const h = await settingsHarness({ diagnostics: false, patch: async () => ({
+    instance: { index: 3, diagnostics: true }, warnings: ['已有其它程序采集 logcat，诊断模式未接管宿主采集'],
+  }) });
+  h.toggle(true);
+  await h.submit();
+  assert.match(h.toasts[0].text, /未接管宿主采集/);
+});
+
 test('disabling waits for preview and confirmation, then reports actual cleanup', async () => {
   const h = await settingsHarness();
   h.toggle(false);

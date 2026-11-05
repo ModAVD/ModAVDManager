@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -242,7 +243,11 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	if in.Diagnostics {
 		diagnostics = "开"
 		if in.DiagnosticsSince != "" {
-			diagnostics += "，自 " + in.DiagnosticsSince
+			since := in.DiagnosticsSince
+			if parsed, err := time.Parse(time.RFC3339Nano, since); err == nil {
+				since = parsed.Local().Format("2006-01-02 15:04:05 MST")
+			}
+			diagnostics += "，自 " + since
 		}
 	}
 	kv("诊断模式", diagnostics)
@@ -384,6 +389,9 @@ func formatUpdate(w io.Writer, r *emu.UpdateResult) {
 	}
 	if c := r.DiagnosticsCleanup; c != nil && !r.Instance.Diagnostics {
 		fmt.Fprintf(w, "清理日志 %d 份，释放 %d 字节\n", c.Files, c.Bytes)
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintln(w, warning)
 	}
 }
 

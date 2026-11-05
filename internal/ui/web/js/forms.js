@@ -221,6 +221,7 @@ export function openSettings(i, field) {
           text = cleanup ? `诊断模式已关闭，已清理 ${cleanup.files} 个文件（${fmtBytes(cleanup.bytes)}）。` : '诊断模式已关闭。';
         }
         if (r.applies_next_boot && Object.keys(pending).some((k) => k !== 'diagnostics')) text += '其他设置在下次开机生效。';
+        if (r.warnings && r.warnings.length) text += r.warnings.join('；');
         return { title: '已保存', text };
       }
       return r.applies_next_boot ? { title: '已保存，下次开机生效', text: '实例正在运行，这次开机还是原来的设置。' } : { title: '已保存' };

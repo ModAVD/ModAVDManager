@@ -226,6 +226,32 @@ func logcatCmdlineMatches(cmdline []string, port, serial string) bool {
 	return hasPort && hasSerial && hasLogcat
 }
 
+var logcatListProcesses = win.ListProcesses
+
+// findLogcatProcesses recognizes any matching adb capture, including AUTO-MAS watchdog clients.
+// Discovery never grants permission to terminate a process; only ownedCapture does.
+func (m *Manager) findLogcatProcesses(serial string) ([]win.Process, error) {
+	procs, err := logcatListProcesses()
+	if err != nil {
+		return nil, err
+	}
+	port := strconv.Itoa(m.Root.AdbServerPort())
+	var found []win.Process
+	for _, p := range procs {
+		if !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
+			continue
+		}
+		cmdline, err := p.CommandLine()
+		if err != nil {
+			continue
+		}
+		if logcatCmdlineMatches(cmdline, port, serial) {
+			found = append(found, p)
+		}
+	}
+	return found, nil
+}
+
 // logcatMu: within one process the boot path and a re-registration hook (another goroutine) may both find no capture
 // and start one each.
 var logcatMu sync.Mutex
@@ -240,7 +266,7 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
 	serial := m.Root.Ports().Serial(i)
-	running, err := m.findOwnedLogcatProcesses(serial)
+	running, err := m.findLogcatProcesses(serial)
 	// Another process may have started the writer but not adb yet, or killed stale adb while its writer drains.
 	// Let that transition finish before deciding whether to create a replacement.
 	for deadline := time.Now().Add(5 * time.Second); err == nil && len(running) == 0 && m.lockHeld(i, "logcat"); {
@@ -248,13 +274,17 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 			return ""
 		}
 		time.Sleep(20 * time.Millisecond)
-		running, err = m.findOwnedLogcatProcesses(serial)
+		running, err = m.findLogcatProcesses(serial)
 	}
 	if err != nil {
 		m.Log.Warnf("实例 %d 读不出宿主进程表，这次不起客体日志落盘（免得起两份）: %v", i, err)
 		return ""
 	}
 	if len(running) > 0 {
+		state, _ := m.readCaptureState(i)
+		if _, ours := m.ownedCapture(i, state); !ours {
+			m.warnExternalCapture(i, m.diagnosticPolicy(i))
+		}
 		return openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt")
 	}
 	if ctx.Err() != nil {
@@ -276,7 +306,7 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	// Wait for the helper to hold the output before reporting it. Its per-instance lock also covers the interval
 	// before adb appears in the process table, including starts from another manager process.
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if clients, err := m.findOwnedLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
 			if path := openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt"); path != "" {
 				m.Log.Infof("实例 %d 客体日志 → %s", i, path)
 				return path

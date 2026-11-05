@@ -73,16 +73,17 @@ const (
 
 // Manager works on one root. Log gets the progress messages.
 type Manager struct {
-	Root *root.Root
-	Log  *logx.Logger
-	ADB  *adb.Client
+	Root             *root.Root
+	Log              *logx.Logger
+	ADB              *adb.Client
+	diagnosticReader *operationalDiagnostics
 }
 
 func New(r *root.Root, log *logx.Logger) *Manager {
 	if log == nil {
 		log = logx.Nop()
 	}
-	m := &Manager{Root: r, Log: log, ADB: adb.New(r, log)}
+	m := &Manager{Root: r, Log: log, ADB: adb.New(r, log), diagnosticReader: &operationalDiagnostics{}}
 	m.ADB.Booting = func(serial string) bool {
 		port, ok := consolePortOfSerial(serial)
 		if !ok {

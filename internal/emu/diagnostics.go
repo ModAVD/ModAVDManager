@@ -4,11 +4,40 @@ package emu
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
 )
+
+// Runtime capture must continue in ordinary mode when metadata is temporarily unreadable. Deletion uses the
+// strict diagnostics.Read directly. Warn once per failure episode, shared by this manager's derived loggers.
+type operationalDiagnostics struct {
+	mu     sync.Mutex
+	failed bool
+}
+
+var readOperationalDiagnostics = diagnostics.Read
+
+func (m *Manager) diagnosticPolicy(i int) diagnostics.State {
+	states, err := readOperationalDiagnostics(m.Root)
+	r := m.diagnosticReader
+	if r == nil {
+		r = &operationalDiagnostics{}
+	} // narrow unit fixtures may construct Manager without New
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		if !r.failed {
+			m.Log.Warnf("诊断策略读不了，日志采集和客体缓冲区暂按关闭处理，历史日志不删除: %v", err)
+		}
+		r.failed = true
+		return diagnostics.State{}
+	}
+	r.failed = false
+	return states[i]
+}
 
 // PreviewDiagnostics reports the same closed-file plan off will apply, without changing settings or deleting files.
 func (m *Manager) PreviewDiagnostics(ctx context.Context, i int) (*DiagnosticsPreview, error) {
@@ -59,7 +88,6 @@ func (m *Manager) SetDiagnostics(ctx context.Context, i int, enabled bool) (*Dia
 			WithAdvice("重试相同的诊断开关命令；实例关着时，下次开机也会恢复这些设置")
 	}
 	if running {
-		m.ensureLogcat(ctx, i)
 		if err := m.waitDiagnosticCapture(ctx, i, 10*time.Second); err != nil {
 			return cleanup, err
 		}
@@ -112,15 +140,12 @@ func (m *Manager) applyDiagnosticGuest(ctx context.Context, i int) (bool, error)
 	if _, err := m.instance(i); err != nil {
 		return false, err
 	}
-	states, err := diagnostics.Read(m.Root)
-	if err != nil {
-		return false, err
-	}
+	policy := m.diagnosticPolicy(i)
 	_, running, err := m.qemuOf(i)
 	if err != nil || !running {
 		return running, err
 	}
-	res := m.su(ctx, i, diagnosticBufferScript(states[i].Enabled), 10*time.Second)
+	res := m.su(ctx, i, diagnosticBufferScript(policy.Enabled), 10*time.Second)
 	if res.Code != 0 {
 		return true, fmt.Errorf("调整客体日志缓冲区失败，退出码 %d: %s", res.Code, tail(res.Out, 400))
 	}

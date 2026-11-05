@@ -53,6 +53,8 @@ var bootDiagItems = []bootDiagItem{
 // bootDiagRun runs adb args for at most timeout, stdout into w (kept when adb times out or fails).
 type bootDiagRun func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result
 
+var bootDiagSelfProcess = func() (win.Process, bool) { return win.FindProcess(uint32(os.Getpid())) }
+
 // bootFailed: err ends a boot that went wrong, not one the caller gave up on. A cancel (Ctrl+C, MCP
 // notifications/cancelled, the manager's job) is not one; create's own deadline running out is.
 func bootFailed(ctx context.Context, err error) bool {
@@ -82,10 +84,10 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		m.Log.Warnf("实例 %d 开机失败，建不了日志目录，不收客体现场: %v", i, err)
 		return ""
 	}
-	self, ok := win.FindProcess(uint32(os.Getpid()))
+	self, ok := bootDiagSelfProcess()
 	if !ok || self.Created == 0 {
-		m.Log.Warnf("实例 %d 读不到现场收集进程身份，不收客体现场", i)
-		return ""
+		m.Log.Warnf("实例 %d 读不到现场收集进程身份，继续保存客体现场", i)
+		self = win.Process{PID: uint32(os.Getpid())}
 	}
 	prefix := fmt.Sprintf(".%s-%s-bootfail-%d-%d-", root.AvdName(i), stamp.Format("20060102-150405"), self.PID, self.Created)
 	dir, err := os.MkdirTemp(logs, prefix)
@@ -93,7 +95,12 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		m.Log.Warnf("实例 %d 开机失败，建不了临时现场目录: %v", i, err)
 		return ""
 	}
-	defer os.RemoveAll(dir)
+	keep := false
+	defer func() {
+		if !keep {
+			os.RemoveAll(dir)
+		}
+	}()
 	serial := m.Root.Ports().Serial(i)
 	run := func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result {
 		return m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: timeout, Stdout: w}, args...)
@@ -106,11 +113,11 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		m.Log.Warnf("实例 %d 开机失败，客体现场一项也没读到", i)
 		return ""
 	}
+	keep = true // never discard collected evidence because publication or cleanup coordination failed
 	// Publish only a complete snapshot. Retention and collect-info cannot see a directory still being written.
 	lock, err := m.retentionLock()
 	if err != nil {
-		m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
-		return ""
+		m.Log.Warnf("实例 %d 取不到清理锁，仍发布已完成的开机失败现场: %v", i, err)
 	}
 	var published string
 	for {
@@ -118,19 +125,25 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		if _, err := os.Lstat(published); errors.Is(err, os.ErrNotExist) {
 			break
 		} else if err != nil {
-			lock.Unlock()
+			if lock != nil {
+				lock.Unlock()
+			}
 			m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
-			return ""
+			return dir
 		}
 		stamp = stamp.Add(time.Second)
 	}
 	err = os.Rename(dir, published)
-	lock.Unlock()
+	if lock != nil {
+		lock.Unlock()
+	}
 	if err != nil {
 		m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
-		return ""
+		return dir
 	}
-	m.pruneLogs(i)
+	if lock != nil {
+		m.pruneLogs(i)
+	}
 	return published
 }
 

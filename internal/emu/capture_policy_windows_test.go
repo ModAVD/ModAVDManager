@@ -53,20 +53,6 @@ func TestDiagnosticCaptureSwitchAndReregisterPreserveOtherClients(t *testing.T) 
 	ctx := context.Background()
 	serial := m.Root.Ports().Serial(6)
 	port := strconv.Itoa(m.Root.AdbServerPort())
-	// Both have the same root adb and serial. Neither is owned by the capture helper: one is a single dump,
-	// deliberately held open by the fake, and the other is a user-started stream.
-	var foreign []win.Process
-	for _, args := range [][]string{
-		{"-P", port, "-s", serial, "logcat", "-d", "-b", "all"},
-		{"-P", port, "-s", serial, "logcat", "-b", "main"},
-	} {
-		p, err := win.StartDetached(m.Root.AdbExe(), args, win.StartOptions{Env: m.ADB.Env()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		foreign = append(foreign, p)
-	}
-	t.Cleanup(func() { endProcesses(foreign, time.Second) })
 	for _, enabled := range []bool{true, false} {
 		if _, err := m.SetDiagnostics(ctx, 6, enabled); err != nil {
 			t.Fatal(err)
@@ -91,6 +77,20 @@ func TestDiagnosticCaptureSwitchAndReregisterPreserveOtherClients(t *testing.T) 
 			t.Fatalf("kernel capture is not root: %s", all)
 		}
 	}
+	// Both have the same root adb and serial. Neither is owned by the capture helper: one is a single dump,
+	// deliberately held open by the fake, and the other is a user-started stream.
+	var foreign []win.Process
+	for _, args := range [][]string{
+		{"-P", port, "-s", serial, "logcat", "-d", "-b", "all"},
+		{"-P", port, "-s", serial, "logcat", "-b", "main"},
+	} {
+		p, err := win.StartDetached(m.Root.AdbExe(), args, win.StartOptions{Env: m.ADB.Env()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreign = append(foreign, p)
+	}
+	t.Cleanup(func() { endProcesses(foreign, time.Second) })
 	server := m.privateServerProcess()
 	if server.PID == 0 || server.Kill() != nil || !server.Wait(time.Second) {
 		t.Fatal("fake private server did not stop")
@@ -111,21 +111,10 @@ func TestDiagnosticCaptureSwitchAndReregisterPreserveOtherClients(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	if err := m.waitDiagnosticCapture(ctx, 6, 10*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	states, err := diagnostics.Read(m.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := m.readCaptureState(6)
-	if err != nil || state.Enabled != states[6].Enabled || state.Since != states[6].Since {
-		t.Fatalf("concurrent final state=%+v policy=%+v err=%v", state, states[6], err)
-	}
-	owned, err := m.findOwnedLogcatProcesses(serial)
-	if err != nil || len(owned) != 1 {
-		t.Fatalf("owned captures=%v/%v", owned, err)
-	}
+	waitLogcatTest(t, func() bool {
+		owned, _ := m.findOwnedLogcatProcesses(serial)
+		return len(owned) == 0 && !m.lockHeld(6, "logcat")
+	})
 	for _, p := range foreign {
 		if !p.Alive() {
 			t.Fatal("diagnostic switch ended an independent logcat", p.PID)

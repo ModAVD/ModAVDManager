@@ -6,6 +6,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"modavd/internal/emu"
 )
@@ -39,6 +40,25 @@ func TestDiagnosticsSetDispatchesBooleanAndReportsCleanup(t *testing.T) {
 				t.Fatalf("actual cleanup omitted: %s", human.stdout)
 			}
 		})
+	}
+}
+
+func TestDiagnosticInfoHumanTimeIsLocalAndJSONRemainsUTC(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("CST", 8*60*60)
+	t.Cleanup(func() { time.Local = saved })
+	h := newHarness()
+	in := sampleInstance(3)
+	in.Diagnostics = true
+	in.DiagnosticsSince = "2026-11-05T12:00:00Z"
+	h.fake.info = func(int) (*emu.InstanceInfo, error) { return &in, nil }
+	human := h.run(t, nil, "info", "3")
+	if !strings.Contains(human.stdout, "2026-11-05 20:00:00 CST") {
+		t.Fatal(human.stdout)
+	}
+	encoded := h.run(t, nil, "info", "3", "--json")
+	if !strings.Contains(encoded.stdout, `"diagnostics_since":"2026-11-05T12:00:00Z"`) {
+		t.Fatal(encoded.stdout)
 	}
 }
 

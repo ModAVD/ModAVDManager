@@ -69,6 +69,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 - JSON 请求体：不认识的字段回 400 `usage`（拼错的字段名页面能直接看到）；空请求体等于全用默认值；PATCH 一个字段都没给回 400 `usage`。
 - 截图、输入、列应用遇到实例没开机：409，code 是 `busy`。
 - `InstanceInfo` 带 `diagnostics: bool`，开启时带 `diagnostics_since`。PATCH 修改诊断时，`UpdateResult` 带 `diagnostics_cleanup: {files, bytes}`，只报实际删除量。关闭预览包含重新加入普通全根目录 1 GiB 池后需淘汰的其它普通实例旧日志；活跃文件不在预览和删除范围内。预览和提交之间现场可能变化，页面以提交结果为准。关闭部分失败时开关已保存为关，再次提交 `diagnostics: false` 会继续清理和客体恢复。
+- 诊断设置成功但宿主 logcat 由外部程序采集时，`UpdateResult.warnings` 说明未接管；不结束外部进程，也不等待它切换后才返回。前端显示该提示。
 
 ### Job
 

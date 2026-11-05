@@ -115,16 +115,24 @@ func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error)
 
 func (m *Manager) waitDiagnosticCapture(ctx context.Context, i int, timeout time.Duration) error {
 	for deadline := time.Now().Add(timeout); ; {
-		states, err := diagnostics.Read(m.Root)
-		if err != nil {
-			return err
-		}
+		policy := m.diagnosticPolicy(i)
 		state, err := m.readCaptureState(i)
-		server := m.privateServerProcess()
-		if err == nil && state.Enabled == states[i].Enabled && state.Since == states[i].Since &&
-			state.ServerPID == server.PID && state.ServerCreated == server.Created {
+		server := captureServerProcess(m)
+		serverMatches := server.PID == 0 || server.Created == 0 || state.ServerPID == 0 || state.ServerCreated == 0 ||
+			state.ServerPID == server.PID && state.ServerCreated == server.Created
+		if err == nil && state.Enabled == policy.Enabled && state.Since == policy.Since && serverMatches {
 			if _, ok := m.ownedCapture(i, state); ok {
 				return nil
+			}
+		}
+		clients, scanErr := m.findLogcatProcesses(m.Root.Ports().Serial(i))
+		if scanErr == nil && len(clients) > 0 {
+			owned, ours := m.ownedCapture(i, state)
+			for _, client := range clients {
+				if !ours || client.PID != owned.PID || client.Created != owned.Created {
+					m.warnExternalCapture(i, policy)
+					return nil
+				}
 			}
 		}
 		if _, running, qerr := m.qemuOf(i); qerr != nil || !running {
@@ -139,9 +147,28 @@ func (m *Manager) waitDiagnosticCapture(ctx context.Context, i int, timeout time
 		if !m.lockHeld(i, "logcat") {
 			m.ensureLogcat(ctx, i)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+func (m *Manager) warnExternalCapture(i int, policy diagnostics.State) {
+	if policy.Enabled {
+		m.Log.Warnf("实例 %d 已有其它程序采集 logcat，诊断模式未接管宿主采集；客体缓冲区设置已应用，外部采集保持不变", i)
+	}
+}
+
+// A failed observation is unknown, not a server replacement. The first successful observation establishes the
+// baseline when startup could not read it. Restart only between two known process identities.
+func captureServerChanged(observed *win.Process, next win.Process) bool {
+	if next.PID == 0 || next.Created == 0 {
+		return false
+	}
+	changed := observed.PID != 0 && observed.Created != 0 && (next.PID != observed.PID || next.Created != observed.Created)
+	*observed = next
+	return changed
+}
+
+var captureServerProcess = (*Manager).privateServerProcess
 
 func diagnosticLogcatArgs(server int, serial string, enabled bool) []string {
 	if !enabled {

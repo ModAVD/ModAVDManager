@@ -280,10 +280,12 @@ func (m *Manager) diagnosticCleanup(i int, previewOff bool) (cleanupPlan, error)
 		dir := filepath.Join(m.Root.LogsDir(), entry.Name())
 		info, err := snapshotLog(dir)
 		if err != nil {
-			return cleanupPlan{}, err
+			m.Log.Warnf("诊断转储 %s 读不了，跳过这一项: %v", entry.Name(), err)
+			continue
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return cleanupPlan{}, fmt.Errorf("诊断转储目录不是常规目录，未清理")
+			m.Log.Warnf("诊断转储 %s 不是常规目录，跳过这一项", entry.Name())
+			continue
 		}
 		if !states[index].Enabled || low {
 			closed = append(closed, retainedLog{logFile: logFile{path: dir, name: entry.Name(), dir: true, size: dirSize(dir), mtime: info.ModTime(), info: info}, index: index, kind: crashDump})

@@ -10,9 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modavd/internal/avd"
+	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
+	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
 )
@@ -239,11 +242,14 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	}
 	nextBoot := len(applied) > 0
 	var cleanup *DiagnosticsCleanup
+	var warnings []string
 	if req.Diagnostics != nil {
-		cleanup, err = m.SetDiagnostics(ctx, i, *req.Diagnostics)
+		col := &logx.Collector{}
+		cleanup, err = m.withLog(col.Sink()).SetDiagnostics(ctx, i, *req.Diagnostics)
 		if err != nil {
 			return nil, err
 		}
+		warnings = col.Messages()
 		applied["diagnostics"] = *req.Diagnostics
 	}
 	m.Log.Infof("已写入魔改 AVD 实例 %d 的设置: %s", i, formatApplied(applied))
@@ -263,7 +269,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		}
 	}
 	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,
-		DiagnosticsCleanup: cleanup}, nil
+		DiagnosticsCleanup: cleanup, Warnings: warnings}, nil
 }
 
 // Delete removes a stopped instance with all its data. errs.Busy while it runs or is being started / stopped.
@@ -331,6 +337,10 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		m.Log.Warnf("魔改 AVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
 			strings.Join(leftovers, "、"))
 	}
+	if err := m.prepareDiagnosticDelete(ctx, i); err != nil {
+		unlock()
+		return nil, err
+	}
 	if err := avd.Delete(m.Root, i); err != nil {
 		unlock()
 		return nil, err
@@ -350,6 +360,37 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		m.Log.Infof("已删除魔改 AVD 实例 %d", i)
 	}
 	return &DeleteResult{Index: i, Name: in.Name, Path: in.Dir}, nil
+}
+
+// Retire diagnostic history before removing its metadata. Otherwise up to 4 GiB immediately joins the ordinary
+// 1 GiB pool. An explicit off value also retries a previous partial cleanup before a repeated delete.
+func (m *Manager) prepareDiagnosticDelete(ctx context.Context, i int) error {
+	l, err := m.Root.LockInstanceConfig(i)
+	if err != nil {
+		if errs.CodeOf(err) == errs.NotFound {
+			return nil // avd home itself is absent; only metadata can remain
+		}
+		return err
+	}
+	meta, err := m.Root.ReadMetadata()
+	if err != nil {
+		l.Unlock()
+		return err
+	}
+	states, err := diagnostics.Parse(meta.Obj())
+	needed := meta.Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj().Has("diagnostics")
+	if err == nil && states[i].Enabled {
+		err = diagnostics.Set(m.Root, i, false, time.Now())
+	}
+	l.Unlock()
+	if err != nil || !needed {
+		return err
+	}
+	if err := m.waitCrashArchiveStopped(ctx, i); err != nil {
+		return err
+	}
+	_, _, err = m.cleanupDiagnostics(ctx, i)
+	return err
 }
 
 // tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("魔改 AVD 实例 0 正在启动，无法删除").
