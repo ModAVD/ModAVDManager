@@ -44,7 +44,7 @@ function mk(i, title, o = {}) {
     serial: 'emulator-' + console, adb_address: '127.0.0.1:' + (console + 1),
     ports: { console, adb: console + 1, grpc: console + 2 },
     screencap: { shm: 'SHM_videmulator' + console, shm_ready: st === 'online' },
-    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 64, width: 1280, height: 720, dpi: 240 },
+    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 64, resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.resolution === 1080 ? 280 : 240 },
     initialized, launcher: initialized ? 'µLauncher' : '',
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
@@ -645,6 +645,7 @@ const errResp = (code, message, advice) => fail(STATUS_OF[code] || 500, code, me
 function validate(b, create) {
   if (b.memory_mb != null && !MEM.includes(b.memory_mb)) return ['invalid_argument', `内存只能选 3、4、5、6 GB（收到 ${b.memory_mb} MB）`, ''];
   if (b.cpu != null && ![2, 4, 6].includes(b.cpu)) return ['invalid_argument', `CPU 核数只能是 2、4 或 6（收到 ${b.cpu}）`, ''];
+  if (b.resolution != null && ![1080, 720].includes(b.resolution)) return ['invalid_argument', '分辨率只能是 1080 或 720', ''];
   if (b.fps != null && ![30, 60].includes(b.fps)) return ['invalid_argument', `帧率只能是 30 或 60（收到 ${b.fps}）`, ''];
   if (create && b.data_partition_gb != null && (!Number.isInteger(b.data_partition_gb) || b.data_partition_gb < 16 || b.data_partition_gb > 512)) {
     return ['invalid_argument', `数据盘上限只能是 16–512 GB 的整数（收到 ${b.data_partition_gb}）`, ''];
@@ -673,7 +674,7 @@ async function handle(url, init) {
     if (!INDEXES.includes(i)) return errResp('invalid_argument', `实例编号 ${i} 不可用（只能是 0–9，5 除外）`);
     if (db.insts.has(i)) return errResp('already_exists', `实例 mas_${i} 已存在`);
     await sleep(500);
-    const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, disk: body.data_partition_gb, initialized: false, scene: i });
+    const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, resolution: body.resolution || 1080, disk: body.data_partition_gb, initialized: false, scene: i });
     log('info', `已新建魔改 AVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${inst.config.data_partition_gb} GB / 帧率 ${inst.config.fps}）`);
     emit('instances', list());
     return json(pub(inst), 201);
@@ -723,6 +724,12 @@ async function handle(url, init) {
       if (bad) return errResp(...bad);
       const applied = {};
       if (body.title != null) { inst.title = body.title || inst.name; applied.title = body.title; }
+      if (body.resolution != null) {
+        const portrait = inst.config.height > inst.config.width;
+        const w = body.resolution === 1080 ? 1920 : 1280, h = body.resolution;
+        Object.assign(inst.config, { resolution: body.resolution, width: portrait ? h : w, height: portrait ? w : h, dpi: body.resolution === 1080 ? 280 : 240 });
+        applied.resolution = body.resolution;
+      }
       for (const k of ['memory_mb', 'cpu', 'fps']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
       emit('instances', list());
       return json({ instance: pub(inst), applied, applies_next_boot: inst.running });

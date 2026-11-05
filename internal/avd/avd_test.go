@@ -658,7 +658,7 @@ func TestListAndGet(t *testing.T) {
 	if d, ok := in.DataPartitionGB(); !ok || d != 64 {
 		t.Errorf("DataPartitionGB %d", d)
 	}
-	if w, h, dpi := in.Display(); in.FPS() != 60 || w != 1280 || h != 720 || dpi != 240 {
+	if w, h, dpi := in.Display(); in.FPS() != 60 || w != 1920 || h != 1080 || dpi != 280 {
 		t.Errorf("FPS / Display %d %d %d %d", in.FPS(), w, h, dpi)
 	}
 	// An instance whose config.ini cannot be read (opened elsewhere without sharing) is listed with an empty config
@@ -1066,7 +1066,7 @@ func TestApplyDisplay(t *testing.T) {
 	if err != nil || !wrote {
 		t.Fatalf("first: %v %v", wrote, err)
 	}
-	want := "hw.lcd.width=720\r\nhw.lcd.height=1280\r\nhw.lcd.density=240\r\nx=1\r\nhw.mainKeys=yes\r\n"
+	want := "hw.lcd.width=1080\r\nhw.lcd.height=1920\r\nhw.lcd.density=280\r\nx=1\r\nhw.mainKeys=yes\r\n"
 	if got := string(readFile(t, ConfigPath(r, 0))); got != want {
 		t.Fatalf("got %q", got)
 	}

@@ -5,6 +5,9 @@ package ui
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -110,9 +113,19 @@ func TestScreenshot(t *testing.T) {
 	expectError(t, h.do("GET", "/api/instances/8/screenshot", nil), http.StatusNotFound, errs.NotFound)
 }
 
+func displayPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
 func TestInputValidation(t *testing.T) {
 	h := newHarness(t, nil)
 	h.f.put(3, emu.StatusOnline)
+	h.f.shot = adb.Result{Code: 0, Stdout: displayPNG(t, 1280, 720)}
 
 	ok := map[string]string{
 		`{"type":"tap","x":100,"y":200}`:      "input tap 100 200",
@@ -389,5 +402,33 @@ func TestCheckCached(t *testing.T) {
 	expect(t, h.do("GET", "/api/check?refresh=1", nil), 200, &res)
 	if n := h.f.checks.Load(); n != 2 {
 		t.Fatalf("refresh=1 did not check again (%d)", n)
+	}
+}
+
+// Next-boot settings must neither scale nor reject taps in the still-running guest.
+func TestInputUsesLiveDisplayAfterPresetChange(t *testing.T) {
+	for _, dimensions := range [][2]int{{1920, 1080}, {1280, 720}, {1080, 1920}, {720, 1280}} {
+		t.Run(fmt.Sprint(dimensions), func(t *testing.T) {
+			h := newHarness(t, nil)
+			h.f.put(3, emu.StatusOnline)
+			h.f.mu.Lock()
+			in := h.f.instances[3]
+			in.Config.Width, in.Config.Height = 720, 1280
+			if dimensions[0] <= 1280 && dimensions[1] <= 1280 {
+				in.Config.Width, in.Config.Height = 1920, 1080
+			}
+			h.f.instances[3] = in
+			h.f.shot = adb.Result{Code: 0, Stdout: displayPNG(t, dimensions[0], dimensions[1])}
+			h.f.mu.Unlock()
+			x, y := dimensions[0]-1, dimensions[1]-1
+			expect(t, h.do("POST", "/api/instances/3/input", fmt.Sprintf(`{"type":"tap","x":%d,"y":%d}`, x, y)), 200, nil)
+			h.f.mu.Lock()
+			got := h.f.shells[len(h.f.shells)-1]
+			h.f.mu.Unlock()
+			if want := fmt.Sprintf("input tap %d %d", x, y); got != want {
+				t.Fatalf("%s, want %s", got, want)
+			}
+			expectError(t, h.do("POST", "/api/instances/3/input", fmt.Sprintf(`{"type":"tap","x":%d,"y":0}`, dimensions[0])), 400, errs.InvalidArgument)
+		})
 	}
 }
