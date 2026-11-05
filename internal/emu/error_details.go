@@ -29,7 +29,9 @@ var errorRunning = func(m *Manager, i int) string {
 		return unknownState
 	}
 	plan, problem := root.PortPlanOf(meta.Obj())
-	if problem != "" {
+	// Legacy risk warnings still preserve the actual plan for observation and shutdown. Only malformed values
+	// that fell back to the default segment make a negative process observation unreliable.
+	if problem != "" && plan.Base == root.DefaultPortBase {
 		return unknownState
 	}
 	procs, err := listQemuProcesses()
