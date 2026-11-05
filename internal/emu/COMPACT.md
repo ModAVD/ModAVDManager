@@ -34,6 +34,10 @@ Duration arithmetic saturates instead of wrapping. Unknown virtual capacity
 disables the automatic deadline. The caller's context still cancels either
 operation, and cancellation and timeout retain their existing error codes.
 This does not measure ongoing throughput or guarantee success below 1 MiB/s.
+For a 64 GiB disk, the convert budget is about 54.7 hours and compare about
+36.5 hours. Large disks therefore effectively do not time out in normal use.
+Cancel the operation when you want it to stop. Timeout messages show hours and
+minutes for these long budgets, rather than thousands of minutes.
 
 `DiskCompactResult` keeps the existing fields and adds these fields for CLI JSON,
 GUI job results and MCP structured output:
@@ -43,14 +47,15 @@ GUI job results and MCP structured output:
 | `before_on_disk_bytes` | Host allocation before compact |
 | `after_on_disk_bytes` | Host allocation after compact, equal to before on skip |
 | `freed_bytes` | Existing nonnegative saving, `max(0, before - after)` |
-| `on_disk_delta_bytes` | Signed `after - before`; positive means growth |
+| `on_disk_delta_bytes` | Signed `after - before`; positive means increased host disk usage |
 | `skipped` | Validation completed, but the image was not rewritten |
 | `estimated_reclaimable_bytes` | Preflight estimate, omitted when allocation is unknown |
 | `reclaim_threshold_bytes` | Minimum estimated saving that qualifies for rewriting |
 
-The verified temporary image is measured before the atomic replacement. A failed
-measurement therefore leaves the original intact. CLI and GUI distinguish growth
-from savings; the GUI job offers cancellation during a long compact.
+The verified temporary image is flushed, then measured before the atomic
+replacement. A failed flush or measurement therefore leaves the original intact.
+CLI and GUI distinguish growth from savings; the GUI job offers cancellation
+during a long compact.
 
 Run the repeatable checks with an existing SDK and the pinned local Go toolchain:
 
@@ -73,3 +78,6 @@ the budget calculation to three seconds, then exercises timeout classification,
 scratch cleanup, lock release and original-image protection through the complete
 compact pipeline. Independent fault injections must be caught by test failures:
 duration overflow, lost cancellation, lost growth reporting and disabled skipping.
+Another file overlay grows the temporary image as the flush completes, then
+checks that the result reports that allocation. Measuring before the flush makes
+this check fail.

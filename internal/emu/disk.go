@@ -403,7 +403,7 @@ type DiskCompactResult struct {
 	BeforeOnDiskBytes int64  `json:"before_on_disk_bytes"`
 	AfterOnDiskBytes  int64  `json:"after_on_disk_bytes"`
 	// FreedBytes keeps its original nonnegative contract; growth is represented
-	// by OnDiskDeltaBytes (after minus before, positive means more host space).
+	// by OnDiskDeltaBytes (after minus before; positive means increased host disk usage).
 	FreedBytes                int64  `json:"freed_bytes"`
 	OnDiskDeltaBytes          int64  `json:"on_disk_delta_bytes"`
 	Skipped                   bool   `json:"skipped"`
@@ -484,7 +484,7 @@ func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ..
 		return nil, nil, 0, errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
 	if cctx.Err() == context.DeadlineExceeded {
-		return nil, nil, 0, errs.Newf(errs.Timeout, "qemu-img %s %.0f 分钟没跑完", args[0], timeout.Minutes())
+		return nil, nil, 0, errs.Newf(errs.Timeout, "qemu-img %s %s没跑完", args[0], qemuImgTimeoutText(timeout))
 	}
 	if state == nil {
 		return nil, nil, 0, errs.Wrap(errs.Internal, runErr, "运行不了 qemu-img: "+runErr.Error())
@@ -809,18 +809,17 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		_ = os.Remove(tmp)
 		return nil, err
 	}
+	// Flush the copy before measuring its host allocation.
+	if err := syncFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return nil, errs.Wrap(errs.Internal, err, "刷新整理后的数据盘失败")
+	}
 	// Measure while the original is still protected. Rename on the same volume
 	// preserves allocation and no post-replace probe can turn success into error.
 	after, err := compactHostBytes(tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
 		return nil, err
-	}
-
-	// flush the copy's data, then atomically replace the original (write-through).
-	if err := syncFile(tmp); err != nil {
-		_ = os.Remove(tmp)
-		return nil, errs.Wrap(errs.Internal, err, "刷新整理后的数据盘失败")
 	}
 	if err := ctxErr(ctx); err != nil {
 		_ = os.Remove(tmp)

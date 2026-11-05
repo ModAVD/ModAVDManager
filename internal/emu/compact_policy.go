@@ -2,6 +2,7 @@ package emu
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -14,6 +15,23 @@ func qemuImgContext(ctx context.Context, budget time.Duration) (context.Context,
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, budget)
+}
+
+func qemuImgTimeoutText(budget time.Duration) string {
+	if budget >= time.Hour {
+		hours, minutes := budget/time.Hour, budget%time.Hour/time.Minute
+		if minutes > 0 {
+			return fmt.Sprintf("%d 小时 %d 分钟", hours, minutes)
+		}
+		return fmt.Sprintf("%d 小时", hours)
+	}
+	if budget >= time.Minute {
+		return fmt.Sprintf("%d 分钟", budget/time.Minute)
+	}
+	if budget >= time.Second {
+		return fmt.Sprintf("%d 秒", budget/time.Second)
+	}
+	return budget.String()
 }
 
 // compactTimeout allows 1 MiB/s of aggregate I/O, plus five minutes for setup.

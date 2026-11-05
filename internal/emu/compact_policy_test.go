@@ -23,6 +23,26 @@ func TestCompactBudgetContext(t *testing.T) {
 	}
 }
 
+func TestCompactTimeoutText(t *testing.T) {
+	for _, c := range []struct {
+		budget time.Duration
+		want   string
+	}{
+		{200 * time.Millisecond, "200ms"},
+		{3 * time.Second, "3 秒"},
+		{30 * time.Minute, "30 分钟"},
+		{time.Hour - time.Second, "59 分钟"},
+		{time.Hour, "1 小时"},
+		{compactTimeout(64<<30, 0, 0, 3, 30*time.Minute), "54 小时 41 分钟"},
+		{compactTimeout(64<<30, 0, 0, 2, 20*time.Minute), "36 小时 29 分钟"},
+		{time.Duration(math.MaxInt64), "2562047 小时 47 分钟"},
+	} {
+		if got := qemuImgTimeoutText(c.budget); got != c.want {
+			t.Errorf("budget=%s got=%q want=%q", c.budget, got, c.want)
+		}
+	}
+}
+
 func TestCompactTimeout(t *testing.T) {
 	for _, c := range []struct {
 		name                             string

@@ -295,6 +295,9 @@ func TestCompactBudgetControlledTimeout(t *testing.T) {
 			if errs.CodeOf(err) != errs.Timeout || time.Since(start) > 5*time.Second {
 				t.Fatalf("timeout: %v", err)
 			}
+			if !strings.Contains(err.Error(), "3 秒没跑完") {
+				t.Fatalf("timeout budget is unreadable: %v", err)
+			}
 			if b, _ := os.ReadFile(path + ".ready"); string(b) != stage {
 				t.Fatal("timed out before helper started")
 			}
