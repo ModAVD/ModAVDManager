@@ -10,6 +10,7 @@ import * as A from './actions.js';
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
 const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
 const FPS = [[30, '30 Hz'], [60, '60 Hz']];
+const RESOLUTION = [[1080, '1080p'], [720, '720p']];
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MIN12 = '约 1⁠–⁠2 分钟';
 const CREATE_TIME = '一般要几分钟';
@@ -100,6 +101,7 @@ export function openCreate() {
       segRow('内存', 'memory', MEM, 6144),
       segRow('CPU', 'cpu', CPU, 6),
       segRow('帧率', 'fps', FPS, 60, hint('30 更省资源')),
+      segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
       inputRow('数据盘上限', h('span', { class: 'with-suffix' }, disk, h('span', { class: 'suffix', text: 'GB' })), diskHint, diskErr),
       inputRow('编号', idx, idxHint)), box),
     actions: { ok },
@@ -119,7 +121,7 @@ export function openCreate() {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
         const job = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
-          fps: Number(f.fps.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
+          fps: Number(f.fps.value), resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
         });
         A.onJob(job);
         S.watch.add(job.id);
@@ -151,7 +153,8 @@ export function openSettings(i, field) {
         inputRow('名称', title, hint(`不填就显示 ${inst0.name}`)),
         segRow('内存', 'memory', MEM, cfg.memory_mb),
         segRow('CPU', 'cpu', CPU, cfg.cpu),
-        segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源'))),
+        segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源')),
+        segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改'))),
       box,
       h('h3', { class: 'sec-title', text: '实例信息' }), kv),
     actions: { left: del, ok: save },
@@ -168,7 +171,7 @@ export function openSettings(i, field) {
     const f = ctl.form.elements;
     const out = {};
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
-    for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps']]) {
+    for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
       const v = f[k].value === '' ? null : Number(f[k].value);
       if (v != null && v !== cfg[key]) out[key] = v;
     }

@@ -61,7 +61,7 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	if !root.ValidIndex(i) || created.Title != "测试实例" || created.Status != StatusOffline || created.Running || created.PID != 0 {
 		t.Fatalf("created = %+v", created)
 	}
-	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Width: 1280, Height: 720, DPI: 240}
+	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Resolution: 1080, Width: 1920, Height: 1080, DPI: 280}
 	if created.Config != want {
 		t.Fatalf("config = %+v, want %+v", created.Config, want)
 	}
@@ -94,12 +94,12 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	mem, cpu, fps := 4096, 4, 30
-	up, err := m.Update(ctx, i, UpdateRequest{MemoryMB: &mem, CPU: &cpu, FPS: &fps})
+	mem, cpu, fps, resolution := 4096, 4, 30, 720
+	up, err := m.Update(ctx, i, UpdateRequest{MemoryMB: &mem, CPU: &cpu, FPS: &fps, Resolution: &resolution})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if up.AppliesNextBoot || up.Instance.Config.MemoryMB != 4096 || up.Instance.Config.CPU != 4 || up.Instance.Config.FPS != 30 {
+	if up.AppliesNextBoot || up.Instance.Config.MemoryMB != 4096 || up.Instance.Config.CPU != 4 || up.Instance.Config.FPS != 30 || up.Instance.Config.Resolution != 720 || up.Instance.Config.Width != 1280 || up.Instance.Config.DPI != 240 {
 		t.Fatalf("update = %+v", up)
 	}
 	if len(up.Applied) == 0 {

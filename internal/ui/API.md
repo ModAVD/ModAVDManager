@@ -35,8 +35,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`） |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?}` | `UpdateResult` |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`） |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?}` | `UpdateResult` |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
 | POST | `/api/instances/{i}/stop` | `{force?: bool}` | 202 `Job` |
@@ -45,7 +45,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：让开着的安卓把删掉的文件占的空间还给模拟器（电脑上的文件要整理后才变小）；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |
 | POST | `/api/instances/{i}/disk-compact` | `{}` | 202 `Job`（`kind` 是 `disk-compact`）：重写已关机实例的数据盘文件，只留在用的部分，要几分钟；实例没关机时任务失败，code 是 `busy`；结果是 `DiskCompactResult` |
 | POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |
-| POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是 1280×720 显示的像素）或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
+| POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是这台实例显示的像素（1280×720 或 1920×1080，竖屏时宽高对调））或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
 | GET | `/api/instances/{i}/screenshot` | | `image/png`（`adb exec-out screencap -p`），`Cache-Control: no-store`；没开机回 409 |
 | GET | `/api/instances/{i}/log?kind=emulator\|logcat&lines=300` | | `text/plain; charset=utf-8`，最新那份日志的末尾；没有回 404 |
 | GET | `/api/instances/{i}/proxy` | | `ProxyView`，见下 |
@@ -140,3 +140,7 @@ data: {}                    每 15 秒
   - Edge 进程在启动后 10 秒内就退出：当作把窗口交给了同一配置下已在运行的 Edge，不算关窗，之后按事件流规则判断。
   - 真正关窗后，5 秒内没有事件流连着就退出（有任务先等任务做完）。
   - `--dev` 不会因为空闲退出。
+
+`resolution` 只接受 1080 和 720。新建默认 1080，分别联动 1920×1080 / DPI 280 与 1280×720 / DPI 240；修改保留方向，下次开机生效。`InstanceInfo.config.resolution` 是按当前配置宽高识别的档位，运行中修改后表示下次开机的设置。
+
+画面点击按当前截图的尺寸换算并校验。运行中改档时，`config` 表示下次开机设置，当前画面和点击坐标在重启前保持原尺寸。
