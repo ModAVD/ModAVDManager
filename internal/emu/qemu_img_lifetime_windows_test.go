@@ -206,8 +206,11 @@ func TestQemuImgLifetimeResults(t *testing.T) {
 		})
 	}
 	t.Run("launch failure", func(t *testing.T) {
-		exe, err := m.Root.QemuImgExe()
-		if err != nil {
+		// This input is invalid from birth. Do not overwrite the executable used
+		// by earlier cases: Windows may still retain its image mapping after exit.
+		m := New(managerTestRoot(t, 1), nil)
+		exe := filepath.Join(m.Root.RuntimeSDK(), "emulator", "qemu-img.exe")
+		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(exe, []byte("invalid executable"), 0o600); err != nil {
