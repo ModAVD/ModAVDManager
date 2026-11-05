@@ -19,12 +19,22 @@ const unknownState = "unknown"
 // error details must instead say unknown when that could hide this instance. No lock is acquired or removed.
 // Replaced in tests that run creation without an emulator.
 var errorRunning = func(m *Manager, i int) string {
+	// Ports() falls back to the default plan on unreadable metadata. That is useful to best-effort lifecycle
+	// queries, but cannot prove a custom-port qemu is absent from this root.
+	meta, err := m.Root.ReadMetadata()
+	if err != nil {
+		return unknownState
+	}
+	plan, problem := root.PortPlanOf(meta.Obj())
+	if problem != "" {
+		return unknownState
+	}
 	procs, err := listQemuProcesses()
 	if err != nil {
 		return unknownState
 	}
 	running := "false"
-	console := m.Root.Ports().Console(i)
+	console := plan.Console(i)
 	for _, p := range procs {
 		if !isQemuName(p.Name) {
 			continue

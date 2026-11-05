@@ -220,6 +220,8 @@ func TestCreateConcurrentFailureDetails(t *testing.T) {
 
 func TestErrorObservationUnknown(t *testing.T) {
 	m, _ := opsTestManager(t)
+	snapshot := listQemuProcesses
+	t.Cleanup(func() { listQemuProcesses = snapshot })
 	for _, failure := range []error{errors.New("snapshot unavailable"), errs.New(errs.Unsupported, "unsupported snapshot")} {
 		calls := injectQemuSnapshotError(t, failure)
 		if got := errorRunning(m, 3); got != unknownState || *calls != 1 {
@@ -230,7 +232,14 @@ func TestErrorObservationUnknown(t *testing.T) {
 	if err := os.WriteFile(m.Root.MetadataPath(), []byte("invalid json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wantErrorDetails(t, m.withCreateErrorState(3, errs.New(errs.Internal, "original"), false), map[string]string{errs.InstanceExists: unknownState})
+	listQemuProcesses = func() ([]win.Process, error) { return nil, nil }
+	wantErrorDetails(t, m.withCreateErrorState(3, errs.New(errs.Internal, "original"), false), map[string]string{errs.InstanceExists: unknownState, errs.QemuRunning: unknownState})
+	if err := os.WriteFile(m.Root.MetadataPath(), []byte(`{"portBase":"invalid"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := errorRunning(m, 3); got != unknownState {
+		t.Fatalf("invalid port plan must not prove qemu absent: %s", got)
+	}
 }
 
 func TestBusyRunningDetails(t *testing.T) {
