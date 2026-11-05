@@ -527,6 +527,18 @@ func componentLine(c emu.ComponentStatus) string {
 
 func formatComponents(w io.Writer, data any) {
 	switch r := data.(type) {
+	case *ComponentsSourceResult:
+		label := r.Source
+		if label == "custom" {
+			label = "自定义：" + strings.Join(r.MirrorURLs, "、")
+		} else if label == "auto" {
+			label = "自动"
+		}
+		if r.Configured {
+			fmt.Fprintf(w, "组件下载源：%s（已保存）\n", label)
+		} else {
+			fmt.Fprintf(w, "组件下载源：%s（默认）\n", label)
+		}
 	case *ComponentsStatusResult:
 		fmt.Fprintf(w, "根目录：%s\n", r.Root)
 		for _, c := range r.Components {

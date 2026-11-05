@@ -268,3 +268,55 @@ func TestComponentsFetchQuestion(t *testing.T) {
 		t.Fatal("license not shown with --json")
 	}
 }
+
+func TestComponentsSourceCommand(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	res := h.run(t, nil, "--json", "components", "source")
+	if res.code != 0 {
+		t.Fatalf("initial source: %d %s", res.code, res.stderr)
+	}
+	data := envelope(t, res.stdout)["data"].(map[string]any)
+	if data["source"] != "auto" || data["configured"] != false {
+		t.Fatalf("initial data: %+v", data)
+	}
+	res = h.run(t, nil, "components", "source", "tencent")
+	if res.code != 0 || !strings.Contains(res.stdout, "tencent") {
+		t.Fatalf("set source: %d %q %q", res.code, res.stdout, res.stderr)
+	}
+	res = h.run(t, nil, "--json", "components", "source")
+	data = envelope(t, res.stdout)["data"].(map[string]any)
+	if data["source"] != "tencent" || data["mirror"] != "tencent" || data["configured"] != true {
+		t.Fatalf("saved data: %+v", data)
+	}
+	res = h.run(t, nil, "components", "source", "auto")
+	if res.code != 0 {
+		t.Fatalf("set auto: %d %q", res.code, res.stderr)
+	}
+}
+
+func TestComponentsFetchUsesSavedSource(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	var got components.Options
+	h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+		got = o
+		return &components.Result{}, nil
+	}
+	h.stdin = "3\n"
+	if res := h.run(t, nil, "--quiet", "components", "fetch"); res.code != 0 {
+		t.Fatalf("first fetch: %d %q", res.code, res.stderr)
+	}
+	if got.Mirror != "tencent" || len(got.MirrorURLs) != 0 {
+		t.Fatalf("selected source: mirror=%q urls=%v", got.Mirror, got.MirrorURLs)
+	}
+	// The saved setting is reused without consuming another answer.
+	h.stdin = ""
+	if res := h.run(t, nil, "--quiet", "components", "fetch"); res.code != 0 {
+		t.Fatalf("saved fetch: %d %q", res.code, res.stderr)
+	}
+	if got.Mirror != "tencent" {
+		t.Fatalf("saved source: %q", got.Mirror)
+	}
+}
