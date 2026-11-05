@@ -86,7 +86,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 `trim` 的 GUI 任务完成、MCP 成功返回和开机后自动回收日志都只表示触发请求已返回。
 自动回收日志里的秒数是 adb/su 命令往返耗时。客体是否完成或失败，需要另看客体信号，
-不能用暂时稳定的 discard 计数判定。复跑方法和正式包实测见[trim 时机测量](docs/trim-completion.md)。
+不能用暂时稳定的 discard 计数判定。
 
 **arm64 执行桥**：
 

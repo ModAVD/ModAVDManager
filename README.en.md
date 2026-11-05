@@ -166,7 +166,6 @@ It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 
 `disk <i> trim`, the GUI trim job, and `trim_disk` return after requesting asynchronous guest maintenance.
 Success does not confirm that guest FITRIM finished or succeeded. The automatic trim log measures only the
 adb/su command round trip. Stable discard counters alone cannot establish completion.
-See the [measurement procedure and package results](docs/trim-completion.md).
 
 To register it in Claude Code (in PowerShell, `--` needs quotes, or it gets swallowed):
 

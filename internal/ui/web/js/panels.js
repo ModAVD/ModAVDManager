@@ -254,7 +254,7 @@ function updateJob(r, j) {
   const running = j.state === 'running';
   const t0 = parseTime(j.created_at);
   const took = t0 && ((parseTime(j.finished_at) || Date.now()) - t0) / 1000;
-  setText(r.meta, clock(j.created_at) + (took ? ` · ${j.kind === 'disk-trim' ? '触发请求用时' : running ? '已进行' : '用时'} ${dur(took)}` : ''));
+  setText(r.meta, clock(j.created_at) + (took ? ` · ${running ? '已进行' : j.kind === 'disk-trim' ? '触发请求用时' : '用时'} ${dur(took)}` : ''));
   setText(r.pill, j.kind === 'disk-trim' && j.state === 'done' ? '已触发' : STATE[j.state] || j.state);
   attr(r.pill, 'class', 'pill tone-' + (STATE_TONE[j.state] || 'idle'));
 
