@@ -331,11 +331,11 @@ func (m *Manager) watchStartLock(i int) (*win.FileLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 	}
 	if !free {
-		return nil, errs.Newf(errs.Busy, "实例 %d 正由另一次启动开机或做开机后设置", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正由另一次启动开机或做开机后设置", i), map[string]string{errs.Reason: "locked", errs.Lock: "start"})
 	}
 	if m.stopping(i) {
 		l.Unlock()
-		return nil, errs.Newf(errs.Busy, "实例 %d 正在关机", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正在关机", i), map[string]string{errs.Reason: "locked", errs.Lock: "stop"})
 	}
 	return l, nil
 }

@@ -486,6 +486,9 @@ func TestMetadataLock(t *testing.T) {
 	defer func() { metadataLockWait = old }()
 	err = r.UpdateMetadata(func(o *jsonord.Obj) error { return nil })
 	wantCode(t, err, errs.Busy)
+	if got := errs.DetailsOf(err); got[errs.Reason] != "locked" || got[errs.Lock] != "metadata" {
+		t.Errorf("details: %v", got)
+	}
 	held.unlock()
 	if err := r.UpdateMetadata(func(o *jsonord.Obj) error { return nil }); err != nil {
 		t.Fatalf("after unlock: %v", err)

@@ -20,7 +20,7 @@ import (
 // TestDiskCompactIntegration runs compact end to end against a real qemu-img -- the path the fake-manager unit tests
 // cannot reach, and the one the `-T none` bug failed on for every real qcow2 overlay (ModAVD/ModAVD#2 P1-1). It is
 // skipped unless MODAVD_TEST_SDK_ROOT points at an SDK whose emulator\qemu-img.exe exists, so CI without an SDK just
-// skips it. Run it with, e.g., MODAVD_TEST_SDK_ROOT=E:\aosp\sdk-mas37.
+// skips it. Run it with MODAVD_TEST_SDK_ROOT set to such an SDK directory, e.g. MODAVD_TEST_SDK_ROOT=<SDK 目录>.
 func TestDiskCompactIntegration(t *testing.T) {
 	t.Run("EmptyBacking", func(t *testing.T) {
 		testDiskCompactIntegration(t, false)

@@ -43,11 +43,30 @@
 // root.Resolve(--root), looked up only by commands that need it, after their arguments were checked.
 //
 // Output. With --json, stdout carries exactly one line, {"ok":true,"data":<result>} or
-// {"ok":false,"error":{"code","message","advice"}} (advice omitted when empty), and stderr carries NDJSON logs
+// {"ok":false,"error":{"code","message","advice","details"}} (advice/details omitted when empty), and stderr carries NDJSON logs
 // (logx.JSONSink). Without --json, stdout gets a Chinese summary, errors go to stderr as "错误：…" / "建议：…" lines
 // and logs go to stderr as text (logx.TextSink). Log level Info; --quiet Warn; --verbose Debug (and the cause of an
 // error). adb and mcp never print an envelope (their stdout belongs to adb / the protocol): their errors go to
 // stderr only.
+//
+// error.details is optional, with string values only. These additions do not change code/message or Protocol 2.
+// busy reasons: running, locked, starting (stop before qemu exists), stopping (start awaiting shutdown),
+// window_mismatch, port_in_use, port_other_root. locked also has lock: start, stop, boot, bridge, create, guest,
+// disk (compact or a shared disk probe), metadata (mas-avd.json), config (per-instance config/metadata writes).
+// Other busy errors may omit reason. Clients must tolerate missing/unknown keys and values.
+// A failed boot wait or after-boot setup adds instance_status and qemu_running. qemu_running is "true", "false" or
+// "unknown"; instance_status is a known lifecycle status, "not_found" or "unknown". The failed boot wait knows
+// "starting"; later setup may restart Android, so its boot state can be unknown. The process observation is shared
+// with the diagnostic decision, before its optional collection (up to 30 s); it is a snapshot, not a liveness lease.
+// Create errors add instance_exists ("true" / "false" / "unknown"), instance_status and qemu_running after cleanup.
+// instance_exists counts any instance files or metadata now occupying the index, even incomplete or pre-existing;
+// it does NOT prove ownership by this call and never authorizes deleting an already_exists/busy instance.
+// Before an index is selected, or when a fact cannot be observed, it is "unknown", never a guessed false.
+// Creating/failing metadata overrides the boot state. An own create is observed while its lock is still held but
+// reports the state after that lock's imminent release; another creator's state can be unknown without probing it.
+// boot_diag_dir, when collected, survives wrappers and the final create state replacing an inner start's state.
+// The manager HTTP responses and failed jobs carry these same details. MCP isError text appends one JSON line,
+// "error.details: {...}", while retaining its message/advice, error code and diagnostic-directory lines.
 //
 // Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument / license declined, 3 not found, 4 not
 // ready / precheck failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8

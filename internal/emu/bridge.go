@@ -603,7 +603,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i), map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}
