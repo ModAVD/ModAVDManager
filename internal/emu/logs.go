@@ -319,7 +319,7 @@ func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 	// Wait for the helper to hold the output before reporting it. Its per-instance lock also covers the interval
 	// before adb appears in the process table, including starts from another manager process.
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		if clients, err := m.findOwnedLogcatProcesses(serial); err == nil && len(clients) > 0 {
 			if path := openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt"); path != "" {
 				m.Log.Infof("实例 %d 客体日志 → %s", i, path)
 				return path
@@ -329,6 +329,10 @@ func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		m.warnExternalCapture(i, m.diagnosticPolicy(i))
+		return ""
 	}
 	m.Log.Warnf("实例 %d 客体日志采集没有就绪", i)
 	return ""

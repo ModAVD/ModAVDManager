@@ -95,6 +95,41 @@ func TestExternalCaptureBlocksEnsureAndDiagnosticUpdateImmediately(t *testing.T)
 	}
 }
 
+func TestOwnedReplacementDuringProcessSnapshotIsNotExternal(t *testing.T) {
+	m, _, _ := liveDiagnosticCapture(t)
+	previous, err := m.readCaptureState(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := logcatListProcesses
+	var delayed atomic.Bool
+	logcatListProcesses = func() ([]win.Process, error) {
+		if delayed.CompareAndSwap(false, true) {
+			deadline := time.Now().Add(4 * time.Second)
+			for {
+				current, err := m.readCaptureState(6)
+				if err == nil && current.Enabled && current.ClientPID != previous.ClientPID {
+					break
+				}
+				if time.Now().After(deadline) {
+					return nil, errors.New("owned helper did not publish its replacement")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		return saved()
+	}
+	t.Cleanup(func() { logcatListProcesses = saved })
+	enabled := true
+	result, err := m.Update(context.Background(), 6, UpdateRequest{Diagnostics: &enabled})
+	if err != nil || len(result.Warnings) != 0 {
+		t.Fatalf("owned replacement reported as external: %+v/%v", result, err)
+	}
+	if !delayed.Load() {
+		t.Fatal("replacement barrier was not exercised")
+	}
+}
+
 func TestLogcatChecksAgainImmediatelyBeforeAdbStart(t *testing.T) {
 	m, _, _ := reviewCaptureFixture(t)
 	if err := m.logcatStartGuard(6); err != nil {

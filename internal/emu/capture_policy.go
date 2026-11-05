@@ -58,46 +58,54 @@ func (m *Manager) writeCaptureState(i int, state captureState) error {
 	return os.Rename(tmp, path)
 }
 
-func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
+func (m *Manager) ownsCaptureHelper(i int, state captureState) bool {
 	helper := win.Process{PID: state.HelperPID, Created: state.HelperCreated}
-	client := win.Process{PID: state.ClientPID, Created: state.ClientCreated}
-	if helper.PID == 0 || helper.Created == 0 || client.PID == 0 || client.Created == 0 || !helper.Alive() || !client.Alive() {
-		return win.Process{}, false
+	if helper.PID == 0 || helper.Created == 0 || !helper.Alive() {
+		return false
 	}
 	image, err := helper.ImagePath()
 	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Join(m.Root.Dir, "tools", "modavd.exe")) {
-		return win.Process{}, false
+		return false
 	}
 	args, err := helper.CommandLine()
 	if err != nil || (len(args) != 6 && len(args) != 7) || args[1] != LogcatCaptureArg ||
 		!strings.EqualFold(filepath.Clean(args[2]), m.Root.Dir) || args[3] != strconv.Itoa(i) ||
 		args[4] != strconv.FormatUint(uint64(state.QemuPID), 10) || args[5] != strconv.FormatUint(state.QemuCreated, 10) {
-		return win.Process{}, false
+		return false
 	}
 	if len(args) == 7 {
 		target, err := captureRuntimeFromToken(m.Root, args[6])
 		if err != nil {
-			return win.Process{}, false
+			return false
 		}
 		given, _ := target.RuntimeConfig()
 		current, err := m.Root.SnapshotRuntime()
 		if err != nil {
-			return win.Process{}, false
+			return false
 		}
 		want, _ := current.RuntimeConfig()
 		if given != want {
-			return win.Process{}, false
+			return false
 		}
+	}
+	return true
+}
+
+func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
+	helper := win.Process{PID: state.HelperPID, Created: state.HelperCreated}
+	client := win.Process{PID: state.ClientPID, Created: state.ClientCreated}
+	if !m.ownsCaptureHelper(i, state) || client.PID == 0 || client.Created == 0 || !client.Alive() {
+		return win.Process{}, false
 	}
 	p, found := win.FindProcess(client.PID)
 	if !found || p.Created != client.Created || p.PPID != helper.PID {
 		return win.Process{}, false
 	}
-	image, err = client.ImagePath()
+	image, err := client.ImagePath()
 	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
 		return win.Process{}, false
 	}
-	args, err = client.CommandLine()
+	args, err := client.CommandLine()
 	if err != nil || !logcatCmdlineMatches(args, strconv.Itoa(m.Root.AdbServerPort()), m.Root.Ports().Serial(i)) {
 		return win.Process{}, false
 	}
@@ -107,6 +115,29 @@ func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
 		}
 	}
 	return p, true
+}
+
+// A new owned adb child may appear just before its state file is published. Its validated helper parent proves
+// this is a transition to wait for, not an external capture. This weaker readiness fact never permits killing it.
+func (m *Manager) pendingOwnedCapture(i int, client win.Process) bool {
+	image, err := client.ImagePath()
+	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+		return false
+	}
+	helper, ok := win.FindProcess(client.PPID)
+	if !ok {
+		return false
+	}
+	args, err := helper.CommandLine()
+	if err != nil || (len(args) != 6 && len(args) != 7) {
+		return false
+	}
+	qpid, pidErr := strconv.ParseUint(args[4], 10, 32)
+	qcreated, createdErr := strconv.ParseUint(args[5], 10, 64)
+	if pidErr != nil || createdErr != nil || qpid == 0 || qcreated == 0 {
+		return false
+	}
+	return m.ownsCaptureHelper(i, captureState{HelperPID: helper.PID, HelperCreated: helper.Created, QemuPID: uint32(qpid), QemuCreated: qcreated})
 }
 
 func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error) {
@@ -151,8 +182,26 @@ func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeo
 		}
 		clients, scanErr := m.findLogcatProcesses(m.Root.Ports().Serial(i))
 		if scanErr == nil && len(clients) > 0 {
+			// The helper can replace its client while the process snapshot is being read. Classify against its
+			// latest published state, not the previous generation read before the snapshot.
+			if latest, readErr := m.readCaptureState(i); readErr == nil {
+				state = latest
+			}
 			owned, ours := m.ownedCapture(i, state)
+			helperOurs := m.ownsCaptureHelper(i, state)
 			for _, client := range clients {
+				if !client.Alive() {
+					continue
+				}
+				if helperOurs && client.PPID == state.HelperPID {
+					image, err := client.ImagePath()
+					if err == nil && strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+						continue
+					}
+				}
+				if m.pendingOwnedCapture(i, client) {
+					continue
+				}
 				if !ours || client.PID != owned.PID || client.Created != owned.Created {
 					m.warnExternalCapture(i, policy)
 					return nil
