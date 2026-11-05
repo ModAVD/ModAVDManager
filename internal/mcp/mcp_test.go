@@ -1567,6 +1567,11 @@ func TestToolDefinitions(t *testing.T) {
 		}
 	}
 	del := byName["delete_instance"]["inputSchema"].(map[string]any)
+	trimDescription := byName["trim_disk"]["description"].(string)
+	if !strings.Contains(trimDescription, "not that guest FITRIM finished or succeeded") ||
+		!strings.Contains(trimDescription, "timeout bounds only the request") {
+		t.Fatalf("trim contract must distinguish the request from guest completion: %s", trimDescription)
+	}
 	if !reflect.DeepEqual(del["required"], []any{"index", "confirm"}) {
 		t.Fatalf("delete required %v", del["required"])
 	}

@@ -41,7 +41,7 @@ function notify(job) {
   else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
   // the sizes are the answer, so they stay long enough to read
   else if (job.kind === 'disk-info') toast({ tone: 'info', title: `${who}的磁盘占用`, text: diskInfoText(r), timeout: 9000 });
-  else if (job.kind === 'disk-trim') toast({ title: `${who}已回收磁盘空间`, text: diskTrimText(), timeout: 6000 });
+  else if (job.kind === 'disk-trim') toast({ title: `${who}已触发磁盘回收`, text: diskTrimText(), timeout: 6000 });
   else if (job.kind === 'disk-compact') toast({ title: r.skipped ? `${who}已跳过磁盘重写` : `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
 }
 

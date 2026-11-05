@@ -163,6 +163,10 @@ modavd mcp --root D:\ModAVD
 
 It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 2025-06-18 (`initialize` handshake). The root folder is fixed at startup and is not a tool parameter. Tools: `list_instances`, `get_instance`, `check_host`, `create_instance`, `update_instance`, `delete_instance`, `start_instance` (with progress), `stop_instance`, `set_window_visible`, `shell`, `install_apk`, `disk_info` (data disk size), `trim_disk` (reclaim space while running; the emulator must support discard), `compact_disk` (shrink the data disk; the instance must be stopped), `get_app_proxy`, `set_app_proxy` (per-app proxy).
 
+`disk <i> trim`, the GUI trim job, and `trim_disk` return after requesting asynchronous guest maintenance.
+Success does not confirm that guest FITRIM finished or succeeded. The automatic trim log measures only the
+adb/su command round trip. Stable discard counters alone cannot establish completion.
+
 To register it in Claude Code (in PowerShell, `--` needs quotes, or it gets swallowed):
 
 ```powershell

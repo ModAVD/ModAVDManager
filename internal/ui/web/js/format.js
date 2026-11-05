@@ -69,7 +69,7 @@ export function diskInfoText(r) {
 }
 
 export function diskTrimText() {
-  return '已让安卓把删掉的文件占的空间还回来；电脑上的磁盘文件要关机后用「整理磁盘」才会变小。';
+  return '不等待安卓回收完成；电脑上的磁盘文件要关机后用「整理磁盘」才会变小。';
 }
 
 export function diskCompactText(r) {
