@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
@@ -544,9 +546,10 @@ func truthy(v *jsonord.Value) bool {
 
 // processUse is a process that uses this root's sdk\emulator or runs one of its two programs.
 type processUse struct {
-	PID     uint32
-	Name    string
-	Unknown bool // its path could not be read; matched by name
+	PID            uint32
+	Name           string
+	Unknown        bool // its path could not be read; matched by name
+	ShutdownHelper bool // verified root executable and complete shutdown-helper argv
 }
 
 // emulatorNames are the image names that count as the emulator's when a process's path cannot be read (another
@@ -584,7 +587,7 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 			name := strings.ToLower(p.Name)
 			for _, n := range emulatorNames {
 				if strings.HasPrefix(name, n) {
-					out = append(out, processUse{p.PID, p.Name, true})
+					out = append(out, processUse{PID: p.PID, Name: p.Name, Unknown: true})
 					break
 				}
 			}
@@ -598,7 +601,9 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 			}
 		}
 		if hit {
-			out = append(out, processUse{PID: p.PID, Name: p.Name})
+			args, err := p.CommandLine()
+			out = append(out, processUse{PID: p.PID, Name: p.Name,
+				ShutdownHelper: err == nil && u.shutdownHelper(path, args)})
 		}
 	}
 	return out, nil
@@ -619,12 +624,59 @@ func realOrSame(p string) string {
 }
 
 func (u *Updater) ensureNotInUse(verb string) error {
-	uses, err := u.processesUsing(true)
-	if err != nil {
-		return errs.Wrap(errs.Internal, err, "查不了有没有程序在用模拟器文件，什么都没动: "+err.Error())
+	return waitUntilUnused(verb, u.processesUsing, time.Now, time.Sleep)
+}
+
+// shutdownHelper recognizes only the two short-lived helpers whose executable belongs to this root.
+// A name alone, unreadable argv, a different bootwatch root, or additional arguments never grants a wait.
+func (u *Updater) shutdownHelper(image string, args []string) bool {
+	same := func(a, b string) bool { return strings.EqualFold(realOrSame(a), realOrSame(b)) }
+	positive := func(s string, bits int) bool {
+		n, err := strconv.ParseUint(s, 10, bits)
+		return err == nil && n > 0
 	}
-	if len(uses) == 0 {
-		return nil
+	if same(image, filepath.Join(u.l.emulator(), "emulator.exe")) {
+		return len(args) == 5 && args[1] == "-kill" && positive(args[2], 32) &&
+			args[3] == "-sleep" && positive(args[4], 32)
+	}
+	if !same(image, u.l.at("tools/modavd.exe")) && !same(image, u.l.at("ModAVD.exe")) {
+		return false
+	}
+	if len(args) != 6 || args[1] != "__bootwatch" || !filepath.IsAbs(args[2]) || !same(args[2], u.l.root) {
+		return false
+	}
+	i, err := strconv.Atoi(args[3])
+	return err == nil && root.ValidIndex(i) && positive(args[4], 32) && positive(args[5], 64)
+}
+
+const shutdownHelperWait = 30 * time.Second
+
+// Keep scanning the entire root: helpers are never ignored, and any other use blocks immediately.
+// One deadline covers all helpers, including helpers first seen on a later scan.
+func waitUntilUnused(verb string, scan func(bool) ([]processUse, error), now func() time.Time, sleep func(time.Duration)) error {
+	deadline := now().Add(shutdownHelperWait)
+	var uses []processUse
+	for {
+		var err error
+		uses, err = scan(true)
+		if err != nil {
+			return errs.Wrap(errs.Internal, err, "查不了有没有程序在用模拟器文件，什么都没动: "+err.Error())
+		}
+		if len(uses) == 0 {
+			return nil
+		}
+		helperOnly := true
+		for _, p := range uses {
+			if !p.ShutdownHelper || p.Unknown {
+				helperOnly = false
+				break
+			}
+		}
+		left := deadline.Sub(now())
+		if !helperOnly || left <= 0 {
+			break
+		}
+		sleep(min(250*time.Millisecond, left))
 	}
 	var parts []string
 	for _, p := range uses {
