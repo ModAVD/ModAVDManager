@@ -17,6 +17,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -175,10 +176,10 @@ func TestCreateFailureExistingAndMissing(t *testing.T) {
 	if err := avd.Delete(m.Root, i); err != nil {
 		t.Fatal(err)
 	}
-	// Incomplete files and metadata still occupy the index, even though status cannot find a usable instance.
+	// Incomplete files still occupy the index; a lossy NotFound cannot prove whether the rest are missing or unreadable.
 	writeTestFile(t, avd.IniPath(m.Root, i), "leftover")
 	_, err = m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true})
-	wantErrorDetails(t, err, map[string]string{errs.InstanceExists: "true", errs.InstanceStatus: "not_found"})
+	wantErrorDetails(t, err, map[string]string{errs.InstanceExists: "true", errs.InstanceStatus: unknownState})
 	if err := os.Remove(avd.IniPath(m.Root, i)); err != nil {
 		t.Fatal(err)
 	}
@@ -305,5 +306,36 @@ func TestCreateRecordedStateAfterUnlock(t *testing.T) {
 	held.Unlock()
 	if state, _, _ := m.creation(i); state != creationFailed {
 		t.Fatalf("after releasing own lock: %s", state)
+	}
+}
+
+// avd.Get drops a failed config.ini Stat and returns NotFound. Existing files or metadata mean that result cannot
+// prove absence. Inject exactly that lossy boundary result without depending on the host's ACL behavior.
+func TestCreateFileObservationUnknown(t *testing.T) {
+	m, _ := opsTestManager(t)
+	i := 3
+	if _, err := m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	savedInstance, savedRunning := errorInstanceForState, errorRunning
+	t.Cleanup(func() { errorInstanceForState, errorRunning = savedInstance, savedRunning })
+	errorRunning = func(*Manager, int) string { return "false" }
+	queries := 0
+	errorInstanceForState = func(*root.Root, int) (*avd.Instance, error) {
+		queries++
+		return nil, errs.New(errs.NotFound, "instance lookup lost the config.ini attribute error")
+	}
+	original := errs.New(errs.InvalidArgument, "original create error").WithAdvice("original advice")
+	observed := m.withCreateErrorState(i, original, false)
+	wantErrorDetails(t, observed, map[string]string{errs.InstanceExists: "true", errs.InstanceStatus: unknownState, errs.QemuRunning: "false"})
+	if queries != 1 || errs.CodeOf(observed) != original.Code || errs.As(observed).Message != original.Message || errs.As(observed).Advice != original.Advice || original.Details != nil {
+		t.Fatalf("observation changed the original error: %v, queries %d", observed, queries)
+	}
+	if err := avd.Delete(m.Root, i); err != nil {
+		t.Fatal(err)
+	}
+	wantErrorDetails(t, m.withCreateErrorState(i, original, false), map[string]string{errs.InstanceExists: "false", errs.InstanceStatus: "not_found", errs.QemuRunning: "false"})
+	if queries != 1 {
+		t.Fatalf("absence was already established without an instance lookup, queries %d", queries)
 	}
 }

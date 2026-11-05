@@ -15,6 +15,9 @@ import (
 
 const unknownState = "unknown"
 
+// Replaced only by error-observation tests, to model avd.Get's lossy NotFound after a file attribute read fails.
+var errorInstanceForState = avd.Get
+
 // errorRunning takes one read-only process snapshot. Lifecycle scans deliberately tolerate unreadable processes;
 // error details must instead say unknown when that could hide this instance. No lock is acquired or removed.
 // Replaced in tests that run creation without an emulator.
@@ -109,9 +112,9 @@ func (m *Manager) withCreateErrorState(i int, err error, ownCreation bool) error
 	case exists == "false":
 		details[errs.InstanceStatus] = "not_found"
 	case exists == "true":
-		if _, ierr := avd.Get(m.Root, i); errs.CodeOf(ierr) == errs.NotFound {
-			details[errs.InstanceStatus] = "not_found" // incomplete files / metadata, not a usable instance
-		} else if ierr == nil && running == "false" {
+		// Get's NotFound also covers a config.ini attribute read failure. With files/metadata present it cannot
+		// distinguish incomplete files from an unreadable instance, so keep unknown rather than claim absence.
+		if _, ierr := errorInstanceForState(m.Root, i); ierr == nil && running == "false" {
 			details[errs.InstanceStatus] = string(StatusOffline)
 		}
 	}
