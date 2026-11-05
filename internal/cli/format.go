@@ -294,7 +294,7 @@ func formatCreate(w io.Writer, in *emu.InstanceInfo) {
 }
 
 // appliedOrder is the order changes are listed in; unknown keys follow alphabetically.
-var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "data_partition_gb"}
+var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "resolution", "data_partition_gb"}
 
 func appliedParts(applied map[string]any) []string {
 	keys := make([]string, 0, len(applied))
@@ -332,6 +332,8 @@ func appliedParts(applied map[string]any) []string {
 			parts = append(parts, fmt.Sprintf("核数 %v", v))
 		case "fps":
 			parts = append(parts, fmt.Sprintf("帧率 %v", v))
+		case "resolution":
+			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
 		case "data_partition_gb":
 			parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
 		default:

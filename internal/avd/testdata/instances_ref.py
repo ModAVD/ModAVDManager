@@ -2,8 +2,8 @@
 # app/utils/common/emulator2/avd/instances.py (and the parts of constants.py, components.py and manager.py it uses)
 # so it runs without the app package. Keep it a copy: when AUTO-MAS changes, copy again.
 #
-# The only change: create_instance_files takes created_at instead of calling datetime.now(), so the output can be
-# compared byte for byte.
+# Intentional differences: created_at is injected for byte comparisons. ModAVD#100
+# defaults new instances to 1080p and preserves either preset on existing instances.
 #
 #   python -I instances_ref.py <job.json> <out.json>
 #
@@ -35,7 +35,7 @@ DEFAULT_MEMORY_MB = 6144
 DEFAULT_CPU = 6
 DEFAULT_DATA_PARTITION_GB = 64
 DATA_PARTITION_RANGE_GB = (16, 512)
-SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1280, 720, 240
+SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1920, 1080, 280
 FPS_CHOICES = (30, 60)
 DEFAULT_FPS = 60
 
@@ -283,14 +283,17 @@ def remove_instance_meta(root, native_index):
 def display_changes(config):
     width = _int_or_none(config.get("hw.lcd.width")) or 0
     height = _int_or_none(config.get("hw.lcd.height")) or 0
-    if height > width:
-        width, height = SCREEN_HEIGHT, SCREEN_WIDTH
+    portrait = height > width
+    if sorted((width, height)) == [1080, 1920]:
+        width, height, density = 1920, 1080, 280
     else:
-        width, height = SCREEN_WIDTH, SCREEN_HEIGHT
+        width, height, density = 1280, 720, 240
+    if portrait:
+        width, height = height, width
     return {
         "hw.lcd.width": str(width),
         "hw.lcd.height": str(height),
-        "hw.lcd.density": str(SCREEN_DENSITY),
+        "hw.lcd.density": str(density),
         "hw.mainKeys": "yes",
     }
 

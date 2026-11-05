@@ -106,7 +106,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 }
 
 // launchPlanFor is the rest of prepareLaunch, once the checks passed: the instance's ports in the root's plan (free?),
-// the private adb server, the fixed 720p display, old logs, the log file name, the emulator's arguments.
+// the private adb server, the selected display preset, old logs, the log file name, the emulator's arguments.
 func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryMB int, window bool) (*launchPlan, error) {
 	i := inst.Index
 	port := m.Root.Ports().Console(i)
@@ -139,7 +139,7 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %d 写显示设置（config.ini）失败: %v", i, err))
 	}
 	if wrote {
-		m.Log.Infof("实例 %d 显示改回 720p、不显示导航栏（已写入 config.ini）", i)
+		m.Log.Infof("实例 %d 显示设为 %dp、不显示导航栏（已写入 config.ini）", i, inst.Resolution())
 	}
 
 	headless := !window
@@ -156,8 +156,8 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	if n, ok := inst.CPU(); ok {
 		cpu = strconv.Itoa(n)
 	}
-	m.Log.Infof("启动魔改 AVD 实例 %d（%s，720p %d Hz，%d MB / %s 核，气球开，不带声卡，ANDROID_EMU_VK_HIDE_REBAR=1）: emulator %s",
-		i, mode, inst.FPS(), memoryMB, cpu, strings.Join(args, " "))
+	m.Log.Infof("启动魔改 AVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，气球开，不带声卡，ANDROID_EMU_VK_HIDE_REBAR=1）: emulator %s",
+		i, mode, inst.Resolution(), inst.FPS(), memoryMB, cpu, strings.Join(args, " "))
 	return &launchPlan{args: args, logPath: logPath, memoryMB: memoryMB}, nil
 }
 

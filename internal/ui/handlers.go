@@ -56,12 +56,13 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		CPU             *int    `json:"cpu"`
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		FPS             *int    `json:"fps"`
+		Resolution      *int    `json:"resolution"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	req := emu.CreateRequest{Index: body.Index, MemoryMB: body.MemoryMB, CPU: body.CPU,
-		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS}
+		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution}
 	if body.Title != nil {
 		req.Title = *body.Title
 	}
@@ -114,17 +115,18 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		MemoryMB        *int    `json:"memory_mb"`
 		CPU             *int    `json:"cpu"`
 		FPS             *int    `json:"fps"`
+		Resolution      *int    `json:"resolution"`
 		DataPartitionGB *int    `json:"data_partition_gb"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.DataPartitionGB == nil {
-		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、data_partition_gb 中的一项"))
+	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil {
+		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb 中的一项"))
 		return
 	}
 	res, err := s.mgr.Update(detached(r), i, emu.UpdateRequest{Title: body.Title, MemoryMB: body.MemoryMB, CPU: body.CPU,
-		FPS: body.FPS, DataPartitionGB: body.DataPartitionGB})
+		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB})
 	if err != nil {
 		writeError(w, err)
 		return

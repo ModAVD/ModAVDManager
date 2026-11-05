@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"math"
 	"net/http"
 	"strconv"
@@ -23,8 +24,6 @@ const (
 	// statusMaxAge: how old a polled instance list may be to decide "not booted" without asking adb.
 	statusMaxAge = 10 * time.Second
 	inputTimeout = 10 * time.Second
-	// The display the page's coordinates refer to when the instance config does not say (API.md: 1280x720).
-	defaultWidth, defaultHeight = 1280, 720
 )
 
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
@@ -227,21 +226,30 @@ func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if !in.Booted {
+		writeError(w, notBooted(i))
+		return
+	}
 	if body.Type == "tap" {
-		wd, ht := in.Config.Width, in.Config.Height
-		if wd <= 0 || ht <= 0 {
-			wd, ht = defaultWidth, defaultHeight
+		// Config describes the next boot. A running guest may still use the previous
+		// preset, so validate against its screenshot, shared with the viewer cache.
+		data, err := s.screenshot(r.Context(), i)
+		if err != nil {
+			writeError(w, err)
+			return
 		}
+		display, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			writeError(w, errs.New(errs.Internal, "截图的显示尺寸读不出"))
+			return
+		}
+		wd, ht := display.Width, display.Height
 		x, y := *body.X, *body.Y
 		if math.IsNaN(x) || math.IsNaN(y) || x < 0 || y < 0 || x >= float64(wd) || y >= float64(ht) {
 			writeError(w, errs.Newf(errs.InvalidArgument, "点击位置 (%g, %g) 不在 %d×%d 的画面里", x, y, wd, ht))
 			return
 		}
 		command = fmt.Sprintf("input tap %d %d", int(x), int(y))
-	}
-	if !in.Booted {
-		writeError(w, notBooted(i))
-		return
 	}
 	res, err := s.mgr.Shell(detached(r), i, command, inputTimeout)
 	if err != nil {
