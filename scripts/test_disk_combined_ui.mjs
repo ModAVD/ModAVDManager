@@ -24,7 +24,7 @@ test('trim, fallback info, growth and skipped notifications coexist', async () =
   const trim = send('trim', 'disk-trim', { discard_max_bytes: 2 ** 30 });
   assert.match(trim.title, /已触发/);
   assert.doesNotMatch(trim.title, /已回收|已完成/);
-  assert.match(trim.text, /未确认.*回收完成/);
+  assert.match(trim.text, /不等待安卓回收完成/);
   const info = send('info', 'disk-info', { logical_bytes: 64 * 2 ** 20, warnings: ['正在整理磁盘'] });
   assert.match(info.text, /正在整理磁盘/);
   assert.doesNotMatch(info.text, /宿主占用|开机时/);
@@ -48,10 +48,14 @@ test('activity keeps trim request timing and compact cancellation distinct', asy
   vm.runInNewContext(moduleBody(await read('panels.js')) + '\nglobalThis.render = updateJob;', scope);
   const r = row();
   const common = { id: 'one', index: 2, created_at: '2026-11-05T00:00:00Z', finished_at: '2026-11-05T00:00:02Z' };
+  scope.render(r, { ...common, kind: 'disk-trim', state: 'running', finished_at: undefined });
+  assert.equal(r.pill.text, '进行中');
+  assert.match(r.meta.text, /已进行/);
+  assert.doesNotMatch(r.meta.text, /触发请求用时/);
   scope.render(r, { ...common, kind: 'disk-trim', state: 'done', result: {} });
   assert.equal(r.pill.text, '已触发');
   assert.match(r.meta.text, /触发请求用时/);
-  assert.match(r.res.text, /未确认.*回收完成/);
+  assert.match(r.res.text, /不等待安卓回收完成/);
   scope.render(r, { ...common, kind: 'disk-compact', state: 'running', progress: { done: 1, total: 10 } });
   assert.equal(r.acts.hidden, false);
   assert.equal(r.cancel.text, '取消整理');
