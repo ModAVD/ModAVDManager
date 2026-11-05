@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -177,6 +178,42 @@ func TestCancelJob(t *testing.T) {
 	expectError(t, h.do("POST", "/api/jobs/j77/cancel", nil), 404, errs.NotFound)
 	expectError(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", nil, withHeader("Origin", "http://evil.example")),
 		http.StatusForbidden, "forbidden")
+}
+
+func TestStopCancelCreateOption(t *testing.T) {
+	for _, body := range []string{`{}`, `{"force":true}`, `{"cancel_create":true}`} {
+		t.Run(body, func(t *testing.T) {
+			h := newHarness(t, nil)
+			var j jobView
+			expect(t, h.do("POST", "/api/instances/3/stop", body), http.StatusAccepted, &j)
+			h.waitJob(j.ID, stateIs(stateDone))
+			h.f.mu.Lock()
+			opt := h.f.stops[0]
+			h.f.mu.Unlock()
+			if opt.CancelCreate != (body == `{"cancel_create":true}`) || opt.Force != (body == `{"force":true}`) {
+				t.Fatalf("stop options %+v", opt)
+			}
+		})
+	}
+}
+
+func TestCancelCreateJob(t *testing.T) {
+	h := newHarness(t, nil)
+	j, err := h.s.startJob(kindCreate, 3, func(ctx context.Context, _ *job, _ backend) (any, error) {
+		<-ctx.Done()
+		return nil, canceledErr(ctx)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, h.do("POST", "/api/instances/3/stop", `{}`), http.StatusConflict, errs.Busy)
+	expect(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", nil), http.StatusOK, nil)
+	h.waitJob(j.ID, stateIs(stateCanceled))
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	if len(h.f.stops) != 0 {
+		t.Fatalf("job cancel sent stop: %+v", h.f.stops)
+	}
 }
 
 // TestStartWithWindowAndFailedJob: the manager boots with the window only (no headless option, no restart, no

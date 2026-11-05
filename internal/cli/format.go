@@ -434,6 +434,9 @@ func stopLine(r *emu.StopResult) string {
 
 func formatStop(w io.Writer, r *emu.StopResult) {
 	fmt.Fprintln(w, stopLine(r))
+	if r.InterruptedCreate {
+		fmt.Fprintf(w, "  已打断新建初始化，用 modavd create --resume %d 重做\n", r.Index)
+	}
 	writeWarnings(w, r.Warnings)
 }
 

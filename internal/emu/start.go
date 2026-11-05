@@ -94,6 +94,9 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	if err != nil {
 		return nil, err
 	}
+	if opt.creating && m.createCanceled(i) {
+		return nil, errs.New(errs.Canceled, "新建初始化已被关机打断")
+	}
 	// A new instance boots only for create's own setup until that is done (createinit.go); the boot watch of that
 	// boot's qemu may adopt it again.
 	if !opt.creating && opt.watchQemu == nil {

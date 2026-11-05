@@ -76,7 +76,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 
 	// Held from before the files exist until the setup is done: nobody else starts, changes or deletes the instance
 	// meanwhile, and status tells "creating" from a create that was killed (createinit.go).
-	lock, err := m.tryInstanceLock(i, "create", "正在新建")
+	lock, err := m.lockCreation(ctx, i)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	if err != nil {
 		return nil, err
 	}
-	lock, err := m.tryInstanceLock(i, "create", "正在新建")
+	lock, err := m.lockCreation(ctx, i)
 	if err != nil {
 		return nil, err
 	}

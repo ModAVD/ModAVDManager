@@ -197,7 +197,8 @@ func TestCreateSetsUp(t *testing.T) {
 		_, e4 := m.Bridge(ctx, i, "verify")
 		j := i
 		_, e5 := m.Create(ctx, CreateRequest{Index: &j})
-		refused = []error{e1, e2, e3, e4, e5}
+		_, e6 := m.Stop(ctx, i, StopOptions{})
+		refused = []error{e1, e2, e3, e4, e5, e6}
 		return &StartResult{HostIME: true}, nil
 	}
 	h.install(t)

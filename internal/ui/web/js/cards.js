@@ -294,8 +294,8 @@ function menuItems(c) {
   return [
     v.key === 'starting' && { label: '关机', icon: 'power', run: () => A.stop(i) },
     // create's setup: our own create job is cancelled, one of another process (CLI, AUTO-MAS) is ended by a normal
-    // stop; either way the instance is shut down normally and reads create_failed (resumable)
-    v.key === 'creating' ? { label: '取消新建', icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.stop(i)) }
+    // stop with explicit cancellation; either way it shuts down normally and reads create_failed (resumable)
+    v.key === 'creating' ? { label: '取消新建', icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.cancelCreate(i)) }
       : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },

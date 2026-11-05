@@ -518,7 +518,7 @@ func (m *Manager) bridgeUpdateBlocked(ctx context.Context, i int) (mountBlocker,
 
 // bridgeRestart shuts instance i down and boots it cold, without the bridge step (the caller does that).
 func (m *Manager) bridgeRestart(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
-	sr, err := m.Stop(ctx, i, StopOptions{})
+	sr, err := m.Stop(ctx, i, StopOptions{creating: opt.creating})
 	if err != nil {
 		return nil, err
 	}

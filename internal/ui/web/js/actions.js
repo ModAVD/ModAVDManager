@@ -68,6 +68,7 @@ async function run(i, kind, body) {
 // the manager boots with the window only (the server makes it so); there is no restart and no headless boot here
 export const start = (i) => run(i, 'start', {});
 export const stop = (i, force = false) => run(i, 'stop', { force });
+export const cancelCreate = (i) => run(i, 'stop', { cancel_create: true });
 // 重试初始化: the setup of a new instance that failed (its job is a create job)
 export const resumeCreate = (i) => run(i, 'resume', {});
 
