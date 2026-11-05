@@ -66,7 +66,7 @@
 //
 // Hidden subcommands, routed before any flag parsing or root lookup: __spawn (win.SpawnHelperMain, the helper of
 // win.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
-// (emu.RunBootWatch).
+// (emu.RunBootWatch), and __logcat (emu.RunLogcatCapture, the host logcat writer).
 package cli
 
 import (
@@ -160,6 +160,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
 			return emu.RunBootWatch(args[1:], stderr)
+		case emu.LogcatCaptureArg:
+			return emu.RunLogcatCapture(args[1:], stderr)
 		}
 	}
 	// StartOrphan re-runs this executable as the spawn helper.

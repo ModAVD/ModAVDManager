@@ -78,6 +78,11 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 		var mine []logFile
 		for _, f := range files {
 			if f.dir == kind.dir && strings.HasPrefix(f.name, kind.prefix) && strings.HasSuffix(f.name, kind.suffix) {
+				if !f.dir {
+					if busy, vanished := fileInUse(f.path); busy || vanished {
+						continue
+					}
+				}
 				mine = append(mine, f)
 			}
 		}
@@ -339,6 +344,15 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	defer logcatMu.Unlock()
 	serial := m.Root.Ports().Serial(i)
 	running, err := m.findLogcatProcesses(serial)
+	// Another process may have started the writer but not adb yet, or killed stale adb while its writer drains.
+	// Let that transition finish before deciding whether to create a replacement.
+	for deadline := time.Now().Add(5 * time.Second); err == nil && len(running) == 0 && m.lockHeld(i, "logcat"); {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(20 * time.Millisecond)
+		running, err = m.findLogcatProcesses(serial)
+	}
 	if err != nil {
 		m.Log.Warnf("实例 %d 读不出宿主进程表，这次不起客体日志落盘（免得起两份）: %v", i, err)
 		return ""
@@ -357,21 +371,33 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	if ctx.Err() != nil {
 		return ""
 	}
-	m.pruneLogs(i)
-	stamp := time.Now().Format("20060102-150405")
-	path := filepath.Join(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-"+stamp+".txt")
-	exe := m.Root.AdbExe()
-	// StartOrphan creates the file and its directory
-	if _, err := win.StartOrphan(exe, logcatArgs(m.Root.AdbServerPort(), serial), win.StartOptions{
-		Dir:        filepath.Dir(exe),
-		Env:        m.ADB.Env(),
-		OutputPath: path,
-	}); err != nil {
+	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
+	exe, err := os.Executable()
+	if err != nil {
+		m.Log.Warnf("实例 %d 找不到日志采集程序: %v", i, err)
+		return ""
+	}
+	p, err := win.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i)}, win.StartOptions{Env: m.ADB.Env()})
+	if err != nil {
 		m.Log.Warnf("实例 %d 客体日志落盘没起来: %v", i, err)
 		return ""
 	}
-	m.Log.Infof("实例 %d 客体日志 → %s", i, path)
-	return path
+	// Wait for the helper to hold the output before reporting it. Its per-instance lock also covers the interval
+	// before adb appears in the process table, including starts from another manager process.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+			if path := openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt"); path != "" {
+				m.Log.Infof("实例 %d 客体日志 → %s", i, path)
+				return path
+			}
+		}
+		if !p.Alive() || ctx.Err() != nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	m.Log.Warnf("实例 %d 客体日志采集没有就绪", i)
+	return ""
 }
 
 // openLogFile is the newest <prefix>*<suffix> of the logs dir that some process holds open (a running capture, the

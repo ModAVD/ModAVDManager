@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,31 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case LogcatCaptureArg:
+			limit := logcatSegmentBytes
+			if os.Getenv(fakeLogcatStreamEnv) != "" {
+				limit = 128
+			}
+			os.Exit(runLogcatCapture(os.Args[2:], os.Stderr, limit))
+		case win.SpawnHelperArg:
+			os.Exit(win.SpawnHelperMain(os.Args[2:], os.Stdout))
+		case fakeLogcatLaunchArg:
+			r, err := root.New(os.Args[2])
+			if err != nil {
+				os.Exit(1)
+			}
+			i, _ := strconv.Atoi(os.Args[3])
+			win.OrphanHelper, _ = os.Executable()
+			path := New(r, nil).ensureLogcat(context.Background(), i)
+			fmt.Println(path)
+			if path == "" {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
 	switch os.Getenv(fakeAdbEnv) {
 	case "server", "qemu":
 		os.Exit(fakeAdbServerMain())
@@ -121,6 +147,9 @@ func startFake(t *testing.T, exe, mode string, listen int, args ...string) win.P
 }
 
 func fakeAdbClientMain(args []string) int {
+	if slices.Contains(args, "logcat") && os.Getenv(fakeLogcatStreamEnv) != "" {
+		return fakeLogcatStream(args)
+	}
 	line, _ := json.Marshal(args)
 	if f, err := os.OpenFile(os.Getenv(fakeAdbLogEnv), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644); err == nil {
 		f.Write(append(line, '\n'))

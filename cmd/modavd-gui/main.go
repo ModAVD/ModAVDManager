@@ -50,6 +50,8 @@ func main() {
 			os.Exit(emu.RunVulkanProbe(os.Stdout))
 		case emu.BootWatchArg:
 			os.Exit(emu.RunBootWatch(os.Args[2:], os.Stderr))
+		case emu.LogcatCaptureArg:
+			os.Exit(emu.RunLogcatCapture(os.Args[2:], os.Stderr))
 		case versionArg:
 			os.Exit(printVersion())
 		}

@@ -138,6 +138,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
   - 不合规时，`status`、`list`、`info` 照常按 20000 段看，开机和新建都拒绝（`invalid_argument`），`check` 多一行「端口段」说明原因。
   - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。
+- 宿主 logcat 由独立采集进程写入 `logs\logcat-mas_<i>-<时间>.txt`，启动命令退出后仍继续。每满 256 MiB 在下一处换行切分，同一条 adb 输出流接着写新文件；关闭的分段每台留最新 10 份，并计入 `logs\` 的 1 GiB 清理上限，正在写的文件不计入。
 - 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和 Vulkan 补丁，绝不拉起新的模拟器。
 - 同一实例的开机、关机按 `<根>\avd\.mas_<i>.{start,boot,stop}.lock` 排队：开机等前一次开机和关机做完；关机可以打断正在开机的实例。
 
