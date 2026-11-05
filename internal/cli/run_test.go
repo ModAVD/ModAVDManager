@@ -176,11 +176,11 @@ func (f *fakeManager) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult,
 	const gb = int64(1) << 30
 	if i == 4 { // running: no allocated / reclaimable
 		return &emu.DiskInfoResult{Index: i, Overlay: "x", Running: true, NeedsShutdown: true,
-			LogicalBytes: 8 * gb, OnDiskBytes: 3 * gb,
+			LogicalBytes: 8 * gb, OnDiskBytes: new(int64(3 * gb)),
 			Warnings: []string{"实例在运行：已分配和可回收的大小要关机后才能算"}}, nil
 	}
 	alloc, rec := 2*gb, gb
-	return &emu.DiskInfoResult{Index: i, Overlay: "x", LogicalBytes: 8 * gb, OnDiskBytes: 3 * gb,
+	return &emu.DiskInfoResult{Index: i, Overlay: "x", LogicalBytes: 8 * gb, OnDiskBytes: new(int64(3 * gb)),
 		ClusterBytes: 65536, AllocatedBytes: &alloc, ReclaimableBytes: &rec}, nil
 }
 

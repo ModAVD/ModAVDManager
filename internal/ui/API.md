@@ -41,7 +41,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
 | POST | `/api/instances/{i}/stop` | `{force?: bool}` | 202 `Job` |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
-| POST | `/api/instances/{i}/disk-info` | `{}` | 202 `Job`（`kind` 是 `disk-info`）：数据盘的占用，随时可以查（开机时 `allocated_bytes`、`reclaimable_bytes` 不返回，`needs_shutdown` 为 `true`）；结果是 emu 的 `DiskInfoResult` |
+| POST | `/api/instances/{i}/disk-info` | `{}` | 202 `Job`（`kind` 是 `disk-info`）：数据盘的占用，随时可以查（开机时 `allocated_bytes`、`reclaimable_bytes` 不返回，`needs_shutdown` 为 `true`）；结果是 emu 的 `DiskInfoResult`。整理中或锁不可用时返回可读取的文件信息及 `warnings`，不运行 qemu-img；读不到宿主占用时省略 `on_disk_bytes` |
 | POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：让开着的安卓把删掉的文件占的空间还给模拟器（电脑上的文件要整理后才变小）；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |
 | POST | `/api/instances/{i}/disk-compact` | `{}` | 202 `Job`（`kind` 是 `disk-compact`）：重写已关机实例的数据盘文件，只留在用的部分，要几分钟；实例没关机时任务失败，code 是 `busy`；结果是 `DiskCompactResult` |
 | POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |

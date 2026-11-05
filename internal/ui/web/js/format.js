@@ -59,13 +59,13 @@ export function fmtBytes(n) {
 export function diskInfoText(r) {
   const parts = [];
   if (r.logical_bytes) parts.push(`逻辑大小 ${fmtBytes(r.logical_bytes)}`);
-  parts.push(`宿主占用 ${fmtBytes(r.on_disk_bytes)}`);
+  if (r.on_disk_bytes != null) parts.push(`宿主占用 ${fmtBytes(r.on_disk_bytes)}`);
   if (r.allocated_bytes != null) parts.push(`已分配 ${fmtBytes(r.allocated_bytes)}`);
   if (r.reclaimable_bytes != null) parts.push(`可回收约 ${fmtBytes(r.reclaimable_bytes)}`);
   let text = parts.join(' · ');
-  if (r.needs_shutdown) text += '。开机时算不出已分配和可回收，关机后再看';
+  if (r.running) text += '。开机时算不出已分配和可回收，关机后再看';
   else if (r.reclaimable_bytes != null) text += r.reclaimable_bytes > 0 ? '。用「整理磁盘」可以收回' :'。没有可以回收的';
-  return text + '。';
+  return (text ? text + '。' : '') + (r.warnings || []).join('；');
 }
 
 export function diskTrimText() {

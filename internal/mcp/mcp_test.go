@@ -203,7 +203,7 @@ func (f *fake) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
 	f.record("disk info %d", i)
 	allocated, reclaim := int64(8<<30), int64(4<<30)
 	return &emu.DiskInfoResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
-		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536, AllocatedBytes: &allocated,
+		LogicalBytes: 64 << 30, OnDiskBytes: new(int64(12 << 30)), ClusterBytes: 65536, AllocatedBytes: &allocated,
 		ReclaimableBytes: &reclaim}, nil
 }
 

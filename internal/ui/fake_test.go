@@ -338,7 +338,7 @@ func (b fakeBackend) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, 
 	in, _ := b.f.get(i)
 	allocated, reclaimable := int64(10<<30), int64(2<<30)
 	res := &emu.DiskInfoResult{Index: i, Overlay: `C:\fake\userdata-qemu.img.qcow2`, Running: in.Running,
-		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536}
+		LogicalBytes: 64 << 30, OnDiskBytes: new(int64(12 << 30)), ClusterBytes: 65536}
 	if in.Running {
 		res.NeedsShutdown = true
 	} else {

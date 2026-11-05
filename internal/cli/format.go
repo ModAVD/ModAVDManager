@@ -639,7 +639,9 @@ func formatDiskInfo(w io.Writer, r *emu.DiskInfoResult) {
 	if r.LogicalBytes > 0 {
 		kv("数据盘逻辑大小", fmtBytesGB(r.LogicalBytes))
 	}
-	kv("覆盖层在宿主上占用", fmtBytesGB(r.OnDiskBytes))
+	if r.OnDiskBytes != nil {
+		kv("覆盖层在宿主上占用", fmtBytesGB(*r.OnDiskBytes))
+	}
 	if r.AllocatedBytes != nil {
 		kv("已分配（客体实际数据）", fmtBytesGB(*r.AllocatedBytes))
 	}

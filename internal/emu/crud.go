@@ -322,10 +322,9 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 
 // tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("魔改 AVD 实例 0 正在启动，无法删除").
 func (m *Manager) tryInstanceLock(i int, kind, what string) (*win.FileLock, error) {
-	path := m.lockPath(i, kind)
-	l, ok, err := win.TryLock(path)
+	l, ok, err := m.tryOperationLock(i, kind)
 	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
+		return nil, err
 	}
 	if !ok {
 		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法删除", i, what)

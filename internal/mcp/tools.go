@@ -444,7 +444,9 @@ func toolDefs() []*toolDef {
 			"Report the size of an instance's data disk (the qcow2 overlay): virtual size, what it occupies on the "+
 				"host, and, for a stopped instance, the guest data it really holds and the estimated saving of "+
 				"compact_disk. A running instance only gets the host size (needs_shutdown=true): the allocated and "+
-				"reclaimable figures need the instance offline. Read-only.",
+				"reclaimable figures need the instance offline and its start lock. During compaction or when locks are "+
+				"unavailable, returns only readable header/host sizes and warnings. Unreadable sizes are omitted. "+
+				"The offline check validates qcow2 metadata; it does not repair the image or check the guest filesystem.",
 			readOnly(), reflect.TypeFor[emu.DiskInfoResult](), []prop{indexProp(true)},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
