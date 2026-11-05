@@ -181,7 +181,8 @@ function updateCard(c, inst) {
   const sub = [];
   if (inst.title && inst.title !== inst.name) sub.push(inst.name);
   if (live && inst.started_at) sub.push(uptime(inst.started_at));
-  setText(c.sub, sub.join(' · ') || `编号 ${inst.index}`);
+  const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
+  setText(c.sub, subtitle + (inst.diagnostics ? ' · 诊断模式' : ''));
   setText(c.cfg, cfgText(inst.config));
 
   let [pt, tone] = PILL[v.key];
