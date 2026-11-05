@@ -289,9 +289,11 @@ func (u *Updater) swapIn() (string, error) {
 	if _, err := u.Root.ReadMetadata(); err != nil {
 		return "", errs.Newf(errs.NotReady, "%s。先修好或删掉它再更新，什么都没动", errs.As(err).Message)
 	}
-	if err := u.ensureNotInUse("装"); err != nil {
+	unlock, err := u.lockForSwap("装")
+	if err != nil {
 		return "", err
 	}
+	defer unlock()
 	from := ""
 	if v, ok := LocalVersion(u.Root); ok {
 		from = v.String()
@@ -355,7 +357,8 @@ func stepVal(step string) *jsonord.Value {
 
 // recoverAfter: an error after the point of no return; recover at once, as AUTO-MAS _recover_now does.
 func (u *Updater) recoverAfter(err error) error {
-	msg, rerr := u.recover()
+	// swapIn still holds the start locks, including throughout this recovery.
+	msg, rerr := u.recoverState()
 	switch {
 	case rerr != nil:
 		msg = fmt.Sprintf("当场恢复也失败了（%v），下次更新或 AUTO-MAS 启动时会再按记录恢复", rerr)
@@ -452,6 +455,19 @@ func (u *Updater) recordHistory(from, to, source, asset string) {
 // recover is AUTO-MAS recover(): finish or undo a swap that was cut off, drop a preparation that was, clean up
 // leftovers. The message says what it did ("" when nothing).
 func (u *Updater) recover() (string, error) {
+	if phaseOf(u.l.readState()) == phaseSwapping {
+		unlock, err := u.lockForSwap("恢复更新")
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+	}
+	return u.recoverState()
+}
+
+// recoverState requires the start locks while phase is swapping. The external recovery
+// entry takes them; recovery inside swapIn reuses its existing locks without relocking.
+func (u *Updater) recoverState() (string, error) {
 	l := u.l
 	st := l.readState()
 	phase := phaseOf(st)
@@ -565,8 +581,15 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 		return u.scan(programs)
 	}
 	var prefixes []string
-	for _, p := range []string{l2abs(u.l.emulator()), realOrSame(u.l.emulator())} {
-		prefixes = append(prefixes, strings.ToLower(p)+`\`)
+	dirs := []string{u.l.emulator()}
+	if phaseOf(u.l.readState()) == phaseSwapping {
+		// Recovery can restore or discard the previous SDK as well as the current one.
+		dirs = append(dirs, u.l.previousEmulator())
+	}
+	for _, dir := range dirs {
+		for _, p := range []string{l2abs(dir), realOrSame(dir)} {
+			prefixes = append(prefixes, strings.ToLower(p)+`\`)
+		}
 	}
 	progs := map[string]bool{}
 	for _, rel := range []string{"ModAVD.exe", "tools/modavd.exe"} {
@@ -627,6 +650,48 @@ func (u *Updater) ensureNotInUse(verb string) error {
 	return waitUntilUnused(verb, u.processesUsing, time.Now, time.Sleep)
 }
 
+// lockForSwap first lets shutdown helpers exit, then closes the managed-start race.
+// Lock every valid slot, including instances not created yet, before the final scan.
+// The caller holds these locks through all renames and any immediate recovery.
+func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
+	if err := u.ensureNotInUse(verb); err != nil {
+		return nil, err
+	}
+	var locks []*win.FileLock
+	release := func() {
+		for _, lock := range locks {
+			lock.Unlock()
+		}
+	}
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
+	for i := 0; i <= root.MaxIndex; i++ {
+		if !root.ValidIndex(i) {
+			continue
+		}
+		path := filepath.Join(u.Root.AvdHome(), "."+root.AvdName(i)+".start.lock")
+		lock, free, err := win.TryLock(path)
+		if err != nil {
+			return nil, errs.Wrap(errs.Internal, err, "更新时打不开实例启动锁: "+path)
+		}
+		if !free {
+			return nil, swapBlocked("实例 %d 正在开机或做开机后设置，什么都没动，请稍后再%s", i, verb)
+		}
+		locks = append(locks, lock)
+	}
+	uses, err := u.processesUsing(true)
+	if err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "查不了有没有程序在用模拟器文件，什么都没动: "+err.Error())
+	}
+	if len(uses) != 0 {
+		return nil, processesBlocked(verb, uses)
+	}
+	return release, nil
+}
+
 // shutdownHelper recognizes only the two short-lived helpers whose executable belongs to this root.
 // A name alone, unreadable argv, a different bootwatch root, or additional arguments never grants a wait.
 func (u *Updater) shutdownHelper(image string, args []string) bool {
@@ -678,6 +743,10 @@ func waitUntilUnused(verb string, scan func(bool) ([]processUse, error), now fun
 		}
 		sleep(min(250*time.Millisecond, left))
 	}
+	return processesBlocked(verb, uses)
+}
+
+func processesBlocked(verb string, uses []processUse) error {
 	var parts []string
 	for _, p := range uses {
 		s := fmt.Sprintf("%s（pid %d", p.Name, p.PID)
