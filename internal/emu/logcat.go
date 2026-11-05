@@ -2,6 +2,7 @@ package emu
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ import (
 	"modavd/internal/win"
 )
 
-// LogcatCaptureArg is routed by both the console and GUI executables, before normal command parsing.
+// LogcatCaptureArg is routed by the root's console executable before normal command parsing.
 const LogcatCaptureArg = "__logcat"
 
 // Rotate at the first newline at or beyond 256 MiB, so a record never spans two files.
@@ -135,17 +136,19 @@ func (w *logcatWriter) Close() error { return w.file.Close() }
 
 // RunLogcatCapture is an orphaned host writer, not a guest logcat -f (which would write inside Android).
 // A per-instance lifetime lock prevents duplicate helpers while adb starts or a previous helper drains its pipe.
-// Killing a stale adb client on re-registration closes this pipe and releases the lock before its replacement.
+// It also watches the qemu identity, so even a stale adb client is ended when this boot's qemu exits.
 func RunLogcatCapture(args []string, stderr io.Writer) int {
 	return runLogcatCapture(args, stderr, logcatSegmentBytes)
 }
 
 func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
-	if len(args) != 2 {
+	if len(args) != 4 {
 		return 2
 	}
 	i, err := strconv.Atoi(args[1])
-	if err != nil || !root.ValidIndex(i) {
+	pid, pidErr := strconv.ParseUint(args[2], 10, 32)
+	created, createdErr := strconv.ParseUint(args[3], 10, 64)
+	if errors.Join(err, pidErr, createdErr) != nil || !root.ValidIndex(i) || pid == 0 || created == 0 {
 		return 2
 	}
 	r, err := root.New(args[0])
@@ -158,6 +161,10 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		return 1
 	}
 	defer l.Unlock()
+	q := win.Process{PID: uint32(pid), Created: created}
+	if !q.Alive() {
+		return 0
+	}
 	// A legacy capture, or a helper started concurrently, may already have an adb client.
 	if running, err := m.findLogcatProcesses(r.Ports().Serial(i)); err != nil || len(running) > 0 {
 		return 1
@@ -167,20 +174,30 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		return 1
 	}
 	defer w.Close()
-	if err := captureLogcat(r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(i)), m.ADB.Env(), w); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for !q.Wait(100 * time.Millisecond) {
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		cancel()
+	}()
+	if err := captureLogcat(ctx, r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(i)), m.ADB.Env(), w); err != nil && ctx.Err() == nil {
 		m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
 		return 1
 	}
 	return 0
 }
 
-func captureLogcat(exe string, args, env []string, output io.Writer) error {
+func captureLogcat(ctx context.Context, exe string, args, env []string, output io.Writer) error {
 	r, pipe, err := os.Pipe()
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-	cmd := exec.Command(exe, args...)
+	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = filepath.Dir(exe), env, pipe, pipe
 	win.HideConsoleCmd(cmd)
 	if err := cmd.Start(); err != nil {

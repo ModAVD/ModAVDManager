@@ -246,7 +246,7 @@ func TestLogcatWriteFailureEndsAdb(t *testing.T) {
 	m := New(r, nil)
 	done := make(chan error, 1)
 	go func() {
-		done <- captureLogcat(r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(6)), m.ADB.Env(), logcatFailWriter{})
+		done <- captureLogcat(context.Background(), r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(6)), m.ADB.Env(), logcatFailWriter{})
 	}()
 	select {
 	case err := <-done:
@@ -264,12 +264,14 @@ func TestLogcatWriteFailureEndsAdb(t *testing.T) {
 }
 
 func TestLogcatCaptureRejectsBadArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"missing-index"}, {t.TempDir(), "5"}, {t.TempDir(), "-1"}, {t.TempDir(), "not-a-number"}} {
+	for _, args := range [][]string{nil, {"missing-index"}, {t.TempDir(), "5", "1", "1"},
+		{t.TempDir(), "-1", "1", "1"}, {t.TempDir(), "not-a-number", "1", "1"},
+		{t.TempDir(), "0", "0", "1"}, {t.TempDir(), "0", "1", "0"}} {
 		if code := RunLogcatCapture(args, &bytes.Buffer{}); code != 2 {
 			t.Errorf("args %q: exit %d", args, code)
 		}
 	}
-	if code := RunLogcatCapture([]string{filepath.Join(t.TempDir(), "missing"), "0"}, &bytes.Buffer{}); code != 1 {
+	if code := RunLogcatCapture([]string{filepath.Join(t.TempDir(), "missing"), "0", "1", "1"}, &bytes.Buffer{}); code != 1 {
 		t.Fatalf("missing root: exit %d", code)
 	}
 }
@@ -301,6 +303,11 @@ func fakeLogcatStream(args []string) int {
 
 func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 	r, _ := portPlanRoot(t)
+	copyTestExe(t, filepath.Join(r.Dir, "tools", "modavd.exe"))
+	q := fakeQemu(t, filepath.Join(r.Dir, "fake-qemu"), 6, 21060, false, "")
+	savedScan := qemuScan
+	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: q} }
+	t.Cleanup(func() { qemuScan = savedScan })
 	gate := filepath.Join(r.Dir, "emit-after-cli-exit")
 	t.Setenv(fakeLogcatStreamEnv, gate)
 	m := New(r, nil)
@@ -312,7 +319,7 @@ func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 	self, _ := os.Executable()
 	launch := func() {
 		t.Helper()
-		cmd := exec.Command(self, fakeLogcatLaunchArg, r.Dir, "6")
+		cmd := exec.Command(self, fakeLogcatLaunchArg, r.Dir, "6", strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10))
 		win.HideConsoleCmd(cmd)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("launcher: %v, %s", err, out)
@@ -341,6 +348,13 @@ func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 	if err != nil || len(clients) != 1 {
 		t.Fatalf("active clients: %v, %v", clients, err)
 	}
+	helper, ok := win.FindProcess(clients[0].PPID)
+	if !ok {
+		t.Fatal("cannot find logcat helper")
+	}
+	if path, err := helper.ImagePath(); err != nil || !strings.EqualFold(path, filepath.Join(r.Dir, "tools", "modavd.exe")) {
+		t.Fatalf("capture did not use the root's CLI: %s, %v", path, err)
+	}
 	launch()                             // adopting the running capture must not start another helper/client
 	endProcesses(clients, 2*time.Second) // same EOF as a stopped emulator or a stale-server client
 	// Start immediately, while the old writer may still be draining and releasing its lock.
@@ -351,6 +365,65 @@ func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 	})
 	if path := m.ensureLogcat(context.Background(), 6); path == "" {
 		t.Fatal("restarted capture did not expose its current file")
+	}
+}
+
+func TestLogcatQemuExitEndsStubbornAdbAndReleasesFiles(t *testing.T) {
+	r, _ := portPlanRoot(t)
+	copyTestExe(t, filepath.Join(r.Dir, "tools", "modavd.exe"))
+	q := fakeQemu(t, filepath.Join(r.Dir, "fake-qemu"), 6, 21060, false, "")
+	gate := filepath.Join(r.Dir, "keep-adb-running")
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fakeLogcatStreamEnv, gate)
+	m := New(r, nil)
+	var helper win.Process
+	t.Cleanup(func() {
+		clients, _ := m.findLogcatProcesses(r.Ports().Serial(6))
+		endProcesses(clients, time.Second)
+		endProcesses([]win.Process{helper}, time.Second)
+	})
+	self, _ := os.Executable()
+	cmd := exec.Command(self, fakeLogcatLaunchArg, r.Dir, "6", strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10))
+	win.HideConsoleCmd(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("launcher: %v, %s", err, out)
+	}
+	waitLogcatTest(t, func() bool { return logcatTestContains(r.LogsDir(), 6, "after-cli-exit\n", 3) })
+	clients, err := m.findLogcatProcesses(r.Ports().Serial(6))
+	if err != nil || len(clients) != 1 {
+		t.Fatalf("active clients: %v, %v", clients, err)
+	}
+	var ok bool
+	helper, ok = win.FindProcess(clients[0].PPID)
+	if !ok {
+		t.Fatal("cannot find logcat helper")
+	}
+	// The fake adb deliberately never observes qemu's exit: only the writer's qemu watch can end it.
+	if err := q.Kill(); err != nil || !q.Wait(time.Second) {
+		t.Fatalf("end fake qemu: %v", err)
+	}
+	if !helper.Wait(3 * time.Second) {
+		t.Fatal("qemu exited but logcat helper kept running and blocking its executable")
+	}
+	if clients[0].Alive() || m.lockHeld(6, "logcat") {
+		t.Fatal("qemu exit left adb or the capture lock alive")
+	}
+	_, paths := readLogcatSegments(t, r.LogsDir(), 6)
+	for _, path := range paths {
+		if busy, _ := fileInUse(path); busy {
+			t.Fatalf("capture still holds %s", path)
+		}
+	}
+	// A reused PID must not adopt a different boot, even when that PID is alive.
+	selfProc, _ := win.FindProcess(uint32(os.Getpid()))
+	if code := RunLogcatCapture([]string{r.Dir, "6", strconv.Itoa(os.Getpid()), strconv.FormatUint(selfProc.Created+1, 10)}, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("stale qemu identity: exit %d", code)
+	}
+	m.removeLockFiles(6)
+	if _, err := os.Stat(m.lockPath(6, "logcat")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("delete left capture lock: %v", err)
 	}
 }
 

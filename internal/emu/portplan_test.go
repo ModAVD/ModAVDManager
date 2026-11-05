@@ -54,6 +54,11 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			i, _ := strconv.Atoi(os.Args[3])
+			pid, _ := strconv.ParseUint(os.Args[4], 10, 32)
+			created, _ := strconv.ParseUint(os.Args[5], 10, 64)
+			qemuScan = func([]int) map[int]win.Process {
+				return map[int]win.Process{i: {PID: uint32(pid), Created: created}}
+			}
 			win.OrphanHelper, _ = os.Executable()
 			path := New(r, nil).ensureLogcat(context.Background(), i)
 			fmt.Println(path)
@@ -232,6 +237,7 @@ func portPlanRoot(t *testing.T) (*root.Root, string) {
 // What status reports follows too.
 func TestPortPlanReachesEveryAdbCall(t *testing.T) {
 	r, log := portPlanRoot(t)
+	copyTestExe(t, filepath.Join(r.Dir, "tools", "modavd.exe"))
 	ctx := context.Background()
 	m := New(r, logx.Nop())
 	six := 6

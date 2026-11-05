@@ -371,13 +371,15 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	if ctx.Err() != nil {
 		return ""
 	}
-	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
-	exe, err := os.Executable()
-	if err != nil {
-		m.Log.Warnf("实例 %d 找不到日志采集程序: %v", i, err)
+	q, found, err := m.qemuOf(i)
+	if err != nil || !found || q.Created == 0 || !q.Alive() {
+		m.Log.Warnf("实例 %d 找不到仍在运行的 qemu，这次不起客体日志采集", i)
 		return ""
 	}
-	p, err := win.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i)}, win.StartOptions{Env: m.ADB.Env()})
+	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
+	exe := filepath.Join(m.Root.Dir, "tools", "modavd.exe")
+	p, err := win.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i),
+		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10)}, win.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
 		m.Log.Warnf("实例 %d 客体日志落盘没起来: %v", i, err)
 		return ""
