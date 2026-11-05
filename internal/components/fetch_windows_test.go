@@ -462,7 +462,14 @@ func TestFetchInstallsThenSkips(t *testing.T) {
 		!out.said("已通过 --accept-license 同意许可协议。") {
 		t.Errorf("notices %q", notices)
 	}
+	// where it downloads from is said once, before the license is fetched
+	if !out.said("下载源：自定义镜像（" + m.url() + "）（--mirror-url），按顺序试") {
+		t.Error("the download source was not said")
+	}
 	logged := logText(t, r)
+	if src, lic := strings.Index(logged, "下载源："), strings.Index(logged, "许可协议另存"); src < 0 || lic < 0 || src > lic {
+		t.Errorf("the download source line is not before the license:\n%s", logged)
+	}
 	for _, s := range []string{"参数：AcceptLicense=true", "  URL " + m.url() + "pt.zip", "下载结束：", "退出码 0",
 		"完成，可以在 AUTO-MAS 里添加这个文件夹了。"} {
 		if !strings.Contains(logged, s) {
@@ -480,7 +487,7 @@ func TestFetchInstallsThenSkips(t *testing.T) {
 		t.Fatalf("rerun: %v, %d requests", out.err, len(m.all())-n)
 	}
 	if !out.res.Components[0].Skipped || !out.res.Components[1].Skipped || out.res.License != "" ||
-		!out.said("已有：平台工具（adb）（版本 1.0），跳过") || !out.said("组件都已齐全，不需要下载") {
+		!out.said("已有：平台工具（adb）（版本 1.0），跳过") || !out.said("组件都已齐全，不需要下载") || out.said("下载源：") {
 		t.Fatalf("rerun %+v", out.res)
 	}
 	// A system image of another revision is complete; the script only notes it.
