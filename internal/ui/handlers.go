@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"modavd/internal/buildinfo"
+	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/root"
@@ -304,9 +306,78 @@ func (s *server) handleComponentLicense(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
+type componentSourceView struct {
+	Source     string   `json:"source"`
+	Mirror     string   `json:"mirror"`
+	MirrorURLs []string `json:"mirror_urls"`
+	Configured bool     `json:"configured"`
+}
+
+func componentSourceViewOf(s components.SourceSettings) componentSourceView {
+	source := "auto"
+	if len(s.MirrorURLs) > 0 {
+		source = "custom"
+	} else if s.Mirror != "" {
+		source = s.Mirror
+	}
+	return componentSourceView{Source: source, Mirror: s.Mirror, MirrorURLs: append([]string(nil), s.MirrorURLs...), Configured: s.Set}
+}
+
+func componentSourceFromFields(source, mirror string, urls []string) (components.SourceSettings, error) {
+	source = strings.ToLower(strings.TrimSpace(source))
+	mirror = strings.TrimSpace(mirror)
+	switch source {
+	case "auto":
+		mirror, urls = "", nil
+	case "googledownloads_cn", "tencent", "google":
+		mirror, urls = source, nil
+	case "custom":
+		if len(urls) == 0 {
+			return components.SourceSettings{}, errs.New(errs.Usage, "自定义组件下载源至少要有一个地址")
+		}
+		mirror = ""
+	case "":
+		if mirror == "" && len(urls) == 0 {
+			return components.SourceSettings{}, errs.New(errs.Usage, "组件下载源必须给 source 或 mirror_urls")
+		}
+	default:
+		return components.SourceSettings{}, errs.Newf(errs.InvalidArgument, "组件下载源只能是 auto、googledownloads_cn、tencent、google 或 custom，收到「%s」", source)
+	}
+	return components.SourceSettings{Mirror: mirror, MirrorURLs: urls, Set: true}, nil
+}
+
+func (s *server) handleComponentSource(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, componentSourceViewOf(components.LoadSourceSettings()))
+		return
+	}
+	var body struct {
+		Source     string   `json:"source"`
+		Mirror     string   `json:"mirror"`
+		MirrorURLs []string `json:"mirror_urls"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	source, err := componentSourceFromFields(body.Source, body.Mirror, body.MirrorURLs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	saved, err := components.SaveSourceSettings(source.Mirror, source.MirrorURLs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, componentSourceViewOf(saved))
+}
+
 func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AcceptLicense *bool `json:"accept_license"`
+		AcceptLicense *bool    `json:"accept_license"`
+		Source        string   `json:"source"`
+		Mirror        string   `json:"mirror"`
+		MirrorURLs    []string `json:"mirror_urls"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -315,8 +386,17 @@ func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errs.New(errs.Usage, "补全组件必须明确同意许可协议").WithAdvice("先阅读许可协议，再发送 accept_license: true"))
 		return
 	}
+	source := components.LoadSourceSettings()
+	if body.Source != "" || body.Mirror != "" || len(body.MirrorURLs) > 0 {
+		var err error
+		source, err = componentSourceFromFields(body.Source, body.Mirror, body.MirrorURLs)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+	}
 	v, err := s.startRootJob(kindComponents, func(ctx context.Context, j *job, _ backend) (any, error) {
-		return s.diag.Fetch(ctx, true, func(p DiagProgress) { s.setDiagProgress(j, p) })
+		return s.diag.Fetch(ctx, true, source, func(p DiagProgress) { s.setDiagProgress(j, p) })
 	})
 	s.respondJob(w)(v, err)
 }

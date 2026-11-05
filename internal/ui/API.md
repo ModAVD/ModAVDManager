@@ -54,9 +54,11 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
 | POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
 | POST | `/api/open` | `{what: "root"\|"logs"\|"instance"\|"path", index?, path?}` | `{}`，在资源管理器里打开；`path` 会打开其所在文件夹 |
-| GET | `/api/components` | | 组件状态；真实诊断适配未接入时回 `500 not_implemented` |
+| GET | `/api/components` | | 组件状态 |
 | GET | `/api/components/license` | | `{"license":"全文","license_source":"镜像来源"}`；不下载组件 |
-| POST | `/api/components/fetch` | `{"accept_license":true}`（必须明确为 `true`） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`） |
+| GET | `/api/components/source` | | 当前组件下载源：`source` 为 `auto`、内置镜像 ID 或 `custom`，以及 `mirror_urls`、`configured` |
+| PUT | `/api/components/source` | `{"source":"auto"\|"googledownloads_cn"\|"tencent"\|"google"\|"custom", "mirror_urls":[...]}` | 保存当前用户的组件下载源；自定义地址只接受 HTTP(S) 目录 |
+| POST | `/api/components/fetch` | `{"accept_license":true, "source"?:..., "mirror_urls"?:[...]}`（必须明确为 `true`） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`） |
 | POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
 | GET | `/api/diag/report-config` | | `{"text":"…"}` |
 | GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |

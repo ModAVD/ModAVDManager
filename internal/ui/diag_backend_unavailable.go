@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 
+	"modavd/internal/components"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 )
@@ -22,7 +23,7 @@ func (unavailableDiagBackend) Components(context.Context) (*DiagComponentsResult
 func (unavailableDiagBackend) License(context.Context) (*DiagLicenseResult, error) {
 	return nil, unavailableDiagError()
 }
-func (unavailableDiagBackend) Fetch(context.Context, bool, func(DiagProgress)) (*DiagFetchResult, error) {
+func (unavailableDiagBackend) Fetch(context.Context, bool, components.SourceSettings, func(DiagProgress)) (*DiagFetchResult, error) {
 	return nil, unavailableDiagError()
 }
 func (unavailableDiagBackend) Collect(context.Context, DiagCollectOptions, func(DiagProgress)) (*DiagCollectResult, error) {

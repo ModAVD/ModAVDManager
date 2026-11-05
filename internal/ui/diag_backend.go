@@ -46,13 +46,15 @@ func (b *realDiagBackend) License(ctx context.Context) (*DiagLicenseResult, erro
 	return &DiagLicenseResult{Text: text, Source: source}, nil
 }
 
-func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, progress func(DiagProgress)) (*DiagFetchResult, error) {
+func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source components.SourceSettings, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
 		return nil, errs.New(errs.LicenseDeclined, "没有同意许可协议，已退出，什么也没有下载")
 	}
 	res, err := diagFetch(ctx, b.r, components.Options{
 		AcceptLicense: true,
 		Input:         nil,
+		Mirror:        source.Mirror,
+		MirrorURLs:    append([]string(nil), source.MirrorURLs...),
 		Log:           b.log,
 		Notice:        func(s string) { b.log.Infof("%s", s) },
 		Progress: func(p components.Progress) {

@@ -167,7 +167,7 @@ export function renderBanner(el) {
       h('h2', { text: '这个目录现在还不能开机' }),
       first && h('p', { text: first.reason }),
       first && first.advice && advice(first.id === 'components'
-        ? '请点下面的「补全组件」打开许可协议并下载；根目录里的旧批处理仅作为备选。'
+        ? '请点下面的「补全组件」打开许可协议并下载，或运行 tools\\modavd.exe components fetch。'
         : first.advice),
       missing.length && !(first && first.id === 'components') && h('div', { class: 'banner-missing' },
         h('span', { class: 'muted', text: '缺少的组件：' }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),

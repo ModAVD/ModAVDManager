@@ -28,14 +28,31 @@ function cancel(id) {
   api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`).then((j) => { S.jobs.set(j.id, j); update(); }).catch(toastError);
 }
 
-function openLicense(license, source) {
+function openLicense(license, source, saved = {}) {
   const text = h('pre', { class: 'loglines diag-license', tabindex: '0', text: license || '后台没有返回许可协议全文。' });
   const note = h('p', { class: 'f-hint', text: `取自：${source || '未知镜像'}` });
-  const box = h('div', { class: 'diag-license-body' }, text, note);
+  const choices = [['auto', '自动'], ['googledownloads_cn', 'googledownloads_cn'], ['tencent', 'tencent'], ['google', 'google'], ['custom', '自定义地址']];
+  const select = h('select', { class: 'input', 'aria-label': '组件下载源' }, ...choices.map(([value, label]) => h('option', { value, text: label })));
+  select.value = saved.source || 'auto';
+  const custom = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', value: (saved.mirror_urls || []).join(',') });
+  const customRow = h('div', { class: 'f-ctl' }, custom);
+  const updateCustom = () => { customRow.hidden = select.value !== 'custom'; };
+  select.addEventListener('change', updateCustom);
+  updateCustom();
+  const sourceRow = h('div', { class: 'fields' }, h('label', { class: 'f-label', text: '下载源' }), h('div', { class: 'f-ctl' }, select), customRow);
+  const box = h('div', { class: 'diag-license-body' }, text, note, sourceRow);
   const agree = btn('btn btn-primary', '同意并下载', () => {
     agree.disabled = true;
-    startJob(api.post('/api/components/fetch', { accept_license: true }));
-    d.close();
+    const selected = select.value;
+    const urls = selected === 'custom' ? custom.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
+    if (selected === 'custom' && !urls.length) {
+      agree.disabled = false;
+      toast({ tone: 'err', title: '需要自定义地址', text: '请填写至少一个 HTTP(S) 下载目录。' });
+      return;
+    }
+    const body = { source: selected, mirror_urls: urls };
+    api.put('/api/components/source', body).then(() => startJob(api.post('/api/components/fetch', { accept_license: true, ...body })))
+      .then(() => d.close()).catch((e) => { agree.disabled = false; toastError(e); });
   });
   const d = openDialog({ title: 'Android 软件开发套件许可协议', sub: '请完整阅读后再决定是否下载组件', cls: 'dlg-update', body: box,
     actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), cancel: false, ok: agree }, light: true });
@@ -46,7 +63,8 @@ export function openDiagnostics() {
   const componentBox = h('div', { class: 'diag-components' });
   const componentError = h('div', { class: 'form-error', role: 'alert', hidden: true });
   const fetchBtn = btn('btn btn-secondary', [icon('download'), '补全组件'], () => {
-    api.get('/api/components/license').then((v) => openLicense(v.license, v.license_source)).catch(toastError);
+    Promise.all([api.get('/api/components/license'), api.get('/api/components/source')])
+      .then(([v, saved]) => openLicense(v.license, v.license_source, saved)).catch(toastError);
   });
   const compHead = h('div', { class: 'diag-head' }, h('strong', { text: '组件' }), fetchBtn);
   const compNote = h('p', { class: 'f-hint', text: '缺少组件时先查看许可协议；只有亲手点“同意并下载”才会开始下载。' });

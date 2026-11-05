@@ -8,7 +8,8 @@
 const ROOT = 'X:\\ModAVD';
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MEM = [3072, 4096, 5120, 6144];
-const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true, diagMode: '', componentsReady: false };
+const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true, diagMode: '', componentsReady: false,
+  componentSource: { source: 'auto', mirror: '', mirror_urls: [], configured: false } };
 const now = () => Date.now();
 const iso = (t = now()) => {
   const d = new Date(t);
@@ -714,6 +715,17 @@ async function handle(url, init) {
     return json({ root: ROOT, components: checkResult().components });
   }
   if (p === '/api/components/license' && method === 'GET') return json({ license: 'Android Software Development Kit License Agreement\n\n(mock)', license_source: 'mock' });
+  if (p === '/api/components/source' && method === 'GET') return json({ ...db.componentSource, mirror_urls: [...db.componentSource.mirror_urls] });
+  if (p === '/api/components/source' && method === 'PUT') {
+    const source = String(body.source || '').toLowerCase();
+    const urls = Array.isArray(body.mirror_urls) ? body.mirror_urls.map((x) => String(x).trim()).filter(Boolean) : [];
+    if (!['auto', 'googledownloads_cn', 'tencent', 'google', 'custom'].includes(source)) return errResp('invalid_argument', '组件下载源不认识');
+    if (source === 'custom' && !urls.length) return errResp('usage', '自定义组件下载源至少需要一个地址');
+    if (source === 'custom' && urls.some((x) => !/^https?:\/\//i.test(x))) return errResp('invalid_argument', '自定义组件下载源必须是 HTTP(S) 地址');
+    const normalized = urls.map((x) => x.endsWith('/') ? x : x + '/');
+    db.componentSource = { source, mirror: source === 'custom' ? '' : source === 'auto' ? '' : source, mirror_urls: normalized, configured: true };
+    return json({ ...db.componentSource, mirror_urls: [...normalized] });
+  }
   if (p === '/api/components/fetch' && method === 'POST') {
     if (body.accept_license !== true) return errResp('usage', '补全组件必须明确同意许可协议');
     if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');

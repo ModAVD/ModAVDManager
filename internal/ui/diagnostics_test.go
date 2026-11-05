@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/components"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 )
@@ -27,7 +28,7 @@ func (f *fakeDiag) Components(context.Context) (*DiagComponentsResult, error) {
 func (f *fakeDiag) License(context.Context) (*DiagLicenseResult, error) {
 	return &DiagLicenseResult{Text: "terms", Source: "mirror"}, nil
 }
-func (f *fakeDiag) Fetch(ctx context.Context, accept bool, progress func(DiagProgress)) (*DiagFetchResult, error) {
+func (f *fakeDiag) Fetch(ctx context.Context, accept bool, _ components.SourceSettings, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
 		return nil, errs.New(errs.Usage, "必须同意")
 	}

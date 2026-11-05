@@ -1,6 +1,10 @@
 package ui
 
-import "context"
+import (
+	"context"
+
+	"modavd/internal/components"
+)
 
 type DiagComponent struct {
 	ID        string `json:"id"`
@@ -80,7 +84,7 @@ type DiagCollectResult struct {
 type diagBackend interface {
 	Components(context.Context) (*DiagComponentsResult, error)
 	License(context.Context) (*DiagLicenseResult, error)
-	Fetch(context.Context, bool, func(DiagProgress)) (*DiagFetchResult, error)
+	Fetch(context.Context, bool, components.SourceSettings, func(DiagProgress)) (*DiagFetchResult, error)
 	Collect(context.Context, DiagCollectOptions, func(DiagProgress)) (*DiagCollectResult, error)
 	ReportConfig(context.Context) (string, error)
 }

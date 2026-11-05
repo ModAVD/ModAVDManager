@@ -985,8 +985,12 @@ func componentsSourceResult(s components.SourceSettings) *ComponentsSourceResult
 // the question are written whatever the log level (raw on stderr, or one log line each with --json).
 func fetchOptions(c *cmdCtx) (components.Options, error) {
 	inv := c.inv
+	input := c.stdin
+	if input == nil {
+		input = os.Stdin
+	}
 	o := components.Options{
-		AcceptLicense: inv.boolOpt("accept-license"), JSON: inv.json, Input: c.stdin,
+		AcceptLicense: inv.boolOpt("accept-license"), JSON: inv.json, Input: input,
 		KeepDownloads: inv.boolOpt("keep-downloads"), Mirror: inv.strOpt("mirror"), MirrorURLs: inv.strsOpt("mirror-url"),
 		Log: c.log,
 	}
@@ -997,10 +1001,14 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	if !inv.isSet("mirror") && !inv.isSet("mirror-url") {
 		saved := components.LoadSourceSettings()
 		if !saved.Set && !o.AcceptLicense && !o.JSON {
-			choice, err := askComponentSource(c)
+			buffered := bufio.NewReader(input)
+			choice, err := askComponentSource(c, buffered)
 			if err != nil {
 				return o, err
 			}
+			// Keep the reader that may already have buffered the answer to the
+			// subsequent license question.
+			o.Input = buffered
 			saved = choice
 		}
 		if saved.Set {
@@ -1059,18 +1067,14 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	return o, nil
 }
 
-func askComponentSource(c *cmdCtx) (components.SourceSettings, error) {
+func askComponentSource(c *cmdCtx, input io.Reader) (components.SourceSettings, error) {
 	fmt.Fprintln(c.stderr, "组件下载源还没有设置，请选择：")
 	fmt.Fprintln(c.stderr, "  1. 自动（googledownloads_cn、tencent、google，按顺序尝试）")
 	fmt.Fprintln(c.stderr, "  2. googledownloads_cn")
 	fmt.Fprintln(c.stderr, "  3. tencent")
 	fmt.Fprintln(c.stderr, "  4. google")
 	fmt.Fprint(c.stderr, "选择 [1]：")
-	in := c.stdin
-	if in == nil {
-		in = os.Stdin
-	}
-	line, _ := bufio.NewReader(in).ReadString('\n')
+	line, _ := bufio.NewReader(input).ReadString('\n')
 	choice := strings.TrimSpace(line)
 	if choice == "" || choice == "1" {
 		return components.SaveSourceSettings("", nil)

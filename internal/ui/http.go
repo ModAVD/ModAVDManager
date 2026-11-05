@@ -47,6 +47,8 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/open", s.handleOpen)
 	m.HandleFunc("GET /api/components", s.handleComponents)
 	m.HandleFunc("GET /api/components/license", s.handleComponentLicense)
+	m.HandleFunc("GET /api/components/source", s.handleComponentSource)
+	m.HandleFunc("PUT /api/components/source", s.handleComponentSource)
 	m.HandleFunc("POST /api/components/fetch", s.handleComponentsFetch)
 	m.HandleFunc("POST /api/diag/collect", s.handleDiagCollect)
 	m.HandleFunc("GET /api/diag/report-config", s.handleReportConfig)
