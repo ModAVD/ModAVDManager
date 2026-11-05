@@ -333,6 +333,75 @@ func TestPortPlanReachesEveryAdbCall(t *testing.T) {
 	}
 }
 
+// Legacy plans may not start another instance, but status and a normal shutdown must still reach private adb.
+// Only qemu discovery and its exit are simulated; prepare, HOME, sync and shutdown run the real adb client path.
+func TestLegacyPortPlanNormalShutdown(t *testing.T) {
+	for _, base := range []int{5500, 49100} {
+		t.Run(strconv.Itoa(base), func(t *testing.T) {
+			r, log := portPlanRoot(t)
+			m := New(r, logx.Nop())
+			six := 6
+			ctx := context.Background()
+			if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &six}); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(r.MetadataPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = []byte(strings.ReplaceAll(string(raw), `"portBase": 21000`, fmt.Sprintf(`"portBase": %d`, base)))
+			if err := os.WriteFile(r.MetadataPath(), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if r.Ports().Base != base || r.CheckPorts() == nil || r.CheckAdbPorts() != nil {
+				t.Fatalf("legacy plan: %d, start %v, adb %v", r.Ports().Base, r.CheckPorts(), r.CheckAdbPorts())
+			}
+			self, ok := win.FindProcess(uint32(os.Getpid()))
+			if !ok {
+				t.Fatal("cannot read self")
+			}
+			savedScan, savedOps := qemuScan, stopOpsOf
+			qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: self} }
+			stopOpsOf = func(mm *Manager, ctx context.Context, i int, _ win.Process) stopOps {
+				ops := mm.stopOpsFor(ctx, i, win.Process{PID: 0xFFFFFFFC})
+				ops.consoleKill = func(time.Duration) error { t.Fatal("unexpected console kill"); return nil }
+				ops.forceKill = func(time.Duration) error { t.Fatal("unexpected force kill"); return nil }
+				return ops
+			}
+			t.Cleanup(func() { qemuScan, stopOpsOf = savedScan, savedOps })
+			info, err := m.Info(ctx, 6)
+			if err != nil || !info.Booted || info.Serial != fmt.Sprintf("emulator-%d", base+60) {
+				t.Fatalf("Info = %+v, %v", info, err)
+			}
+			res, err := m.Stop(ctx, 6, StopOptions{})
+			if err != nil || res.Method != "graceful" || !res.Synced {
+				t.Fatalf("Stop = %+v, %v", res, err)
+			}
+			b, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var commands []string
+			for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+				var args []string
+				if err := json.Unmarshal([]byte(line), &args); err != nil {
+					t.Fatal(err)
+				}
+				if len(args) < 4 || args[0] != "-P" || args[1] != strconv.Itoa(r.AdbServerPort()) ||
+					args[2] != "-s" || args[3] != fmt.Sprintf("emulator-%d", base+60) {
+					t.Fatalf("wrong adb target: %q", args)
+				}
+				if n := slices.Index(args, "shell"); n >= 0 {
+					commands = append(commands, strings.Join(args[n+1:], " "))
+				}
+			}
+			if !slices.Equal(commands[len(commands)-3:], []string{guestHomeScript, "sync", guestShutdownCommand}) {
+				t.Fatalf("shutdown commands = %q", commands)
+			}
+		})
+	}
+}
+
 // TestPortBaseRefused: an invalid portBase, or a plan of one's own still on the production adb servers, starts
 // nothing: create refuses before writing a file, picking an index refuses, and so does a boot.
 func TestPortBaseRefused(t *testing.T) {

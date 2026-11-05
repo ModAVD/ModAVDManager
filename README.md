@@ -134,7 +134,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - adb 只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050），不碰 5037。
 - 端口：实例 i 的控制台端口是 20000 + 10 × i，adb 加 1、gRPC 加 2，编号 0–9、不含 5。
   - 开发、测试用的根目录可以在 `mas-avd.json` 里写 `"portBase": 21000`，换一段端口（这是 modavd 自己的键，AUTO-MAS 不认）。这样它的实例不会和同一台电脑上日常用的根目录（比如 AUTO-MAS 管的那个）里同编号的实例抢端口，也不会被认成那一台。
-  - `portBase` 只能是 20000，或者 1100–65400 之间 100 的整数倍。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。
+  - `portBase` 只能是 1100–49000 之间 100 的整数倍，且不能是 5500。5500 段会被别的 adb server 自动扫描；49100 及以上会与 Windows 默认临时端口重叠。已有这些配置仍可查状态和关机，但不能再开机，先关掉全部实例再换段。默认值仍是 20000。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。
   - 不合规时，`status`、`list`、`info` 照常按 20000 段看，开机和新建都拒绝（`invalid_argument`），`check` 多一行「端口段」说明原因。
   - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。

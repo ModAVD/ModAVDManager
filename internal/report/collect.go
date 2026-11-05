@@ -680,11 +680,10 @@ var (
 	portsArg = regexp.MustCompile(`(?i)(?:^|\s)-ports?\s+"?([0-9]+)`)
 )
 
-// otherRootsInstance: a qemu of instance avd on console port is another root's. Only with a plan of its own
-// (portBase): then the same-named instance of another root can run at the same time, on that root's ports. Without
-// one, as the script: two such instances could not run at once (they would share ports).
+// otherRootsInstance excludes a same-named qemu on another root's console port, including from the default plan.
+// A missing -port/-ports remains inconclusive and is kept, as in the original script.
 func otherRootsInstance(plan root.PortPlan, avd string, port int) bool {
-	if plan.Base == root.DefaultPortBase {
+	if port == 0 {
 		return false
 	}
 	i, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(avd), root.AvdNamePrefix))
