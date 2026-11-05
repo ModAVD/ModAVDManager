@@ -166,7 +166,13 @@ func TestCompactBudgetRealImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("before: host=%d allocated=%d virtual=%d", info.OnDiskBytes, *info.AllocatedBytes, info.LogicalBytes)
+	// Keep diagnostics valid when DiskInfo represents an unavailable size with
+	// a pointer. Formatting that pointer with %d prints its address, not bytes.
+	infoJSON, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("before: %s", infoJSON)
 	res, err := m.DiskCompact(ctx, i)
 	if err != nil {
 		t.Fatal(err)
