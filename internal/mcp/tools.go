@@ -494,7 +494,10 @@ func toolDefs() []*toolDef {
 			"Rewrite a stopped instance's data disk so it keeps only the clusters still in use, then swap it in "+
 				"(the original stays untouched until the final replace). The instance must be offline (stop it "+
 				"with stop_instance first; a running one fails with busy) and must have no snapshots. Can take "+
-				"several minutes for a large disk; use disk_info first to see what it would save.",
+				"a long time for a large or slow disk; cancellation remains available. Skips rewriting when the "+
+				"estimated saving is below max(16 MiB, 1% of host usage), after validation and corruption checks. "+
+				"Reports before/after host usage and on_disk_delta_bytes (after minus before; positive means growth). "+
+				"freed_bytes stays nonnegative. Use disk_info first to estimate savings.",
 			mutating(true, false), reflect.TypeFor[emu.DiskCompactResult](), []prop{indexProp(true)},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")

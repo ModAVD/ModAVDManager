@@ -625,6 +625,16 @@ func formatDiskHuman(w io.Writer, data any) {
 }
 
 func formatDiskCompact(w io.Writer, r *emu.DiskCompactResult) {
+	if r.Skipped {
+		fmt.Fprintf(w, "实例 %d 预计可回收不足 %d 字节，跳过重写：覆盖层占用 %s → %s\n",
+			r.Index, r.ReclaimThresholdBytes, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes))
+		return
+	}
+	if r.AfterOnDiskBytes > r.BeforeOnDiskBytes {
+		fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，增加 %d 字节\n",
+			r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), r.AfterOnDiskBytes-r.BeforeOnDiskBytes)
+		return
+	}
 	fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，省下 %s\n",
 		r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), fmtBytesGB(r.FreedBytes))
 }

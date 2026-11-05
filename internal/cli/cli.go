@@ -26,7 +26,7 @@
 //	window <i> show|hide                                  emu.WindowResult
 //	disk <i> trim                                         emu.DiskTrimResult {index,discard_max_bytes}
 //	disk <i> info                                         emu.DiskInfoResult {index,overlay,running,needs_shutdown,logical_bytes,on_disk_bytes?,allocated_bytes?,reclaimable_bytes?}
-//	disk <i> compact                                      emu.DiskCompactResult {index,overlay,before_on_disk_bytes,after_on_disk_bytes,freed_bytes}
+//	disk <i> compact                                      emu.DiskCompactResult (host sizes, freed_bytes >= 0, signed on_disk_delta_bytes, skipped, estimate/threshold)
 //	install <i> <apk>                                     emu.InstallResult
 //	shell <i> [--timeout S] <command...>                  emu.ShellResult
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code

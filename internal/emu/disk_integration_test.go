@@ -166,6 +166,7 @@ func testDiskCompactIntegration(t *testing.T, backingData bool) {
 
 	// Keep a pristine copy (overlay + its backing) to confirm the guest-visible content survives the rewrite.
 	pristineDir := filepath.Join(dir, "pristine")
+	addCompactGarbage(t, overlay) // keep the convert/check/compare path covered after low-benefit skips
 	if err := os.MkdirAll(pristineDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +198,9 @@ func testDiskCompactIntegration(t *testing.T, backingData bool) {
 	}
 	if res.Overlay != overlay {
 		t.Errorf("result overlay = %q, want %q", res.Overlay, overlay)
+	}
+	if res.Skipped {
+		t.Fatal("reclaimable fixture skipped the convert/check/compare path")
 	}
 	if res.FreedBytes < 0 {
 		t.Errorf("freed bytes negative: %d", res.FreedBytes)

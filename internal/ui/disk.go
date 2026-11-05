@@ -47,19 +47,25 @@ func (s *server) handleDiskTrim(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDiskCompact is POST /api/instances/{i}/disk-compact: rewrites the shut-down instance's data disk file without
-// the freed clusters. It copies the whole disk, so it takes minutes (the page offers no cancel; POST /api/jobs/{id}/cancel still ends it).
+// the freed clusters. Long rewrites can be canceled through the job's cancel action.
 func (s *server) handleDiskCompact(w http.ResponseWriter, r *http.Request) {
 	i, ok := pathIndex(w, r)
 	if !ok || !decode(w, r, &struct{}{}) {
 		return
 	}
 	s.respondJob(w)(s.startJob(kindDiskCompact, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		s.setProgress(j, jobProgress{Step: "disk_compact", Message: fmt.Sprintf("实例 %d 正在整理磁盘（重写数据盘文件，要几分钟）", i)})
+		s.setProgress(j, jobProgress{Step: "disk_compact", Message: fmt.Sprintf("实例 %d 正在检查并整理磁盘", i)})
 		res, err := b.DiskCompact(ctx, i)
 		if err != nil {
 			return nil, err
 		}
-		s.setProgress(j, jobProgress{Step: "done", Message: fmt.Sprintf("实例 %d 已整理磁盘，释放 %s", i, humanBytes(res.FreedBytes)), Done: progressTotal, Total: progressTotal})
+		message := fmt.Sprintf("实例 %d 已整理磁盘，释放 %s", i, humanBytes(res.FreedBytes))
+		if res.Skipped {
+			message = fmt.Sprintf("实例 %d 可回收空间不足 %s，已跳过重写", i, humanBytes(res.ReclaimThresholdBytes))
+		} else if res.AfterOnDiskBytes > res.BeforeOnDiskBytes {
+			message = fmt.Sprintf("实例 %d 已整理磁盘，占用增加 %s", i, humanBytes(res.AfterOnDiskBytes-res.BeforeOnDiskBytes))
+		}
+		s.setProgress(j, jobProgress{Step: "done", Message: message, Done: progressTotal, Total: progressTotal})
 		return res, nil
 	}))
 }

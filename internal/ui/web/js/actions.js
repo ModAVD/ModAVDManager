@@ -42,7 +42,7 @@ function notify(job) {
   // the sizes are the answer, so they stay long enough to read
   else if (job.kind === 'disk-info') toast({ tone: 'info', title: `${who}的磁盘占用`, text: diskInfoText(r), timeout: 9000 });
   else if (job.kind === 'disk-trim') toast({ title: `${who}已回收磁盘空间`, text: diskTrimText(), timeout: 6000 });
-  else if (job.kind === 'disk-compact') toast({ title: `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
+  else if (job.kind === 'disk-compact') toast({ title: r.skipped ? `${who}已跳过磁盘重写` : `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
 }
 
 async function run(i, kind, body) {
@@ -82,7 +82,7 @@ export async function install(i, file) {
 export const diskInfo = (i) => run(i, 'disk-info', {});
 export const diskTrim = (i) => run(i, 'disk-trim', {});
 export async function diskCompact(i) {
-  if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: '正在整理磁盘', text: `${quoted(instance(i), i)}要几分钟，期间不能开机`, timeout: 5000 });
+  if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: '正在整理磁盘', text: `${quoted(instance(i), i)}正在检查并整理，期间不能开机`, timeout: 5000 });
 }
 
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));

@@ -231,8 +231,9 @@ function jobRow(j) {
   r.err = h('div', { class: 'job-err' });
   r.warn = h('ul', { class: 'job-warn' });
   r.res = h('div', { class: 'job-res' });
-  r.acts = h('div', { class: 'job-acts' }, btn('btn btn-secondary btn-sm', '取消等待', () => A.cancelJob(j.id)),
-    h('span', { class: 'muted', text: '只停止等待，模拟器会继续开机。' }));
+  r.cancel = btn('btn btn-secondary btn-sm', '取消等待', () => A.cancelJob(j.id));
+  r.cancelHint = h('span', { class: 'muted', text: '只停止等待，模拟器会继续开机。' });
+  r.acts = h('div', { class: 'job-acts' }, r.cancel, r.cancelHint);
   r.logs = h('div', { class: 'loglines' });
   r.sum = h('summary');
   r.det = h('details', null, r.sum, r.logs);
@@ -267,7 +268,9 @@ function updateJob(r, j) {
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  r.acts.hidden = !(running && j.kind === 'start');
+  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact'));
+  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : '取消等待');
+  r.cancelHint.hidden = j.kind === 'disk-compact';
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
   const why = j.state === 'canceled' && j.error ? j.error.message || '' : '';

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -192,6 +193,9 @@ type qemuImgCheck struct {
 	ImageEndOffset    *int64 `json:"image-end-offset"`
 	CheckErrors       int64  `json:"check-errors"`
 	Corruptions       int64  `json:"corruptions"`
+	TotalClusters     *int64 `json:"total-clusters"`
+	Format            string `json:"format"`
+	allocationKnown   bool
 }
 
 // parseQemuImgCheck decodes the JSON object of `qemu-img check --output=json`. Anything before its first "{" (a
@@ -207,6 +211,7 @@ func parseQemuImgCheck(out []byte) (qemuImgCheck, error) {
 	}
 	// qemu-img omits allocated-clusters when it is 0 (an empty image); a clean decode with it missing means 0, not an
 	// error (ModAVD/ModAVD#2 R-3). Callers gate on check-errors/corruptions before they use the count.
+	c.allocationKnown = c.AllocatedClusters != nil || (c.TotalClusters != nil && *c.TotalClusters >= 0 && c.Format == "qcow2")
 	if c.AllocatedClusters == nil {
 		zero := int64(0)
 		c.AllocatedClusters = &zero
@@ -361,10 +366,6 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 const (
 	// diskInfoTimeout bounds a quick `qemu-img info`.
 	diskInfoTimeout = time.Minute
-	// diskConvertTimeout bounds `qemu-img convert` of a multi-GB data disk.
-	diskConvertTimeout = 30 * time.Minute
-	// diskCompareTimeout bounds `qemu-img compare` of the before/after images.
-	diskCompareTimeout = 20 * time.Minute
 	// compactSpaceSlack is the headroom required on the volume beyond the estimated new overlay (allocated x 1.05),
 	// so a convert cannot fill the volume and stall other instances sharing it (ModAVD/ModAVD#2 P1-2).
 	compactSpaceSlack = 2 << 30 // 2 GiB
@@ -401,7 +402,13 @@ type DiskCompactResult struct {
 	Overlay           string `json:"overlay"`
 	BeforeOnDiskBytes int64  `json:"before_on_disk_bytes"`
 	AfterOnDiskBytes  int64  `json:"after_on_disk_bytes"`
-	FreedBytes        int64  `json:"freed_bytes"`
+	// FreedBytes keeps its original nonnegative contract; growth is represented
+	// by OnDiskDeltaBytes (after minus before, positive means more host space).
+	FreedBytes                int64  `json:"freed_bytes"`
+	OnDiskDeltaBytes          int64  `json:"on_disk_delta_bytes"`
+	Skipped                   bool   `json:"skipped"`
+	EstimatedReclaimableBytes *int64 `json:"estimated_reclaimable_bytes,omitempty"`
+	ReclaimThresholdBytes     int64  `json:"reclaim_threshold_bytes"`
 }
 
 // qemuImgInfoResult is the part of `qemu-img info --output=json` compact reads.
@@ -470,7 +477,7 @@ func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ..
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
+	cctx, cancel := qemuImgContext(ctx, timeout)
 	defer cancel()
 	so, se, state, runErr := win.RunBound(cctx, exe, args...)
 	if ctx.Err() != nil {
@@ -547,7 +554,13 @@ func (m *Manager) verifyCompacted(ctx context.Context, orig, tmp string) error {
 // killed process) is a real failure, returned as err so a mismatch is never mistaken for a compare that could not
 // run (ModAVD/ModAVD#2 P3-7).
 func (m *Manager) compareEqual(ctx context.Context, a, b string) (bool, error) {
-	so, se, code, err := m.runQemuImg(ctx, diskCompareTimeout, "compare", a, b)
+	var virtual int64
+	ah, ae := readQcow2Header(a)
+	bh, be := readQcow2Header(b)
+	if ae == nil && be == nil {
+		virtual = max(ah.VirtualSize, bh.VirtualSize)
+	}
+	so, se, code, err := m.runQemuImg(ctx, compactTimeout(virtual, 0, 0, 2, 20*time.Minute), "compare", a, b)
 	if err != nil {
 		return false, err
 	}
@@ -588,24 +601,42 @@ const damagedDiskAdvice = "modavd disk <id> info 只读取文件头和宿主占�
 // (allocated clusters x cluster size), used to size the volume headroom compact needs (ModAVD/ModAVD#2 P1-2). It
 // refuses a disk whose check reports errors or corruption: the size would be unreliable and compacting a damaged
 // image is unsafe. The overlay must not be open in a running qemu (compact holds the locks that guarantee that).
-func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clusterBytes int64) (int64, error) {
+func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clusterBytes int64) (*int64, error) {
 	out, failure, err := m.runQemuImgCheck(ctx, overlay)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if failure != "" {
-		return 0, errs.Newf(errs.Internal, "整理前检查数据盘没通过：%s，没有整理", failure)
+		return nil, errs.Newf(errs.Internal, "整理前检查数据盘没通过：%s，没有整理", failure)
 	}
 	chk, err := parseQemuImgCheck(out)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if chk.CheckErrors > 0 || chk.Corruptions > 0 {
-		return 0, errs.Newf(errs.Unsupported,
+		return nil, errs.Newf(errs.Unsupported,
 			"数据盘镜像有 %d 处检查错误、%d 处损坏，先修复再整理", chk.CheckErrors, chk.Corruptions).
 			WithAdvice(damagedDiskAdvice)
 	}
-	return *chk.AllocatedClusters * clusterBytes, nil
+	if !chk.allocationKnown {
+		return nil, nil
+	}
+	allocated, err := checkedCompactAllocation(*chk.AllocatedClusters, clusterBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &allocated, nil
+}
+
+func compactHostBytes(path string) (int64, error) {
+	n, err := win.GetCompressedFileSize(path)
+	if err != nil {
+		return 0, err
+	}
+	if n > math.MaxInt64 {
+		return 0, errs.New(errs.Internal, "宿主文件占用超出可表示范围，无法整理")
+	}
+	return int64(n), nil
 }
 
 // clearStrayCompactTmp removes a temp file left by an interrupted earlier compact, before a new run reuses the path.
@@ -706,7 +737,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	}
 	backingName := filepath.Base(info.BackingFilename)
 
-	before, err := win.GetCompressedFileSize(overlay)
+	before, err := compactHostBytes(overlay)
 	if err != nil {
 		return nil, err
 	}
@@ -730,11 +761,28 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	if err != nil {
 		return nil, err
 	}
+	estimate, threshold := compactBenefit(before, allocated)
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+	if estimate != nil && *estimate < threshold {
+		m.Log.Infof("魔改 AVD 实例 %d 预计可回收 %d 字节，低于 %d 字节，跳过磁盘重写", i, *estimate, threshold)
+		return compactResult(i, overlay, before, before, estimate, threshold, true), nil
+	}
+	// Without an allocation count, reserve for the complete virtual image and
+	// do not skip. A missing count must not masquerade as an empty disk.
+	workAllocated := hdr.VirtualSize
+	if allocated != nil {
+		workAllocated = *allocated
+	}
 	free, err := win.DiskFree(in.Dir)
 	if err != nil {
 		return nil, err
 	}
-	need := allocated + allocated/20 + compactSpaceSlack // ~ allocated x 1.05 + 2 GiB
+	need, err := compactRequiredSpace(workAllocated)
+	if err != nil {
+		return nil, err
+	}
 	if free < uint64(need) {
 		return nil, errs.Newf(errs.Unsupported,
 			"整理磁盘大约需要 %s 可用空间，%s 所在磁盘只剩 %s，请先腾出约 %s 再整理",
@@ -745,7 +793,8 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	// convert: a fresh overlay holding only the live clusters, same backing. -B skips the backing's data. The source
 	// is read through the host cache: a qcow2 source with cache=none (-T none) fails on 2.12's file-win32 because the
 	// header read is not sector-aligned, and the cache only touches referenced clusters, not the holes (#2 P1-1).
-	so, se, code, err := m.runQemuImg(ctx, diskConvertTimeout, "convert",
+	budget := compactTimeout(hdr.VirtualSize, workAllocated, before, 3, 30*time.Minute)
+	so, se, code, err := m.runQemuImg(ctx, budget, "convert",
 		"-O", "qcow2", "-B", backingName, "-o", "backing_fmt="+info.BackingFilenameFmt, overlay, tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -760,27 +809,28 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		_ = os.Remove(tmp)
 		return nil, err
 	}
+	// Measure while the original is still protected. Rename on the same volume
+	// preserves allocation and no post-replace probe can turn success into error.
+	after, err := compactHostBytes(tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return nil, err
+	}
 
 	// flush the copy's data, then atomically replace the original (write-through).
 	if err := syncFile(tmp); err != nil {
 		_ = os.Remove(tmp)
 		return nil, errs.Wrap(errs.Internal, err, "刷新整理后的数据盘失败")
 	}
+	if err := ctxErr(ctx); err != nil {
+		_ = os.Remove(tmp)
+		return nil, err
+	}
 	if err := win.MoveFileReplaceThrough(tmp, overlay); err != nil {
 		_ = os.Remove(tmp)
 		return nil, err
 	}
 
-	after, err := win.GetCompressedFileSize(overlay)
-	if err != nil {
-		return nil, err
-	}
-	m.Log.Infof("魔改 AVD 实例 %d 整理磁盘完成：占用 %s → %s", i, gib(int64(before)), gib(int64(after)))
-	return &DiskCompactResult{
-		Index:             i,
-		Overlay:           overlay,
-		BeforeOnDiskBytes: int64(before),
-		AfterOnDiskBytes:  int64(after),
-		FreedBytes:        reclaimable(int64(before), int64(after)),
-	}, nil
+	m.Log.Infof("魔改 AVD 实例 %d 整理磁盘完成：占用 %s → %s", i, gib(before), gib(after))
+	return compactResult(i, overlay, before, after, estimate, threshold, false), nil
 }
