@@ -84,6 +84,9 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if err := m.Root.CheckPorts(); err != nil {
 		return nil, err
 	}
+	if err := m.prepareBridgeBackings(ctx, inst); err != nil {
+		return nil, err
+	}
 	if missing := m.Root.Missing(); len(missing) > 0 {
 		return nil, m.Root.MissingError(missing)
 	}

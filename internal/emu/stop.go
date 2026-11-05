@@ -48,6 +48,7 @@ package emu
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -85,7 +86,8 @@ var stopOpsOf = (*Manager).stopOpsFor
 
 // Stop shuts instance i down (see StopResult.Method). Stopping an offline instance is not an error, but stopping one
 // whose start has not launched qemu yet is errs.Busy (see waitStartingQemu). errs.Internal when Windows refuses to
-// end qemu (see qemuNotEnded).
+// end qemu (see qemuNotEnded). An external stop of a creating instance is errs.Busy unless CancelCreate is explicit;
+// Force only selects the shutdown method. Internal setup shutdowns and bridge restarts use creating instead.
 func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
@@ -102,8 +104,21 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	}
 	defer l.Unlock()
 
+	// Check after taking the stop lock: a creation may have begun while we waited for another stop.
+	state, _, _ := mm.creation(i)
+	creating := state == creationCreating && !opt.creating
+	if creating && !opt.CancelCreate {
+		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），不能关机", i).
+			WithAdvice(fmt.Sprintf("等新建做完；进度用 modavd status 查看；确实要打断请用 modavd stop %d --cancel-create", i))
+	}
+	if creating {
+		if err := os.WriteFile(mm.createCancelPath(i), nil, 0o600); err != nil {
+			return nil, errs.Wrap(errs.Internal, err, "请求取消新建失败")
+		}
+	}
+
 	started := time.Now()
-	res := &StopResult{Index: i, Name: in.Name}
+	res := &StopResult{Index: i, Name: in.Name, InterruptedCreate: creating}
 	p, ok, err := mm.qemuOf(i)
 	if err != nil {
 		return nil, err

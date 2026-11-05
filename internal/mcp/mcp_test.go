@@ -203,7 +203,7 @@ func (f *fake) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
 	f.record("disk info %d", i)
 	allocated, reclaim := int64(8<<30), int64(4<<30)
 	return &emu.DiskInfoResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
-		LogicalBytes: 64 << 30, OnDiskBytes: 12 << 30, ClusterBytes: 65536, AllocatedBytes: &allocated,
+		LogicalBytes: 64 << 30, OnDiskBytes: new(int64(12 << 30)), ClusterBytes: 65536, AllocatedBytes: &allocated,
 		ReclaimableBytes: &reclaim}, nil
 }
 
@@ -776,6 +776,8 @@ func TestToolCalls(t *testing.T) {
 		{"start_instance", map[string]any{"index": 1, "window": false}, "start 1"},
 		{"stop_instance", map[string]any{"index": 1, "force": true}, "stop 1"},
 		{"stop_instance", map[string]any{"index": 1}, "stop 1"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": true}, "stop 1"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": false}, "stop 1"},
 		{"set_window_visible", map[string]any{"index": 1, "visible": false}, "window 1 false"},
 		{"shell", map[string]any{"index": 1, "command": "getprop sys.boot_completed", "timeout_s": 10}, "shell 1"},
 		{"install_apk", map[string]any{"index": 1, "apk_path": `D:\apk\game.apk`}, "install 1 D:\\apk\\game.apk"},
@@ -836,7 +838,8 @@ func TestToolCalls(t *testing.T) {
 	if s := f.starts[2]; s.Window || !s.Headless {
 		t.Fatalf("window=false %+v", s)
 	}
-	if !f.stops[0].Force || f.stops[1].Force {
+	if !f.stops[0].Force || f.stops[0].CancelCreate || f.stops[1].Force || f.stops[1].CancelCreate ||
+		!f.stops[2].CancelCreate || f.stops[2].Force || f.stops[3].CancelCreate {
 		t.Fatalf("stop options %+v", f.stops)
 	}
 	if f.timeout != 10*time.Second {
@@ -870,6 +873,7 @@ func TestToolErrors(t *testing.T) {
 		{"delete_instance", map[string]any{"index": 2}, errs.Usage, "缺少参数 confirm"},
 		{"update_instance", map[string]any{"index": 2}, errs.Usage, "至少给一项"},
 		{"start_instance", map[string]any{"index": 1, "window": "yes"}, errs.Usage, "必须是 true 或 false"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": "yes"}, errs.Usage, "必须是 true 或 false"},
 		{"start_instance", map[string]any{"index": 1, "timeout_s": 0}, errs.InvalidArgument, "timeout_s"},
 		{"shell", map[string]any{"index": 1, "command": "  "}, errs.InvalidArgument, "command 不能为空"},
 		{"shell", map[string]any{"index": 1, "command": 5}, errs.Usage, "参数 command 必须是字符串"},

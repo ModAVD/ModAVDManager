@@ -14,6 +14,7 @@ package emu
 // the lock .mas_<i>.create.lock, held for the whole setup. "creating" without anybody holding that lock is a create
 // that was killed half way: it reads as failed. While it runs, the setup's percentage (createProgress, by the steps
 // done) is in .mas_<i>.create.progress, which status / list read as creation_progress.
+// An explicit stop cancellation uses .mas_<i>.create.cancel to notify the creator across processes (createcancel.go).
 
 import (
 	"bytes"
@@ -329,7 +330,14 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 		timeout = DefaultCreateTimeout
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	canceled := m.watchCreateCancel(cctx, cancel, i)
+	defer func() {
+		cancel()
+		<-canceled
+		if err := os.Remove(m.createCancelPath(i)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			m.Log.Warnf("实例 %d 没清理新建取消标记: %v", i, err)
+		}
+	}()
 	bridge := m.bridgeWanted(i, cfg)
 	// the progress is also kept on disk, for status / list in other processes (AUTO-MAS, the manager)
 	defer m.removeCreateProgress(i)
@@ -375,12 +383,20 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	if err == nil && stopErr != nil {
 		err = errs.Wrap(errs.As(stopErr).Code, stopErr, fmt.Sprintf("实例 %d 初始化做完了，但没能正常关机: %s", i, errs.As(stopErr).Message))
 	}
+	if err == nil {
+		err = m.finishCreation(cctx, i)
+	}
 	if err != nil {
 		switch {
 		case ctx.Err() == nil && cctx.Err() == context.DeadlineExceeded:
 			err = errs.Wrap(errs.Timeout, err, fmt.Sprintf("实例 %d 新建后的初始化 %.0f 分钟没做完", i, timeout.Minutes()))
 		case ctx.Err() != nil && errs.CodeOf(err) != errs.Canceled:
 			err = errs.Wrap(errs.Canceled, err, "已取消")
+		}
+		// Start (including a bridge restart) can say it left qemu running. The
+		// cleanup above has since stopped it; persist the final state instead.
+		if errs.CodeOf(err) == errs.Canceled && stopErr == nil {
+			err = errs.Wrap(errs.Canceled, err, "新建初始化已取消，已关机")
 		}
 		logFile := ""
 		if sr != nil {
@@ -399,9 +415,6 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 		}
 		return nil, &errs.Error{Code: e.Code, Message: fmt.Sprintf("魔改 AVD 实例 %d 新建失败：%s", i, e.Message),
 			Advice: advice, Cause: err}
-	}
-	if err := m.setCreation(i, "", "", ""); err != nil {
-		return nil, err
 	}
 	prog.stage("done", fmt.Sprintf("实例 %d 新建完成，已关机；第一次开机不用再做初始化", i))
 	m.Log.Infof("实例 %d 新建完成", i)
@@ -432,12 +445,12 @@ func (m *Manager) checkCreated(ctx context.Context, i int, bridge bool, sr *Star
 
 // stopAndWait shuts instance i down normally (sync first; Stop's own fallbacks) and waits for its qemu to exit.
 func (m *Manager) stopAndWait(ctx context.Context, i int) error {
-	if _, running, err := m.findQemu(i); err != nil {
+	if running, err := createRunning(m, i); err != nil {
 		return err
 	} else if !running {
 		return nil
 	}
-	if _, err := m.Stop(ctx, i, StopOptions{}); err != nil {
+	if _, err := m.Stop(ctx, i, StopOptions{creating: true}); err != nil {
 		return err
 	}
 	return m.waitQemuGone(ctx, i)

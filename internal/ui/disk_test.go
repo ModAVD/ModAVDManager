@@ -38,7 +38,7 @@ func TestDiskJobs(t *testing.T) {
 	if v.State != stateDone || v.Error != nil || v.Progress == nil || v.Progress.Step != "done" {
 		t.Fatalf("info job %+v", v)
 	}
-	if info.Index != 3 || info.LogicalBytes != 64<<30 || info.OnDiskBytes != 12<<30 || info.NeedsShutdown ||
+	if info.Index != 3 || info.LogicalBytes != 64<<30 || info.OnDiskBytes == nil || *info.OnDiskBytes != 12<<30 || info.NeedsShutdown ||
 		info.AllocatedBytes == nil || *info.AllocatedBytes != 10<<30 || info.ReclaimableBytes == nil || *info.ReclaimableBytes != 2<<30 {
 		t.Fatalf("info result %+v", info)
 	}

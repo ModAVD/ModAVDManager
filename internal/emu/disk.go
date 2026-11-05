@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -149,7 +149,8 @@ type DiskInfoResult struct {
 	LogicalBytes int64 `json:"logical_bytes,omitempty"`
 	// OnDiskBytes is what the overlay occupies on the host volume (GetCompressedFileSize: a sparse file counts only
 	// its data).
-	OnDiskBytes int64 `json:"on_disk_bytes"`
+	// nil when the host allocation cannot be read; unknown is never reported as zero.
+	OnDiskBytes *int64 `json:"on_disk_bytes,omitempty"`
 	// ClusterBytes is the qcow2 cluster size.
 	ClusterBytes int64 `json:"cluster_bytes,omitempty"`
 	// AllocatedBytes is the guest data the overlay really holds (allocated clusters x cluster size, qemu-img check);
@@ -226,33 +227,28 @@ func (m *Manager) runQemuImgCheck(ctx context.Context, image string) (out []byte
 	}
 	cctx, cancel := context.WithTimeout(ctx, diskCheckTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, exe, "check", "--output=json", image)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	win.HideConsoleCmd(cmd)
-	cmd.WaitDelay = 2 * time.Second
-	err = cmd.Run()
+	stdout, stderr, state, err := win.RunBound(cctx, exe, "check", "--output=json", image)
 	if ctx.Err() != nil {
 		return nil, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return nil, "", errs.Newf(errs.Timeout, "qemu-img check %.0f 分钟没跑完", diskCheckTimeout.Minutes())
 	}
-	if cmd.ProcessState == nil {
+	if state == nil {
 		return nil, "", errs.Wrap(errs.Internal, err, "运行不了 qemu-img: "+err.Error())
 	}
-	switch code := cmd.ProcessState.ExitCode(); code {
+	switch code := state.ExitCode(); code {
 	case 0, 2, 3:
-		return stdout.Bytes(), "", nil
+		return stdout, "", nil
 	default:
 		return nil, fmt.Sprintf("qemu-img check 失败（退出码 %d）: %s", code,
-			orText(tail(strings.TrimSpace(stderr.String()), 300), "没有输出")), nil
+			orText(tail(strings.TrimSpace(string(stderr)), 300), "没有输出")), nil
 	}
 }
 
 // readQcow2Header reads the first bytes of the qcow2 file at path.
 func readQcow2Header(path string) (qcow2Header, error) {
-	f, err := os.Open(path)
+	f, err := root.OpenShared(path)
 	if err != nil {
 		return qcow2Header{}, errs.Wrap(errs.Internal, err, "打不开数据盘文件: "+err.Error())
 	}
@@ -274,9 +270,9 @@ func reclaimable(onDisk, allocated int64) int64 {
 }
 
 // DiskInfo reports the data disk's sizes of instance i (see DiskInfoResult). It works for a running and a stopped
-// instance; the allocated and reclaimable figures need qemu-img on the image and so only a stopped instance gets them
-// (NeedsShutdown otherwise). errs.NotFound when the instance has no data disk overlay; errs.NotReady when qemu-img is
-// missing (stopped instance only).
+// instance. Allocated and reclaimable figures require an offline instance and its start lock. Lock failures fall
+// back to readable header/host sizes with warnings; an unreadable size is omitted. errs.NotFound when no overlay
+// exists; errs.NotReady when qemu-img is missing and a locked offline check was attempted.
 func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
@@ -290,56 +286,44 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		return nil, errs.Newf(errs.NotFound, "实例 %d 没有数据盘覆盖层: %s", i, overlay).
 			WithAdvice("实例还没开过机，或数据盘不是这种格式")
 	}
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+	res := &DiskInfoResult{Index: i, Overlay: overlay}
+	// A held start lock excludes compact/delete/start and the updater's SDK swap.
+	// If it cannot be opened or acquired, never invoke qemu-img on this image.
+	startLock, locked, lockErr := m.tryOperationLock(i, "start")
+	defer startLock.Unlock()
+	if lockErr != nil {
+		res.Warnings = append(res.Warnings, lockErr.Error()+"；仅报告当前可读取的文件头和宿主占用，未运行 qemu-img check")
+	} else if !locked {
+		res.NeedsShutdown = true
+		res.Warnings = append(res.Warnings, "实例启动锁被占用，可能正在启动或更新；仅报告当前可读取的文件头和宿主占用，未运行 qemu-img check")
+	}
 	_, running, err := m.qemuOf(i)
 	if err != nil {
 		return nil, err
 	}
-	res := &DiskInfoResult{Index: i, Overlay: overlay, Running: running, NeedsShutdown: running}
-	if err := ctxErr(ctx); err != nil {
-		return nil, err
-	}
-
-	onDisk, err := win.GetCompressedFileSize(overlay)
-	if err != nil {
-		return nil, err
-	}
-	res.OnDiskBytes = int64(onDisk)
-
-	// The header read needs no qemu-img. A running qemu has the file open: if that blocks the read, leave the
-	// logical size out rather than fail.
-	hdr, herr := readQcow2Header(overlay)
-	switch {
-	case herr == nil:
-		res.LogicalBytes, res.ClusterBytes = hdr.VirtualSize, hdr.ClusterSize
-	case !running:
-		return nil, herr
-	default:
-		res.Warnings = append(res.Warnings, "实例在运行，读不到数据盘的逻辑大小")
-	}
+	res.Running = running
 	if running {
+		res.NeedsShutdown = true
 		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
-		return res, nil
 	}
 
-	// Not seen running, but a start may be launching qemu right now (it holds the start lock for the whole start,
-	// before qemuOf can see the process). Take that lock so qemu-img does not read the overlay while a launch opens
-	// it; if a start holds it, report the header-only numbers rather than fail or stall a boot (ModAVD/ModAVD#2 P3-8).
-	startLock, ok, err := win.TryLock(m.lockPath(i, "start"))
-	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+m.lockPath(i, "start"))
+	if onDisk, err := win.GetCompressedFileSize(overlay); err != nil {
+		res.Warnings = append(res.Warnings, "读不到数据盘的宿主占用："+err.Error())
+	} else {
+		res.OnDiskBytes = new(int64(onDisk))
 	}
-	if !ok {
-		res.NeedsShutdown = true
-		res.Warnings = append(res.Warnings, "实例正在启动：已分配和可回收的大小要关机后才能算")
-		return res, nil
+	// Both reads are best effort snapshots. They neither repair the image nor
+	// claim a consistent allocation estimate while another process changes it.
+	hdr, herr := readQcow2Header(overlay)
+	if herr != nil {
+		res.Warnings = append(res.Warnings, herr.Error())
+	} else {
+		res.LogicalBytes, res.ClusterBytes = hdr.VirtualSize, hdr.ClusterSize
 	}
-	defer startLock.Unlock()
-	// With the lock held, re-check: a start that finished between the first scan and the lock leaves qemu running.
-	if _, running, err := m.qemuOf(i); err != nil {
-		return nil, err
-	} else if running {
-		res.Running, res.NeedsShutdown = true, true
-		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
+	if !locked || running || herr != nil {
 		return res, nil
 	}
 
@@ -357,15 +341,18 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		return nil, err
 	}
 	if chk.CheckErrors > 0 || chk.Corruptions > 0 {
-		res.Warnings = append(res.Warnings, "数据盘镜像检查发现错误，已分配和可回收的大小不可信，已省略")
+		res.Warnings = append(res.Warnings, "数据盘镜像检查发现错误，已分配和可回收的大小不可信，已省略。"+damagedDiskAdvice)
 		return res, nil
 	}
 	if res.ClusterBytes == 0 {
 		return nil, errs.New(errs.Internal, "读不到数据盘的簇大小")
 	}
 	alloc := *chk.AllocatedClusters * res.ClusterBytes
-	rec := reclaimable(res.OnDiskBytes, alloc)
-	res.AllocatedBytes, res.ReclaimableBytes = &alloc, &rec
+	res.AllocatedBytes = &alloc
+	if res.OnDiskBytes != nil {
+		rec := reclaimable(*res.OnDiskBytes, alloc)
+		res.ReclaimableBytes = &rec
+	}
 	return res, nil
 }
 
@@ -419,16 +406,20 @@ type DiskCompactResult struct {
 
 // qemuImgInfoResult is the part of `qemu-img info --output=json` compact reads.
 type qemuImgInfoResult struct {
+	Format             string            `json:"format"`
+	VirtualSize        int64             `json:"virtual-size"`
 	BackingFilename    string            `json:"backing-filename"`
 	BackingFilenameFmt string            `json:"backing-filename-format"`
 	Snapshots          []json.RawMessage `json:"snapshots"`
 }
 
 // lockInstanceForCompact takes the per-instance locks that keep anyone from booting,
-// stopping, bridging or creating instance i while compact rewrites its data disk;
+// stopping, bridging or creating instance i while compact rewrites its data disk.
+// Disk is taken first and released last to identify the owner of these locks;
 // errs.Busy when any is already held. The returned func releases them; call it once.
 func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 	kinds := []struct{ kind, what string }{
+		{"disk", "正在整理磁盘"},
 		{"start", "正在启动"},
 		{"stop", "正在关闭"},
 		{"bridge", "正在装卸执行桥"},
@@ -442,13 +433,27 @@ func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 	}
 	for _, kw := range kinds {
 		path := m.lockPath(i, kw.kind)
-		l, ok, err := win.TryLock(path)
+		var l *win.FileLock
+		var ok bool
+		var err error
+		if kw.kind == "disk" {
+			// Let a short shared probe finish. Lifecycle locks below never wait.
+			l, ok, err = win.Lock(path, 100*time.Millisecond)
+		} else {
+			l, ok, err = win.TryLock(path)
+		}
 		if err != nil {
 			unlock()
 			return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 		}
 		if !ok {
 			unlock()
+			if kw.kind == "disk" {
+				if err := m.compactBusy(i); err != nil {
+					return nil, err
+				}
+				return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的磁盘状态正在读取，请稍后再整理", i)
+			}
 			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法整理磁盘", i, kw.what)
 		}
 		locks = append(locks, l)
@@ -467,22 +472,17 @@ func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ..
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, exe, args...)
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	win.HideConsoleCmd(cmd)
-	cmd.WaitDelay = 2 * time.Second
-	runErr := cmd.Run()
+	so, se, state, runErr := win.RunBound(cctx, exe, args...)
 	if ctx.Err() != nil {
 		return nil, nil, 0, errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return nil, nil, 0, errs.Newf(errs.Timeout, "qemu-img %s %.0f 分钟没跑完", args[0], timeout.Minutes())
 	}
-	if cmd.ProcessState == nil {
+	if state == nil {
 		return nil, nil, 0, errs.Wrap(errs.Internal, runErr, "运行不了 qemu-img: "+runErr.Error())
 	}
-	return so.Bytes(), se.Bytes(), cmd.ProcessState.ExitCode(), nil
+	return so, se, state.ExitCode(), nil
 }
 
 // qemuImgFail picks the most useful tail of a failed qemu-img run (stderr first).
@@ -580,6 +580,10 @@ func dirHasEntries(path string) bool {
 	return err == nil && len(es) > 0
 }
 
+// disk info checks the header and host allocation; offline with a lock it also
+// runs a read-only qcow2 metadata check. It cannot repair qcow2 or guest ext4 data.
+const damagedDiskAdvice = "modavd disk <id> info 只读取文件头和宿主占用，关机且取得锁后还会运行只读的 qemu-img check 检查 qcow2 元数据；不会修复镜像，也不检查客体文件系统。请保持关机，先备份整个实例目录及其引用的后备镜像；有正常备份时恢复整套镜像，无备份时保留副本和检查输出并联系维护者排查。确认不需要原有数据后，可用 modavd delete <id> --yes 删除，再用 modavd create 新建"
+
 // probeCompactAllocated runs `qemu-img check` on the overlay and returns the bytes its live clusters hold
 // (allocated clusters x cluster size), used to size the volume headroom compact needs (ModAVD/ModAVD#2 P1-2). It
 // refuses a disk whose check reports errors or corruption: the size would be unreliable and compacting a damaged
@@ -599,7 +603,7 @@ func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clu
 	if chk.CheckErrors > 0 || chk.Corruptions > 0 {
 		return 0, errs.Newf(errs.Unsupported,
 			"数据盘镜像有 %d 处检查错误、%d 处损坏，先修复再整理", chk.CheckErrors, chk.Corruptions).
-			WithAdvice("可以先用 modavd disk <id> info 看一下，修复镜像后再整理")
+			WithAdvice(damagedDiskAdvice)
 	}
 	return *chk.AllocatedClusters * clusterBytes, nil
 }
@@ -631,7 +635,7 @@ func removeCompactTmp(tmp string) error {
 // DiskCompact offline-compacts instance i's data disk: it converts the overlay to a
 // fresh qcow2 that keeps only the clusters still in use (same backing), checks and
 // compares the copy, then atomically swaps it in with a write-through replace. The
-// instance must be powered off; compact holds its start/stop/bridge/create locks so
+// instance must be powered off; compact holds its disk/start/stop/bridge/create locks so
 // nothing boots it mid-rewrite. It runs only on NTFS/ReFS (where the swap is atomic),
 // refuses when the data disk or the instance has snapshots (the convert would drop
 // them), and refuses when the volume lacks room for the copy (so a convert cannot fill

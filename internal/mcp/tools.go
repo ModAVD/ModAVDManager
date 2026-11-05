@@ -356,11 +356,14 @@ func toolDefs() []*toolDef {
 			"Shut an instance down safely: Android shutdown, falling back to sync and console kill; force=true "+
 				"skips the Android shutdown but still syncs first. Always use this instead of killing emulator or "+
 				"qemu processes: a kill without sync loses recently written game data. Stopping an offline "+
-				"instance is not an error. Takes up to about 30 s.",
+				"instance is not an error. A creating instance returns busy unless cancel_create=true, even with force=true. "+
+				"Interrupting creation leaves it create_failed; retry with the CLI's create --resume. Takes up to about 30 s.",
 			mutating(true, true), reflect.TypeFor[emu.StopResult](), []prop{
 				indexProp(true),
 				{"force", false, map[string]any{"type": "boolean", "default": false,
 					"description": "Skip the Android shutdown: sync the guest disk, then kill the emulator."}},
+				{"cancel_create", false, map[string]any{"type": "boolean", "default": false,
+					"description": "Allow interrupting creation. Still shuts Android down normally unless force=true; the result marks interrupted_create."}},
 			},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
@@ -371,7 +374,11 @@ func toolDefs() []*toolDef {
 				if err != nil {
 					return nil, err
 				}
-				return b.Stop(ctx, i, emu.StopOptions{Force: force != nil && *force})
+				cancelCreate, err := a.optBool("cancel_create")
+				if err != nil {
+					return nil, err
+				}
+				return b.Stop(ctx, i, emu.StopOptions{Force: force != nil && *force, CancelCreate: cancelCreate != nil && *cancelCreate})
 			}),
 
 		newTool("set_window_visible", "Show or hide window",
@@ -456,7 +463,9 @@ func toolDefs() []*toolDef {
 			"Report the size of an instance's data disk (the qcow2 overlay): virtual size, what it occupies on the "+
 				"host, and, for a stopped instance, the guest data it really holds and the estimated saving of "+
 				"compact_disk. A running instance only gets the host size (needs_shutdown=true): the allocated and "+
-				"reclaimable figures need the instance offline. Read-only.",
+				"reclaimable figures need the instance offline and its start lock. During compaction or when locks are "+
+				"unavailable, returns only readable header/host sizes and warnings. Unreadable sizes are omitted. "+
+				"The offline check validates qcow2 metadata; it does not repair the image or check the guest filesystem.",
 			readOnly(), reflect.TypeFor[emu.DiskInfoResult](), []prop{indexProp(true)},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")

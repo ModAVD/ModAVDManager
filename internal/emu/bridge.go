@@ -518,7 +518,7 @@ func (m *Manager) bridgeUpdateBlocked(ctx context.Context, i int) (mountBlocker,
 
 // bridgeRestart shuts instance i down and boots it cold, without the bridge step (the caller does that).
 func (m *Manager) bridgeRestart(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
-	sr, err := m.Stop(ctx, i, StopOptions{})
+	sr, err := m.Stop(ctx, i, StopOptions{creating: opt.creating})
 	if err != nil {
 		return nil, err
 	}
@@ -596,9 +596,9 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		}
 		return &BridgeResult{Index: i, Action: action, ExitCode: 0, Message: "arm64 客体不需要执行桥", Warnings: []string{}}, nil
 	}
-	bridgeLock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	bridgeLock, ok, err := m.tryOperationLock(i, "bridge")
 	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, "实例执行桥锁文件打不开")
+		return nil, err
 	}
 	if !ok {
 		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i)

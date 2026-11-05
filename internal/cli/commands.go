@@ -71,6 +71,7 @@ var (
 	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
 	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的，它开的模拟器还开着就先正常关机；其他选项不用）"}
 	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
+	optCancelCreate  = flagSpec{"cancel-create", kindBool, "", "允许打断新建中的初始化，之后用 create --resume N 重做"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
 	optCheckMB       = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
@@ -174,10 +175,12 @@ func init() {
 			run:   runStart, human: humanOf(formatStart),
 		},
 		{
-			name: "stop", args: "<i> [--force] | stop --all [--force]", summary: "关机",
+			name: "stop", args: "<i> [--force] [--cancel-create] | stop --all [--force]", summary: "关机",
 			details: "先让 Android 正常关机，不成再 sync 后结束 qemu；--force 跳过正常关机，先 sync 再结束。" +
-				"--all 按进程表找出所有在运行的实例，同时关掉，结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
-			flags:    []flagSpec{optForce, optAll},
+				"新建中的实例默认报 busy，--force 也不例外；确实要打断请加 --cancel-create，之后用 create --resume N 重做。" +
+				"--all 按进程表找出所有在运行的实例，同时关掉（包括新建中的），被打断的结果标记 interrupted_create: true；" +
+				"结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
+			flags:    []flagSpec{optForce, optAll, optCancelCreate},
 			posNames: []string{"实例编号"}, minPos: 0, maxPos: 1,
 			final: true,
 			run:   runStop, human: humanStop, exit: exitStop,
@@ -673,7 +676,7 @@ func runStart(c *cmdCtx) (any, error) {
 }
 
 func runStop(c *cmdCtx) (any, error) {
-	opt := emu.StopOptions{Force: c.inv.boolOpt("force")}
+	opt := emu.StopOptions{Force: c.inv.boolOpt("force"), CancelCreate: c.inv.boolOpt("cancel-create")}
 	if c.inv.boolOpt("all") {
 		if len(c.inv.pos) > 0 {
 			return nil, errs.New(errs.Usage, "stop --all 不能再给实例编号").WithAdvice(findCommand("stop").usageAdvice())
@@ -710,6 +713,8 @@ func runStop(c *cmdCtx) (any, error) {
 // adbd, before the first stop begins; and a server it started would make each Stop trust it and skip its own "start
 // the server and register" step, so an instance not registered yet would be killed without a sync.
 func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) {
+	// A power action must also stop creations, with the same sync / graceful shutdown as other instances.
+	opt.CancelCreate = true
 	running, err := m.Running(c.ctx)
 	if err != nil {
 		return nil, err

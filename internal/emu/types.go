@@ -216,6 +216,10 @@ type StartResult struct {
 type StopOptions struct {
 	// Force: skip the Android shutdown; sync, then kill qemu (AUTO-MAS ForceKillOnClose).
 	Force bool
+	// CancelCreate: allow interrupting a creation. Independent of Force: normally shut Android down first.
+	CancelCreate bool
+	// creating: the setup's own shutdown or bridge restart, while it holds the create lock.
+	creating bool
 }
 
 type StopResult struct {
@@ -228,9 +232,11 @@ type StopResult struct {
 	Method string `json:"method"`
 	// Synced: a sync ran before qemu was ended (always true for graceful; for sync_kill, the one before the shutdown
 	// command or the one before the kill).
-	Synced   bool     `json:"synced"`
-	Seconds  float64  `json:"seconds"`
-	Warnings []string `json:"warnings"`
+	Synced bool `json:"synced"`
+	// InterruptedCreate: this external stop requested cancellation of an active creation, including between boots.
+	InterruptedCreate bool     `json:"interrupted_create"`
+	Seconds           float64  `json:"seconds"`
+	Warnings          []string `json:"warnings"`
 	// PID of the qemu this stop ended; 0 when it was already offline.
 	PID int `json:"pid"`
 	// Process is that qemu (PID + creation time), for callers in this process that must wait until it is really gone

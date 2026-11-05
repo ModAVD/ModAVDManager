@@ -179,7 +179,8 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Force bool `json:"force"`
+		Force        bool `json:"force"`
+		CancelCreate bool `json:"cancel_create"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -187,7 +188,7 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.respondJob(w)(s.startJob(kindStop, i, func(ctx context.Context, j *job, b backend) (any, error) {
 		s.stopStarts(ctx, j, i)
 		s.setProgress(j, jobProgress{Step: "stop", Message: fmt.Sprintf("实例 %d 正在关机", i), Total: progressTotal})
-		res, err := b.Stop(ctx, i, emu.StopOptions{Force: body.Force})
+		res, err := b.Stop(ctx, i, emu.StopOptions{Force: body.Force, CancelCreate: body.CancelCreate})
 		if err != nil {
 			return nil, err
 		}

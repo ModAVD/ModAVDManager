@@ -273,3 +273,39 @@ func AvailableMemoryMB() (uint64, error) {
 	}
 	return m.AvailPhys / (1024 * 1024), nil
 }
+
+// OpenStableRead keeps the file from being written, renamed or deleted while
+// a raw backing is being verified or an offline overlay is being copied.
+func OpenStableRead(path string) (*os.File, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	h, err := syscall.CreateFile(p, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil,
+		syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
+var getFileInformationByHandleEx = modkernel32.NewProc("GetFileInformationByHandleEx")
+
+// FileChangeStamp identifies an unchanged file at its current path. An empty
+// result disables caching on filesystems without a file ID or change time.
+func FileChangeStamp(f *os.File) string {
+	h := syscall.Handle(f.Fd())
+	var id syscall.ByHandleFileInformation
+	if syscall.GetFileInformationByHandle(h, &id) != nil || id.FileIndexHigh == 0 && id.FileIndexLow == 0 {
+		return ""
+	}
+	var basic struct {
+		Creation, Access, Write, Change int64
+		Attributes, Padding             uint32
+	}
+	ok, _ := call(getFileInformationByHandleEx, uintptr(h), 0 /* FileBasicInfo */, uintptr(unsafe.Pointer(&basic)), unsafe.Sizeof(basic))
+	if ok == 0 || basic.Change == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x-%x", id.VolumeSerialNumber, id.FileIndexHigh, id.FileIndexLow, basic.Creation, basic.Write, basic.Change)
+}
