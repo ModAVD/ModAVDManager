@@ -46,8 +46,9 @@ func TestReadStableWaitsForSharingViolation(t *testing.T) {
 	}
 
 	// Other errors are not retried.
+	missing := filepath.Join(testutil.TempDir(t), "missing.sh")
 	t0 = time.Now()
-	if _, err := readStable(filepath.Join(testutil.TempDir(t), "missing.sh")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := readStable(missing); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing: %v", err)
 	}
 	if d := time.Since(t0); d > 40*time.Millisecond {
