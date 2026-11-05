@@ -177,6 +177,10 @@ It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 
 
 Only `list_instances` exposes diagnostic fields. MCP tools do not accept a diagnostic switch; disabling deletes logs and must be done in the manager or CLI.
 
+`disk <i> trim`, the GUI trim job, and `trim_disk` return after requesting asynchronous guest maintenance.
+Success does not confirm that guest FITRIM finished or succeeded. The automatic trim log measures only the
+adb/su command round trip. Stable discard counters alone cannot establish completion.
+
 To register it in Claude Code (in PowerShell, `--` needs quotes, or it gets swallowed):
 
 ```powershell
