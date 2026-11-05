@@ -62,6 +62,7 @@ var (
 	optMemory        = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 MB，也可写 6G"}
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
 	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
+	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
@@ -125,24 +126,24 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
-			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧。内存和核数只能取列出的档位，不会自动凑整。" +
+			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
 				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
 				"之后第一次开机和平常一样快。" +
 				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
 				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
-			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optNoBridge, optCreateTimeout, optResume},
+			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optNoBridge, optCreateTimeout, optResume},
 			final: true,
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]",
-			summary: "修改实例的标题、内存、核数、帧率、数据盘大小",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N]",
+			summary: "修改实例的标题、内存、核数、帧率、分辨率、数据盘大小",
 			details: "至少给一个选项。改动写进实例配置，下次开机生效。" +
 				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optDataGB},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -455,6 +456,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 	req.CPU = intPtrOpt(inv, "cpu")
 	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
 	req.FPS = intPtrOpt(inv, "fps")
+	req.Resolution = intPtrOpt(inv, "resolution")
 	req.NoBridge = inv.boolOpt("no-bridge")
 	if inv.isSet("timeout") {
 		n := inv.intOpt("timeout")
@@ -464,7 +466,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.Timeout = time.Duration(n) * time.Second
 	}
 	if inv.isSet("resume") {
-		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "no-bridge"} {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "no-bridge"} {
 			if inv.isSet(o) {
 				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
 			}
@@ -494,9 +496,10 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	}
 	req.CPU = intPtrOpt(inv, "cpu")
 	req.FPS = intPtrOpt(inv, "fps")
+	req.Resolution = intPtrOpt(inv, "resolution")
 	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
-	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.DataPartitionGB == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--data-gb 中的一个").
+	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

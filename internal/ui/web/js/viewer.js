@@ -6,6 +6,7 @@ import { S, subscribe, instance, rootBlocked } from './store.js';
 import { openDialog } from './ui.js';
 import { label } from './format.js';
 import * as A from './actions.js';
+import { displayTap } from './display.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -102,17 +103,15 @@ export function openViewer(i) {
   frame.addEventListener('click', (e) => {
     if (frame.classList.contains('off')) return;
     const r = frame.getBoundingClientRect();
-    const cfg = (instance(i) || inst).config || {};
-    const fx = (e.clientX - r.left) / r.width;
-    const fy = (e.clientY - r.top) / r.height;
-    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+    // The screenshot is the running display; config may already describe the next boot.
+    const tap = displayTap(r, img.naturalWidth, img.naturalHeight, e.clientX, e.clientY);
+    if (!tap) return;
     const rip = h('span', { class: 'ripple' });
-    rip.style.left = fx * 100 + '%';
-    rip.style.top = fy * 100 + '%';
+    rip.style.left = (e.clientX - r.left) + 'px';
+    rip.style.top = (e.clientY - r.top) + 'px';
     frame.append(rip);
     setTimeout(() => rip.remove(), 600);
-    // the API takes pixels of the 1280×720 display
-    A.input(i, { type: 'tap', x: Math.round(fx * ((cfg.width || 1280) - 1)), y: Math.round(fy * ((cfg.height || 720) - 1)) });
+    A.input(i, tap);
   });
   const un = subscribe(() => {
     const cur = instance(i);
