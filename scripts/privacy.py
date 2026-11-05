@@ -13,35 +13,99 @@ import subprocess
 import sys
 import tarfile
 
-# Only generic rules live in this file, because it is copied into the public
-# repository. Rules that name private identifiers (real name, private email,
-# hostname, local directories) sit in privacy-private-rules.json next to it,
-# which stays in the maintainer repository: public CI runs without them, and
-# the release entry point refuses to scan unless they were loaded.
+# Only generic rules live in this file. Rules that name private identifiers
+# (real name, private email, hostname, local directories) sit in a
+# privacy-private-rules.json that never enters this repository: the maintainer
+# points MODAVD_PRIVATE_RULES (or --private-rules, or use_rules()) at it.
+# Public CI runs without them; the release entry point refuses to scan unless
+# they were loaded.
 PUBLIC_RULES = {
     # name: (pattern, UTF-16 prefilter prefixes)
     "user-path": (r"[a-z]:[\\/]+Users[\\/]+[^\\/\s\"'<>|]+", ["Users"]),
 }
-PRIVATE_RULES_FILE = Path(__file__).with_name("privacy-private-rules.json")
+PRIVATE_RULES_ENV = "MODAVD_PRIVATE_RULES"
 
 
-def load_rule_specs(private_file=PRIVATE_RULES_FILE):
+def load_rule_specs(private_file):
+    """The public rules plus those in `private_file` (None: public rules only). A named file must exist."""
     specs = dict(PUBLIC_RULES)
-    loaded = private_file.exists()
-    if loaded:
-        for name, spec in json.loads(private_file.read_text(encoding="utf-8"))["rules"].items():
-            specs[name] = (spec["pattern"], spec["prefixes"])
-    return specs, loaded
+    if private_file is None:
+        return specs, False
+    private_file = Path(private_file)
+    if not private_file.is_file():
+        raise FileNotFoundError(f"Private privacy rules not found: {private_file}")
+    for name, spec in json.loads(private_file.read_text(encoding="utf-8"))["rules"].items():
+        specs[name] = (spec["pattern"], spec["prefixes"])
+    return specs, True
 
 
-RULE_SPECS, PRIVATE_RULES_LOADED = load_rule_specs()
-RULES = {name: re.compile(pattern, re.I) for name, (pattern, _) in RULE_SPECS.items()}
-ANY_RULE = re.compile("|".join(rx.pattern for rx in RULES.values()), re.I)
-ASCII_CANDIDATE = re.compile(ANY_RULE.pattern.encode("ascii"), re.I)
-# UTF-16 prefix prefilter; full matching still uses RULES on decoded printable strings.
-PREFIXES = [prefix for _, prefixes in RULE_SPECS.values() for prefix in prefixes]
-U16_CANDIDATE = re.compile(b"|".join(re.escape(s.encode("utf-16le")) for s in PREFIXES), re.I)
-NEEDLES = [s.lower().encode(e) for s in PREFIXES for e in ["ascii", "utf-16le"]]
+def use_rules(private_file):
+    """Build the matchers from the public rules plus `private_file` (None: public rules only)."""
+    global RULE_SPECS, PRIVATE_RULES_LOADED, PRIVATE_RULES_FILE, RULES, ANY_RULE, ASCII_CANDIDATE, U16_CANDIDATE, UTF8_PREFIX, NEEDLES
+    RULE_SPECS, PRIVATE_RULES_LOADED = load_rule_specs(private_file)
+    PRIVATE_RULES_FILE = Path(private_file) if private_file is not None else None
+    RULES = {name: re.compile(pattern, re.I) for name, (pattern, _) in RULE_SPECS.items()}
+    ANY_RULE = re.compile("|".join(rx.pattern for rx in RULES.values()), re.I)
+    ASCII_CANDIDATE = re.compile(ANY_RULE.pattern.encode("ascii"), re.I)
+    # UTF-16 prefix prefilter; full matching still uses RULES on decoded printable strings.
+    PREFIXES = [prefix for _, prefixes in RULE_SPECS.values() for prefix in prefixes]
+    U16_CANDIDATE = re.compile(b"|".join(re.escape(s.encode("utf-16le")) for s in PREFIXES), re.I)
+    UTF8_PREFIX = re.compile(b"|".join(re.escape(s.encode("ascii")) for s in PREFIXES), re.I)
+    NEEDLES = [s.lower().encode(e) for s in PREFIXES for e in ["ascii", "utf-16le"]]
+
+
+use_rules(os.environ.get(PRIVATE_RULES_ENV) or None)
+
+
+def printable_end(data, pos, encoding):
+    """Return the next complete printable character boundary, or None."""
+    if encoding == "utf-8":
+        first = data[pos]
+        width = (1 if first < 0x80 else 2 if 0xc2 <= first <= 0xdf else
+                 3 if 0xe0 <= first <= 0xef else 4 if 0xf0 <= first <= 0xf4 else 0)
+    else:
+        if pos + 2 > len(data):
+            return None
+        unit = int.from_bytes(data[pos:pos+2], "little")
+        width = 4 if 0xd800 <= unit <= 0xdbff else 2
+    if not width or pos + width > len(data):
+        return None
+    try:
+        char = data[pos:pos+width].decode(encoding)
+    except UnicodeDecodeError:
+        return None
+    return pos + width if char.isprintable() else None
+
+
+def unicode_strings(data):
+    # Keep legacy ASCII candidates and allowlist hashes. Add only strings
+    # whose rule match contains non-ASCII text, using complete characters.
+    # Keep UTF-16LE only; a BE pass would duplicate shifted ASCII LE strings.
+    for rx, encoding, step in [(UTF8_PREFIX, "utf-8", 1), (U16_CANDIDATE, "utf-16le", 2)]:
+        previous_end = [-1] * step
+        for match in rx.finditer(data):
+            lo, hi = match.span()
+            alignment = lo % step
+            if lo < previous_end[alignment]:
+                continue
+            while lo >= step:
+                starts = [lo-step] if step == 2 else range(max(0, lo-4), lo)
+                start = next((p for p in starts if printable_end(data, p, encoding) == lo), None)
+                if start is None and step == 2 and lo >= 4:
+                    start = lo-4 if printable_end(data, lo-4, encoding) == lo else None
+                if start is None:
+                    break
+                lo = start
+            while hi < len(data):
+                end = printable_end(data, hi, encoding)
+                if end is None:
+                    break
+                hi = end
+            # Overlapping strings suppress only prefixes on the same UTF-16 alignment.
+            previous_end[alignment] = hi
+            text = data[lo:hi].decode(encoding)
+            if any(any(ord(c) > 127 for c in match.group()) for match in ANY_RULE.finditer(text)):
+                yield text
 
 
 def strings(data):
@@ -62,7 +126,19 @@ def strings(data):
                     hi += 2
             if (lo, hi) not in seen:
                 seen.add((lo, hi))
-                yield data[lo:hi].decode(encoding)
+                try:
+                    yield data[lo:hi].decode(encoding)
+                except UnicodeDecodeError:
+                    # The ASCII bytes regex can swallow non-ASCII bytes.
+                    # Preserve the printable prefix and report the full span
+                    # even when its bytes are not valid Unicode.
+                    end = lo
+                    while end < hi and 32 <= data[end] <= 126:
+                        end += 1
+                    if end > lo:
+                        yield data[lo:end].decode("ascii")
+                    yield data[lo:hi].decode("latin-1")
+    yield from unicode_strings(data)
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -124,14 +200,18 @@ def main():
     parser.add_argument("root", type=Path)
     parser.add_argument("--allowlist", type=Path, default=Path(__file__).with_name("privacy-allowlist.json"))
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--private-rules", type=Path, help=f"private rules file (default: ${PRIVATE_RULES_ENV}, else none)")
     args = parser.parse_args()
+    if args.private_rules:
+        use_rules(args.private_rules)
     # CI scans tracked repository files, never .git internals or arbitrary local artifacts.
     names = subprocess.check_output(["git", "-C", str(args.root), "ls-files", "-z"]).decode("utf-8").split("\0")
     files = [(args.root / name, name) for name in names if name]
     report = scan_files(files, args.allowlist)
     if args.report:
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Privacy: {report['files_scanned']} files; {len(report['allowed'])} allowed; {len(report['failures'])} failures")
+    private = f"private rules {PRIVATE_RULES_FILE}" if PRIVATE_RULES_LOADED else "public rules only"
+    print(f"Privacy: {report['files_scanned']} files; {len(report['allowed'])} allowed; {len(report['failures'])} failures ({private})")
     for item in report["failures"][:20]:
         print(f"  {item['file']}: {item['rule']}: {item['sample'][:120]}")
     return bool(report["failures"])
