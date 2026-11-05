@@ -32,7 +32,7 @@ func TestCaptureRuntimeRejectsInvalidTransport(t *testing.T) {
 func TestUnreadableMetadataRetainsTrustedCaptureTarget(t *testing.T) {
 	for _, failure := range []string{"bad-json", "read-denied"} {
 		t.Run(failure, func(t *testing.T) {
-			m, old, _ := reviewCaptureFixture(t)
+			m, old, adbLog := reviewCaptureFixture(t)
 			old.Kill()
 			old.Wait(time.Second)
 			sdk := filepath.Join(m.Root.Dir, "alternate-sdk")
@@ -100,6 +100,24 @@ func TestUnreadableMetadataRetainsTrustedCaptureTarget(t *testing.T) {
 			}
 			if strings.Contains(strings.Join(got.Args, " "), "kernel") {
 				t.Fatal("unreadable diagnostic policy did not fall back off")
+			}
+			guest, err := os.ReadFile(adbLog)
+			if err != nil || !bytes.Contains(guest, []byte("logcat -b all -G 16M")) {
+				t.Fatalf("ordinary guest buffers were not applied: %s/%v", guest, err)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(guest)), "\n") {
+				var args []string
+				if json.Unmarshal([]byte(line), &args) != nil {
+					continue
+				}
+				for k, a := range args {
+					if a == "-P" && (k+1 >= len(args) || args[k+1] != strconv.Itoa(pinned.AdbServerPort())) {
+						t.Fatalf("guest buffer operation retargeted: %q", args)
+					}
+					if a == "-s" && (k+1 >= len(args) || args[k+1] != "emulator-21060") {
+						t.Fatalf("guest serial retargeted: %q", args)
+					}
+				}
 			}
 			if strings.Count(stderr.String(), "诊断策略读不了") != 1 {
 				t.Fatalf("warning episode=%s", stderr.String())
