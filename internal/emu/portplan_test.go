@@ -249,13 +249,11 @@ func TestPortPlanReachesEveryAdbCall(t *testing.T) {
 	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &six}); err != nil {
 		t.Fatal(err)
 	}
-	// instance 6 runs: the process scan finds our own process for it (nothing below ends it)
-	self, ok := win.FindProcess(uint32(os.Getpid()))
-	if !ok {
-		t.Fatal("cannot read our own process")
-	}
+	// The helper independently verifies qemu ownership, so use a real inert process with this root's runtime record.
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	q := fakeQemu(t, filepath.Join(r.RuntimeSDK(), "emulator", "qemu", "windows-x86_64"), 6, 21060, false, filepath.Join(r.AvdHome(), "mas_6.avd"))
 	saved := qemuScan
-	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: self} }
+	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: q} }
 	t.Cleanup(func() { qemuScan = saved })
 
 	info, err := m.Info(ctx, 6)
