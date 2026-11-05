@@ -566,6 +566,7 @@ type processUse struct {
 	Name           string
 	Unknown        bool // its path could not be read; matched by name
 	ShutdownHelper bool // verified root executable and complete shutdown-helper argv
+	RootProgram    bool // verified ModAVD.exe or tools/modavd.exe of this root
 }
 
 // emulatorNames are the image names that count as the emulator's when a process's path cannot be read (another
@@ -577,10 +578,37 @@ var emulatorNames = []string{"qemu-system", "emulator", "netsimd"}
 // exes do not stop a directory rename, so they are checked first. With programs, also the other processes running the
 // root's ModAVD.exe or tools\modavd.exe (the manager, MCP servers, helpers), which the swap replaces.
 func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
-	if u.scan != nil {
-		return u.scan(programs)
+	scan := u.scan
+	if scan == nil {
+		scan = func(programs bool) ([]processUse, error) {
+			return u.scanProcesses(programs, win.ListProcesses, win.Process.ImagePath)
+		}
 	}
-	return u.scanProcesses(programs, win.ListProcesses, win.Process.ImagePath)
+	return scanWithProgramRetries(programs, scan, time.Sleep)
+}
+
+// A short CLI query may finish before the next scan. Never ignore a live program:
+// retry the full scan twice, keeping the caller's locks held throughout.
+func scanWithProgramRetries(programs bool, scan func(bool) ([]processUse, error), sleep func(time.Duration)) ([]processUse, error) {
+	for attempt := 0; ; attempt++ {
+		uses, err := scan(programs)
+		if err != nil || !programs || attempt == 2 {
+			return uses, err
+		}
+		haveProgram := false
+		for _, p := range uses {
+			if p.Unknown || (!p.ShutdownHelper && !p.RootProgram) {
+				return uses, nil
+			}
+			if p.RootProgram && !p.ShutdownHelper {
+				haveProgram = true
+			}
+		}
+		if !haveProgram {
+			return uses, nil
+		}
+		sleep(250 * time.Millisecond)
+	}
 }
 
 func (u *Updater) scanProcesses(programs bool, list func() ([]win.Process, error), imagePath func(win.Process) (string, error)) ([]processUse, error) {
@@ -637,6 +665,7 @@ func (u *Updater) scanProcesses(programs bool, list func() ([]win.Process, error
 				continue // It may also exit after ImagePath succeeded.
 			}
 			out = append(out, processUse{PID: p.PID, Name: p.Name,
+				RootProgram:    progs[lp],
 				ShutdownHelper: err == nil && u.shutdownHelper(path, args)})
 		}
 	}
