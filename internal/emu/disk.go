@@ -459,9 +459,9 @@ func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 				if err := m.compactBusy(i); err != nil {
 					return nil, err
 				}
-				return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的磁盘状态正在读取，请稍后再整理", i)
+				return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的磁盘状态正在读取，请稍后再整理", i), map[string]string{errs.Reason: "locked", errs.Lock: "disk"})
 			}
-			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法整理磁盘", i, kw.what)
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法整理磁盘", i, kw.what), map[string]string{errs.Reason: "locked", errs.Lock: kw.kind})
 		}
 		locks = append(locks, l)
 	}
@@ -710,8 +710,8 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	if _, running, err := m.qemuOf(i); err != nil {
 		return nil, err
 	} else if running {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法整理磁盘", i).
-			WithAdvice(fmt.Sprintf("先 modavd stop %d，关机后再整理", i))
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法整理磁盘", i).
+			WithAdvice(fmt.Sprintf("先 modavd stop %d，关机后再整理", i)), map[string]string{errs.Reason: "running"})
 	}
 	if err := ctxErr(ctx); err != nil {
 		return nil, err

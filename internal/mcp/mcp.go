@@ -682,12 +682,17 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 	return data, b, nil
 }
 
-// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code (and
-// where a failed boot's guest state went).
+// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code,
+// the diagnostic directory and error.details as one JSON object of string values.
 func errorText(e *errs.Error) string {
 	text := e.Error() + "\n错误码: " + e.Code
-	if dir := errs.DetailsOf(e)[errs.BootDiagDir]; dir != "" {
+	details := errs.DetailsOf(e)
+	if dir := details[errs.BootDiagDir]; dir != "" {
 		text += "\n开机失败时的客体现场: " + dir
+	}
+	if len(details) > 0 {
+		data, _ := json.Marshal(details) // map[string]string always encodes
+		text += "\nerror.details: " + string(data)
 	}
 	return text
 }

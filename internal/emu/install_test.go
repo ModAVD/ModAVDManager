@@ -72,6 +72,7 @@ func TestInstallAPKGuestLockBusy(t *testing.T) {
 	if errs.CodeOf(err) != errs.Busy || !strings.HasPrefix(err.Error(), fmt.Sprintf("实例 %d 正在挂驱动补丁，稍后再装", i)) {
 		t.Fatalf("install: %v (%s)", err, errs.CodeOf(err))
 	}
+	wantErrorDetails(t, err, map[string]string{errs.Reason: "locked", errs.Lock: "guest"})
 	if d := time.Since(started); d < installGuestLockWait {
 		t.Fatalf("gave up after %v", d)
 	}

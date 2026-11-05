@@ -191,6 +191,9 @@ func TestOtherRootQemu(t *testing.T) {
 
 func TestOtherRootBusy(t *testing.T) {
 	err := otherRootBusy(3, win.Process{PID: 4242}, `D:\ModAVD\avd\mas_3.avd`)
+	if errs.DetailsOf(err)[errs.Reason] != "port_other_root" {
+		t.Errorf("details: %v", errs.DetailsOf(err))
+	}
 	if err.Code != errs.Busy || err.Message != `魔改 AVD 实例 3 的端口被另一个根目录的同编号实例占用（pid 4242，D:\ModAVD\avd\mas_3.avd）` ||
 		err.Advice == "" {
 		t.Errorf("otherRootBusy = %+v", err)

@@ -36,7 +36,7 @@ func TestStopCreatingInstance(t *testing.T) {
 	} {
 		text, isErr, sc := toolText(t, h.call(n, "stop_instance", args, nil))
 		if n < 2 {
-			if !isErr || !strings.Contains(text, "--cancel-create") || !strings.HasSuffix(text, "错误码: busy") {
+			if !isErr || !strings.Contains(text, "--cancel-create") || !strings.Contains(text, "\n错误码: busy\nerror.details: ") || !strings.Contains(text, `"lock":"create"`) || !strings.Contains(text, `"reason":"locked"`) {
 				t.Fatalf("default stop: %s", text)
 			}
 		} else if isErr || sc["interrupted_create"] != true || sc["method"] != "already_offline" {

@@ -114,7 +114,12 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
 - **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
-- **错误的 `details`**：`error` 有额外的机读信息时多一个 `details` 对象，没有就不出现。现在只有 `boot_diag_dir`：开机超时、开机后设置失败等情况下，客体现场存放的目录。
+- **错误的 `details`**：可选对象，值全部是字符串。增加这些键不改变现有 `code`、`message` 或 protocol；调用方要容忍缺少字段、不认识的键和值。管理器 HTTP 响应和失败任务保留同一份字段；MCP 的 `isError` 文本在原有错误后追加一行 `error.details: {…}`，其中 `{…}` 是 JSON。
+  - `reason` 细分实例操作的 `busy`：`running`（实例未关闭）、`locked`（另一操作持锁）、`starting`（关机时开机还没拉起 qemu）、`stopping`（开机等不到关机退出）、`window_mismatch`（窗口方式不同）、`port_in_use`（端口被占）、`port_other_root`（另一个根目录的同编号实例占端口）。其他 `busy` 可能没有此字段。
+  - `reason=locked` 时另有 `lock`：`start`、`stop`、`boot`、`bridge`、`create`、`guest`、`disk`、`metadata` 或 `config`。`disk` 是整理磁盘或共享磁盘探测用的锁；`metadata` 是根目录 JSON 锁，`config` 是实例配置与元数据写锁。
+  - `start` 的开机等待或开机后设置失败时带 `instance_status`、`qemu_running`。前者使用已知状态（如 `offline`、`starting`、`create_failed`），也可为 `not_found` 或 `unknown`；后者为 `"true"`、`"false"`、`"unknown"`。开机等待没完成时知道是 `starting`；后续设置可能重启安卓，无法确定就报 `unknown`。进程观察与是否收集客体现场共用一次快照，发生在最多 30 秒的现场收集之前；不保证调用方读到时状态未变。
+  - `create` 失败时另带 `instance_exists`（`"true"` / `"false"` / `"unknown"`），并在清理结束后填 `instance_status`、`qemu_running`，覆盖内部 `start` 过时的状态。`instance_exists` 只表示该编号当前存在实例文件或元数据，包括不完整残留和原本已存在的实例，**不表示属于这次创建**；已有实例、并发创建、参数错误时也按此定义，不能只凭它自动删除。未选定编号或读不到事实时用 `unknown`。初始化失败的状态是 `create_failed`；另一个创建者还持锁时不打扰它，状态可能是 `unknown`。
+  - `boot_diag_dir` 是开机超时、开机后设置失败等情况下客体现场存放的目录，错误包装和创建清理不会丢掉此字段。
   - 开机失败、模拟器还在时，`start` 和 `create`（包括 MCP 和管理器发起的）在返回前把客体的 `logcat -d -b all`、`dmesg`、`getprop`、`ps -A`、`/proc/meminfo`、`dumpsys activity processes` 前 300 行存进 `logs\mas_<i>-<时间>-bootfail\`，各项是否收到写在同目录的 `summary.txt` 里。
   - 每项单独限时，一共最多 30 秒；超时或出错时，已经读到的部分也留着。
   - 取消（Ctrl+C、MCP 取消）、开机中途被关机、模拟器已经不在时不收。
