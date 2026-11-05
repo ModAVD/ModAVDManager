@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -226,27 +225,22 @@ func (m *Manager) runQemuImgCheck(ctx context.Context, image string) (out []byte
 	}
 	cctx, cancel := context.WithTimeout(ctx, diskCheckTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, exe, "check", "--output=json", image)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	win.HideConsoleCmd(cmd)
-	cmd.WaitDelay = 2 * time.Second
-	err = cmd.Run()
+	stdout, stderr, state, err := win.RunBound(cctx, exe, "check", "--output=json", image)
 	if ctx.Err() != nil {
 		return nil, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return nil, "", errs.Newf(errs.Timeout, "qemu-img check %.0f 分钟没跑完", diskCheckTimeout.Minutes())
 	}
-	if cmd.ProcessState == nil {
+	if state == nil {
 		return nil, "", errs.Wrap(errs.Internal, err, "运行不了 qemu-img: "+err.Error())
 	}
-	switch code := cmd.ProcessState.ExitCode(); code {
+	switch code := state.ExitCode(); code {
 	case 0, 2, 3:
-		return stdout.Bytes(), "", nil
+		return stdout, "", nil
 	default:
 		return nil, fmt.Sprintf("qemu-img check 失败（退出码 %d）: %s", code,
-			orText(tail(strings.TrimSpace(stderr.String()), 300), "没有输出")), nil
+			orText(tail(strings.TrimSpace(string(stderr)), 300), "没有输出")), nil
 	}
 }
 
@@ -467,22 +461,17 @@ func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ..
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, exe, args...)
-	var so, se bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &so, &se
-	win.HideConsoleCmd(cmd)
-	cmd.WaitDelay = 2 * time.Second
-	runErr := cmd.Run()
+	so, se, state, runErr := win.RunBound(cctx, exe, args...)
 	if ctx.Err() != nil {
 		return nil, nil, 0, errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return nil, nil, 0, errs.Newf(errs.Timeout, "qemu-img %s %.0f 分钟没跑完", args[0], timeout.Minutes())
 	}
-	if cmd.ProcessState == nil {
+	if state == nil {
 		return nil, nil, 0, errs.Wrap(errs.Internal, runErr, "运行不了 qemu-img: "+runErr.Error())
 	}
-	return so.Bytes(), se.Bytes(), cmd.ProcessState.ExitCode(), nil
+	return so, se, state.ExitCode(), nil
 }
 
 // qemuImgFail picks the most useful tail of a failed qemu-img run (stderr first).
