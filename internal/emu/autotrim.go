@@ -1,7 +1,7 @@
 package emu
 
 // The automatic trim of the data disk after boot (ModAVD/ModAVD#2, design §3.3 / §3.6): once the boot setup is done
-// and the emulator advertises discard on /data, the clusters the guest freed are handed back (the same guest trim as
+// and the emulator advertises discard on /data, request reclamation of freed clusters (the same guest request as
 // `modavd disk <i> trim`), at most once per 24 hours per instance, so nobody has to run it by hand.
 //
 // Strictly best effort and never in the boot's way: every problem (no discard, su failed, mas-avd.json unreadable or
@@ -21,9 +21,8 @@ const (
 	autoTrimInterval = 24 * time.Hour
 	// autoTrimProbeTimeout bounds the read of the discard limit.
 	autoTrimProbeTimeout = 10 * time.Second
-	// autoTrimTimeout bounds the trim itself, which the start waits for. Far shorter than the manual diskTrimTimeout:
-	// a boot must not wait minutes for it. A trim that did not finish in time is not tried again before the interval
-	// is over (see autoTrim).
+	// autoTrimTimeout bounds the sm request, which the start waits for. It does not
+	// bound or await vold's asynchronous FITRIM. See autoTrim for retry scheduling.
 	autoTrimTimeout = 30 * time.Second
 )
 
@@ -90,9 +89,9 @@ func (m *Manager) autoTrim(ctx context.Context, i int, mode bootSetup) {
 		return
 	}
 	if res.Code == 0 {
-		m.Log.Infof("实例 %d 开机后自动回收磁盘空间（%.1f 秒）", i, time.Since(started).Seconds())
+		m.Log.Infof("实例 %d 开机后已触发磁盘回收（命令往返 %.1f 秒，未等待客体回收完成）", i, time.Since(started).Seconds())
 	} else {
-		m.Log.Warnf("实例 %d 开机后自动回收磁盘空间没成功，%.0f 小时后再试: %s", i, autoTrimInterval.Hours(),
+		m.Log.Warnf("实例 %d 开机后触发磁盘回收失败，%.0f 小时后再试: %s", i, autoTrimInterval.Hours(),
 			orText(tail(res.Out, 200), fmt.Sprintf("退出码 %d", res.Code)))
 	}
 	if err := m.writeDiskTrimAt(i, time.Now().Unix()); err != nil {

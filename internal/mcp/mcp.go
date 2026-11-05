@@ -63,8 +63,8 @@ var instructions = fmt.Sprintf("Manages the ModAVD (patched Android Emulator) in
 	"is fixed by the server's --root; instances are numbered 0-%d except %d. Always shut instances down with "+
 	"stop_instance, which syncs the guest disk first: never kill emulator or qemu processes, that loses recently "+
 	"written game data. start_instance can take minutes and reports progress; delete_instance permanently removes "+
-	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk reclaims "+
-	"unused space of a running instance, compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
+	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk requests "+
+	"reclamation in a running instance without waiting for guest completion; compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
 
 // progressEvery throttles progress notifications that do not complete a step.
 const progressEvery = time.Second

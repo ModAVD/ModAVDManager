@@ -35,9 +35,8 @@ const (
 	userdataBacking = "userdata-qemu.img"
 )
 
-// diskTrimTimeout bounds the guest idle-maintenance run. A first full trim of a
-// large /data walks all the free space and can take a few seconds; later trims
-// are quick. Generous so a big first pass does not time out.
+// diskTrimTimeout bounds the sm request's adb/su round trip, not the asynchronous
+// vold maintenance or FITRIM. A successful return does not confirm guest completion.
 const diskTrimTimeout = 2 * time.Minute
 
 // vdcDiscardMaxPath is the data disk's advertised discard limit in the guest. 0
@@ -46,12 +45,12 @@ const diskTrimTimeout = 2 * time.Minute
 // backport, where a trim would silently do nothing.
 const vdcDiscardMaxPath = "/sys/block/vdc/queue/discard_max_bytes"
 
-// DiskTrimResult reports what `modavd disk <id> trim` did.
+// DiskTrimResult reports a successful trim request, not guest FITRIM completion.
 type DiskTrimResult struct {
 	Index int `json:"index"`
 	// DiscardMaxBytes is the data disk's advertised discard limit (guest
 	// /sys/block/vdc/queue/discard_max_bytes); >0 confirms the emulator's
-	// discard path is live.
+	// discard capability is advertised. It does not confirm a completed discard.
 	DiscardMaxBytes int64 `json:"discard_max_bytes"`
 }
 
@@ -74,15 +73,16 @@ func (m *Manager) probeDiscardMax(ctx context.Context, i int, timeout time.Durat
 	return parseDiscardMaxBytes(probe.Out)
 }
 
-// runIdleMaint triggers the guest's vold idle maintenance (it runs fstrim on the mounted file systems). Shared by
-// DiskTrim and the best-effort trim after boot (autotrim.go).
+// runIdleMaint asks vold to run idle maintenance asynchronously. The result and timeout
+// describe only the sm request. Shared by DiskTrim and the best-effort boot request.
 func (m *Manager) runIdleMaint(ctx context.Context, i int, timeout time.Duration) adb.Result {
 	return m.su(ctx, i, "sm idle-maint run", timeout)
 }
 
 // DiskTrim triggers a guest FITRIM on /data (via vold idle maintenance) so the
 // virtio-blk discard path frees the qcow2 clusters behind deleted files. The
-// instance must be running and booted. errs.Unsupported when the instance is
+// result confirms only that sm returned successfully, not that FITRIM finished or
+// succeeded. The instance must be running and booted. errs.Unsupported when the instance is
 // not up, or when the emulator does not advertise discard on the data disk (an
 // old build); errs.Internal when the guest command fails.
 func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) {

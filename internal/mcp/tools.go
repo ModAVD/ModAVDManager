@@ -479,7 +479,8 @@ func toolDefs() []*toolDef {
 			"Trigger one reclaim of the unused space in a running, booted instance's data disk (guest fstrim via "+
 				"idle maintenance), so the host file can shrink as deleted game data is discarded. The instance "+
 				"must be online and the emulator must support discard (an old emulator build without it fails "+
-				"with unsupported). Safe to repeat; takes up to about 2 minutes. To shrink the file fully, stop "+
+				"with unsupported). Success means the request returned, not that guest FITRIM finished or succeeded. "+
+				"The 2-minute timeout bounds only the request. Safe to repeat. To shrink the file fully, stop "+
 				"the instance and use compact_disk.",
 			mutating(false, true), reflect.TypeFor[emu.DiskTrimResult](), []prop{indexProp(true)},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
