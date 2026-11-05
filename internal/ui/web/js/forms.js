@@ -159,7 +159,7 @@ export function openSettings(i, field) {
         segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源')),
         segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
-          hint('立即生效。宿主日志上限 4 GiB、客体 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h'))),
+          hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h'))),
       box,
       h('h3', { class: 'sec-title', text: '实例信息' }), kv),
     actions: { left: del, ok: save },

@@ -223,7 +223,7 @@ test('settings has one diagnostic checkbox with limits, privacy and immediate ap
   assert.equal(descendants(h.settings.form).filter(x => x.type === 'checkbox').length, 1);
   assert.equal(h.control('s-diagnostics').checked, true);
   const text = h.settings.options.body.textContent;
-  for (const expected of ['4 GiB', '48 MiB', '账号信息', '仅保存在本机', '诊断设置立即生效']) assert.ok(text.includes(expected), text);
+  for (const expected of ['历史日志上限 4 GiB', '客体内存最多增加 48 MiB', '账号信息', '仅保存在本机', '诊断设置立即生效']) assert.ok(text.includes(expected), text);
 });
 
 test('enabling diagnostics patches a boolean immediately without a deletion preview', async () => {

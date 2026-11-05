@@ -63,7 +63,7 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 | `list` | All instances and their status |
 | `info <i>` / `status <i>` | Details of one instance / its status |
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`, `create --resume N` | Create an instance, then start it once in the background, headless, to finish initialization, and shut it down (see below). The arm64 execution bridge is included by default; `--no-bridge` records that this instance does not want the bridge, so it is not installed on later starts either. `--resume N` redoes the initialization of an instance whose creation failed |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N]` | Change settings; they take effect at the next start. `--data-gb` can only be increased, and game data is untouched: the emulator (from 0.36) grows the disk image at start and grows the file system online after boot. A disk created before 0.36 at 16 GB or smaller can only be grown to just below the next backup group (a 16 GB disk to about 30 GB) |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--diagnostics on\|off]` | Change settings. Diagnostics apply immediately; other settings take effect at the next start. `--data-gb` can only be increased, and game data is untouched: the emulator (from 0.36) grows the disk image at start and grows the file system online after boot. A disk created before 0.36 at 16 GB or smaller can only be grown to just below the next backup group (a 16 GB disk to about 30 GB) |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add PKG] [--remove PKG] [--apps PKG]` | Per-app proxy: the listed apps go through a proxy, the others direct (see below) |
 | `delete <i> --yes` | Delete a stopped instance, together with its game data |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | Start (headless by default, with the window for `--window`), wait until boot finishes and the post-boot setup is done, and before returning confirm that files can be written to `/sdcard` (normally it is ready long before this; it waits up to 60 more seconds and only warns at the deadline). If the instance is shutting down (for example, right after a click on the emulator window's ×), it first waits for the shutdown to finish (up to 30 seconds) and then starts it. If the instance has no execution bridge yet, install it afterward; `--no-bridge` skips that this time. No switch while it runs: if the instance is already running and `--window` / `--headless` asks for the other way, it fails (exit code 5) without taking it over or restarting it; to switch, `stop` and then `start`. With neither, it is taken over as it runs |
@@ -155,6 +155,18 @@ Two display presets are available: 1080p is 1920×1080 / DPI 280; 720p is 1280×
 
 AUTO-MAS currently prefers the packaged CLI, which preserves the selected preset. Old roots without a usable CLI fall back to the Python launch path, which still forces 720p. Update the packaged CLI before using 1080p there. AUTO-MAS creation and display settings still need matching two-preset support; use the ModAVD manager to set the preset meanwhile.
 
+## Diagnostic mode
+
+Enable diagnostic mode in the instance settings, or run `modavd set <i> --diagnostics on`. It defaults to off. Files stay on this computer and are not uploaded automatically. Logs and screenshots can contain account information. `info` and `list` show the switch; JSON includes `diagnostics` and, while enabled, `diagnostics_since`. The switch and first enable time are stored as `instances.<i>.diagnostics` and `diagnosticsSince` in `mas-avd.json`. Enabling again preserves that time.
+
+- Emulator output, logcat and archived dumps are kept for 30 days, together with the latest 20 failed-boot snapshots, under a separate 4 GiB history limit for this instance. They do not consume the ordinary instances' shared 1 GiB pool. Bridge logs are retained during diagnostics. Active files are excluded from deletion and history limits; logcat still rotates at a newline after 256 MiB.
+- When the volume has less than 20 GiB free, cleanup falls back to ordinary rules and warns once. Diagnostic retention resumes when space recovers. Unreadable configuration skips deletion and produces a warning.
+- Guest main, system and kernel buffers become 32 MiB each; other buffers stay at 16 MiB. This adds at most 48 MiB of guest memory. Host capture includes kernel and dmesg. Running instances switch immediately; stopped instances apply the setting at their next boot.
+- Before each start, a separate short-lived background task copies new ModAVD crash dumps since the last successful scan into `logs\mas_<i>-crashdumps\`. Startup does not wait for the copy. Dumps in a shared crashpad database cannot be attributed precisely to one instance, so the archive can include another instance's new dumps. Crashpad's own retention stays unchanged.
+- For each diagnostic instance, `collect-info` selects the latest 30 emulator logs and logcats, with a separate 1 GiB copy budget shared with archived dumps. Failed-boot snapshots have another 300 MiB limit. Dumps are deduplicated by content; oversized binary files are skipped whole. Text is bounded to the selected snapshot length, with growth or budget truncation reported in summary. Running diagnostic instances also contribute all logcat buffers, dmesg, meminfo and activity processes. Summary records the switch and enable time. Ordinary instances keep the shared 300 MiB log budget. Ordinary failed-boot collection keeps its existing rule: include the newest directory whole, then stop taking more after reaching 100 MiB.
+
+`modavd set <i> --diagnostics off` immediately reduces closed emulator logs, logcats and bridge logs to the latest 10 each, keeps 3 failed-boot snapshots and deletes this instance's dump archive. Remaining files return to the ordinary root-wide 1 GiB pool, which can also evict older logs from other ordinary instances. Guest buffers return to 16 MiB and host capture returns to the ordinary buffers. The command reports actual deleted items and bytes. Repeat it after a failure to finish cleanup or guest restoration. The manager previews cleanup and asks for confirmation before disabling.
+
 ## MCP
 
 ```
@@ -162,6 +174,8 @@ modavd mcp --root D:\ModAVD
 ```
 
 It supports both MCP 2026-07-28 (stateless, `server/discover`) and 2025-11-25 / 2025-06-18 (`initialize` handshake). The root folder is fixed at startup and is not a tool parameter. Tools: `list_instances`, `get_instance`, `check_host`, `create_instance`, `update_instance`, `delete_instance`, `start_instance` (with progress), `stop_instance`, `set_window_visible`, `shell`, `install_apk`, `disk_info` (data disk size), `trim_disk` (reclaim space while running; the emulator must support discard), `compact_disk` (shrink the data disk; the instance must be stopped), `get_app_proxy`, `set_app_proxy` (per-app proxy).
+
+Only `list_instances` exposes diagnostic fields. MCP tools do not accept a diagnostic switch; disabling deletes logs and must be done in the manager or CLI.
 
 To register it in Claude Code (in PowerShell, `--` needs quotes, or it gets swallowed):
 
