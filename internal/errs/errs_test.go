@@ -47,3 +47,14 @@ func TestDetails(t *testing.T) {
 		t.Errorf("WithDetail of a plain error: %+v", got)
 	}
 }
+
+func TestWithDetailsCopiesAndPreservesCause(t *testing.T) {
+	inner := WithDetail(New(Timeout, "inner"), BootDiagDir, "saved")
+	base := Wrap(Timeout, inner, "outer").WithAdvice("advice")
+	details := map[string]string{InstanceStatus: "create_failed", QemuRunning: "false"}
+	got := WithDetails(base, details)
+	details[QemuRunning] = "true"
+	if got.Code != base.Code || got.Message != base.Message || got.Advice != base.Advice || !errors.Is(got, inner) || base.Details != nil || DetailsOf(got)[BootDiagDir] != "saved" || DetailsOf(got)[QemuRunning] != "false" {
+		t.Fatalf("base %+v, got %+v, details %v", base, got, DetailsOf(got))
+	}
+}

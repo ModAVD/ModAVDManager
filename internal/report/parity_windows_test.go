@@ -23,7 +23,8 @@ import (
 )
 
 // The outputs compared line by line with what report-config.ps1 and collect-info.ps1 print for the same scenario
-// (testdata/golden, written by testdata/gen_golden.ps1 from the scripts themselves).
+// (testdata/golden, written by testdata/gen_golden.ps1 from the scripts themselves). Bridge classification lines
+// now name the actual numbered instance; the original archive entries remain unchanged.
 
 // testTempDir is a fresh directory, removed afterwards: under $MODAVD_TEST_TMP\report when that is set, otherwise
 // the default OS temporary directory. Its 8.3 short names are expanded (%TEMP% is an 8.3 short name on GitHub's runners), as the

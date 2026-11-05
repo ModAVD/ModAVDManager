@@ -60,12 +60,8 @@ func bootFailed(ctx context.Context, err error) bool {
 
 // saveBootFailure is err, with the directory in its details when the guest state of instance i was saved (see the
 // file comment).
-func (m *Manager) saveBootFailure(ctx context.Context, i int, err error) error {
-	if !bootFailed(ctx, err) || m.stopping(i) {
-		return err
-	}
-	// no scan (an unsupported host): nothing to save; the boot's own error stays the one returned
-	if _, found, ferr := startFindQemu(m, i); ferr != nil || !found {
+func (m *Manager) saveBootFailure(ctx context.Context, i int, err error, running bool) error {
+	if !running || !bootFailed(ctx, err) || m.stopping(i) {
 		return err
 	}
 	dir := m.collectBootFailure(i, err)

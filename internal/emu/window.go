@@ -36,11 +36,11 @@ func windowConflict(i int, opt StartOptions, windowed bool) error {
 	const asIs = "（不指定 --window / --headless 就照原样接管）"
 	switch {
 	case opt.Window && !windowed:
-		return errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正以无头方式运行，运行中不能换成带窗口", i).
-			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --window%s", i, i, asIs))
+		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正以无头方式运行，运行中不能换成带窗口", i).
+			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --window%s", i, i, asIs)), map[string]string{errs.Reason: "window_mismatch"})
 	case opt.Headless && windowed:
-		return errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正带窗口运行，运行中不能换成无头", i).
-			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --headless%s", i, i, asIs))
+		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正带窗口运行，运行中不能换成无头", i).
+			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --headless%s", i, i, asIs)), map[string]string{errs.Reason: "window_mismatch"})
 	}
 	return nil
 }

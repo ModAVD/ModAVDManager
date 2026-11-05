@@ -127,6 +127,9 @@ func TestLockInstanceConfig(t *testing.T) {
 	started := time.Now()
 	_, err = r.LockInstanceConfig(3)
 	wantCode(t, err, errs.Busy)
+	if got := errs.DetailsOf(err); got[errs.Reason] != "locked" || got[errs.Lock] != "config" {
+		t.Errorf("details: %v", got)
+	}
 	if time.Since(started) < 150*time.Millisecond {
 		t.Fatalf("did not wait (%v)", time.Since(started))
 	}

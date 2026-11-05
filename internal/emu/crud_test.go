@@ -109,6 +109,7 @@ func TestDeleteHalfInstances(t *testing.T) {
 	if errs.CodeOf(err) != errs.Busy || !fileOrDirExists(avd.IniPath(m.Root, 6)) {
 		t.Fatalf("running: %v", err)
 	}
+	wantErrorDetails(t, err, map[string]string{errs.Reason: "running"})
 	l, ok, err := win.TryLock(m.lockPath(6, "start"))
 	if err != nil || !ok {
 		t.Fatalf("TryLock: %v %v", ok, err)

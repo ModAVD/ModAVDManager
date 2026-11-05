@@ -499,6 +499,8 @@ func TestWaitShutdown(t *testing.T) {
 	shutdownExitWait = 300 * time.Millisecond
 	if _, _, err := m.waitShutdown(context.Background(), 3, q, &progressor{}); errs.CodeOf(err) != errs.Busy {
 		t.Fatalf("qemu still running: %v, want busy", err)
+	} else {
+		wantErrorDetails(t, err, map[string]string{errs.Reason: "stopping"})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

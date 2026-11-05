@@ -221,7 +221,7 @@ function updateCard(c, inst) {
   if (busy) {
     const p = v.job && v.job.progress;
     const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…'
-      : v.kind === 'disk-trim' ? '正在回收磁盘空间…' : v.kind === 'disk-compact' ? '正在整理磁盘…' : '正在开机…');
+      : v.kind === 'disk-trim' ? '正在触发磁盘回收…' : v.kind === 'disk-compact' ? '正在整理磁盘…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     const n = cp ?? pct(p);

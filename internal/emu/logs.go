@@ -20,12 +20,13 @@ import (
 )
 
 // What in the logs dir is ours to prune: the files emulator output mas_<i>-<time>.log and guest logcat
-// logcat-mas_<i>-<time>.txt, and the directories of failed boots mas_<i>-<time>-bootfail (bootdiag.go). Nothing else
-// there is touched.
+// logcat-mas_<i>-<time>.txt, bridge logs modavd-bridge-<i>-<time>.log, and failed boots mas_<i>-<time>-bootfail.
+// Nothing else there is touched.
 var (
 	managedLogPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`^mas_\d+-.+\.log$`),
 		regexp.MustCompile(`^logcat-mas_\d+-.+\.txt$`),
+		regexp.MustCompile(`^modavd-bridge-\d+-[0-9]{8}-[0-9]{6}\.log$`),
 	}
 	bootDiagDirPattern = regexp.MustCompile(`^mas_\d+-[0-9]{8}-[0-9]{6}` + bootDiagSuffix + `$`)
 )
@@ -43,7 +44,7 @@ type logFile struct {
 }
 
 // pruneLogs deletes old logs before a new one is created (AUTO-MAS host.prune_logs): per instance keep the newest 10
-// emulator logs (mas_<i>-*.log) and 10 logcats (logcat-mas_<i>-*.txt), and the newest 3 failed boots
+// emulator logs (mas_<i>-*.log), 10 logcats (logcat-mas_<i>-*.txt), 10 bridge logs, and the newest 3 failed boots
 // (mas_<i>-*-bootfail); then while the closed files of these kinds in the whole logs dir exceed 1 GiB, delete from the
 // oldest. Files in use are skipped and not counted.
 func (m *Manager) pruneLogs(i int) {
@@ -73,6 +74,7 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 	}{
 		{avdName + "-", ".log", false, keep},
 		{"logcat-" + avdName + "-", ".txt", false, keep},
+		{"modavd-bridge-" + strconv.Itoa(i) + "-", ".log", false, keep},
 		{avdName + "-", bootDiagSuffix, true, bootDiagKeep},
 	} {
 		var mine []logFile
@@ -150,7 +152,7 @@ func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (rem
 	return removed, freed, nil
 }
 
-// managedLogFiles lists the regular files of both kinds and the failed boots' directories (no symlinks) with mtime and
+// managedLogFiles lists the managed regular files and the failed boots' directories (no symlinks) with mtime and
 // size; none when dir is missing.
 func managedLogFiles(dir string) ([]logFile, error) {
 	entries, err := os.ReadDir(dir)

@@ -254,8 +254,8 @@ function updateJob(r, j) {
   const running = j.state === 'running';
   const t0 = parseTime(j.created_at);
   const took = t0 && ((parseTime(j.finished_at) || Date.now()) - t0) / 1000;
-  setText(r.meta, clock(j.created_at) + (took ? ` · ${running ? '已进行' : '用时'} ${dur(took)}` : ''));
-  setText(r.pill, STATE[j.state] || j.state);
+  setText(r.meta, clock(j.created_at) + (took ? ` · ${running ? '已进行' : j.kind === 'disk-trim' ? '触发请求用时' : '用时'} ${dur(took)}` : ''));
+  setText(r.pill, j.kind === 'disk-trim' && j.state === 'done' ? '已触发' : STATE[j.state] || j.state);
   attr(r.pill, 'class', 'pill tone-' + (STATE_TONE[j.state] || 'idle'));
 
   r.prog.hidden = !running;
@@ -263,7 +263,7 @@ function updateJob(r, j) {
     const p = j.progress;
     const n = pct(p);
     setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…'
-      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在回收磁盘空间…' : j.kind === 'disk-compact' ? '正在整理磁盘…' : '进行中…'));
+      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在触发磁盘回收…' : j.kind === 'disk-compact' ? '正在整理磁盘…' : '进行中…'));
     setText(r.pctEl, n == null ? '' : Math.round(n) + '%');
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';

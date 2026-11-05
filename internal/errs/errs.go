@@ -43,7 +43,12 @@ const (
 
 // Keys of Error.Details.
 const (
-	BootDiagDir = "boot_diag_dir" // where a failed boot's guest state was saved (logs\<instance>-<time>-bootfail)
+	BootDiagDir    = "boot_diag_dir"   // where a failed boot's guest state was saved (logs\<instance>-<time>-bootfail)
+	Reason         = "reason"          // busy: running, locked, starting, stopping, window_mismatch, port_in_use, port_other_root
+	Lock           = "lock"            // the lock category when Reason is locked
+	InstanceStatus = "instance_status" // a lifecycle status, not_found, or unknown
+	QemuRunning    = "qemu_running"    // true, false, or unknown
+	InstanceExists = "instance_exists" // files or metadata currently occupy the index; not ownership by this call
 )
 
 type Error struct {
@@ -86,10 +91,15 @@ func (e *Error) WithAdvice(advice string) *Error {
 
 // WithDetail is a copy of As(err) with the detail key set (err itself is left as it is).
 func WithDetail(err error, key, value string) *Error {
+	return WithDetails(err, map[string]string{key: value})
+}
+
+// WithDetails copies As(err) and its details, then sets details. Wrapped details remain available to DetailsOf.
+func WithDetails(err error, details map[string]string) *Error {
 	e := *As(err)
-	d := make(map[string]string, len(e.Details)+1)
+	d := make(map[string]string, len(e.Details)+len(details))
 	maps.Copy(d, e.Details)
-	d[key] = value
+	maps.Copy(d, details)
 	e.Details = d
 	return &e
 }
