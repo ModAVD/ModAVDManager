@@ -25,6 +25,13 @@ func TestDeleteDiagnosticHistoryBeforeRemovingPolicy(t *testing.T) {
 	saved := removeRetainedLog
 	failed := false
 	removeRetainedLog = func(f logFile, log *logx.Logger) unlinkResult {
+		lock, free, err := win.Lock(filepath.Join(m.Root.LogsDir(), ".modavd-retention.lock"), 0)
+		if lock != nil {
+			lock.Unlock()
+		}
+		if err != nil || free {
+			t.Fatal("delete exposed off history before cleanup was serialized", err)
+		}
 		if !failed {
 			failed = true
 			return unlinkFailed

@@ -263,6 +263,15 @@ var logcatMu sync.Mutex
 // A helper's PID and creation time, its root-local executable and its exact adb child identity establish ownership.
 // The helper observes policy and private-server changes and replaces only its own stream.
 func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
+	r, err := m.Root.SnapshotRuntime()
+	if err != nil {
+		m.Log.Warnf("实例 %d 无法确认日志采集的 SDK/adb 目标，本次不新起采集: %v", i, err)
+		return ""
+	}
+	return m.withRuntime(r).ensureLogcatRuntime(ctx, i)
+}
+
+func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
 	serial := m.Root.Ports().Serial(i)
@@ -297,8 +306,12 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	}
 	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
 	exe := filepath.Join(m.Root.Dir, "tools", "modavd.exe")
+	token, err := captureRuntimeToken(m.Root)
+	if err != nil {
+		return ""
+	}
 	p, err := win.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i),
-		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10)}, win.StartOptions{Env: m.ADB.Env()})
+		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10), token}, win.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
 		m.Log.Warnf("实例 %d 客体日志落盘没起来: %v", i, err)
 		return ""

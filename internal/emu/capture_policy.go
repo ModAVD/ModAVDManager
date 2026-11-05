@@ -69,10 +69,25 @@ func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
 		return win.Process{}, false
 	}
 	args, err := helper.CommandLine()
-	if err != nil || len(args) != 6 || args[1] != LogcatCaptureArg ||
+	if err != nil || (len(args) != 6 && len(args) != 7) || args[1] != LogcatCaptureArg ||
 		!strings.EqualFold(filepath.Clean(args[2]), m.Root.Dir) || args[3] != strconv.Itoa(i) ||
 		args[4] != strconv.FormatUint(uint64(state.QemuPID), 10) || args[5] != strconv.FormatUint(state.QemuCreated, 10) {
 		return win.Process{}, false
+	}
+	if len(args) == 7 {
+		target, err := captureRuntimeFromToken(m.Root, args[6])
+		if err != nil {
+			return win.Process{}, false
+		}
+		given, _ := target.RuntimeConfig()
+		current, err := m.Root.SnapshotRuntime()
+		if err != nil {
+			return win.Process{}, false
+		}
+		want, _ := current.RuntimeConfig()
+		if given != want {
+			return win.Process{}, false
+		}
 	}
 	p, found := win.FindProcess(client.PID)
 	if !found || p.Created != client.Created || p.PPID != helper.PID {
@@ -114,6 +129,15 @@ func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error)
 }
 
 func (m *Manager) waitDiagnosticCapture(ctx context.Context, i int, timeout time.Duration) error {
+	r, err := m.Root.SnapshotRuntime()
+	if err != nil {
+		m.Log.Warnf("实例 %d 无法确认 SDK/adb 目标，本次不切换宿主采集: %v", i, err)
+		return nil
+	}
+	return m.withRuntime(r).waitDiagnosticCaptureRuntime(ctx, i, timeout)
+}
+
+func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeout time.Duration) error {
 	for deadline := time.Now().Add(timeout); ; {
 		policy := m.diagnosticPolicy(i)
 		state, err := m.readCaptureState(i)

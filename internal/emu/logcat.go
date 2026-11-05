@@ -146,7 +146,7 @@ func RunLogcatCapture(args []string, stderr io.Writer) int {
 }
 
 func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
-	if len(args) != 4 {
+	if len(args) != 4 && len(args) != 5 {
 		return 2
 	}
 	i, err := strconv.Atoi(args[1])
@@ -159,6 +159,15 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 	if err != nil {
 		return 1
 	}
+	if len(args) == 5 {
+		r, err = captureRuntimeFromToken(r, args[4])
+	} else {
+		r, err = r.SnapshotRuntime()
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "无法确认日志采集的 SDK/adb 目标，不猜默认配置: %v\n", err)
+		return 1
+	}
 	m := New(r, logx.New(logx.JSONSink(stderr, logx.Info)))
 	l, free, err := win.Lock(m.lockPath(i, "logcat"), 5*time.Second)
 	if err != nil || !free {
@@ -168,6 +177,11 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 	q := win.Process{PID: uint32(pid), Created: created}
 	if !q.Alive() {
 		return 0
+	}
+	verified, found, err := m.findQemu(i)
+	if err != nil || !found || verified.PID != q.PID || verified.Created != q.Created {
+		fmt.Fprintln(stderr, "日志采集的 qemu 身份、端口或根目录归属不匹配")
+		return 1
 	}
 	// The lifetime lock owns this helper, its adb child and its rotating writer. Policy/server changes cancel
 	// only this child; independent one-shot logcat calls never participate in capture ownership.

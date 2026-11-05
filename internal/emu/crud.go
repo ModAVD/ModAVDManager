@@ -379,11 +379,30 @@ func (m *Manager) prepareDiagnosticDelete(ctx context.Context, i int) error {
 	}
 	states, err := diagnostics.Parse(meta.Obj())
 	needed := meta.Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj().Has("diagnostics")
-	if err == nil && states[i].Enabled {
+	if err != nil || !needed {
+		l.Unlock()
+		return err
+	}
+	retention, err := m.retentionLock()
+	if err != nil {
+		l.Unlock()
+		return err
+	}
+	if states[i].Enabled {
 		err = diagnostics.Set(m.Root, i, false, time.Now())
 	}
+	// Do not expose the diagnostic history to another instance's ordinary-pool prune between off and its first
+	// cleanup. Only the short selection/deletion phase holds this lock, never a background dump copy.
+	if err == nil {
+		var plan cleanupPlan
+		plan, err = m.diagnosticCleanup(i, false)
+		if err == nil {
+			_, _, err = applyCleanup(plan, m.Log)
+		}
+	}
+	retention.Unlock()
 	l.Unlock()
-	if err != nil || !needed {
+	if err != nil {
 		return err
 	}
 	if err := m.waitCrashArchiveStopped(ctx, i); err != nil {

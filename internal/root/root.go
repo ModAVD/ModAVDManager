@@ -132,7 +132,7 @@ func (p PortPlan) InstancePorts() map[int]bool {
 // ports alone); CheckPorts keeps anything from being started with it. Previously accepted 5500 / 49100-65400
 // plans retain their ports for status and shutdown while CheckPorts reports how to migrate them.
 func (r *Root) Ports() PortPlan {
-	p, _ := portPlan(r.MetadataLoose().Obj())
+	p, _ := portPlan(r.runtimeMetadata())
 	return p
 }
 
@@ -157,7 +157,7 @@ func (r *Root) CheckAdbPorts() *errs.Error {
 }
 
 func (r *Root) checkPorts(allowLegacy bool) *errs.Error {
-	o := r.MetadataLoose().Obj()
+	o := r.runtimeMetadata()
 	p, problem := portPlan(o)
 	legacy := p.Base == 5500 || p.Base > maxPortBase
 	if problem != "" && !(allowLegacy && legacy) {
@@ -238,7 +238,8 @@ const EnvRoot = "MODAVD_ROOT"
 
 // Root is one ModAVD root. Dir is absolute and cleaned.
 type Root struct {
-	Dir string
+	Dir     string
+	runtime *jsonord.Obj // immutable SDK/port keys only; metadata and instance state remain live
 }
 
 // Resolve picks the root: the --root flag when given, else env MODAVD_ROOT, else the directory this executable
@@ -305,7 +306,7 @@ func (r *Root) SDK() string { return filepath.Join(r.Dir, SDKDir) } // <root>\sd
 // value is taken relative to the root (AUTO-MAS would resolve it against its own working directory, which is
 // never what was meant).
 func (r *Root) LocalSDKRoot() string {
-	s, ok := r.MetadataLoose().Obj().Get("sdkRoot").Str()
+	s, ok := r.runtimeMetadata().Get("sdkRoot").Str()
 	if !ok {
 		return ""
 	}
@@ -683,13 +684,13 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 // AdbServerPort is mas-avd.json adbServerPort when valid (an integer 1024-65535, not 5037, not an instance port),
 // else DefaultAdbServerPort. Same rule as AUTO-MAS adb_server_port.
 func (r *Root) AdbServerPort() int {
-	return adbServerPort(r.MetadataLoose().Obj())
+	return adbServerPort(r.runtimeMetadata())
 }
 
 // ScriptAdbServerPort is mas-avd.json scriptAdbServerPort when valid and different from AdbServerPort, else
 // DefaultScriptAdbServerPort, or FallbackScriptAdbServerPort when that equals the private port.
 func (r *Root) ScriptAdbServerPort() int {
-	return scriptAdbServerPort(r.MetadataLoose().Obj())
+	return scriptAdbServerPort(r.runtimeMetadata())
 }
 
 func adbServerPort(o *jsonord.Obj) int {

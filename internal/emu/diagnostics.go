@@ -132,6 +132,15 @@ func (m *Manager) persistDiagnostics(ctx context.Context, i int, enabled bool) (
 // applyDiagnosticGuest is shared by set, after-boot and re-registration. The config lock and fresh read prevent
 // an older on request from applying after a later off. No metadata or retention lock is held across an adb call.
 func (m *Manager) applyDiagnosticGuest(ctx context.Context, i int) (bool, error) {
+	r, err := m.Root.SnapshotRuntime()
+	if err != nil {
+		m.Log.Warnf("实例 %d 无法确认 SDK/adb 目标，本次不改客体缓冲区: %v", i, err)
+		return false, nil
+	}
+	return m.withRuntime(r).applyDiagnosticGuestRuntime(ctx, i)
+}
+
+func (m *Manager) applyDiagnosticGuestRuntime(ctx context.Context, i int) (bool, error) {
 	l, err := m.Root.LockInstanceConfig(i)
 	if err != nil {
 		return false, err
