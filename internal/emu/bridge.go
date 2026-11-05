@@ -314,6 +314,8 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 		run.LogFile = filepath.Join(dir, fmt.Sprintf("modavd-bridge-%d-%s.log", i, time.Now().Format("20060102-150405")))
 		if werr := os.WriteFile(run.LogFile, out, 0o644); werr != nil {
 			run.LogFile = ""
+		} else {
+			m.pruneLogs(i)
 		}
 	}
 	if ctx.Err() != nil {
