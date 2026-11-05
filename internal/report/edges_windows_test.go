@@ -139,8 +139,19 @@ func TestLogcatService(t *testing.T) {
 
 type diskProcessHost struct {
 	*fakeHost
+	ctx     context.Context
 	started chan struct{}
 	exited  chan error
+}
+
+func (h diskProcessHost) Drive(root string) (Drive, error) {
+	// Exercise cancellation of an already-running disk query, regardless of scheduling.
+	select {
+	case <-h.started:
+		return h.fakeHost.Drive(root)
+	case <-h.ctx.Done():
+		return Drive{}, h.ctx.Err()
+	}
 }
 
 func (h diskProcessHost) DiskKind(ctx context.Context, letter string) (string, string, error) {
@@ -168,9 +179,9 @@ func TestDiskQueryChild(t *testing.T) {
 func TestDriveFailureJoinsDiskProcess(t *testing.T) {
 	f := newFixture(t, "bare", testTempDir(t), "")
 	guardDials(t, f.adbPort)
-	h := diskProcessHost{f.host, make(chan struct{}), make(chan error, 1)}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	h := diskProcessHost{fakeHost: f.host, ctx: ctx, started: make(chan struct{}), exited: make(chan error, 1)}
 	done := make(chan struct{})
 	go func() { buildConfig(ctx, f.root, h); close(done) }()
 	select {
@@ -184,8 +195,11 @@ func TestDriveFailureJoinsDiskProcess(t *testing.T) {
 		t.Fatal("buildConfig did not finish")
 	}
 	select {
-	case <-h.exited:
-	case <-time.After(100 * time.Millisecond):
+	case err := <-h.exited:
+		if err == nil {
+			t.Fatal("disk child finished without cancellation")
+		}
+	default:
 		t.Fatal("disk child outlived failed drive query")
 	}
 }
