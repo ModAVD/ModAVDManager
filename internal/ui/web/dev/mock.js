@@ -789,7 +789,7 @@ async function handle(url, init) {
           ...(running ? {} : { allocated_bytes: Math.round(d.alloc), reclaimable_bytes: Math.max(0, Math.round(d.onDisk - d.alloc)) }) });
       }, 500);
     } else if (act === 'disk-trim') {
-      step(j, 'disk_trim', `实例 ${i} 正在回收磁盘空间`, 0);
+      step(j, 'disk_trim', `实例 ${i} 正在触发磁盘回收`, 0);
       setTimeout(() => {
         if (inst.status !== 'online') return failJob(j, 'unsupported', `魔改 AVD 实例 ${i} 没有在运行，请先开机再回收磁盘空间`, '');
         d.alloc = Math.max(3 * GB, d.alloc - 1.5 * GB);

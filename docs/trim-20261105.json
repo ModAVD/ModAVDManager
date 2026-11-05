@@ -1,0 +1,684 @@
+{
+  "schema": 1,
+  "description": "Selected raw evidence from five final runs; complete raw JSON retained in the local test directory. Counter stability is an observation only.",
+  "runs": [
+    {
+      "command_kind": "sm",
+      "write_mib": 128,
+      "started_at": "2026-11-05T06:25:20.696912+00:00",
+      "finished_at": "2026-11-05T06:25:32.776208+00:00",
+      "host": {
+        "platform": "Windows-11-10.0.26200-SP0",
+        "python": "3.12.10"
+      },
+      "package_version": "v0.37.1",
+      "binaries": {
+        "manager": "f322226622cf1c2728960dac867d91e740807d79945cac67b7db362b948faf12",
+        "adb": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f",
+        "qemu": "1992affccaf3777205bee92081f8ba3947308841d817c7ebc29b381de219f412"
+      },
+      "kernel": "Linux localhost 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 #1 SMP PREEMPT Mon Apr 17 20:50:58 UTC 2023 x86_64 Toybox\n",
+      "data_device": "254:40",
+      "device_graph": {
+        "254:40": {
+          "uevent": "MAJOR=254\nMINOR=40\nDEVNAME=dm-40\nDEVTYPE=disk\nDISKSEQ=102\n",
+          "slaves": [
+            "253:32"
+          ],
+          "discard_max_bytes": 0
+        },
+        "253:32": {
+          "uevent": "MAJOR=253\nMINOR=32\nDEVNAME=vdc\nDEVTYPE=disk\nDISKSEQ=35\n",
+          "slaves": [],
+          "discard_max_bytes": 0
+        }
+      },
+      "command": {
+        "sent_at": "2026-11-05T06:25:21.713516+00:00",
+        "returned_at": "2026-11-05T06:25:22.128185+00:00",
+        "round_trip_seconds": 0.4146347999922,
+        "code": 0,
+        "stdout": "SM_SENT\n520.06 1854.38\nSM_RETURNED 0\n520.19 1854.38\n",
+        "stderr": ""
+      },
+      "evidence": {
+        "data_trim_status": "failed",
+        "data_starts": [
+          {
+            "uptime_seconds": 520.182,
+            "pid": "171",
+            "tid": "16274",
+            "log_line": 6,
+            "line": "   520.182   171 16274 D vold    : Starting trim of /data"
+          }
+        ],
+        "data_returns": [],
+        "data_failures": [
+          {
+            "uptime_seconds": 520.182,
+            "pid": "171",
+            "tid": "16274",
+            "log_line": 7,
+            "line": "   520.182   171 16274 W vold    : Trim failed on /data: Operation not supported on transport endpoint"
+          }
+        ],
+        "maintenance_completions": [
+          {
+            "uptime_seconds": 520.182,
+            "pid": "171",
+            "tid": "16274",
+            "log_line": 11,
+            "line": "   520.182   171 16274 D vold    : idle maintenance completed"
+          }
+        ]
+      },
+      "sampler_code": 0,
+      "same_boot": true,
+      "source_file": "sm-work-final.json",
+      "source_sha256": "edbd2d20373d4ff6ae606cec6a93b655c3151cd2244a017a4ba871391c39b4b9",
+      "data_mount": [
+        "90 33 254:40 / /data rw,nosuid,nodev,noatime shared:29 - ext4 /dev/block/dm-40 rw,seclabel,resgid=1065,errors=panic"
+      ],
+      "workload": {
+        "sent_at": "2026-11-05T06:25:21.093517+00:00",
+        "returned_at": "2026-11-05T06:25:21.515033+00:00",
+        "round_trip_seconds": 0.4218113999813795,
+        "code": 0,
+        "stdout": "131076\t/data/local/tmp/modavd-trim-measure-38dda32c21044fc99b1e8080d72393aa/payload\n",
+        "stderr": "128+0 records in\n128+0 records out\n134217728 bytes (128 M) copied, 0.333 s, 384 M/s\n"
+      },
+      "samples": {
+        "count": 100,
+        "first": {
+          "uptime_seconds": 519.76,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "last": {
+          "uptime_seconds": 530.55,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "all_discard_counters_zero": true,
+        "all_samples_have_every_mapped_device": true
+      },
+      "vold_log": "dmesg: klogctl: Permission denied\n--------- beginning of main\n   519.663 16229 16229 I ModAVDTrimMeasure: BEGIN 38dda32c21044fc99b1e8080d72393aa\n--------- beginning of system\n   520.182   171 16274 D vold    : idle maintenance started\n   520.182   171 16274 D vold    : Starting trim of /data\n   520.182   171 16274 W vold    : Trim failed on /data: Operation not supported on transport endpoint\n   520.182   171 16274 D vold    : Starting trim of /metadata\n   520.182   171 16274 W vold    : Trim failed on /metadata: Operation not supported on transport endpoint\n   520.182   171 16274 W vold    : Cannot find dev sysfs path\n   520.182   171 16274 D vold    : idle maintenance completed\n   530.751 16649 16649 I ModAVDTrimMeasure: END 38dda32c21044fc99b1e8080d72393aa\n",
+      "dmesg": {
+        "dmesg_before": {
+          "code": 0,
+          "sha256": "3c6a478671bdaac2ff3d782955ac752aa606d358c7fbd8638d60eb4e87a5e53b",
+          "trim_or_discard_lines": []
+        },
+        "dmesg_after": {
+          "code": 0,
+          "sha256": "3ac0ad6100b788194ece27709ca211ab18e8148dda549b1773105166ea73bc58",
+          "trim_or_discard_lines": []
+        }
+      }
+    },
+    {
+      "command_kind": "sm",
+      "write_mib": 0,
+      "started_at": "2026-11-05T06:25:33.108667+00:00",
+      "finished_at": "2026-11-05T06:25:44.495750+00:00",
+      "host": {
+        "platform": "Windows-11-10.0.26200-SP0",
+        "python": "3.12.10"
+      },
+      "package_version": "v0.37.1",
+      "binaries": {
+        "manager": "f322226622cf1c2728960dac867d91e740807d79945cac67b7db362b948faf12",
+        "adb": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f",
+        "qemu": "1992affccaf3777205bee92081f8ba3947308841d817c7ebc29b381de219f412"
+      },
+      "kernel": "Linux localhost 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 #1 SMP PREEMPT Mon Apr 17 20:50:58 UTC 2023 x86_64 Toybox\n",
+      "data_device": "254:40",
+      "device_graph": {
+        "254:40": {
+          "uevent": "MAJOR=254\nMINOR=40\nDEVNAME=dm-40\nDEVTYPE=disk\nDISKSEQ=102\n",
+          "slaves": [
+            "253:32"
+          ],
+          "discard_max_bytes": 0
+        },
+        "253:32": {
+          "uevent": "MAJOR=253\nMINOR=32\nDEVNAME=vdc\nDEVTYPE=disk\nDISKSEQ=35\n",
+          "slaves": [],
+          "discard_max_bytes": 0
+        }
+      },
+      "command": {
+        "sent_at": "2026-11-05T06:25:33.528632+00:00",
+        "returned_at": "2026-11-05T06:25:33.682736+00:00",
+        "round_trip_seconds": 0.1545637999952305,
+        "code": 0,
+        "stdout": "SM_SENT\n531.63 1895.92\nSM_RETURNED 0\n531.74 1896.23\n",
+        "stderr": ""
+      },
+      "evidence": {
+        "data_trim_status": "failed",
+        "data_starts": [
+          {
+            "uptime_seconds": 531.739,
+            "pid": "171",
+            "tid": "16738",
+            "log_line": 6,
+            "line": "   531.739   171 16738 D vold    : Starting trim of /data"
+          }
+        ],
+        "data_returns": [],
+        "data_failures": [
+          {
+            "uptime_seconds": 531.739,
+            "pid": "171",
+            "tid": "16738",
+            "log_line": 7,
+            "line": "   531.739   171 16738 W vold    : Trim failed on /data: Operation not supported on transport endpoint"
+          }
+        ],
+        "maintenance_completions": [
+          {
+            "uptime_seconds": 531.739,
+            "pid": "171",
+            "tid": "16738",
+            "log_line": 11,
+            "line": "   531.739   171 16738 D vold    : idle maintenance completed"
+          }
+        ]
+      },
+      "sampler_code": 0,
+      "same_boot": true,
+      "source_file": "sm-idle-1-final.json",
+      "source_sha256": "c7ef9b042f6e24c1e30ddfbfed610733178ae53357c36ff3039267de47026e36",
+      "data_mount": [
+        "90 33 254:40 / /data rw,nosuid,nodev,noatime shared:29 - ext4 /dev/block/dm-40 rw,seclabel,resgid=1065,errors=panic"
+      ],
+      "samples": {
+        "count": 100,
+        "first": {
+          "uptime_seconds": 531.58,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "last": {
+          "uptime_seconds": 542.21,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "all_discard_counters_zero": true,
+        "all_samples_have_every_mapped_device": true
+      },
+      "vold_log": "dmesg: klogctl: Permission denied\n--------- beginning of main\n   531.523 16707 16707 I ModAVDTrimMeasure: BEGIN 0835154727fb4243b8a041bfe2a4d6fa\n--------- beginning of system\n   531.739   171 16738 D vold    : idle maintenance started\n   531.739   171 16738 D vold    : Starting trim of /data\n   531.739   171 16738 W vold    : Trim failed on /data: Operation not supported on transport endpoint\n   531.739   171 16738 D vold    : Starting trim of /metadata\n   531.739   171 16738 W vold    : Trim failed on /metadata: Operation not supported on transport endpoint\n   531.739   171 16738 W vold    : Cannot find dev sysfs path\n   531.739   171 16738 D vold    : idle maintenance completed\n   542.436 17120 17120 I ModAVDTrimMeasure: END 0835154727fb4243b8a041bfe2a4d6fa\n",
+      "dmesg": {
+        "dmesg_before": {
+          "code": 0,
+          "sha256": "3ac0ad6100b788194ece27709ca211ab18e8148dda549b1773105166ea73bc58",
+          "trim_or_discard_lines": []
+        },
+        "dmesg_after": {
+          "code": 0,
+          "sha256": "8213d4053e4eaee395557cfe362320e63b45acdac8cef71061dd0efa452c574e",
+          "trim_or_discard_lines": []
+        }
+      }
+    },
+    {
+      "command_kind": "sm",
+      "write_mib": 0,
+      "started_at": "2026-11-05T06:25:44.851534+00:00",
+      "finished_at": "2026-11-05T06:25:56.338817+00:00",
+      "host": {
+        "platform": "Windows-11-10.0.26200-SP0",
+        "python": "3.12.10"
+      },
+      "package_version": "v0.37.1",
+      "binaries": {
+        "manager": "f322226622cf1c2728960dac867d91e740807d79945cac67b7db362b948faf12",
+        "adb": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f",
+        "qemu": "1992affccaf3777205bee92081f8ba3947308841d817c7ebc29b381de219f412"
+      },
+      "kernel": "Linux localhost 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 #1 SMP PREEMPT Mon Apr 17 20:50:58 UTC 2023 x86_64 Toybox\n",
+      "data_device": "254:40",
+      "device_graph": {
+        "254:40": {
+          "uevent": "MAJOR=254\nMINOR=40\nDEVNAME=dm-40\nDEVTYPE=disk\nDISKSEQ=102\n",
+          "slaves": [
+            "253:32"
+          ],
+          "discard_max_bytes": 0
+        },
+        "253:32": {
+          "uevent": "MAJOR=253\nMINOR=32\nDEVNAME=vdc\nDEVTYPE=disk\nDISKSEQ=35\n",
+          "slaves": [],
+          "discard_max_bytes": 0
+        }
+      },
+      "command": {
+        "sent_at": "2026-11-05T06:25:45.276216+00:00",
+        "returned_at": "2026-11-05T06:25:45.434550+00:00",
+        "round_trip_seconds": 0.15868029999546707,
+        "code": 0,
+        "stdout": "SM_SENT\n543.38 1940.95\nSM_RETURNED 0\n543.49 1941.26\n",
+        "stderr": ""
+      },
+      "evidence": {
+        "data_trim_status": "failed",
+        "data_starts": [
+          {
+            "uptime_seconds": 543.49,
+            "pid": "171",
+            "tid": "17208",
+            "log_line": 6,
+            "line": "   543.490   171 17208 D vold    : Starting trim of /data"
+          }
+        ],
+        "data_returns": [],
+        "data_failures": [
+          {
+            "uptime_seconds": 543.49,
+            "pid": "171",
+            "tid": "17208",
+            "log_line": 7,
+            "line": "   543.490   171 17208 W vold    : Trim failed on /data: Operation not supported on transport endpoint"
+          }
+        ],
+        "maintenance_completions": [
+          {
+            "uptime_seconds": 543.491,
+            "pid": "171",
+            "tid": "17208",
+            "log_line": 11,
+            "line": "   543.491   171 17208 D vold    : idle maintenance completed"
+          }
+        ]
+      },
+      "sampler_code": 0,
+      "same_boot": true,
+      "source_file": "sm-idle-2-final.json",
+      "source_sha256": "0af2a250c0f7f5167579695643fe96ed58633966e768ec0f9219c39c0c9b4c69",
+      "data_mount": [
+        "90 33 254:40 / /data rw,nosuid,nodev,noatime shared:29 - ext4 /dev/block/dm-40 rw,seclabel,resgid=1065,errors=panic"
+      ],
+      "samples": {
+        "count": 100,
+        "first": {
+          "uptime_seconds": 543.33,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "last": {
+          "uptime_seconds": 554.04,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "all_discard_counters_zero": true,
+        "all_samples_have_every_mapped_device": true
+      },
+      "vold_log": "dmesg: klogctl: Permission denied\n--------- beginning of main\n   543.270 17177 17177 I ModAVDTrimMeasure: BEGIN 3b353ea1dcfa42a680907e5e6a637888\n--------- beginning of system\n   543.490   171 17208 D vold    : idle maintenance started\n   543.490   171 17208 D vold    : Starting trim of /data\n   543.490   171 17208 W vold    : Trim failed on /data: Operation not supported on transport endpoint\n   543.490   171 17208 D vold    : Starting trim of /metadata\n   543.490   171 17208 W vold    : Trim failed on /metadata: Operation not supported on transport endpoint\n   543.490   171 17208 W vold    : Cannot find dev sysfs path\n   543.491   171 17208 D vold    : idle maintenance completed\n   554.280 17590 17590 I ModAVDTrimMeasure: END 3b353ea1dcfa42a680907e5e6a637888\n",
+      "dmesg": {
+        "dmesg_before": {
+          "code": 0,
+          "sha256": "8213d4053e4eaee395557cfe362320e63b45acdac8cef71061dd0efa452c574e",
+          "trim_or_discard_lines": []
+        },
+        "dmesg_after": {
+          "code": 0,
+          "sha256": "874af79e2343c8ccaf54d3cc7e4a21f4f9ac1af5e0e8630d6c0ae631285196a4",
+          "trim_or_discard_lines": []
+        }
+      }
+    },
+    {
+      "command_kind": "cli",
+      "write_mib": 128,
+      "started_at": "2026-11-05T06:25:56.858951+00:00",
+      "finished_at": "2026-11-05T06:26:08.824670+00:00",
+      "host": {
+        "platform": "Windows-11-10.0.26200-SP0",
+        "python": "3.12.10"
+      },
+      "package_version": "v0.37.1",
+      "binaries": {
+        "manager": "f322226622cf1c2728960dac867d91e740807d79945cac67b7db362b948faf12",
+        "adb": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f",
+        "qemu": "1992affccaf3777205bee92081f8ba3947308841d817c7ebc29b381de219f412"
+      },
+      "kernel": "Linux localhost 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 #1 SMP PREEMPT Mon Apr 17 20:50:58 UTC 2023 x86_64 Toybox\n",
+      "data_device": "254:40",
+      "device_graph": {
+        "254:40": {
+          "uevent": "MAJOR=254\nMINOR=40\nDEVNAME=dm-40\nDEVTYPE=disk\nDISKSEQ=102\n",
+          "slaves": [
+            "253:32"
+          ],
+          "discard_max_bytes": 0
+        },
+        "253:32": {
+          "uevent": "MAJOR=253\nMINOR=32\nDEVNAME=vdc\nDEVTYPE=disk\nDISKSEQ=35\n",
+          "slaves": [],
+          "discard_max_bytes": 0
+        }
+      },
+      "command": {
+        "sent_at": "2026-11-05T06:25:57.812858+00:00",
+        "returned_at": "2026-11-05T06:25:58.429510+00:00",
+        "round_trip_seconds": 0.6168216000078246,
+        "code": 4,
+        "stdout": "",
+        "stderr": "错误：这个模拟器版本不支持回收磁盘空间（客体数据盘没有 discard）\n建议：请把魔改 AVD 更新到带磁盘回收的版本，实例和游戏数据不受影响\n"
+      },
+      "evidence": {
+        "data_trim_status": "unknown",
+        "data_starts": [],
+        "data_returns": [],
+        "data_failures": [],
+        "maintenance_completions": []
+      },
+      "sampler_code": 0,
+      "same_boot": true,
+      "source_file": "cli-work-final.json",
+      "source_sha256": "947cf3feb894b6746aa3e90cfb41512eadc5bfb4afe7b9edaa3585569a05370d",
+      "data_mount": [
+        "90 33 254:40 / /data rw,nosuid,nodev,noatime shared:29 - ext4 /dev/block/dm-40 rw,seclabel,resgid=1065,errors=panic"
+      ],
+      "workload": {
+        "sent_at": "2026-11-05T06:25:57.251632+00:00",
+        "returned_at": "2026-11-05T06:25:57.646835+00:00",
+        "round_trip_seconds": 0.39550259997486137,
+        "code": 0,
+        "stdout": "131076\t/data/local/tmp/modavd-trim-measure-0a47667e9eb2430dbeda5e356c18ffb2/payload\n",
+        "stderr": "128+0 records in\n128+0 records out\n134217728 bytes (128 M) copied, 0.316 s, 405 M/s\n"
+      },
+      "samples": {
+        "count": 100,
+        "first": {
+          "uptime_seconds": 555.87,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "last": {
+          "uptime_seconds": 566.57,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "all_discard_counters_zero": true,
+        "all_samples_have_every_mapped_device": true
+      },
+      "vold_log": "dmesg: klogctl: Permission denied\n--------- beginning of main\n   555.804 17668 17668 I ModAVDTrimMeasure: BEGIN 0a47667e9eb2430dbeda5e356c18ffb2\n   566.775 18075 18075 I ModAVDTrimMeasure: END 0a47667e9eb2430dbeda5e356c18ffb2\n",
+      "dmesg": {
+        "dmesg_before": {
+          "code": 0,
+          "sha256": "874af79e2343c8ccaf54d3cc7e4a21f4f9ac1af5e0e8630d6c0ae631285196a4",
+          "trim_or_discard_lines": []
+        },
+        "dmesg_after": {
+          "code": 0,
+          "sha256": "3d15686e997d5273bc86941b2fe02aab0af805725613bd0ff02d4f7b908f4d4d",
+          "trim_or_discard_lines": []
+        }
+      }
+    },
+    {
+      "command_kind": "cli",
+      "write_mib": 0,
+      "started_at": "2026-11-05T06:26:09.209458+00:00",
+      "finished_at": "2026-11-05T06:26:20.614262+00:00",
+      "host": {
+        "platform": "Windows-11-10.0.26200-SP0",
+        "python": "3.12.10"
+      },
+      "package_version": "v0.37.1",
+      "binaries": {
+        "manager": "f322226622cf1c2728960dac867d91e740807d79945cac67b7db362b948faf12",
+        "adb": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f",
+        "qemu": "1992affccaf3777205bee92081f8ba3947308841d817c7ebc29b381de219f412"
+      },
+      "kernel": "Linux localhost 6.1.23-android14-4-00257-g7e35917775b8-ab9964412 #1 SMP PREEMPT Mon Apr 17 20:50:58 UTC 2023 x86_64 Toybox\n",
+      "data_device": "254:40",
+      "device_graph": {
+        "254:40": {
+          "uevent": "MAJOR=254\nMINOR=40\nDEVNAME=dm-40\nDEVTYPE=disk\nDISKSEQ=102\n",
+          "slaves": [
+            "253:32"
+          ],
+          "discard_max_bytes": 0
+        },
+        "253:32": {
+          "uevent": "MAJOR=253\nMINOR=32\nDEVNAME=vdc\nDEVTYPE=disk\nDISKSEQ=35\n",
+          "slaves": [],
+          "discard_max_bytes": 0
+        }
+      },
+      "command": {
+        "sent_at": "2026-11-05T06:26:09.669335+00:00",
+        "returned_at": "2026-11-05T06:26:09.895084+00:00",
+        "round_trip_seconds": 0.2259085999976378,
+        "code": 4,
+        "stdout": "",
+        "stderr": "错误：这个模拟器版本不支持回收磁盘空间（客体数据盘没有 discard）\n建议：请把魔改 AVD 更新到带磁盘回收的版本，实例和游戏数据不受影响\n"
+      },
+      "evidence": {
+        "data_trim_status": "unknown",
+        "data_starts": [],
+        "data_returns": [],
+        "data_failures": [],
+        "maintenance_completions": []
+      },
+      "sampler_code": 0,
+      "same_boot": true,
+      "source_file": "cli-idle-final.json",
+      "source_sha256": "a29d55b6ca8e46dc8acb850677000afd7c3b475da50b2461933561b018608ec0",
+      "data_mount": [
+        "90 33 254:40 / /data rw,nosuid,nodev,noatime shared:29 - ext4 /dev/block/dm-40 rw,seclabel,resgid=1065,errors=panic"
+      ],
+      "samples": {
+        "count": 100,
+        "first": {
+          "uptime_seconds": 567.73,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "last": {
+          "uptime_seconds": 578.39,
+          "devices": {
+            "253:32": {
+              "name": "vdc",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            },
+            "254:40": {
+              "name": "dm-40",
+              "discard": {
+                "completed": 0,
+                "merged": 0,
+                "sectors": 0,
+                "milliseconds": 0
+              }
+            }
+          }
+        },
+        "all_discard_counters_zero": true,
+        "all_samples_have_every_mapped_device": true
+      },
+      "vold_log": "dmesg: klogctl: Permission denied\n--------- beginning of main\n   566.775 18075 18075 I ModAVDTrimMeasure: END 0a47667e9eb2430dbeda5e356c18ffb2\n   567.659 18145 18145 I ModAVDTrimMeasure: BEGIN 7efd9be577a0412cae9d7775d2bbb533\n   578.589 18544 18544 I ModAVDTrimMeasure: END 7efd9be577a0412cae9d7775d2bbb533\n",
+      "dmesg": {
+        "dmesg_before": {
+          "code": 0,
+          "sha256": "3d15686e997d5273bc86941b2fe02aab0af805725613bd0ff02d4f7b908f4d4d",
+          "trim_or_discard_lines": []
+        },
+        "dmesg_after": {
+          "code": 0,
+          "sha256": "0d5f482a113d53662d5c1727a723761a8f9da430733c6e67bf9d09a29683388e",
+          "trim_or_discard_lines": []
+        }
+      }
+    }
+  ]
+}
