@@ -80,9 +80,10 @@ func TestScriptPort(t *testing.T) {
 		avd        string
 		want       bool
 	}{
-		{root.DefaultPortBase, 20060, "mas_6", false}, {root.DefaultPortBase, 21060, "mas_6", false},
+		{root.DefaultPortBase, 20060, "mas_6", false}, {root.DefaultPortBase, 21060, "mas_6", true},
+		{root.DefaultPortBase, 0, "mas_6", false}, {root.DefaultPortBase, 21060, "MAS_6", true},
 		{21000, 21060, "mas_6", false}, {21000, 20060, "mas_6", true}, {21000, 20060, "MAS_6", true},
-		{21000, 0, "mas_6", true}, {21000, 20060, "mas_x", false},
+		{21000, 0, "mas_6", false}, {21000, 20060, "mas_x", false},
 	} {
 		if got := otherRootsInstance(root.PortPlan{Base: c.base}, c.avd, c.port); got != c.want {
 			t.Errorf("otherRootsInstance(%d, %s, %d) = %v", c.base, c.avd, c.port, got)
@@ -132,6 +133,47 @@ func TestForbiddenEntry(t *testing.T) {
 		if forbiddenEntry(name) {
 			t.Errorf("%s was filtered", name)
 		}
+	}
+}
+
+type portProcessHost struct {
+	Host
+	processes []Process
+}
+
+func (h portProcessHost) Processes(match func(string) bool) ([]Process, error) {
+	var out []Process
+	for _, p := range h.processes {
+		if match(p.Name) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func TestCollectRunningInstancesRespectDefaultPlan(t *testing.T) {
+	for _, base := range []int{root.DefaultPortBase, 21000} {
+		t.Run(fmt.Sprint(base), func(t *testing.T) {
+			own, other := base+60, 21060
+			if base == 21000 {
+				other = 20060
+			}
+			h := portProcessHost{Host: &fakeHost{sc: &scenario{}}, processes: []Process{
+				{PID: 1, Name: "qemu-system-x86_64.exe", CommandLine: fmt.Sprintf("qemu -avd mas_6 -port %d", other)},
+				{PID: 2, Name: "qemu-system-x86_64.exe", CommandLine: fmt.Sprintf("qemu -avd mas_6 -ports %d,%d", own, own+1)},
+				{PID: 3, Name: "qemu-system-x86_64.exe", CommandLine: "qemu -avd mas_6"},
+			}}
+			c := &collector{h: h, plan: root.PortPlan{Base: base}, instances: []string{"mas_6"}}
+			if err := c.runningAndAdb(); err != nil {
+				t.Fatal(err)
+			}
+			if len(c.running) != 2 || c.running[0].pid != 2 || c.running[0].consolePort != own || c.running[1].pid != 3 {
+				t.Fatalf("running = %+v", c.running)
+			}
+			if !strings.Contains(strings.Join(c.lines, "\n"), "是别的根目录的同名实例，跳过") {
+				t.Fatal("missing skip explanation")
+			}
+		})
 	}
 }
 

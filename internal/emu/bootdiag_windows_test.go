@@ -5,6 +5,7 @@ package emu
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/testutil"
 )
@@ -116,35 +118,59 @@ func TestSaveBootFailure(t *testing.T) {
 // booting, times out with the guest state saved and named in the error; the same start canceled during the wait
 // saves nothing.
 func TestStartTimeoutSavesBootDiag(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", testutil.TempDir(t)) // the fake's emulator runtime file
-	r, _ := portPlanRoot(t)
-	m := New(r, logx.Nop())
-	six := 6
-	if _, err := m.Create(context.Background(), CreateRequest{filesOnly: true, Index: &six}); err != nil {
-		t.Fatal(err)
-	}
-	fakeQemu(t, testutil.TempDir(t), 6, 21060, true, filepath.Join(r.AvdHome(), "mas_6.avd"))
-	t.Setenv(fakeAdbNoBootEnv, "1")
-	diagDirs := func() []string {
-		matches, _ := filepath.Glob(filepath.Join(r.LogsDir(), "mas_6-*-bootfail"))
-		return matches
-	}
+	for _, base := range []int{21000, 5500, 49100} {
+		t.Run(fmt.Sprint(base), func(t *testing.T) {
+			t.Setenv("LOCALAPPDATA", testutil.TempDir(t)) // the fake's emulator runtime file
+			r, adbLog := portPlanRoot(t)
+			m := New(r, logx.Nop())
+			six := 6
+			if _, err := m.Create(context.Background(), CreateRequest{filesOnly: true, Index: &six}); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.UpdateMetadata(func(meta *jsonord.Obj) error {
+				meta.Set("portBase", jsonord.NewInt(int64(base)))
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// This is a test-process copy with a qemu command line, never an emulator boot. Legacy guests need no listener.
+			fakeQemu(t, testutil.TempDir(t), 6, base+60, base == 21000, filepath.Join(r.AvdHome(), "mas_6.avd"))
+			t.Setenv(fakeAdbNoBootEnv, "1")
+			diagDirs := func() []string {
+				matches, _ := filepath.Glob(filepath.Join(r.LogsDir(), "mas_6-*-bootfail"))
+				return matches
+			}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(1500*time.Millisecond, cancel)
-	if _, err := m.Start(ctx, 6, StartOptions{Timeout: 30 * time.Second}); errs.CodeOf(err) != errs.Canceled ||
-		errs.DetailsOf(err)[errs.BootDiagDir] != "" || len(diagDirs()) != 0 {
-		t.Fatalf("canceled start: %v, details %v, dirs %v", err, errs.DetailsOf(err), diagDirs())
-	}
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(1500*time.Millisecond, cancel)
+			if _, err := m.Start(ctx, 6, StartOptions{Timeout: 30 * time.Second}); errs.CodeOf(err) != errs.Canceled ||
+				errs.DetailsOf(err)[errs.BootDiagDir] != "" || len(diagDirs()) != 0 {
+				t.Fatalf("canceled start: %v, details %v, dirs %v", err, errs.DetailsOf(err), diagDirs())
+			}
 
-	_, err := m.Start(context.Background(), 6, StartOptions{Timeout: 2 * time.Second})
-	dir := errs.DetailsOf(err)[errs.BootDiagDir]
-	if errs.CodeOf(err) != errs.Timeout || dir == "" {
-		t.Fatalf("timed-out start: %v (%s), details %v", err, errs.CodeOf(err), errs.DetailsOf(err))
-	}
-	wantErrorDetails(t, err, map[string]string{errs.InstanceStatus: "starting", errs.QemuRunning: "true"})
-	if b, _ := os.ReadFile(filepath.Join(dir, "logcat.txt")); !strings.Contains(string(b), "zygote: fake") {
-		t.Errorf("logcat.txt = %q", b)
+			_, err := m.Start(context.Background(), 6, StartOptions{Timeout: 2 * time.Second})
+			dir := errs.DetailsOf(err)[errs.BootDiagDir]
+			if errs.CodeOf(err) != errs.Timeout || dir == "" {
+				t.Fatalf("timed-out start: %v (%s), details %v", err, errs.CodeOf(err), errs.DetailsOf(err))
+			}
+			wantErrorDetails(t, err, map[string]string{errs.InstanceStatus: "starting", errs.QemuRunning: "true"})
+			if b, _ := os.ReadFile(filepath.Join(dir, "logcat.txt")); !strings.Contains(string(b), "zygote: fake") {
+				t.Errorf("logcat.txt = %q", b)
+			}
+			commands, err := os.ReadFile(adbLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(commands)), "\n") {
+				var args []string
+				if err := json.Unmarshal([]byte(line), &args); err != nil {
+					t.Fatal(err)
+				}
+				if len(args) < 4 || args[0] != "-P" || args[1] != fmt.Sprint(r.AdbServerPort()) || args[2] != "-s" || args[3] != fmt.Sprintf("emulator-%d", base+60) {
+					t.Fatalf("boot/diagnostic adb escaped the root's private server and legacy plan: %q", args)
+				}
+			}
+		})
 	}
 }
 
