@@ -74,7 +74,7 @@ export function diskTrimText() {
 
 export function diskCompactText(r) {
   if (r.skipped) return `预计可回收空间不足 ${fmtBytes(r.reclaim_threshold_bytes)}，已跳过重写。磁盘文件占用 ${fmtBytes(r.before_on_disk_bytes)}。`;
-  const delta = r.after_on_disk_bytes - r.before_on_disk_bytes;
+  const delta = r.on_disk_delta_bytes ?? (r.after_on_disk_bytes - r.before_on_disk_bytes);
   const change = delta > 0 ? `增加 ${fmtBytes(delta)}` : `释放 ${fmtBytes(r.freed_bytes)}`;
   return `磁盘文件从 ${fmtBytes(r.before_on_disk_bytes)} 变为 ${fmtBytes(r.after_on_disk_bytes)}，${change}。`;
 }

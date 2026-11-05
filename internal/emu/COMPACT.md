@@ -67,3 +67,9 @@ Windows file identity, missing backing and corrupt refcounts. The existing
 integration fixture also receives reclaimable storage and asserts a real rewrite,
 so Manager #56's backing-data test retains convert/check/compare coverage when
 the branches are combined.
+
+The script also runs `verify_compact_process.py`. A Go file overlay scales only
+the budget calculation to three seconds, then exercises timeout classification,
+scratch cleanup, lock release and original-image protection through the complete
+compact pipeline. Independent fault injections must be caught by test failures:
+duration overflow, lost cancellation, lost growth reporting and disabled skipping.

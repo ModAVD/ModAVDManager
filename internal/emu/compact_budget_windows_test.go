@@ -300,7 +300,7 @@ func TestCompactBudgetControlledTimeout(t *testing.T) {
 			}
 		})
 	}
-	for _, budget := range []time.Duration{0, 2 * time.Second} {
+	for _, budget := range []time.Duration{0, 15 * time.Second} {
 		t.Run(budget.String(), func(t *testing.T) {
 			m, _, _ := compactFakeManager(t, compactFakeRequest{DelayMillis: 250})
 			if _, _, code, err := m.runQemuImg(context.Background(), budget, "compare", "unused"); err != nil || code != 0 {

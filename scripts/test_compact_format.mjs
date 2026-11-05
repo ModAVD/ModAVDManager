@@ -14,6 +14,10 @@ test('compact text reports shrinkage and unchanged allocation', () => {
   assert.match(diskCompactText({ before_on_disk_bytes: 2 ** 30, after_on_disk_bytes: 0, freed_bytes: 2 ** 30 }), /释放 1.0 GB/);
   assert.match(diskCompactText({ before_on_disk_bytes: 4096, after_on_disk_bytes: 4096, freed_bytes: 0 }), /释放 0 B/);
 });
+test('compact text uses signed delta when host sizes exceed exact JavaScript integers', () => {
+  const text = diskCompactText({ before_on_disk_bytes: 2 ** 54, after_on_disk_bytes: 2 ** 54, freed_bytes: 0, on_disk_delta_bytes: 1 });
+  assert.match(text, /增加 1 B/);
+});
 test('compact text distinguishes skip from rewrite', () => {
   const text = diskCompactText({ before_on_disk_bytes: 4096, after_on_disk_bytes: 4096, freed_bytes: 0, skipped: true, reclaim_threshold_bytes: 16 * 2 ** 20 });
   assert.match(text, /不足 16 MB，已跳过重写/);

@@ -30,6 +30,8 @@ try {
     if ($LASTEXITCODE) { throw 'compact regression tests failed' }
     & node --test scripts/test_compact_format.mjs 2>&1 | Tee-Object -FilePath (Join-Path $testDir 'compact-format.log')
     if ($LASTEXITCODE) { throw 'compact browser formatting tests failed' }
+    & python -B -I -X utf8 scripts/verify_compact_process.py --go $Go --out (Join-Path $testDir 'process-checks')
+    if ($LASTEXITCODE) { throw 'compact controlled deadline or fault checks failed' }
 } finally {
     Pop-Location
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k,$saved[$k]) }
