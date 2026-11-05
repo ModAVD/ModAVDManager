@@ -225,7 +225,7 @@ func (u *Updater) begin(st *Status) (*win.FileLock, error) {
 	msg, err := u.recover()
 	if err != nil {
 		lock.Unlock()
-		if errs.CodeOf(err) == errs.Busy {
+		if code := errs.CodeOf(err); code == errs.Busy || code == errs.NotReady {
 			return nil, err
 		}
 		return nil, errs.Wrap(errs.Internal, err, "收拾上次没做完的更新失败: "+err.Error())

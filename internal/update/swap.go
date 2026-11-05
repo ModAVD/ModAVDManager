@@ -650,15 +650,19 @@ func (u *Updater) ensureNotInUse(verb string) error {
 	return waitUntilUnused(verb, u.processesUsing, time.Now, time.Sleep)
 }
 
-// lockForSwap first lets shutdown helpers exit, then closes the managed-start race.
-// Lock every valid slot, including instances not created yet, before the final scan.
-// The caller holds these locks through all renames and any immediate recovery.
+// lockForSwap first lets shutdown helpers exit, then excludes managed and raw
+// starts before the final full scan. Hold all start slots and SDK image objects
+// through the renames, metadata commit and any immediate recovery.
 func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 	if err := u.ensureNotInUse(verb); err != nil {
 		return nil, err
 	}
 	var locks []*win.FileLock
+	var releaseImages func()
 	release := func() {
+		if releaseImages != nil {
+			releaseImages()
+		}
 		for _, lock := range locks {
 			lock.Unlock()
 		}
@@ -681,6 +685,10 @@ func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 			return nil, swapBlocked("实例 %d 正在开机或做开机后设置，什么都没动，请稍后再%s", i, verb)
 		}
 		locks = append(locks, lock)
+	}
+	releaseImages, err = u.lockSDKImages()
+	if err != nil {
+		return nil, err
 	}
 	uses, err := u.processesUsing(true)
 	if err != nil {
