@@ -5,6 +5,7 @@ package emu
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -363,6 +364,43 @@ func TestCreateTimeout(t *testing.T) {
 	if _, err := m.Create(cctx, CreateRequest{Index: &i, Resume: true}); errs.CodeOf(err) != errs.Canceled || h.stopped != 1 ||
 		errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("canceled: %v, stopped %d", err, h.stopped)
+	}
+}
+
+// A bridge restart can embed Start's "emulator left running" advice in its error.
+// The creation's cleanup changes that fact, so its final error must describe the
+// state after cleanup, while retaining the original cause for diagnostics.
+func TestCreateCanceledReportsFinalShutdown(t *testing.T) {
+	for _, stopped := range []bool{true, false} {
+		t.Run(fmt.Sprint(stopped), func(t *testing.T) {
+			m, _ := opsTestManager(t)
+			startErr := errs.New(errs.Canceled, "装执行桥时关机再开机失败: 已取消。模拟器没有关：稍后再启动")
+			h := &createHooks{running: true}
+			h.start = func(*Manager, context.Context, int, StartOptions) (*StartResult, error) {
+				return nil, startErr
+			}
+			if !stopped {
+				h.stopErr = errs.New(errs.Timeout, "关机超时")
+			}
+			h.install(t)
+			i := 6
+			_, err := m.Create(context.Background(), CreateRequest{Index: &i})
+			if errs.CodeOf(err) != errs.Canceled || !errors.Is(err, startErr) || h.stopped != 1 {
+				t.Fatalf("create: %v; shutdown calls %d", err, h.stopped)
+			}
+			info, ierr := m.Info(context.Background(), i)
+			if ierr != nil || info.Status != StatusCreateFailed || info.Creation != creationFailed {
+				t.Fatalf("persisted state: %+v %v", info, ierr)
+			}
+			if stopped {
+				if strings.Contains(info.CreationError, "模拟器没有关") || !strings.Contains(info.CreationError, "已关机") ||
+					!strings.Contains(errs.As(err).Message, "已关机") {
+					t.Fatalf("stale startup state after successful cleanup: %q; %v", info.CreationError, err)
+				}
+			} else if strings.Contains(info.CreationError, "已关机") || info.CreationError != startErr.Message {
+				t.Fatalf("must not claim a failed cleanup stopped Android: %q", info.CreationError)
+			}
+		})
 	}
 }
 

@@ -393,6 +393,11 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 		case ctx.Err() != nil && errs.CodeOf(err) != errs.Canceled:
 			err = errs.Wrap(errs.Canceled, err, "已取消")
 		}
+		// Start (including a bridge restart) can say it left qemu running. The
+		// cleanup above has since stopped it; persist the final state instead.
+		if errs.CodeOf(err) == errs.Canceled && stopErr == nil {
+			err = errs.Wrap(errs.Canceled, err, "新建初始化已取消，已关机")
+		}
 		logFile := ""
 		if sr != nil {
 			logFile = sr.LogFile
