@@ -105,9 +105,14 @@ func TestDiagnosticsCollectSectionsAndPlaceholder(t *testing.T) {
 	if !ok || len(res["sections"].([]any)) != 2 {
 		t.Fatalf("collect result %+v", v.Result)
 	}
-	// The production adapter is an explicit error and must never panic.
-	h2 := newHarness(t, nil)
-	expectError(t, h2.do("GET", "/api/diag/report-config", nil), http.StatusInternalServerError, errs.NotImplemented)
+	h2 := diagHarness(t, &fakeDiag{}, nil)
+	var cfg struct {
+		Text string `json:"text"`
+	}
+	expect(t, h2.do("GET", "/api/diag/report-config", nil), http.StatusOK, &cfg)
+	if cfg.Text != "config" {
+		t.Fatalf("report config %q", cfg.Text)
+	}
 }
 
 func TestDiagnosticsProgressThrottled(t *testing.T) {

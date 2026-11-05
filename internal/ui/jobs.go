@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	kindStart   = "start"
-	kindStop    = "stop"
-	kindInstall = "install"
-	kindCreate  = "create"
+	kindStart      = "start"
+	kindStop       = "stop"
+	kindInstall    = "install"
+	kindCreate     = "create"
 	kindComponents = "components"
-	kindCollect = "collect-info"
-	rootJobIndex = -1
+	kindCollect    = "collect-info"
+	rootJobIndex   = -1
 
 	kindDiskInfo    = "disk-info"
 	kindDiskTrim    = "disk-trim"
@@ -62,10 +62,13 @@ func kindLabel(kind string) string {
 }
 
 type jobProgress struct {
-	Step    string `json:"step"`
-	Message string `json:"message"`
-	Done    int    `json:"done"`
-	Total   int    `json:"total"`
+	Step      string  `json:"step"`
+	Name      string  `json:"name,omitempty"`
+	Message   string  `json:"message"`
+	Done      int     `json:"done"`
+	Total     int     `json:"total"`
+	Speed     float64 `json:"speed,omitempty"`
+	Remaining float64 `json:"remaining,omitempty"`
 }
 
 // jobView is the Job of API.md.
@@ -84,9 +87,12 @@ type jobView struct {
 
 // job: view is guarded by jobTable.mu; cancel and done never change.
 type job struct {
-	view   jobView
-	cancel context.CancelFunc
-	done   chan struct{} // closed when the job function returned
+	view          jobView
+	cancel        context.CancelFunc
+	done          chan struct{} // closed when the job function returned
+	progressAt    time.Time
+	progressStage string
+	progressName  string
 }
 
 type jobTable struct {
@@ -189,6 +195,16 @@ type jobFunc func(ctx context.Context, j *job, b backend) (any, error)
 // job (file log with the job id, log events, warnings). errs.Busy when the instance has a conflicting job.
 func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Lock()
+	for _, o := range s.jobs.list {
+		if o.view.State != stateRunning {
+			continue
+		}
+		if (kind == kindComponents && o.view.Index != rootJobIndex && (o.view.Kind == kindStart || o.view.Kind == kindCreate || o.view.Kind == "restart")) ||
+			(i != rootJobIndex && o.view.Kind == kindComponents && (kind == kindStart || kind == kindCreate || kind == "restart")) {
+			s.jobs.mu.Unlock()
+			return jobView{}, errs.Newf(errs.Busy, "任务 %s 正在运行（任务 %s），等它做完再试", kindLabel(o.view.Kind), o.view.ID)
+		}
+	}
 	if o := s.jobs.busyWith(kind, i); o != nil {
 		s.jobs.mu.Unlock()
 		return jobView{}, busyError(o)
@@ -217,6 +233,10 @@ func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.publishJob(view, true)
 	go s.runJob(ctx, j, b, fn)
 	return view, nil
+}
+
+func (s *server) startRootJob(kind string, fn jobFunc) (jobView, error) {
+	return s.startJob(kind, rootJobIndex, fn)
 }
 
 func (s *server) runJob(ctx context.Context, j *job, b backend, fn jobFunc) {
@@ -256,6 +276,12 @@ func (s *server) finishJob(ctx context.Context, j *job, res any, err error) {
 	v.Error = newErrorBody(err)
 	view := j.snapshot()
 	s.jobs.mu.Unlock()
+	if view.Kind == kindComponents {
+		s.check.mu.Lock()
+		s.check.res, s.check.at = nil, time.Time{}
+		s.check.generation++
+		s.check.mu.Unlock()
+	}
 
 	switch view.State {
 	case stateDone:
@@ -286,6 +312,24 @@ func (s *server) setProgress(j *job, p jobProgress) {
 	view := j.snapshot()
 	s.jobs.mu.Unlock()
 	s.publishJob(view, true)
+}
+
+func (s *server) setDiagProgress(j *job, p DiagProgress) {
+	s.jobs.mu.Lock()
+	if j.view.State != stateRunning {
+		s.jobs.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if !j.progressAt.IsZero() && now.Sub(j.progressAt) < 500*time.Millisecond && j.progressStage == p.Stage && j.progressName == p.Name {
+		s.jobs.mu.Unlock()
+		return
+	}
+	j.progressAt, j.progressStage, j.progressName = now, p.Stage, p.Name
+	j.view.Progress = &jobProgress{Step: p.Stage, Name: p.Name, Message: p.Message, Done: int(p.Done), Total: int(p.Total), Speed: p.Speed, Remaining: p.Remaining}
+	view := j.snapshot()
+	s.jobs.mu.Unlock()
+	s.publishJob(view, false)
 }
 
 // progressFn forwards emu's start progress into the job.

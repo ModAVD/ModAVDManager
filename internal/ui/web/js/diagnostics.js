@@ -57,7 +57,9 @@ export function openDiagnostics() {
   const configBtn = btn('btn btn-ghost', [icon('copy'), '复制配置信息'], async () => {
     try {
       const v = await api.get('/api/diag/report-config');
-      openConfig(v.text || '');
+      const text = v.text || '';
+      const copied = await copyText(text);
+      openConfig(text, copied);
     } catch (e) { toastError(e); }
   });
   const feedbackHead = h('div', { class: 'diag-head' }, h('strong', { text: '问题反馈' }), h('div', { class: 'diag-actions' }, collectBtn, configBtn));
@@ -131,11 +133,12 @@ export function openDiagnostics() {
   render();
 }
 
-function openConfig(text) {
+function openConfig(text, copied) {
   const pre = h('pre', { class: 'loglines diag-config', text });
+  const status = h('p', { class: copied ? 'tone-ok' : 'tone-err', text: copied ? '已复制到剪贴板。' : '没能自动复制，请点击“复制”按钮或手动选中。' });
   const copy = btn('btn btn-primary', '复制', async () => {
     if (await copyText(text)) toast({ title: '已复制' });
     else toast({ tone: 'err', title: '没能复制', text: '请手动选中配置信息复制。' });
   });
-  openDialog({ title: '配置信息', sub: '复制前请检查内容中是否包含不适合公开的信息', cls: 'dlg-update', body: h('div', { class: 'dlg-body' }, pre), actions: { ok: copy }, light: true });
+  openDialog({ title: '配置信息', sub: '复制前请检查内容中是否包含不适合公开的信息', cls: 'dlg-update', body: h('div', { class: 'dlg-body' }, status, pre), actions: { ok: copy }, light: true });
 }

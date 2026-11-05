@@ -1,12 +1,7 @@
 package ui
 
-import (
-	"context"
-)
+import "context"
 
-// DiagComponent is the component row shown by the manager.  It deliberately
-// mirrors the JSON contract without importing internal/components or
-// internal/report; those packages have an independent implementation owner.
 type DiagComponent struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -27,10 +22,9 @@ type DiagLicenseResult struct {
 	Source string `json:"license_source"`
 }
 
-// DiagProgress is shared by component fetching and report collection. Done and
-// Total are bytes when known; Speed is bytes/second and Remaining is seconds.
 type DiagProgress struct {
 	Stage     string  `json:"stage"`
+	Name      string  `json:"name,omitempty"`
 	Message   string  `json:"message"`
 	Done      int64   `json:"done"`
 	Total     int64   `json:"total"`
@@ -38,12 +32,22 @@ type DiagProgress struct {
 	Remaining float64 `json:"remaining"`
 }
 
+type DiagFetchComponent struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	Installed  bool   `json:"installed"`
+	Downloaded bool   `json:"downloaded"`
+	Skipped    bool   `json:"skipped"`
+	SetAside   string `json:"set_aside"`
+}
+
 type DiagFetchResult struct {
-	Root       string          `json:"root"`
-	License    string          `json:"license"`
-	LicenseSrc string          `json:"license_source"`
-	Components []DiagComponent `json:"components"`
-	Downloads  []string        `json:"downloads"`
+	Root          string               `json:"root"`
+	License       string               `json:"license"`
+	LicenseSource string               `json:"license_source"`
+	Components    []DiagFetchComponent `json:"components"`
+	Downloads     []string             `json:"downloads"`
 }
 
 type DiagCollectOptions struct {
@@ -58,18 +62,21 @@ type DiagSectionResult struct {
 }
 
 type DiagCollectResult struct {
-	ZipPath  string              `json:"zip_path"`
-	Stage    string              `json:"stage"`
-	Summary  string              `json:"summary"`
-	Entries  []string            `json:"entries"`
-	Errors   []string            `json:"errors"`
-	Sections []DiagSectionResult `json:"sections"`
+	ZipPath     string              `json:"zip_path"`
+	ZipBytes    int64               `json:"zip_bytes"`
+	ZipSize     string              `json:"zip_size"`
+	Entries     []string            `json:"entries"`
+	Stage       string              `json:"stage"`
+	StageKept   bool                `json:"stage_kept"`
+	StageError  string              `json:"stage_error"`
+	Problems    []string            `json:"problems"`
+	MasFound    bool                `json:"mas_found"`
+	Summary     string              `json:"summary"`
+	PrivacyNote string              `json:"privacy_note"`
+	Errors      []string            `json:"errors,omitempty"`
+	Sections    []DiagSectionResult `json:"sections,omitempty"`
 }
 
-// diagBackend is the narrow seam between the UI and the components/report
-// packages.  A real adapter can be added without changing HTTP, jobs or web.
-// Every operation receives the job context, so cancellation must stop work
-// and return errs.Canceled (or a wrapped equivalent).
 type diagBackend interface {
 	Components(context.Context) (*DiagComponentsResult, error)
 	License(context.Context) (*DiagLicenseResult, error)

@@ -353,8 +353,12 @@ func (s *server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.unlock()
 	// a check that finished while this request waited is as fresh as one started for it
-	if c.res != nil && (!refresh || c.at.After(asked)) {
-		writeJSON(w, http.StatusOK, c.res)
+	c.mu.Lock()
+	cached, cachedAt := c.res, c.at
+	generation := c.generation
+	c.mu.Unlock()
+	if cached != nil && (!refresh || cachedAt.After(asked)) {
+		writeJSON(w, http.StatusOK, cached)
 		return
 	}
 	res, err := s.mgr.Check(r.Context(), emu.CheckOptions{})
@@ -362,7 +366,11 @@ func (s *server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	c.res, c.at = res, time.Now()
+	c.mu.Lock()
+	if c.generation == generation {
+		c.res, c.at = res, time.Now()
+	}
+	c.mu.Unlock()
 	writeJSON(w, http.StatusOK, res)
 }
 

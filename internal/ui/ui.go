@@ -52,14 +52,14 @@ type Options struct {
 	IdleExit time.Duration
 
 	// Test hooks.
-	newBackend func(log *logx.Logger) backend
+	newBackend     func(log *logx.Logger) backend
 	newDiagBackend func(log *logx.Logger) diagBackend
-	token      string
-	web        fs.FS
-	openPath   func(path string) error
-	launch     func(url string) (*Window, error)
-	removeOld  func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
-	proxyEvery time.Duration
+	token          string
+	web            fs.FS
+	openPath       func(path string) error
+	launch         func(url string) (*Window, error)
+	removeOld      func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
+	proxyEvery     time.Duration
 }
 
 const (
@@ -361,10 +361,12 @@ func (w logWriter) Write(p []byte) (int, error) {
 // on every visit of its check view. sem serializes runs; a request waits for a run in progress instead of starting
 // another one.
 type checkCache struct {
-	once sync.Once
-	sem  chan struct{}
-	res  *emu.CheckResult
-	at   time.Time
+	once       sync.Once
+	sem        chan struct{}
+	mu         sync.Mutex
+	generation uint64
+	res        *emu.CheckResult
+	at         time.Time
 }
 
 func (c *checkCache) lock(ctx context.Context) error {

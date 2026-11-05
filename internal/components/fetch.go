@@ -50,6 +50,22 @@ var (
 	diskFree           = win.DiskFree
 )
 
+// License returns the Android SDK license text and the mirror it came from.
+// It only reads the repository manifest; it does not touch a ModAVD root or
+// install any component.
+func License(ctx context.Context) (text, source string, err error) {
+	if fetchGOOS != "windows" {
+		return "", "", errs.New(errs.Unsupported, "这个系统还没有组件清单").WithAdvice("目前只有 Windows 能补全组件")
+	}
+	o := Options{}
+	if err := o.CheckTimeouts(); err != nil {
+		return "", "", err
+	}
+	o.Log = logx.Nop()
+	f := &fetcher{o: o, mirrors: append([]Mirror(nil), defaultMirrors...)}
+	return f.license(ctx)
+}
+
 // Defaults and limits of the three timeouts (the script's -ConnectTimeoutSec, -StallTimeoutSec, -ManifestTimeoutSec).
 const (
 	DefaultConnectTimeout  = download.DefaultConnectTimeout
