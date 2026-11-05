@@ -754,8 +754,8 @@ const (
 // Advice for missing components (AUTO-MAS FETCH_COMPONENTS_ADVICE / PACKAGE_ADVICE; "回来点「检查」" is AUTO-MAS's
 // button, here it is the check command).
 const (
-	FetchComponentsAdvice = "双击魔改 AVD 根目录里的「补全组件.bat」：它会先显示《Android 软件开发套件许可协议》，输入 y 同意后" +
-		"从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），看到「完成」后再运行一次 modavd check"
+	FetchComponentsAdvice = "在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后" +
+		"从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次"
 	PackageAdvice = "模拟器要用魔改 AVD 的发布包：从 https://github.com/ModAVD/ModAVD/releases 下载 " +
 		"ModAVD-<版本>-win-x64.zip，整个解压到这个目录"
 )

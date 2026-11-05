@@ -194,7 +194,7 @@ func init() {
 			run:     runCheck, human: humanOf(formatCheck),
 		},
 		{
-			name: "report-config", args: "[--no-clipboard]", summary: "复制电脑配置和实例里装的游戏（同「复制配置信息.bat」）",
+			name: "report-config", args: "[--no-clipboard]", summary: "复制电脑配置和实例里装的游戏",
 			details: "电脑、模拟器、硬件加速和开着的实例里装的游戏，显示出来并复制到剪贴板（--no-clipboard 不复制）。" +
 				"只读：只在实例开着、它的 adb server 已经在监听时按 adb 主机协议去问，不起 adb server、不调用 adb.exe、不碰 5037；" +
 				"不带用户名、电脑名和完整路径。目前只支持 Windows。",
@@ -203,7 +203,7 @@ func init() {
 		},
 		{
 			name: "collect-info", args: "[--out-dir 目录] [--stage-dir 目录] [--keep-stage] [--no-explorer]",
-			summary: "收集问题信息，打成 zip（同「收集问题信息.bat」）",
+			summary: "收集问题信息，打成 zip",
 			details: "打成「魔改AVD问题信息-<时间>.zip」，默认放桌面，再打开资源管理器选中它（--no-explorer 不打开）。" +
 				"--stage-dir 是暂存目录的父目录（默认 %TEMP%），--keep-stage 保留暂存目录。每一节单独收，出错写进 summary.txt 接着收下一节。" +
 				"只读：不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，不起 adb server、不碰 5037。目前只支持 Windows。",
@@ -213,7 +213,7 @@ func init() {
 		{
 			name: "components", args: "[status] | source [auto|googledownloads_cn|tencent|google] | fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]",
 			summary: "查看或补全 Google 组件（adb 和系统镜像）",
-			details: "status（默认）查看组件，和 check 里的组件一样。fetch 做随包「补全组件.bat」做的事：" +
+			details: "status（默认）查看组件，和 check 里的组件一样。fetch 补全缺少的组件：" +
 				"先从镜像取《Android 软件开发套件许可协议》全文并显示，输入 y 同意才继续，否则什么也不下；" +
 				"再依次试 googledownloads.cn、腾讯云镜像、dl.google.com，下载缺少的 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），" +
 				"校验后装进 sdk\\。已经齐全的跳过；不完整的旧目录改名为 <目录>.incomplete-<时间> 留着，不删。" +

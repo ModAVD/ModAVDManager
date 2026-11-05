@@ -274,7 +274,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	}
 	if !isRoot {
 		return nil, errs.Newf(errs.NotReady, `这里没有 sdk\emulator\emulator.exe，不像是魔改 AVD 的文件夹：%s`, r.Dir).
-			WithAdvice("请把 Release 压缩包完整解压后，在解压出来的文件夹里双击「补全组件.bat」")
+			WithAdvice("请把 Release 压缩包完整解压后，在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch")
 	}
 	if r.LocalSDKRoot() != "" {
 		// check and components status look at that SDK; fetch only ever writes this root's sdk\.

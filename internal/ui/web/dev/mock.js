@@ -224,7 +224,7 @@ function checkResult() {
     Object.assign(items[4], { ok: false, reason: '没有找到能用 Vulkan 的显卡（只有 Microsoft Basic Render Driver）', advice: '安装或更新显卡驱动（NVIDIA / AMD / Intel 官网驱动自带 Vulkan）。没有可用的显卡时模拟器只能软件渲染，游戏会占满 CPU，性能会很差' });
   }
   if (db.check === 'notready') {
-    Object.assign(items[1], { ok: false, reason: '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', advice: '运行魔改 AVD 根目录里的「补全组件.bat」：它会先显示《Android 软件开发套件许可协议》，输入 y 同意后从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），看到「完成」后再检查一次' });
+    Object.assign(items[1], { ok: false, reason: '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', advice: '在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次' });
     Object.assign(items[3], { ok: false, reason: '硬件虚拟化（Windows 虚拟机监控程序平台）不可用，魔改 AVD 无法启动（检查结果：WHPX is not installed）', advice: '先在 BIOS/UEFI 里打开 VT-x/SVM，再在「启用或关闭 Windows 功能」里勾选「Windows 虚拟机监控程序平台」，然后重启' });
     Object.assign(items[4], { ok: null, reason: '查不了 Vulkan：探测程序 8 秒内没有结束' });
     Object.assign(items[2], { reason: '内测包 0.35.0（37.2.10）' });
@@ -292,7 +292,7 @@ function run(j, steps) {
 function startSeq(inst, j, window) {
   const i = inst.index;
   if (!db.ready) {
-    setTimeout(() => failJob(j, 'not_ready', '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', '运行魔改 AVD 根目录里的「补全组件.bat」，看到「完成」后再检查一次'), 600);
+    setTimeout(() => failJob(j, 'not_ready', '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', '在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；完成后再检查一次'), 600);
     return;
   }
   if (inst._.fail && inst.config.memory_mb > 4096) {

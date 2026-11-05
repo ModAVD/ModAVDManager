@@ -75,7 +75,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
-| `components [status]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看或补全 Google 组件（adb 和系统镜像），做的是「补全组件.bat」做的事（见「补全 Google 组件」） |
+| `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
@@ -233,7 +233,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 补全 Google 组件
 
-ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`，规则和随包的 `fetch-components.ps1`（「补全组件.bat」）一条一条对上：
+ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`。管理器检测页的「补全组件」按钮和这个命令共用同一套逻辑；首次交互运行会询问下载源并记住选择：
 
 - 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
 - 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com，要下载时先打一行「下载源：…」说明这次用哪些、为什么（默认 / `--mirror` / `--mirror-url`）；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。
