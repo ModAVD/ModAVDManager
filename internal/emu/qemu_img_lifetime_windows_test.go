@@ -117,7 +117,7 @@ func lifetimeAwaitChild(t *testing.T, path string) syscall.Handle {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h, err := syscall.OpenProcess(syscall.SYNCHRONIZE|syscall.PROCESS_TERMINATE, false, uint32(pid))
+			h, err := syscall.OpenProcess(syscall.SYNCHRONIZE|syscall.PROCESS_TERMINATE|syscall.PROCESS_QUERY_INFORMATION, false, uint32(pid))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,16 +206,22 @@ func TestQemuImgLifetimeResults(t *testing.T) {
 		})
 	}
 	t.Run("launch failure", func(t *testing.T) {
-		// This input is invalid from birth. Do not overwrite the executable used
-		// by earlier cases: Windows may still retain its image mapping after exit.
-		m := New(managerTestRoot(t, 1), nil)
-		exe := filepath.Join(m.Root.RuntimeSDK(), "emulator", "qemu-img.exe")
-		if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		// Use a fresh, valid image. Holding it without sharing makes launch fail
+		// without executing a bad image or overwriting a recently used image.
+		m := lifetimeManager(t)
+		exe, err := m.Root.QemuImgExe()
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(exe, []byte("invalid executable"), 0o600); err != nil {
+		path, err := syscall.UTF16PtrFromString(exe)
+		if err != nil {
 			t.Fatal(err)
 		}
+		h, err := syscall.CreateFile(path, syscall.GENERIC_READ, 0, nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.CloseHandle(h)
 		if _, _, _, err := m.runQemuImg(context.Background(), time.Second, "info"); errs.CodeOf(err) != errs.Internal {
 			t.Fatalf("launch error=%v", err)
 		}
@@ -270,7 +276,19 @@ func TestQemuImgLifetimeCancelAndTimeout(t *testing.T) {
 func TestQemuImgLifetimeParent(t *testing.T) {
 	dir := os.Getenv("MODAVD_TEST_LIFETIME_ROOT")
 	if dir == "" {
-		return
+		t.Skip("subprocess helper requires MODAVD_TEST_LIFETIME_ROOT")
+	}
+	if gate := os.Getenv("MODAVD_TEST_LIFETIME_GATE"); gate != "" {
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			if _, err := os.Stat(gate); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("parent was not admitted to outer job")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	r, err := root.New(dir)
 	if err != nil {
@@ -278,22 +296,59 @@ func TestQemuImgLifetimeParent(t *testing.T) {
 	}
 	m := New(r, nil)
 	path := os.Getenv("MODAVD_TEST_LIFETIME_REQUEST")
-	if os.Getenv("MODAVD_TEST_LIFETIME_MODE") == "check" {
-		_, _, err = m.runQemuImgCheck(context.Background(), path)
-	} else {
-		_, _, _, err = m.runQemuImg(context.Background(), time.Minute, "convert", path)
+	mode := os.Getenv("MODAVD_TEST_LIFETIME_MODE")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if strings.HasPrefix(mode, "cancel ") {
+		go func() {
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if _, err := os.Stat(path + ".cancel"); err == nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
 	}
-	if err != nil {
+	timeout := time.Minute
+	if mode == "timeout" {
+		timeout = 3 * time.Second
+	}
+	if mode == "check" || mode == "cancel check" {
+		_, _, err = m.runQemuImgCheck(ctx, path)
+	} else {
+		_, _, _, err = m.runQemuImg(ctx, timeout, "convert", path)
+	}
+	if strings.HasPrefix(mode, "cancel ") {
+		if errs.CodeOf(err) != errs.Canceled {
+			t.Fatalf("cancel error=%v", err)
+		}
+	} else if mode == "timeout" {
+		if errs.CodeOf(err) != errs.Timeout {
+			t.Fatalf("timeout error=%v", err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestQemuImgLifetimeParentExit(t *testing.T) {
 	m := lifetimeManager(t)
-	start := func(t *testing.T, path, mode string) (*exec.Cmd, <-chan error) {
+	start := func(t *testing.T, path, mode string, outerJob syscall.Handle) (*exec.Cmd, <-chan error) {
 		t.Helper()
 		cmd := exec.Command(os.Args[0], "-test.run=^TestQemuImgLifetimeParent$", "-test.count=1")
 		cmd.Env = append(os.Environ(), "MODAVD_TEST_LIFETIME_ROOT="+m.Root.Dir, "MODAVD_TEST_LIFETIME_REQUEST="+path, "MODAVD_TEST_LIFETIME_MODE="+mode)
+		gate := ""
+		if outerJob != 0 {
+			gate = path + ".parent-gate"
+		}
+		cmd.Env = append(cmd.Env, "MODAVD_TEST_LIFETIME_GATE="+gate)
 		var output bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &output, &output
 		win.HideConsoleCmd(cmd)
@@ -317,29 +372,51 @@ func TestQemuImgLifetimeParentExit(t *testing.T) {
 			case <-time.After(5 * time.Second):
 			}
 		})
+		if outerJob != 0 {
+			lifetimeAssignOuterJob(t, outerJob, uint32(cmd.Process.Pid))
+			if err := os.WriteFile(gate, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		return cmd, done
 	}
-	for _, mode := range []string{"convert", "check", "normal"} {
+	for _, mode := range []string{"convert", "check", "normal", "nested convert", "nested check", "nested normal", "nested cancel convert", "nested cancel check", "nested timeout"} {
 		t.Run(mode, func(t *testing.T) {
+			var outerJob syscall.Handle
+			if strings.HasPrefix(mode, "nested ") {
+				outerJob = lifetimeOuterJob(t)
+				mode = strings.TrimPrefix(mode, "nested ")
+			}
 			path := lifetimeWriteRequest(t, m.Root.Dir, lifetimeRequest{Hold: true})
 			other := lifetimeWriteRequest(t, m.Root.Dir, lifetimeRequest{Hold: true})
-			parent, done := start(t, path, mode)
+			parent, done := start(t, path, mode, outerJob)
 			h := lifetimeAwaitChild(t, path)
-			_, _ = start(t, other, "convert")
+			_, _ = start(t, other, "convert", outerJob)
 			otherHandle := lifetimeAwaitChild(t, other)
+			if outerJob != 0 {
+				lifetimeAssertInJob(t, h, outerJob)
+				lifetimeAssertInJob(t, otherHandle, outerJob)
+			}
 			if mode == "normal" {
 				if err := os.WriteFile(path+".release", nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
-			} else if err := parent.Process.Kill(); err != nil {
-				t.Fatal(err)
+			} else if strings.HasPrefix(mode, "cancel ") {
+				if err := os.WriteFile(path+".cancel", nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if mode != "timeout" {
+				if err := parent.Process.Kill(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			select {
 			case err := <-done:
-				if mode == "normal" && err != nil {
+				terminated := mode == "convert" || mode == "check"
+				if !terminated && err != nil {
 					t.Fatal(err)
 				}
-				if mode != "normal" && err == nil {
+				if terminated && err == nil {
 					t.Fatal("terminated parent reported success")
 				}
 			case <-time.After(10 * time.Second):

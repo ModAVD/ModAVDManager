@@ -26,6 +26,7 @@ const (
 var (
 	procCreateJobObjectW                  = modkernel32.NewProc("CreateJobObjectW")
 	procSetInformationJobObject           = modkernel32.NewProc("SetInformationJobObject")
+	procTerminateJobObject                = modkernel32.NewProc("TerminateJobObject")
 	procInitializeProcThreadAttributeList = modkernel32.NewProc("InitializeProcThreadAttributeList")
 	procUpdateProcThreadAttribute         = modkernel32.NewProc("UpdateProcThreadAttribute")
 	procDeleteProcThreadAttributeList     = modkernel32.NewProc("DeleteProcThreadAttributeList")
@@ -150,9 +151,35 @@ func startBound(exe string, args []string, files [3]*os.File) (*os.Process, sysc
 	return p, h, nil
 }
 
+// waitBound owns the process and job handles until the child has exited.
+func waitBound(ctx context.Context, p *os.Process, job syscall.Handle) (state *os.ProcessState, err error) {
+	defer p.Release()
+	closeJob := func() {
+		if job != 0 {
+			syscall.CloseHandle(job)
+			job = 0
+		}
+	}
+	defer closeJob()
+	done := make(chan struct{})
+	go func() { state, err = p.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// An observer may hold another job handle. Explicit termination must not
+		// depend on ours being the last handle; kill-on-close still covers crashes.
+		if r, _, _ := procTerminateJobObject.Call(uintptr(job), 1); r == 0 {
+			_ = p.Kill()
+		}
+		closeJob()
+		<-done
+	}
+	return state, err
+}
+
 // RunBound captures a short-lived helper's output and waits for it. Its job dies
 // with the calling process, even on TerminateProcess or a console-window close.
-// Cancellation closes only this invocation's job and waits for the child to exit.
+// Cancellation terminates only this invocation's job and waits for the child to exit.
 // A nil state denotes a launch failure; a nonzero exit retains state and output.
 func RunBound(ctx context.Context, exe string, args ...string) (stdout, stderr []byte, state *os.ProcessState, err error) {
 	if err := ctx.Err(); err != nil {
@@ -179,14 +206,6 @@ func RunBound(ctx context.Context, exe string, args ...string) (stdout, stderr [
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	defer p.Release()
-	closeJob := func() {
-		if job != 0 {
-			syscall.CloseHandle(job)
-			job = 0
-		}
-	}
-	defer closeJob()
 	wo.Close()
 	we.Close()
 	type output struct {
@@ -199,15 +218,7 @@ func RunBound(ctx context.Context, exe string, args ...string) (stdout, stderr [
 		return ch
 	}
 	so, se := read(ro), read(re)
-	done := make(chan struct{})
-	go func() { state, err = p.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		closeJob()
-		<-done
-	}
-	closeJob()
+	state, err = waitBound(ctx, p, job)
 	// Match qemu-img's existing WaitDelay, bounding inherited output pipes.
 	timer := time.AfterFunc(2*time.Second, func() { ro.Close(); re.Close() })
 	o, e := <-so, <-se
