@@ -98,7 +98,7 @@ func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
 		return win.Process{}, false
 	}
 	p, found := win.FindProcess(client.PID)
-	if !found || p.Created != client.Created || p.PPID != helper.PID {
+	if !found || p.Created != client.Created || !captureChildOf(p, helper) {
 		return win.Process{}, false
 	}
 	image, err := client.ImagePath()
@@ -117,6 +117,10 @@ func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
 	return p, true
 }
 
+func captureChildOf(client, helper win.Process) bool {
+	return client.PPID == helper.PID && client.Created != 0 && helper.Created != 0 && client.Created >= helper.Created
+}
+
 // A new owned adb child may appear just before its state file is published. Its validated helper parent proves
 // this is a transition to wait for, not an external capture. This weaker readiness fact never permits killing it.
 func (m *Manager) pendingOwnedCapture(i int, client win.Process) bool {
@@ -125,7 +129,7 @@ func (m *Manager) pendingOwnedCapture(i int, client win.Process) bool {
 		return false
 	}
 	helper, ok := win.FindProcess(client.PPID)
-	if !ok {
+	if !ok || !captureChildOf(client, helper) {
 		return false
 	}
 	args, err := helper.CommandLine()
@@ -193,7 +197,7 @@ func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeo
 				if !client.Alive() {
 					continue
 				}
-				if helperOurs && client.PPID == state.HelperPID {
+				if helperOurs && captureChildOf(client, win.Process{PID: state.HelperPID, Created: state.HelperCreated}) {
 					image, err := client.ImagePath()
 					if err == nil && strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
 						continue

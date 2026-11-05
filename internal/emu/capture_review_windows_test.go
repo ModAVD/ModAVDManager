@@ -224,6 +224,18 @@ func TestCaptureServerChangesRequireTwoKnownIdentities(t *testing.T) {
 	}
 }
 
+func TestCaptureParentIdentityRejectsReusedPID(t *testing.T) {
+	helper := win.Process{PID: 12, Created: 100}
+	for _, client := range []win.Process{{PPID: 12, Created: 99}, {PPID: 12}, {PPID: 13, Created: 101}} {
+		if captureChildOf(client, helper) {
+			t.Fatalf("impossible or unknown parent relation accepted: %+v", client)
+		}
+	}
+	if !captureChildOf(win.Process{PPID: 12, Created: 100}, helper) || !captureChildOf(win.Process{PPID: 12, Created: 101}, helper) {
+		t.Fatal("valid helper child rejected")
+	}
+}
+
 func TestBadDiagnosticMetadataCapturesAndBuffersOrdinarily(t *testing.T) {
 	for _, failure := range []string{"bad-value", "unreadable"} {
 		t.Run(failure, func(t *testing.T) {
