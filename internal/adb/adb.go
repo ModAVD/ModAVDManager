@@ -148,7 +148,7 @@ func (g *hookGroup) wait(timeout time.Duration) bool {
 
 // Env is the environment for emulator.exe, adb servers and adb clients: ours plus ANDROID_SDK_ROOT and ANDROID_HOME =
 // RuntimeSDK, ANDROID_AVD_HOME = AvdHome, ANDROID_ADB_SERVER_PORT = AdbServerPort and root.NoLocalScanEnv. Keys are
-// replaced case-insensitively (Windows).
+// replaced using the host's environment-key rules.
 func (c *Client) Env() []string {
 	sdk := c.Root.RuntimeSDK()
 	set := map[string]string{
@@ -160,20 +160,20 @@ func (c *Client) Env() []string {
 	for k, v := range root.NoLocalScanEnv {
 		set[k] = v
 	}
-	return mergeEnv(os.Environ(), set)
+	return mergeEnv(serverBaseEnv(os.Environ()), set)
 }
 
-// mergeEnv returns base with the keys of set replaced in place (compared case-insensitively, as Windows does; later
+// mergeEnv returns base with the keys of set replaced in place (case-insensitively on Windows; later
 // duplicates dropped) and the keys base lacks appended in sorted order.
 func mergeEnv(base []string, set map[string]string) []string {
 	byUpper := make(map[string]string, len(set)) // upper-case key -> key as given in set
 	for k := range set {
-		byUpper[strings.ToUpper(k)] = k
+		byUpper[normalizeEnvKey(k)] = k
 	}
 	out := make([]string, 0, len(base)+len(set))
 	done := map[string]bool{}
 	for _, kv := range base {
-		up := strings.ToUpper(envKey(kv))
+		up := normalizeEnvKey(envKey(kv))
 		k, ok := byUpper[up]
 		if !ok {
 			out = append(out, kv)
@@ -186,7 +186,7 @@ func mergeEnv(base []string, set map[string]string) []string {
 	}
 	keys := make([]string, 0, len(set))
 	for k := range set {
-		if !done[strings.ToUpper(k)] {
+		if !done[normalizeEnvKey(k)] {
 			keys = append(keys, k)
 		}
 	}
@@ -224,7 +224,7 @@ var (
 
 func (c *Client) portConflict(k serverKind, port int, pid uint32, name string) *errs.Error {
 	return errs.Newf(errs.PortConflict,
-		"魔改 AVD 的%s adb 端口 %d 被 %s（PID %d）占用，它不是 adb。请在 %s 里把 %s 改成一个没被占用的端口"+
+		"魔改 AVD 的%s adb 端口 %d 被 %s（PID %d）占用，"+serverConflictReason+"。请在 %s 里把 %s 改成一个没被占用的端口"+
 			"（不能用 5037 和各实例的控制台 / adb / gRPC 端口，也不能和 %s 相同），或者先关掉占用它的程序",
 		k.label, port, name, pid, c.Root.MetadataPath(), k.key, k.otherKey)
 }
@@ -248,6 +248,19 @@ func listener(port int) (up bool, pid uint32, name string, err error) {
 func listening(port int) (bool, error) {
 	up, _, _, err := listener(port)
 	return up, err
+}
+
+// serverListening also verifies the native server's ownership. A busy port alone
+// must never authorize an adb client or an emulator registration.
+func (c *Client) serverListening(k serverKind, port int) (bool, error) {
+	up, pid, name, err := listener(port)
+	if err != nil || !up {
+		return up, err
+	}
+	if !serverBelongsTo(c.Root, port, pid, name) {
+		return false, c.portConflict(k, port, pid, name)
+	}
+	return true, nil
 }
 
 func isAdbName(name string) bool {
@@ -276,7 +289,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // the port, and waits up to timeout until it listens (polling the listener table every 100 ms, not waiting for the
 // start-server client, which takes ~2.1 s; a client that exits non-zero while the port is still closed = failed).
 // Returns whether it listens. A listener whose process name is not adb.exe is errs.PortConflict with the AUTO-MAS
-// message (change adbServerPort in mas-avd.json); an unreadable owner name counts as adb. A root whose mas-avd.json
+// message (change adbServerPort in mas-avd.json). Darwin also requires the native executable and root launch
+// environment; Windows retains its original name check, including unreadable names. A root whose mas-avd.json
 // ports root.CheckPorts refuses gets that errs.InvalidArgument error, before anything is looked at or started.
 func (c *Client) EnsureServer(ctx context.Context, timeout time.Duration) (bool, error) {
 	return c.ensure(ctx, privateServer, c.Root.AdbServerPort(), timeout)
@@ -294,14 +308,11 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	if err := c.Root.CheckPorts(); err != nil {
 		return false, err
 	}
-	up, pid, name, err := listener(port)
+	up, err := c.serverListening(k, port)
 	if err != nil {
 		return false, err
 	}
 	if up {
-		if name != "" && !isAdbName(name) {
-			return false, c.portConflict(k, port, pid, name)
-		}
 		return true, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -318,20 +329,20 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 		return false, errs.Wrap(errs.Internal, err, fmt.Sprintf("启动魔改 AVD %s adb server（端口 %d）失败: %s",
 			k.label, port, errs.As(err).Message))
 	}
-	return waitListening(ctx, port, timeout, client)
+	return c.waitListening(ctx, k, port, timeout, client)
 }
 
 // waitListening polls until port listens, at most timeout (AUTO-MAS _wait_listening). It does not wait for the
 // start-server client to exit, but gives up early when that client has failed.
-func waitListening(ctx context.Context, port int, timeout time.Duration, client host.Process) (bool, error) {
+func (c *Client) waitListening(ctx context.Context, k serverKind, port int, timeout time.Duration, client host.Process) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		up, err := listening(port)
+		up, err := c.startedServerListening(k, port)
 		if err != nil || up {
 			return up, err
 		}
 		if clientFailed(client) {
-			return listening(port)
+			return c.startedServerListening(k, port)
 		}
 		if !time.Now().Before(deadline) {
 			return false, nil
@@ -604,6 +615,9 @@ func (c *Client) Reregister(ctx context.Context, serial string) bool {
 	if c.GetState(ctx, serial, reregisterStateTimeout) == "device" {
 		return true // another caller just registered it
 	}
+	if !registrationStillOwned(c, console, qemu) {
+		return false
+	}
 	c.Log.Warnf("私有 adb server（端口 %d）上没有 %s，按 adb 端口 %d 重新登记", serverPort, serial, console+1)
 	started := time.Now()
 	if err := Register(ctx, serverPort, console+1, registerTimeout); err != nil {
@@ -664,14 +678,11 @@ func (c *Client) PrepareForClose(ctx context.Context, console int, timeout time.
 	started := time.Now()
 	port := c.Root.AdbServerPort()
 	serial := "emulator-" + strconv.Itoa(console)
-	up, pid, name, err := listener(port)
+	up, err := c.serverListening(privateServer, port)
 	if err != nil {
 		return err.Error()
 	}
 	if up {
-		if name != "" && !isAdbName(name) {
-			return c.portConflict(privateServer, port, pid, name).Error()
-		}
 		res := c.runOnce(ctx, RunOptions{Serial: serial, Timeout: timeout, TotalTimeout: true}, []string{"get-state"})
 		if res.Code == 0 || !DeviceMissing(serial, res.Out) {
 			return ""
@@ -696,7 +707,8 @@ func (c *Client) registerForClose(ctx context.Context, console int, started time
 	server string) string {
 	port := c.Root.AdbServerPort()
 	serial := "emulator-" + strconv.Itoa(console)
-	if _, ok := qemuOnAdbPort(c.Root, console); !ok {
+	qemu, ok := qemuOnAdbPort(c.Root, console)
+	if !ok || !registrationStillOwned(c, console, qemu) {
 		return fmt.Sprintf("adb 端口 %d 上不是这台实例的模拟器，不替它登记", console+1)
 	}
 	remaining := timeout - time.Since(started)
@@ -753,6 +765,9 @@ func QemuOnAdbPort(r *root.Root, console int) (host.Process, bool) {
 	}
 	cmdline, err := p.CommandLine()
 	if err != nil || !qemuArgsMatch(cmdline, console, root.AvdName(i)) || !QemuBelongsTo(r, p, i) {
+		return host.Process{}, false
+	}
+	if !qemuListenerUnchanged(p, console+1) {
 		return host.Process{}, false
 	}
 	return p, true

@@ -20,13 +20,10 @@ const defaultConsoleTimeout = 10 * time.Second
 
 const consoleTokenFile = ".emulator_console_auth_token"
 
-// ConsoleToken is the console auth token the emulator writes at first start: %USERPROFILE%\.emulator_console_auth_token,
+// ConsoleToken is the console auth token the emulator writes in the native user's home directory at first start,
 // trimmed; "" when missing (then no auth line is sent).
 func ConsoleToken() string {
-	home := os.Getenv("USERPROFILE")
-	if home == "" {
-		home, _ = os.UserHomeDir()
-	}
+	home := consoleHome()
 	if home == "" {
 		return ""
 	}

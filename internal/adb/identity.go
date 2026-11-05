@@ -17,6 +17,9 @@ import (
 	"modavd/internal/root"
 )
 
+// OwnershipSupported reports whether QemuBelongsTo can verify native process ownership.
+const OwnershipSupported = true
+
 // QemuBelongsTo reports whether qemu process p, already matched to instance i by its "-avd mas_<i>" and "-ports
 // <console>,..." arguments, is instance i of root r. Every root names its instances mas_0, mas_1 ... and uses the same
 // port plan, so those arguments also match the same-numbered instance of any other root on the machine (a test root

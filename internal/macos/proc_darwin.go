@@ -170,50 +170,57 @@ func (p Process) Alive() bool {
 }
 
 func (p Process) CommandLine() ([]string, error) {
+	args, _, err := p.processArguments()
+	return args, err
+}
+
+// processArguments shares the native process record between argument and
+// environment queries, including creation checks around the PID-based read.
+func (p Process) processArguments() ([]string, []byte, error) {
 	if _, err := p.checkedInfo(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var limit C.int
 	if code := C.argument_limit(&limit); code != 0 {
-		return nil, fmt.Errorf("读不到 kern.argmax: %w", syscall.Errno(code))
+		return nil, nil, fmt.Errorf("读不到 kern.argmax: %w", syscall.Errno(code))
 	}
 	if limit < 4 || limit > 64<<20 {
-		return nil, fmt.Errorf("无效的 kern.argmax: %d", limit)
+		return nil, nil, fmt.Errorf("无效的 kern.argmax: %d", limit)
 	}
 	buf := make([]byte, int(limit))
 	size := C.size_t(len(buf))
 	code := C.process_args(C.int(p.PID), unsafe.Pointer(&buf[0]), &size)
 	if _, err := p.checkedInfo(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if code != 0 {
-		return nil, fmt.Errorf("读不到进程 %d 的命令行: %w", p.PID, syscall.Errno(code))
+		return nil, nil, fmt.Errorf("读不到进程 %d 的命令行: %w", p.PID, syscall.Errno(code))
 	}
 	if size < 4 || uint64(size) > uint64(len(buf)) {
-		return nil, errors.New("进程命令行长度无效")
+		return nil, nil, errors.New("进程命令行长度无效")
 	}
 	buf = buf[:int(size)]
 	argc := int(binary.NativeEndian.Uint32(buf[:4]))
 	buf = buf[4:]
 	if argc < 1 || argc > len(buf) {
-		return nil, errors.New("进程参数数量无效")
+		return nil, nil, errors.New("进程参数数量无效")
 	}
 	// KERN_PROCARGS2: argc, executable path, NUL padding, then argc C strings.
 	end := bytes.IndexByte(buf, 0)
 	if end < 0 {
-		return nil, errors.New("进程命令行缺少程序路径")
+		return nil, nil, errors.New("进程命令行缺少程序路径")
 	}
 	buf = bytes.TrimLeft(buf[end:], "\x00")
 	args := make([]string, 0, argc)
 	for range argc {
 		end = bytes.IndexByte(buf, 0)
 		if end < 0 {
-			return nil, errors.New("进程命令行不完整")
+			return nil, nil, errors.New("进程命令行不完整")
 		}
 		args = append(args, string(buf[:end]))
 		buf = buf[end+1:]
 	}
-	return args, nil
+	return args, buf, nil
 }
 
 func (p Process) ImagePath() (string, error) {

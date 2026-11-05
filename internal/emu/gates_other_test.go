@@ -10,6 +10,7 @@ import (
 	"sort"
 	"testing"
 
+	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/host"
@@ -65,6 +66,9 @@ func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
 }
 
 func TestQemuOfRejectsUnsupportedHost(t *testing.T) {
+	if adb.OwnershipSupported && root.CurrentPlatform().Supported() {
+		t.Skip("native process ownership is implemented on this host")
+	}
 	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +80,9 @@ func TestQemuOfRejectsUnsupportedHost(t *testing.T) {
 }
 
 func TestQemuScanRejectsUnsupportedCommandLine(t *testing.T) {
+	if adb.OwnershipSupported && root.CurrentPlatform().Supported() {
+		t.Skip("native command-line queries are implemented on this host")
+	}
 	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)

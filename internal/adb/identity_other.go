@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && (!darwin || !cgo)
 
 package adb
 
@@ -9,6 +9,8 @@ import (
 	"modavd/internal/host"
 	"modavd/internal/root"
 )
+
+const OwnershipSupported = false
 
 // QemuBelongsTo is unavailable until the non-Windows process and file-lock
 // implementation is provided; callers conservatively reject the process.

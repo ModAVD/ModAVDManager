@@ -183,10 +183,8 @@ func scanQemuOf(roots []*root.Root, indexes []int) (map[int]host.Process, error)
 		}
 		return found, nil
 	}
-	// Process queries alone do not implement QemuBelongsTo's host ownership
-	// checks. Keep discovery unsupported until that identity chain is available.
-	if err := requireWindows(); err != nil {
-		return nil, err
+	if !adb.OwnershipSupported || !root.CurrentPlatform().Supported() {
+		return nil, errs.New(errs.Unsupported, "当前平台尚不支持模拟器进程归属核验")
 	}
 	plans := make([]root.PortPlan, len(roots))
 	for k, r := range roots {
