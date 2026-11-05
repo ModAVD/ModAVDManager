@@ -3,7 +3,9 @@
 package emu
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,16 @@ import (
 // skipped unless MODAVD_TEST_SDK_ROOT points at an SDK whose emulator\qemu-img.exe exists, so CI without an SDK just
 // skips it. Run it with, e.g., MODAVD_TEST_SDK_ROOT=E:\aosp\sdk-mas37.
 func TestDiskCompactIntegration(t *testing.T) {
+	t.Run("EmptyBacking", func(t *testing.T) {
+		testDiskCompactIntegration(t, false)
+	})
+	t.Run("BackingData", func(t *testing.T) {
+		testDiskCompactIntegration(t, true)
+	})
+}
+
+func testDiskCompactIntegration(t *testing.T, backingData bool) {
+	t.Helper()
 	sdk := os.Getenv("MODAVD_TEST_SDK_ROOT")
 	if sdk == "" {
 		t.Skip("set MODAVD_TEST_SDK_ROOT to an SDK with emulator\\qemu-img.exe to run the compact integration test")
@@ -57,22 +69,100 @@ func TestDiskCompactIntegration(t *testing.T) {
 		t.Skipf("need >3 GiB free on the volume of %s for the compact integration test", avdDir)
 	}
 
-	// Build a real backing + overlay: the backing is empty, the overlay holds a pattern (clusters that differ from
-	// the backing), so compact has a genuine qcow2 to convert, check, compare and swap.
+	// Both fixtures use the same real compact path below.
 	backing := filepath.Join(avdDir, userdataBacking)
 	overlay := filepath.Join(avdDir, userdataOverlay)
 	src := filepath.Join(dir, "src.raw")
-	writePattern(t, src, 64<<20)
-	qemu := func(args ...string) {
+	qemu := func(args ...string) []byte {
 		t.Helper()
+		t.Logf("qemu-img %v", args)
 		cmd := exec.Command(qemuImg, args...)
 		cmd.Dir = avdDir // so the relative -B backing name resolves next to the output
-		if out, err := cmd.CombinedOutput(); err != nil {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
 			t.Fatalf("qemu-img %v: %v\n%s", args, err, out)
 		}
+		return out
 	}
-	qemu("create", "-f", "qcow2", userdataBacking, "64M")
-	qemu("convert", "-O", "qcow2", "-B", userdataBacking, "-o", "backing_fmt=qcow2", src, userdataOverlay)
+	const inheritedOffset = 1 << 20
+	const overwrittenOffset = 32 << 20
+	inherited := bytes.Repeat([]byte{0x31}, 64<<10)
+	overwritten := bytes.Repeat([]byte{0xa5}, 64<<10)
+	if backingData {
+		data := make([]byte, 64<<20)
+		copy(data[inheritedOffset:], inherited)
+		copy(data[overwrittenOffset:], bytes.Repeat([]byte{0x72}, len(overwritten)))
+		if err := os.WriteFile(src, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		qemu("convert", "-f", "raw", "-O", "qcow2", src, userdataBacking)
+
+		// Convert a delta with only the overwritten region allocated, then attach
+		// the backing. The holes must inherit data rather than store a copy of it.
+		clear(data)
+		copy(data[overwrittenOffset:], overwritten)
+		if err := os.WriteFile(src, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		qemu("convert", "-f", "raw", "-O", "qcow2", src, userdataOverlay)
+		qemu("rebase", "-u", "-f", "qcow2", "-F", "qcow2", "-b", userdataBacking, userdataOverlay)
+	} else {
+		writePattern(t, src, 64<<20)
+		qemu("create", "-f", "qcow2", userdataBacking, "64M")
+		qemu("convert", "-O", "qcow2", "-B", userdataBacking, "-o", "backing_fmt=qcow2", src, userdataOverlay)
+	}
+	backingBefore, err := os.ReadFile(backing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyBackingData := func(stage string) {
+		t.Helper()
+		if !backingData {
+			return
+		}
+		var extents []struct {
+			Start  int64 `json:"start"`
+			Length int64 `json:"length"`
+			Depth  int   `json:"depth"`
+			Data   bool  `json:"data"`
+		}
+		if err := json.Unmarshal(qemu("map", "--output=json", overlay), &extents); err != nil {
+			t.Fatal(err)
+		}
+		raw := filepath.Join(dir, stage+".raw")
+		qemu("convert", "-f", "qcow2", "-O", "raw", overlay, raw)
+		guest, err := os.Open(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer guest.Close()
+		for _, region := range []struct {
+			offset int64
+			want   []byte
+			depth  int
+		}{
+			{inheritedOffset, inherited, 1},
+			{overwrittenOffset, overwritten, 0},
+		} {
+			mapped := false
+			for _, extent := range extents {
+				if extent.Start <= region.offset && extent.Start+extent.Length >= region.offset+int64(len(region.want)) && extent.Data && extent.Depth == region.depth {
+					mapped = true
+				}
+			}
+			if !mapped {
+				t.Fatalf("%s: region at %d is not data at backing depth %d: %+v", stage, region.offset, region.depth, extents)
+			}
+			got := make([]byte, len(region.want))
+			if _, err := guest.ReadAt(got, region.offset); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, region.want) {
+				t.Fatalf("%s: guest data changed at %d", stage, region.offset)
+			}
+		}
+	}
+	verifyBackingData("before")
 
 	// Keep a pristine copy (overlay + its backing) to confirm the guest-visible content survives the rewrite.
 	pristineDir := filepath.Join(dir, "pristine")
@@ -111,6 +201,8 @@ func TestDiskCompactIntegration(t *testing.T) {
 	if res.FreedBytes < 0 {
 		t.Errorf("freed bytes negative: %d", res.FreedBytes)
 	}
+	t.Logf("DiskCompact completed: %+v", res)
+	verifyBackingData("after")
 	if _, err := os.Stat(filepath.Join(avdDir, userdataCompactTmp)); !os.IsNotExist(err) {
 		t.Errorf("temp file left behind after a successful compact: %v", err)
 	}
@@ -138,6 +230,14 @@ func TestDiskCompactIntegration(t *testing.T) {
 	}
 	if _, err := os.Stat(strayTmp); !os.IsNotExist(err) {
 		t.Errorf("stray temp not cleared: %v", err)
+	}
+	verifyBackingData("after-stray-temp")
+	backingAfter, err := os.ReadFile(backing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backingBefore, backingAfter) {
+		t.Fatal("backing file changed across compact")
 	}
 }
 

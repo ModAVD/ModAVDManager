@@ -133,7 +133,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 		}
 		return h.waitJob(v.ID, stateIs(stateDone))
 	}
-	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30})
+	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720})
 	if res, _ := j.Result.(map[string]any); j.Index != 2 || res["title"] != "测试机" {
 		t.Fatalf("created %+v", j)
 	}
@@ -151,11 +151,11 @@ func TestCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("creates %d", len(c))
 	}
 	r := c[0]
-	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 ||
+	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 || r.Resolution == nil || *r.Resolution != 720 ||
 		r.Progress == nil || r.Resume {
 		t.Fatalf("create request %+v", r)
 	}
-	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil {
+	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil || r.Resolution != nil {
 		t.Fatalf("empty create request %+v", r)
 	}
 	if r := c[3]; !r.Resume || r.Index == nil || *r.Index != 3 {
@@ -177,7 +177,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	// update
 	expectError(t, h.do("PATCH", "/api/instances/2", "{}"), 400, errs.Usage)
 	var up emu.UpdateResult
-	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30}`), http.StatusOK, &up)
+	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30,"resolution":1080}`), http.StatusOK, &up)
 	if up.Applied["fps"] != float64(30) {
 		t.Fatalf("update result %+v", up)
 	}
@@ -187,7 +187,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	h.f.mu.Lock()
 	u := h.f.updated
 	h.f.mu.Unlock()
-	if len(u) != 4 || *u[0].FPS != 30 || u[0].Title != nil || u[0].MemoryMB != nil || u[0].CPU != nil ||
+	if len(u) != 4 || u[0].Resolution == nil || *u[0].Resolution != 1080 || *u[0].FPS != 30 || u[0].Title != nil || u[0].MemoryMB != nil || u[0].CPU != nil ||
 		u[0].DataPartitionGB != nil {
 		t.Fatalf("update requests %+v", u)
 	}
