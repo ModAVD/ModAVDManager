@@ -184,7 +184,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		info.Status = StatusCreateFailed
 	}
 
-	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS()}
+	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS(), Resolution: in.Resolution()}
 	if n, ok := in.CPU(); ok {
 		cfg.CPU = n
 	}

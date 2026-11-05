@@ -35,6 +35,7 @@ type InstanceConfig struct {
 	MemoryMB        int `json:"memory_mb"` // what the next boot passes as -memory
 	CPU             int `json:"cpu"`
 	FPS             int `json:"fps"`
+	Resolution      int `json:"resolution"`
 	DataPartitionGB int `json:"data_partition_gb"`
 	Width           int `json:"width"`
 	Height          int `json:"height"`
@@ -115,6 +116,7 @@ type CreateRequest struct {
 	CPU             *int
 	DataPartitionGB *int
 	FPS             *int
+	Resolution      *int
 	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
 	// marker and create's setup installs it.
 	NoBridge bool
@@ -129,10 +131,11 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
-	Title    *string
-	MemoryMB *int
-	CPU      *int
-	FPS      *int
+	Title      *string
+	MemoryMB   *int
+	CPU        *int
+	FPS        *int
+	Resolution *int
 	// DataPartitionGB raises the data partition (never lowers it); see avd.UpdateOptions.
 	DataPartitionGB *int
 }

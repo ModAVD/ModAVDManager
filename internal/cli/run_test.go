@@ -977,9 +977,9 @@ func TestCreateFlags(t *testing.T) {
 		in := sampleInstance(1)
 		return &in, nil
 	}
-	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge")
+	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge", "--resolution", "720")
 	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge ||
-		got[0].Resume || !strings.Contains(r.stderr, "新建中 2%：后台无头开机") ||
+		got[0].Resolution == nil || *got[0].Resolution != 720 || got[0].Resume || !strings.Contains(r.stderr, "新建中 2%：后台无头开机") ||
 		!strings.Contains(r.stderr, "新建中 35%：实例 6 宿主输入法") || strings.Contains(r.stderr, "新建中 100%") ||
 		!strings.Contains(r.stderr, "实例 6 新建完成") {
 		t.Fatalf("create: exit %d, %+v, stderr %s", r.code, got, r.stderr)
@@ -989,7 +989,7 @@ func TestCreateFlags(t *testing.T) {
 		t.Fatalf("resume: exit %d, %+v", r.code, got)
 	}
 	for _, bad := range [][]string{{"create", "--resume", "6", "--memory", "4G"}, {"create", "--resume", "6", "--index", "6"},
-		{"create", "--timeout", "0"}, {"create", "--resume", "5"}} {
+		{"create", "--resume", "6", "--resolution", "1080"}, {"create", "--timeout", "0"}, {"create", "--resume", "5"}} {
 		if r := h.run(t, nil, bad...); r.code != 2 {
 			t.Errorf("%v: exit %d, want 2 (%s)", bad, r.code, r.stderr)
 		}

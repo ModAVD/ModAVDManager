@@ -253,17 +253,17 @@ func TestBuildCreateRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Index != nil || req.MemoryMB != nil || req.CPU != nil || req.DataPartitionGB != nil || req.FPS != nil || req.Title != "" {
+	if req.Index != nil || req.MemoryMB != nil || req.CPU != nil || req.DataPartitionGB != nil || req.FPS != nil || req.Resolution != nil || req.Title != "" {
 		t.Errorf("defaults: %+v, want all nil", req)
 	}
 	req, err = buildCreateRequest(mustParse(t, "create", "--index", "mas_4", "--title", "星铁", "--memory", "6G",
-		"--cpu", "4", "--data-gb", "128", "--fps", "30"))
+		"--cpu", "4", "--data-gb", "128", "--fps", "30", "--resolution", "720"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if req.Index == nil || *req.Index != 4 || req.Title != "星铁" || req.MemoryMB == nil || *req.MemoryMB != 6144 ||
 		req.CPU == nil || *req.CPU != 4 || req.DataPartitionGB == nil || *req.DataPartitionGB != 128 ||
-		req.FPS == nil || *req.FPS != 30 {
+		req.FPS == nil || *req.FPS != 30 || req.Resolution == nil || *req.Resolution != 720 {
 		t.Errorf("all options: %+v", req)
 	}
 	// Zero is passed on (emu rejects it with the AUTO-MAS wording), not mistaken for "not given".
@@ -327,6 +327,11 @@ func TestBuildUpdateRequest(t *testing.T) {
 	if err != nil || req.DataPartitionGB == nil || *req.DataPartitionGB != 96 || req.MemoryMB != nil {
 		t.Errorf("data-gb alone: %+v %v", req, err)
 	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--resolution", "1080"))
+	if err != nil || req.Resolution == nil || *req.Resolution != 1080 || req.MemoryMB != nil {
+		t.Fatalf("resolution alone: %+v %v", req, err)
+	}
+
 }
 
 func TestBuildStartOptions(t *testing.T) {

@@ -2,7 +2,7 @@
 // mas-avd.json. File operations only; nothing here looks at processes or ports (callers pass a busy-port check).
 //
 // Port of AUTO-MAS app/utils/common/emulator2/avd/instances.py (+ the choices in constants.py). Files must come out
-// byte-identical to what AUTO-MAS writes, so the two can manage the same root during the move to modavd.
+// compatible with AUTO-MAS, except for the two display presets added in ModAVD#100.
 package avd
 
 import (
@@ -24,9 +24,10 @@ import (
 
 // Instance options (user decisions: memory and cores only in these steps, no silent rounding).
 var (
-	MemoryChoicesMB = []int{3072, 4096, 5120, 6144}
-	CPUChoices      = []int{2, 4, 6}
-	FPSChoices      = []int{30, 60}
+	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144}
+	CPUChoices        = []int{2, 4, 6}
+	FPSChoices        = []int{30, 60}
+	ResolutionChoices = []int{1080, 720}
 )
 
 const (
@@ -36,9 +37,9 @@ const (
 	DefaultDataPartitionGB = 64
 	MinDataPartitionGB     = 16
 	MaxDataPartitionGB     = 512
-	// Display is fixed at 720p (user 10-04), written into config.ini before every boot, never `wm size`.
-	ScreenWidth, ScreenHeight, ScreenDensity = 1280, 720, 240
-	TargetAPI                                = "android-34"
+	// New instances default to 1080p. Existing instances are identified by their dimensions.
+	DefaultResolution = 1080
+	TargetAPI         = "android-34"
 	// image.sysdir.1, relative to the SDK root, with the trailing backslash AUTO-MAS writes.
 	SystemImageSysdir = `system-images\android-34\google_apis\x86_64\`
 )
@@ -531,6 +532,18 @@ func ValidateFPS(fps *int) (int, error) {
 	return value, nil
 }
 
+// ValidateResolution defaults new instances to 1080p; DPI is part of the preset.
+func ValidateResolution(resolution *int) (int, error) {
+	value := DefaultResolution
+	if resolution != nil {
+		value = *resolution
+	}
+	if !slices.Contains(ResolutionChoices, value) {
+		return 0, errs.New(errs.InvalidArgument, "分辨率只能选 1080 或 720")
+	}
+	return value, nil
+}
+
 // isLineBreak is every character str.splitlines() splits at: a title holding one would break config.ini apart.
 func isLineBreak(r rune) bool {
 	switch r {
@@ -556,6 +569,7 @@ type CreateOptions struct {
 	CPU             int
 	DataPartitionGB int
 	FPS             int
+	Resolution      int // 0 = DefaultResolution
 	// Creating also sets instances.<i>.creationState = "creating" (emu's create setup), in the same write as the other
 	// keys: the instance is never listed without it.
 	Creating bool
@@ -585,6 +599,15 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	var resolutionArg *int
+	if opt.Resolution != 0 {
+		resolutionArg = &opt.Resolution
+	}
+	resolution, err := ValidateResolution(resolutionArg)
+	if err != nil {
+		return nil, err
+	}
+	display := displayChanges(nil, resolution)
 	if err := validateTitle(opt.Title); err != nil {
 		return nil, err
 	}
@@ -612,9 +635,9 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		{"disk.dataPartition.size", strconv.Itoa(dataGB) + "G"},
 		{"hw.cpu.ncore", strconv.Itoa(cpu)},
 		{"hw.ramSize", strconv.Itoa(memory) + "M"},
-		{"hw.lcd.width", strconv.Itoa(ScreenWidth)},
-		{"hw.lcd.height", strconv.Itoa(ScreenHeight)},
-		{"hw.lcd.density", strconv.Itoa(ScreenDensity)},
+		{"hw.lcd.width", display[0][1]},
+		{"hw.lcd.height", display[1][1]},
+		{"hw.lcd.density", display[2][1]},
 		{"hw.lcd.vsync", strconv.Itoa(fps)},
 		{"image.sysdir.1", SystemImageSysdir},
 	} {
@@ -703,10 +726,11 @@ func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int)
 }
 
 type UpdateOptions struct {
-	Title    *string
-	MemoryMB *int
-	CPU      *int
-	FPS      *int
+	Title      *string
+	MemoryMB   *int
+	CPU        *int
+	FPS        *int
+	Resolution *int
 	// DataPartitionGB raises disk.dataPartition.size (modavd only; AUTO-MAS cannot change it): within
 	// MinDataPartitionGB..MaxDataPartitionGB and never below the current value. The emulator (sdk-mas36 on) grows the
 	// disk image at the next boot without touching the data, and the boot's after-boot step grows the file system.
@@ -750,6 +774,12 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 			return nil, err
 		}
 	}
+	var resolution int
+	if opt.Resolution != nil {
+		if resolution, err = ValidateResolution(opt.Resolution); err != nil {
+			return nil, err
+		}
+	}
 	memoryArg := opt.MemoryMB
 	if memoryArg == nil {
 		current := MemoryFor(r, i)
@@ -786,6 +816,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.FPS != nil {
 		changes = append(changes, [2]string{"hw.lcd.vsync", strconv.Itoa(fps)})
 	}
+	if opt.Resolution != nil {
+		changes = append(changes, displayChanges(in.Config, resolution)...)
+	}
 	if opt.DataPartitionGB != nil {
 		changes = append(changes, [2]string{"disk.dataPartition.size", strconv.Itoa(data) + "G"})
 	}
@@ -816,6 +849,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	}
 	if opt.FPS != nil {
 		applied["fps"] = fps
+	}
+	if opt.Resolution != nil {
+		applied["resolution"] = resolution
 	}
 	if opt.DataPartitionGB != nil {
 		applied["data_partition_gb"] = data
@@ -900,19 +936,35 @@ func deleteInstanceFiles(r *root.Root, i int) error {
 
 // ---- display -----------------------------------------------------------------------------------------------------
 
-// DisplayChanges is the fixed 720p for cfg keeping its orientation (portrait when height > width), plus
-// hw.mainKeys=yes: hw.lcd.width, hw.lcd.height, hw.lcd.density, hw.mainKeys in that order.
-func DisplayChanges(cfg *Ini) [][2]string {
+// Resolution identifies 1080p in either orientation. All other old configurations stay 720p.
+func (in *Instance) Resolution() int { return resolutionFor(in.Config) }
+
+func resolutionFor(cfg *Ini) int {
 	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
 	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
-	width, height := ScreenWidth, ScreenHeight
+	if (w == 1920 && h == 1080) || (w == 1080 && h == 1920) {
+		return 1080
+	}
+	return 720
+}
+
+// DisplayChanges normalizes the current preset's dimensions and DPI, preserving orientation.
+func DisplayChanges(cfg *Ini) [][2]string { return displayChanges(cfg, resolutionFor(cfg)) }
+
+func displayChanges(cfg *Ini, resolution int) [][2]string {
+	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
+	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+	width, height, density := 1280, 720, 240
+	if resolution == 1080 {
+		width, height, density = 1920, 1080, 280
+	}
 	if h > w {
-		width, height = ScreenHeight, ScreenWidth
+		width, height = height, width
 	}
 	return [][2]string{
 		{"hw.lcd.width", strconv.Itoa(width)},
 		{"hw.lcd.height", strconv.Itoa(height)},
-		{"hw.lcd.density", strconv.Itoa(ScreenDensity)},
+		{"hw.lcd.density", strconv.Itoa(density)},
 		{"hw.mainKeys", "yes"},
 	}
 }

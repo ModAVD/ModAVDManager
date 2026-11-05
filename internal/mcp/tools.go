@@ -93,6 +93,10 @@ func fpsProp(desc string) prop {
 	return prop{"fps", false, map[string]any{"type": "integer", "enum": avd.FPSChoices, "description": desc}}
 }
 
+func resolutionProp(desc string) prop {
+	return prop{"resolution", false, map[string]any{"type": "integer", "enum": avd.ResolutionChoices, "description": desc}}
+}
+
 func timeoutProp(def time.Duration, desc string) prop {
 	return prop{"timeout_s", false, map[string]any{"type": "integer", "minimum": 1, "maximum": maxTimeoutS,
 		"default": int(def / time.Second), "description": desc}}
@@ -193,6 +197,7 @@ func toolDefs() []*toolDef {
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "Size of the data partition (games) in GB."}},
 				fpsProp("Display refresh rate."),
+				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280 (default), 720 = 1280×720 / DPI 240."),
 			},
 			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				var req emu.CreateRequest
@@ -218,6 +223,9 @@ func toolDefs() []*toolDef {
 				if req.FPS, err = a.optInt("fps"); err != nil {
 					return nil, err
 				}
+				if req.Resolution, err = a.optInt("resolution"); err != nil {
+					return nil, err
+				}
 				if progress != nil {
 					req.Progress = func(p emu.Progress) {
 						if p.Step != "done" {
@@ -230,7 +238,7 @@ func toolDefs() []*toolDef {
 			})),
 
 		finishing(newTool("update_instance", "Update instance",
-			"Change the title, memory, CPU cores, frame rate or data partition size of an instance. The changes take "+
+			"Change the title, memory, CPU cores, frame rate, resolution or data partition size of an instance. The changes take "+
 				"effect at its next boot (applies_next_boot=true when it is running now).",
 			mutating(true, true), reflect.TypeFor[emu.UpdateResult](), []prop{
 				indexProp(true),
@@ -238,6 +246,7 @@ func toolDefs() []*toolDef {
 				memoryProp("New guest memory in MB."),
 				cpuProp("New CPU core count."),
 				fpsProp("New display refresh rate."),
+				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280, 720 = 1280×720 / DPI 240. Preserves orientation; next boot."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "New data partition size in GB; can only be " +
 						"raised. Game data is kept: the emulator grows the disk at the next boot and the file " +
@@ -261,11 +270,14 @@ func toolDefs() []*toolDef {
 				if req.FPS, err = a.optInt("fps"); err != nil {
 					return nil, err
 				}
+				if req.Resolution, err = a.optInt("resolution"); err != nil {
+					return nil, err
+				}
 				if req.DataPartitionGB, err = a.optInt("data_partition_gb"); err != nil {
 					return nil, err
 				}
-				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.DataPartitionGB == nil {
-					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、data_partition_gb 至少给一项")
+				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil {
+					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb 至少给一项")
 				}
 				return b.Update(ctx, i, req)
 			})),

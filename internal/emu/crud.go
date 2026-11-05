@@ -34,6 +34,10 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 	if err != nil {
 		return nil, err
 	}
+	resolution, err := avd.ValidateResolution(req.Resolution)
+	if err != nil {
+		return nil, err
+	}
 	// A root used by modavd alone has no mas-avd.json yet (AUTO-MAS writes it when the root is added).
 	if _, err := m.Root.EnsureMetadata(); err != nil {
 		return nil, err
@@ -81,7 +85,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 		return nil, err
 	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
-		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps, Creating: !req.filesOnly,
+		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps, Resolution: resolution, Creating: !req.filesOnly,
 	})
 	if err != nil {
 		lock.Unlock()
@@ -209,7 +213,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		return nil, err
 	}
 	applied, err := avd.Update(m.Root, i, avd.UpdateOptions{
-		Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, DataPartitionGB: req.DataPartitionGB,
+		Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
 	})
 	if err != nil {
 		return nil, err
