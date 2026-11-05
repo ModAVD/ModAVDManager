@@ -221,6 +221,15 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if applied == nil {
 		applied = map[string]any{}
 	}
+	nextBoot := len(applied) > 0
+	var cleanup *DiagnosticsCleanup
+	if req.Diagnostics != nil {
+		cleanup, err = m.SetDiagnostics(ctx, i, *req.Diagnostics)
+		if err != nil {
+			return nil, err
+		}
+		applied["diagnostics"] = *req.Diagnostics
+	}
 	m.Log.Infof("已写入魔改 AVD 实例 %d 的设置: %s", i, formatApplied(applied))
 	in, err := m.instance(i)
 	if err != nil {
@@ -235,7 +244,8 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		p = &q
 		m.Log.Infof("魔改 AVD 实例 %d 正在运行，改动下次开机生效", i)
 	}
-	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil}, nil
+	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,
+		DiagnosticsCleanup: cleanup}, nil
 }
 
 // Delete removes a stopped instance with all its data. errs.Busy while it runs or is being started / stopped.

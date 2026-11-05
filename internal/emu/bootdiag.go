@@ -80,15 +80,17 @@ func (m *Manager) saveBootFailure(ctx context.Context, i int, err error) error {
 // could be read (the directory is removed again).
 func (m *Manager) collectBootFailure(i int, cause error) string {
 	logs := m.Root.LogsDir()
-	dir := filepath.Join(logs, root.AvdName(i)+"-"+time.Now().Format("20060102-150405")+bootDiagSuffix)
+	stamp := time.Now().Truncate(time.Second)
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		m.Log.Warnf("实例 %d 开机失败，建不了日志目录，不收客体现场: %v", i, err)
 		return ""
 	}
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		m.Log.Warnf("实例 %d 开机失败，建不了 %s，不收客体现场: %v", i, filepath.Base(dir), err)
+	dir, err := os.MkdirTemp(logs, "."+root.AvdName(i)+"-bootfail-")
+	if err != nil {
+		m.Log.Warnf("实例 %d 开机失败，建不了临时现场目录: %v", i, err)
 		return ""
 	}
+	defer os.RemoveAll(dir)
 	serial := m.Root.Ports().Serial(i)
 	run := func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result {
 		return m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: timeout, Stdout: w}, args...)
@@ -98,12 +100,35 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		time.Now().Format("2006-01-02 15:04:05"), e.Code, e.Message)
 	// a fresh context: create's own may be the one that ran out
 	if !collectBootDiag(context.Background(), dir, header, bootDiagTotal, run) {
-		os.RemoveAll(dir)
 		m.Log.Warnf("实例 %d 开机失败，客体现场一项也没读到", i)
 		return ""
 	}
+	// Publish only a complete snapshot. Retention and collect-info cannot see a directory still being written.
+	lock, err := m.retentionLock()
+	if err != nil {
+		m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
+		return ""
+	}
+	var published string
+	for {
+		published = filepath.Join(logs, root.AvdName(i)+"-"+stamp.Format("20060102-150405")+bootDiagSuffix)
+		if _, err := os.Lstat(published); errors.Is(err, os.ErrNotExist) {
+			break
+		} else if err != nil {
+			lock.Unlock()
+			m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
+			return ""
+		}
+		stamp = stamp.Add(time.Second)
+	}
+	err = os.Rename(dir, published)
+	lock.Unlock()
+	if err != nil {
+		m.Log.Warnf("实例 %d 发布开机失败现场失败: %v", i, err)
+		return ""
+	}
 	m.pruneLogs(i)
-	return dir
+	return published
 }
 
 // collectBootDiag writes each of bootDiagItems into dir (whatever came, also from a command that timed out or failed;

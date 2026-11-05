@@ -31,11 +31,8 @@ var (
 	bootDiagDirPattern = regexp.MustCompile(`^mas_\d+-[0-9]{8}-[0-9]{6}` + bootDiagSuffix + `$`)
 )
 
-// pruneMu: several instances of one process booting at once prune the same directory; other processes are covered
-// by tolerating files that vanish meanwhile.
-var pruneMu sync.Mutex
-
 type logFile struct {
+	info  fs.FileInfo // identity selected for deletion; never rebind a candidate after a path replacement
 	path  string
 	name  string
 	mtime time.Time
@@ -48,108 +45,27 @@ type logFile struct {
 // (mas_<i>-*-bootfail); then while the closed files of these kinds in the whole logs dir exceed 1 GiB, delete from the
 // oldest. Files in use are skipped and not counted.
 func (m *Manager) pruneLogs(i int) {
-	pruneMu.Lock()
-	defer pruneMu.Unlock()
-	if _, _, err := pruneLogDir(m.Root.LogsDir(), i, logKeepPerInstance, logsDirMaxBytes, m.Log); err != nil {
+	removed, freed, err := m.cleanupDiagnostics(context.Background(), i)
+	if err != nil {
 		m.Log.Warnf("实例 %d 清理旧日志失败: %v", i, err)
+	}
+	if removed > 0 {
+		m.Log.Infof("实例 %d 建新日志前清理旧日志 %d 份，释放 %.1f MB（%s）", i, removed, float64(freed)/1024/1024, m.Root.LogsDir())
 	}
 }
 
-// pruneLogDir is AUTO-MAS _prune_logs_locked with the limits as parameters: returns the files removed and the bytes
-// freed. Files being written cannot be deleted on Windows; they are skipped and, for the size limit, not counted:
-// otherwise long runs of several instances whose open logs alone exceed the limit would delete every previous log
-// at each boot.
-func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (removed int, freed int64, err error) {
+// pruneLogDir is the ordinary-policy entry used by filesystem regression tests.
+func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (int, int64, error) {
 	files, err := managedLogFiles(dir)
 	if err != nil {
 		return 0, 0, err
 	}
-	avdName := root.AvdName(i)
-	gone := map[string]bool{}
-
-	for _, kind := range []struct {
-		prefix, suffix string
-		dir            bool
-		keep           int
-	}{
-		{avdName + "-", ".log", false, keep},
-		{"logcat-" + avdName + "-", ".txt", false, keep},
-		{"modavd-bridge-" + strconv.Itoa(i) + "-", ".log", false, keep},
-		{avdName + "-", bootDiagSuffix, true, bootDiagKeep},
-	} {
-		var mine []logFile
-		for _, f := range files {
-			if f.dir == kind.dir && strings.HasPrefix(f.name, kind.prefix) && strings.HasSuffix(f.name, kind.suffix) {
-				if !f.dir {
-					if busy, vanished := fileInUse(f.path); busy || vanished {
-						continue
-					}
-				}
-				mine = append(mine, f)
-			}
-		}
-		sortLogFiles(mine, true)
-		if len(mine) <= kind.keep {
-			continue
-		}
-		for _, f := range mine[kind.keep:] {
-			result := removeLog(f, log)
-			if result != unlinkFailed {
-				gone[f.path] = true
-			}
-			if result == unlinkRemoved {
-				removed++
-				freed += f.size
-			}
-		}
-	}
-
-	var rest []logFile
-	var total int64
-	for _, f := range files {
-		if !gone[f.path] {
-			rest = append(rest, f)
-			total += f.size
-		}
-	}
-	if total > maxBytes {
-		var closed []logFile
-		for _, f := range rest {
-			if f.dir {
-				closed = append(closed, f) // written once and closed (bootdiag.go)
-				continue
-			}
-			switch busy, vanished := fileInUse(f.path); {
-			case vanished:
-			case busy:
-				log.Debugf("旧日志 %s 正在写，不算进总量", f.name)
-			default:
-				closed = append(closed, f)
-			}
-		}
-		sortLogFiles(closed, false)
-		var closedTotal int64
-		for _, f := range closed {
-			closedTotal += f.size
-		}
-		for _, f := range closed {
-			if closedTotal <= maxBytes {
-				break
-			}
-			result := removeLog(f, log)
-			// removed, removed by someone else, or just opened for writing: none of them counts as closed any more
-			closedTotal -= f.size
-			if result == unlinkRemoved {
-				removed++
-				freed += f.size
-			}
-		}
-	}
-
+	plan := planCleanup(closedLogs(files), i, keep, maxBytes, nil, false, time.Now())
+	removed, freed, err := applyCleanup(plan, log)
 	if removed > 0 {
 		log.Infof("实例 %d 建新日志前清理旧日志 %d 份，释放 %.1f MB（%s）", i, removed, float64(freed)/1024/1024, dir)
 	}
-	return removed, freed, nil
+	return removed, freed, err
 }
 
 // managedLogFiles lists the managed regular files and the failed boots' directories (no symlinks) with mtime and
@@ -168,11 +84,14 @@ func managedLogFiles(dir string) ([]logFile, error) {
 		if !isDir && (!isManagedLog(e.Name()) || !e.Type().IsRegular()) {
 			continue
 		}
-		info, err := e.Info()
+		info, err := snapshotLog(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
 		}
-		f := logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(), size: info.Size(), dir: isDir}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() != isDir {
+			continue
+		}
+		f := logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(), size: info.Size(), dir: isDir, info: info}
 		if isDir {
 			f.size = dirSize(f.path)
 		}
@@ -229,6 +148,9 @@ const (
 
 // removeLog removes f: tryUnlink for a file, the whole tree for a failed boot's directory.
 func removeLog(f logFile, log *logx.Logger) unlinkResult {
+	if f.info != nil {
+		return unlinkRetained(f, log)
+	}
 	if !f.dir {
 		return tryUnlink(f.path, log)
 	}
@@ -345,7 +267,7 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
 	serial := m.Root.Ports().Serial(i)
-	running, err := m.findLogcatProcesses(serial)
+	running, err := m.findOwnedLogcatProcesses(serial)
 	// Another process may have started the writer but not adb yet, or killed stale adb while its writer drains.
 	// Let that transition finish before deciding whether to create a replacement.
 	for deadline := time.Now().Add(5 * time.Second); err == nil && len(running) == 0 && m.lockHeld(i, "logcat"); {
@@ -353,22 +275,14 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 			return ""
 		}
 		time.Sleep(20 * time.Millisecond)
-		running, err = m.findLogcatProcesses(serial)
+		running, err = m.findOwnedLogcatProcesses(serial)
 	}
 	if err != nil {
 		m.Log.Warnf("实例 %d 读不出宿主进程表，这次不起客体日志落盘（免得起两份）: %v", i, err)
 		return ""
 	}
 	if len(running) > 0 {
-		live, stale := splitLogcatClients(running, m.privateServerProcess())
-		if len(stale) > 0 && ctx.Err() == nil {
-			m.Log.Infof("实例 %d 的客体日志落盘（pid %s）连着已经不在的私有 adb server，结束掉", i, pidList(stale))
-			// ended first: openLogFile below then no longer sees their files as open
-			endProcesses(stale, 5*time.Second)
-		}
-		if len(live) > 0 {
-			return openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt")
-		}
+		return openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt")
 	}
 	if ctx.Err() != nil {
 		return ""
@@ -389,7 +303,7 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	// Wait for the helper to hold the output before reporting it. Its per-instance lock also covers the interval
 	// before adb appears in the process table, including starts from another manager process.
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		if clients, err := m.findOwnedLogcatProcesses(serial); err == nil && len(clients) > 0 {
 			if path := openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt"); path != "" {
 				m.Log.Infof("实例 %d 客体日志 → %s", i, path)
 				return path
@@ -444,12 +358,14 @@ func (m *Manager) logcatAfterReregister(serial string) {
 	if _, err := avd.Get(m.Root, i); err != nil {
 		return
 	}
-	stale, err := m.findLogcatProcesses(serial)
-	if err != nil {
-		return
+	if _, err := m.applyDiagnosticGuest(context.Background(), i); err != nil {
+		m.Log.Warnf("实例 %d 重新登记后恢复日志缓冲区失败: %v", i, err)
 	}
-	endProcesses(stale, 5*time.Second)
+	// The helper watches server identity and replaces only its own adb stream.
 	m.ensureLogcat(context.Background(), i)
+	if err := m.waitDiagnosticCapture(context.Background(), i, 10*time.Second); err != nil {
+		m.Log.Warnf("实例 %d 重新登记后日志采集尚未恢复: %v", i, err)
+	}
 }
 
 // privateServerProcess is the adb server listening on the private port, zero when none, when the listener table or

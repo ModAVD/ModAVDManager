@@ -112,6 +112,7 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Title           *string `json:"title"`
+		Diagnostics     *bool   `json:"diagnostics"`
 		MemoryMB        *int    `json:"memory_mb"`
 		CPU             *int    `json:"cpu"`
 		FPS             *int    `json:"fps"`
@@ -121,18 +122,31 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil {
+	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil && body.Diagnostics == nil {
 		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb 中的一项"))
 		return
 	}
 	res, err := s.mgr.Update(detached(r), i, emu.UpdateRequest{Title: body.Title, MemoryMB: body.MemoryMB, CPU: body.CPU,
-		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB})
+		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB, Diagnostics: body.Diagnostics})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	s.hub.requestRefresh()
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) handleDiagnosticsPreview(w http.ResponseWriter, r *http.Request) {
+	i, ok := pathIndex(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.mgr.PreviewDiagnostics(r.Context(), i)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {

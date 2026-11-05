@@ -162,6 +162,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunBootWatch(args[1:], stderr)
 		case emu.LogcatCaptureArg:
 			return emu.RunLogcatCapture(args[1:], stderr)
+		case emu.DiagnosticArchiveArg:
+			return emu.RunDiagnosticArchive(args[1:], stderr)
 		}
 	}
 	// StartOrphan re-runs this executable as the spawn helper.

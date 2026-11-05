@@ -196,6 +196,9 @@ func formatList(w io.Writer, r *emu.ListResult) {
 
 func listNotes(in emu.InstanceInfo) []string {
 	var notes []string
+	if in.Diagnostics {
+		notes = append(notes, "诊断模式")
+	}
 	if b := busyText(in.Busy); b != "" {
 		notes = append(notes, b)
 	}
@@ -235,6 +238,14 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		kv("标题", in.Title)
 	}
 	kv("状态", statusDetail(in.Status, in.CreationProgress, in.PID, in.StartedAt, in.Busy))
+	diagnostics := "关"
+	if in.Diagnostics {
+		diagnostics = "开"
+		if in.DiagnosticsSince != "" {
+			diagnostics += "，自 " + in.DiagnosticsSince
+		}
+	}
+	kv("诊断模式", diagnostics)
 	kv("adb 地址", in.AdbAddress)
 	kv("序列号", in.Serial+"（私有 adb server 上）")
 	kv("端口", fmt.Sprintf("控制台 %d，adb %d，gRPC %d", in.Ports.Console, in.Ports.Adb, in.Ports.Grpc))
@@ -336,6 +347,12 @@ func appliedParts(applied map[string]any) []string {
 			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
 		case "data_partition_gb":
 			parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+		case "diagnostics":
+			if enabled, _ := v.(bool); enabled {
+				parts = append(parts, "诊断模式 开")
+			} else {
+				parts = append(parts, "诊断模式 关")
+			}
 		default:
 			parts = append(parts, fmt.Sprintf("%s %v", k, v))
 		}
@@ -364,6 +381,9 @@ func formatUpdate(w io.Writer, r *emu.UpdateResult) {
 	fmt.Fprintf(w, "已修改%s：%s\n", instLabel(r.Instance.Index, r.Instance.Name, r.Instance.Title), strings.Join(parts, "，"))
 	if r.AppliesNextBoot {
 		fmt.Fprintln(w, "实例正在运行，改动下次开机生效")
+	}
+	if c := r.DiagnosticsCleanup; c != nil && !r.Instance.Diagnostics {
+		fmt.Fprintf(w, "清理日志 %d 份，释放 %d 字节\n", c.Files, c.Bytes)
 	}
 }
 

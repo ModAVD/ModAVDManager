@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/diagnostics"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
@@ -165,15 +166,9 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 	if !q.Alive() {
 		return 0
 	}
-	// A legacy capture, or a helper started concurrently, may already have an adb client.
-	if running, err := m.findLogcatProcesses(r.Ports().Serial(i)); err != nil || len(running) > 0 {
-		return 1
-	}
-	w, err := newLogcatWriter(r.LogsDir(), i, limit, func() { m.pruneLogs(i) })
-	if err != nil {
-		return 1
-	}
-	defer w.Close()
+	// The lifetime lock owns this helper, its adb child and its rotating writer. Policy/server changes cancel
+	// only this child; independent one-shot logcat calls never participate in capture ownership.
+	defer os.Remove(m.captureStatePath(i))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -184,14 +179,77 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		}
 		cancel()
 	}()
-	if err := captureLogcat(ctx, r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(i)), m.ADB.Env(), w); err != nil && ctx.Err() == nil {
-		m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
-		return 1
+	for ctx.Err() == nil {
+		states, err := diagnostics.Read(r)
+		if err != nil {
+			m.Log.Warnf("实例 %d 读不了诊断策略，日志采集未切换: %v", i, err)
+			return 1
+		}
+		policy := states[i]
+		if _, err := m.applyDiagnosticGuest(ctx, i); err != nil {
+			m.Log.Warnf("实例 %d 客体日志缓冲区设置失败: %v", i, err)
+		}
+		w, err := newLogcatWriter(r.LogsDir(), i, limit, func() { m.pruneLogs(i) })
+		if err != nil {
+			return 1
+		}
+		if policy.Enabled {
+			dmesg := m.su(ctx, i, "dmesg", 5*time.Second)
+			if dmesg.Code == 0 {
+				if _, err := w.Write([]byte("=== dmesg ===\n" + dmesg.Out + "\n=== logcat ===\n")); err != nil {
+					w.Close()
+					return 1
+				}
+			}
+		}
+		captureCtx, stopCapture := context.WithCancel(ctx)
+		server := m.privateServerProcess()
+		watchDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-watchDone:
+					return
+				case <-captureCtx.Done():
+					return
+				case <-ticker.C:
+					current, readErr := diagnostics.Read(r)
+					nextServer := m.privateServerProcess()
+					if readErr == nil && current[i] != policy || nextServer.PID != server.PID || nextServer.Created != server.Created {
+						stopCapture()
+						return
+					}
+				}
+			}
+		}()
+		err = captureLogcatStarted(captureCtx, r.AdbExe(), diagnosticLogcatArgs(r.AdbServerPort(), r.Ports().Serial(i), policy.Enabled),
+			m.ADB.Env(), w, m.captureStarted(i, q, policy, server))
+		stoppedForChange := captureCtx.Err() != nil
+		close(watchDone)
+		stopCapture()
+		w.Close()
+		os.Remove(m.captureStatePath(i))
+		if ctx.Err() != nil {
+			break
+		}
+		if !stoppedForChange {
+			if err != nil {
+				m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
+				return 1
+			}
+			return 0
+		}
 	}
 	return 0
 }
 
 func captureLogcat(ctx context.Context, exe string, args, env []string, output io.Writer) error {
+	return captureLogcatStarted(ctx, exe, args, env, output, nil)
+}
+
+func captureLogcatStarted(ctx context.Context, exe string, args, env []string, output io.Writer, started func(int) error) error {
 	r, pipe, err := os.Pipe()
 	if err != nil {
 		return err
@@ -205,6 +263,13 @@ func captureLogcat(ctx context.Context, exe string, args, env []string, output i
 		return err
 	}
 	pipe.Close()
+	if started != nil {
+		if err := started(cmd.Process.Pid); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			return err
+		}
+	}
 	_, copyErr := io.Copy(output, r)
 	if copyErr != nil {
 		// Do not leave a live adb capture after a disk error: ensureLogcat must be able to start it again.

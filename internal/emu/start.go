@@ -283,6 +283,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			if bootLock, err = m.lock(ctx, i, "boot", bootLockWait, "正在开机"); err != nil {
 				return nil, err
 			}
+			m.startDiagnosticArchive(i)
 			p, err := m.startEmulator(i, plan)
 			if err != nil {
 				bootLock.Unlock()

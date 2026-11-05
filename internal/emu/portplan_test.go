@@ -46,6 +46,11 @@ func TestMain(m *testing.M) {
 				limit = 128
 			}
 			os.Exit(runLogcatCapture(os.Args[2:], os.Stderr, limit))
+		case DiagnosticArchiveArg:
+			configureCrashTestCopyGate()
+			os.Exit(RunDiagnosticArchive(os.Args[2:], os.Stderr))
+		case crashTestLaunchArg:
+			os.Exit(runCrashTestLauncher(os.Args[2:]))
 		case win.SpawnHelperArg:
 			os.Exit(win.SpawnHelperMain(os.Args[2:], os.Stdout))
 		case fakeLogcatLaunchArg:

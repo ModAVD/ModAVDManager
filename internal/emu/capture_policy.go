@@ -1,0 +1,168 @@
+// Copyright 2026 Ji Mao Cai
+package emu
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"modavd/internal/diagnostics"
+	"modavd/internal/errs"
+	"modavd/internal/root"
+	"modavd/internal/win"
+)
+
+// captureState names both process identities. A matching adb command line alone could be collect-info's -d call.
+type captureState struct {
+	HelperPID     uint32
+	HelperCreated uint64
+	ClientPID     uint32
+	ClientCreated uint64
+	QemuPID       uint32
+	QemuCreated   uint64
+	ServerPID     uint32
+	ServerCreated uint64
+	Enabled       bool
+	Since         string
+}
+
+func (m *Manager) captureStatePath(i int) string {
+	return filepath.Join(m.Root.AvdHome(), "."+root.AvdName(i)+".logcat-state.json")
+}
+
+func (m *Manager) readCaptureState(i int) (captureState, error) {
+	var state captureState
+	b, err := root.ReadFileShared(m.captureStatePath(i))
+	if err == nil {
+		err = json.Unmarshal(b, &state)
+	}
+	return state, err
+}
+
+func (m *Manager) writeCaptureState(i int, state captureState) error {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	path := m.captureStatePath(i)
+	tmp := path + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	defer os.Remove(tmp)
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
+	helper := win.Process{PID: state.HelperPID, Created: state.HelperCreated}
+	client := win.Process{PID: state.ClientPID, Created: state.ClientCreated}
+	if helper.PID == 0 || helper.Created == 0 || client.PID == 0 || client.Created == 0 || !helper.Alive() || !client.Alive() {
+		return win.Process{}, false
+	}
+	image, err := helper.ImagePath()
+	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Join(m.Root.Dir, "tools", "modavd.exe")) {
+		return win.Process{}, false
+	}
+	args, err := helper.CommandLine()
+	if err != nil || len(args) != 6 || args[1] != LogcatCaptureArg ||
+		!strings.EqualFold(filepath.Clean(args[2]), m.Root.Dir) || args[3] != strconv.Itoa(i) ||
+		args[4] != strconv.FormatUint(uint64(state.QemuPID), 10) || args[5] != strconv.FormatUint(state.QemuCreated, 10) {
+		return win.Process{}, false
+	}
+	p, found := win.FindProcess(client.PID)
+	if !found || p.Created != client.Created || p.PPID != helper.PID {
+		return win.Process{}, false
+	}
+	image, err = client.ImagePath()
+	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+		return win.Process{}, false
+	}
+	args, err = client.CommandLine()
+	if err != nil || !logcatCmdlineMatches(args, strconv.Itoa(m.Root.AdbServerPort()), m.Root.Ports().Serial(i)) {
+		return win.Process{}, false
+	}
+	for _, arg := range args {
+		if arg == "-d" || arg == "--dump" {
+			return win.Process{}, false
+		}
+	}
+	return p, true
+}
+
+func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error) {
+	port, ok := consolePortOfSerial(serial)
+	if !ok {
+		return nil, nil
+	}
+	i, ok := m.Root.Ports().IndexOfConsole(port)
+	if !ok {
+		return nil, nil
+	}
+	state, err := m.readCaptureState(i)
+	if err != nil {
+		return nil, nil
+	}
+	if p, ok := m.ownedCapture(i, state); ok {
+		return []win.Process{p}, nil
+	}
+	return nil, nil
+}
+
+func (m *Manager) waitDiagnosticCapture(ctx context.Context, i int, timeout time.Duration) error {
+	for deadline := time.Now().Add(timeout); ; {
+		states, err := diagnostics.Read(m.Root)
+		if err != nil {
+			return err
+		}
+		state, err := m.readCaptureState(i)
+		server := m.privateServerProcess()
+		if err == nil && state.Enabled == states[i].Enabled && state.Since == states[i].Since &&
+			state.ServerPID == server.PID && state.ServerCreated == server.Created {
+			if _, ok := m.ownedCapture(i, state); ok {
+				return nil
+			}
+		}
+		if _, running, qerr := m.qemuOf(i); qerr != nil || !running {
+			return qerr
+		}
+		if ctx.Err() != nil {
+			return errs.Wrap(errs.Canceled, ctx.Err(), "诊断设置已保存，等待日志采集切换时取消")
+		}
+		if time.Now().After(deadline) {
+			return errs.New(errs.Timeout, "诊断设置已保存，但宿主日志采集尚未完成切换").WithAdvice("重试相同的诊断开关命令")
+		}
+		if !m.lockHeld(i, "logcat") {
+			m.ensureLogcat(ctx, i)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func diagnosticLogcatArgs(server int, serial string, enabled bool) []string {
+	if !enabled {
+		return logcatArgs(server, serial)
+	}
+	return []string{"-P", strconv.Itoa(server), "-s", serial, "shell", "su", "0", "logcat", "-v", "threadtime", "-b", "main,system,crash,events,kernel"}
+}
+
+func (m *Manager) captureStarted(i int, q win.Process, policy diagnostics.State, server win.Process) func(int) error {
+	return func(pid int) error {
+		helper, ok := win.FindProcess(uint32(os.Getpid()))
+		if !ok || helper.Created == 0 {
+			return fmt.Errorf("读不到采集进程身份")
+		}
+		client, ok := win.FindProcess(uint32(pid))
+		if !ok || client.Created == 0 {
+			return fmt.Errorf("读不到 adb 采集进程身份")
+		}
+		return m.writeCaptureState(i, captureState{HelperPID: helper.PID, HelperCreated: helper.Created,
+			ClientPID: client.PID, ClientCreated: client.Created, QemuPID: q.PID, QemuCreated: q.Created,
+			ServerPID: server.PID, ServerCreated: server.Created,
+			Enabled: policy.Enabled, Since: policy.Since})
+	}
+}

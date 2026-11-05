@@ -195,6 +195,8 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 	info.Config = cfg
 
 	if meta := m.Root.InstanceMeta(i); meta != nil {
+		info.Diagnostics, _ = meta.Get("diagnostics").BoolVal()
+		info.DiagnosticsSince = metaText(meta.Get("diagnosticsSince"))
 		info.Initialized = metaTruthy(meta.Get("initialized"))
 		info.Launcher = metaText(meta.Get("launcher"))
 		info.Renderer = metaText(meta.Get("renderer"))
