@@ -479,6 +479,7 @@ func TestPropertiesMatchPython(t *testing.T) {
 
 // TestMatchesProductionInstance: an instance created here with the options of D:\ModAVD's mas_1 (made by AUTO-MAS
 // on 10-16; read only) is the same bytes. The template has changed once since: hw.mainKeys no -> yes (ModAVD #1).
+// New instances default to 1080p since ModAVD #100; mas_1 is 720p, so its resolution is passed like the others.
 func TestMatchesProductionInstance(t *testing.T) {
 	const prod = `D:\ModAVD`
 	prodIni, err1 := os.ReadFile(prod + `\avd\mas_1.ini`)
@@ -506,7 +507,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	}
 	r := newRoot(t)
 	created, err := Create(r, 1, CreateOptions{Title: title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB,
-		FPS: in.FPS()})
+		FPS: in.FPS(), Resolution: in.Resolution()})
 	if err != nil {
 		t.Fatal(err)
 	}
