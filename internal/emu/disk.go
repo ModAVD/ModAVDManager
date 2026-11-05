@@ -419,6 +419,8 @@ type DiskCompactResult struct {
 
 // qemuImgInfoResult is the part of `qemu-img info --output=json` compact reads.
 type qemuImgInfoResult struct {
+	Format             string            `json:"format"`
+	VirtualSize        int64             `json:"virtual-size"`
 	BackingFilename    string            `json:"backing-filename"`
 	BackingFilenameFmt string            `json:"backing-filename-format"`
 	Snapshots          []json.RawMessage `json:"snapshots"`
