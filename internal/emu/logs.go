@@ -226,30 +226,6 @@ func logcatCmdlineMatches(cmdline []string, port, serial string) bool {
 	return hasPort && hasSerial && hasLogcat
 }
 
-// findLogcatProcesses are the host's `adb -P <port> -s <serial> logcat` processes, whoever started them: a record of
-// our own would not do, a capture an earlier modavd started keeps running.
-func (m *Manager) findLogcatProcesses(serial string) ([]win.Process, error) {
-	procs, err := win.ListProcesses()
-	if err != nil {
-		return nil, err
-	}
-	port := strconv.Itoa(m.Root.AdbServerPort())
-	var found []win.Process
-	for _, p := range procs {
-		if !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
-			continue
-		}
-		cmdline, err := p.CommandLine()
-		if err != nil {
-			continue
-		}
-		if logcatCmdlineMatches(cmdline, port, serial) {
-			found = append(found, p)
-		}
-	}
-	return found, nil
-}
-
 // logcatMu: within one process the boot path and a re-registration hook (another goroutine) may both find no capture
 // and start one each.
 var logcatMu sync.Mutex
@@ -258,11 +234,8 @@ var logcatMu sync.Mutex
 // (AUTO-MAS ensure_logcat). Returns the capture file: the new one, or the newest open logcat of this instance when one
 // was already running ("" when unknown). The capture ends by itself when the emulator goes away.
 //
-// A capture client older than the private server now listening was connected to an earlier server that is gone: it
-// gets no more data but need not exit (10-04: still there 7 s after a re-registration). The re-registration hook
-// ends such clients, but it runs in the background and a short-lived CLI process may exit before it is done; so they
-// are ended here too instead of counting as a running capture (AUTO-MAS's watchdog re-checks every 30 s; modavd has
-// none, so the guest log would otherwise stay off for the rest of the boot).
+// A helper's PID and creation time, its root-local executable and its exact adb child identity establish ownership.
+// The helper observes policy and private-server changes and replaces only its own stream.
 func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
@@ -340,12 +313,8 @@ func openLogFile(dir, prefix, suffix string) string {
 	return ""
 }
 
-// logcatAfterReregister restarts the host logcat capture after serial was registered again with a new private
-// server (the old adb logcat client is connected to a server that is gone). Hooked into adb.Client.OnReregistered.
-//
-// Being re-registered means the private server was replaced: the old clients get no more data but do not
-// necessarily exit (10-04: still there 7 s after a re-registration), and would make ensureLogcat think the capture
-// runs. So they are ended first (AUTO-MAS _logcat_after_reregister).
+// logcatAfterReregister reapplies the latest guest policy and waits for the owned helper's new server connection.
+// Independent logcat -d calls and streams started by other programs are never terminated here.
 func (m *Manager) logcatAfterReregister(serial string) {
 	port, ok := consolePortOfSerial(serial)
 	if !ok {
@@ -380,41 +349,4 @@ func (m *Manager) privateServerProcess() win.Process {
 		return win.Process{}
 	}
 	return p
-}
-
-// splitLogcatClients sorts capture clients by the server they can be talking to. stale: created before server, so
-// connected to an earlier server that is gone. Except the client that started this server itself (adb's
-// fork-server makes the server its child, created a moment after it). Unknown creation times, or no known server,
-// count as live: never end a capture that may be working.
-func splitLogcatClients(clients []win.Process, server win.Process) (live, stale []win.Process) {
-	for _, c := range clients {
-		if server.Created != 0 && c.Created != 0 && c.Created < server.Created && server.PPID != c.PID {
-			stale = append(stale, c)
-		} else {
-			live = append(live, c)
-		}
-	}
-	return live, stale
-}
-
-// endProcesses kills procs and waits up to timeout in all for them to be gone.
-func endProcesses(procs []win.Process, timeout time.Duration) {
-	for _, p := range procs {
-		p.Kill()
-	}
-	deadline := time.Now().Add(timeout)
-	for _, p := range procs {
-		if left := time.Until(deadline); left > 0 {
-			p.Wait(left)
-		}
-	}
-}
-
-// pidList is "12, 34" for the log.
-func pidList(procs []win.Process) string {
-	pids := make([]string, len(procs))
-	for k, p := range procs {
-		pids[k] = strconv.FormatUint(uint64(p.PID), 10)
-	}
-	return strings.Join(pids, ", ")
 }

@@ -673,6 +673,9 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 		return nil, b, err
 	}
 	data, err := encodeJSON(v)
+	if err == nil {
+		data, err = diagnosticToolResult(t.Name, data)
+	}
 	if err != nil {
 		return nil, b, errs.Wrap(errs.Internal, err, "工具结果无法编码成 JSON")
 	}

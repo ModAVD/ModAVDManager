@@ -15,7 +15,6 @@ import (
 
 	"modavd/internal/diagnostics"
 	"modavd/internal/logx"
-	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
@@ -32,6 +31,7 @@ const (
 var logOwner = regexp.MustCompile(`^(?:logcat-mas_|mas_|modavd-bridge-)([0-9]+)-`)
 var crashDirName = regexp.MustCompile(`^mas_([0-9]+)-crashdumps$`)
 var crashInternalName = regexp.MustCompile(`^\.mas_([0-9]+)-(?:crash-copy-.+|crashscan\.json)$`)
+var pendingBootName = regexp.MustCompile(`^\.mas_([0-9]+)-[0-9]{8}-[0-9]{6}-bootfail-([0-9]+)-([0-9]+)-.+$`)
 
 type retainedLog struct {
 	logFile
@@ -242,6 +242,23 @@ func (m *Manager) diagnosticCleanup(i int, previewOff bool) (cleanupPlan, error)
 		return cleanupPlan{}, err
 	}
 	for _, entry := range entries {
+		if match := pendingBootName.FindStringSubmatch(entry.Name()); match != nil && entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			index, _ := strconv.Atoi(match[1])
+			pid, pidErr := strconv.ParseUint(match[2], 10, 32)
+			created, createdErr := strconv.ParseUint(match[3], 10, 64)
+			if pidErr != nil || createdErr != nil || pid == 0 || created == 0 {
+				continue
+			}
+			if (win.Process{PID: uint32(pid), Created: created}).Alive() {
+				continue
+			}
+			path := filepath.Join(m.Root.LogsDir(), entry.Name())
+			info, err := snapshotLog(path)
+			if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				closed = append(closed, retainedLog{logFile: logFile{path: path, name: entry.Name(), dir: true, size: dirSize(path), mtime: info.ModTime(), info: info}, index: index, kind: failedBoot})
+			}
+			continue
+		}
 		if match := crashInternalName.FindStringSubmatch(entry.Name()); match != nil && entry.Type().IsRegular() {
 			index, _ := strconv.Atoi(match[1])
 			if !states[index].Enabled {
@@ -256,11 +273,22 @@ func (m *Manager) diagnosticCleanup(i int, previewOff bool) (cleanupPlan, error)
 			continue
 		}
 		match := crashDirName.FindStringSubmatch(entry.Name())
-		if match == nil || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		if match == nil {
 			continue
 		}
 		index, _ := strconv.Atoi(match[1])
 		dir := filepath.Join(m.Root.LogsDir(), entry.Name())
+		info, err := snapshotLog(dir)
+		if err != nil {
+			return cleanupPlan{}, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return cleanupPlan{}, fmt.Errorf("诊断转储目录不是常规目录，未清理")
+		}
+		if !states[index].Enabled || low {
+			closed = append(closed, retainedLog{logFile: logFile{path: dir, name: entry.Name(), dir: true, size: dirSize(dir), mtime: info.ModTime(), info: info}, index: index, kind: crashDump})
+			continue
+		}
 		for _, f := range regularCrashFiles(dir) {
 			closed = append(closed, retainedLog{logFile: f, index: index, kind: crashDump})
 		}
@@ -305,13 +333,5 @@ func (m *Manager) cleanupDiagnostics(ctx context.Context, i int) (int, int64, er
 		return 0, 0, err
 	}
 	removed, freed, err := applyCleanup(plan, m.Log)
-	// Remove an empty archive directory after off, including on a repeated off following a partial failure.
-	states, readErr := diagnostics.Read(m.Root)
-	if readErr == nil && !states[i].Enabled {
-		dir := filepath.Join(m.Root.LogsDir(), root.AvdName(i)+"-crashdumps")
-		if e := os.Remove(dir); e != nil && !errors.Is(e, os.ErrNotExist) {
-			err = errors.Join(err, e)
-		}
-	}
-	return removed, freed, errors.Join(err, readErr)
+	return removed, freed, err
 }

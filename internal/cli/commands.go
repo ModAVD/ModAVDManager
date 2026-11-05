@@ -142,8 +142,8 @@ func init() {
 		},
 		{
 			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--diagnostics on|off]",
-			summary: "修改实例的标题、内存、核数、帧率、分辨率、数据盘大小",
-			details: "至少给一个选项。改动写进实例配置，下次开机生效。" +
+			summary: "修改实例设置和诊断模式",
+			details: "至少给一个选项。诊断模式立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。",
 			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optDiagnostics},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
@@ -511,7 +511,7 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		req.Diagnostics = &enabled
 	}
 	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil && req.Diagnostics == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb 中的一个").
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--diagnostics 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

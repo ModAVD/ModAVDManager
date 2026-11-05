@@ -438,6 +438,15 @@ func (m *Manager) copyAndPublishCrash(ctx context.Context, i int, expected diagn
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	dirInfo, err := snapshotLog(dir)
+	if err != nil {
+		return err
+	}
+	guard, err := holdDiagnosticDirectory(dir, dirInfo)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
 	dbHash := sha256.Sum256([]byte(source.db))
 	name := hex.EncodeToString(dbHash[:4]) + "-" + hex.EncodeToString(hash.Sum(nil)[:12]) + "-" + source.info.Name()
 	if err := os.Chtimes(tmp.Name(), opened.ModTime(), opened.ModTime()); err != nil {
@@ -446,6 +455,7 @@ func (m *Manager) copyAndPublishCrash(ctx context.Context, i int, expected diagn
 	if err := os.Rename(tmp.Name(), filepath.Join(dir, name)); err != nil {
 		return err
 	}
+	guard.Close()
 	plan, err := m.diagnosticCleanup(i, false)
 	if err != nil {
 		return err

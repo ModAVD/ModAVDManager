@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"modavd/internal/logx"
+	"modavd/internal/root"
 	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
@@ -326,31 +329,6 @@ func TestOpenLogFile(t *testing.T) {
 	}
 }
 
-// TestSplitLogcatClients: a capture client older than the private server now listening talks to a server that is
-// gone, unless it is the client that started this server (the server is its child then).
-func TestSplitLogcatClients(t *testing.T) {
-	server := win.Process{PID: 500, PPID: 77, Name: "adb.exe", Created: 1000}
-	old := win.Process{PID: 10, Name: "adb.exe", Created: 900}
-	starter := win.Process{PID: 77, Name: "adb.exe", Created: 990}
-	newer := win.Process{PID: 11, Name: "adb.exe", Created: 1100}
-	unknown := win.Process{PID: 12, Name: "adb.exe"}
-	live, stale := splitLogcatClients([]win.Process{old, starter, newer, unknown}, server)
-	if !reflect.DeepEqual(live, []win.Process{starter, newer, unknown}) || !reflect.DeepEqual(stale, []win.Process{old}) {
-		t.Errorf("live %+v stale %+v", live, stale)
-	}
-	// no server known (none listening, listener table unreadable, not adb): nothing counts as stale
-	live, stale = splitLogcatClients([]win.Process{old, newer}, win.Process{})
-	if len(live) != 2 || len(stale) != 0 {
-		t.Errorf("no server: live %+v stale %+v", live, stale)
-	}
-	if live, stale = splitLogcatClients(nil, server); live != nil || stale != nil {
-		t.Errorf("no clients: %+v %+v", live, stale)
-	}
-	if got := pidList([]win.Process{old, newer}); got != "10, 11" {
-		t.Errorf("pidList = %q", got)
-	}
-}
-
 // TestEndProcesses: processes already gone (or never there) neither fail nor make it wait.
 func TestEndProcesses(t *testing.T) {
 	start := time.Now()
@@ -379,6 +357,43 @@ func TestLogcatCommandLine(t *testing.T) {
 	} {
 		if logcatCmdlineMatches(c, "20050", "emulator-20030") {
 			t.Errorf("%s matched", name)
+		}
+	}
+}
+
+// findLogcatProcesses is a test observer of the host's `adb -P <port> -s <serial> logcat` processes, whoever started them: a record of
+// our own would not do, a capture an earlier modavd started keeps running.
+func (m *Manager) findLogcatProcesses(serial string) ([]win.Process, error) {
+	procs, err := win.ListProcesses()
+	if err != nil {
+		return nil, err
+	}
+	port := strconv.Itoa(m.Root.AdbServerPort())
+	var found []win.Process
+	for _, p := range procs {
+		if !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
+			continue
+		}
+		cmdline, err := p.CommandLine()
+		if err != nil {
+			continue
+		}
+		if logcatCmdlineMatches(cmdline, port, serial) {
+			found = append(found, p)
+		}
+	}
+	return found, nil
+}
+
+// endProcesses kills procs and waits up to timeout in all for them to be gone.
+func endProcesses(procs []win.Process, timeout time.Duration) {
+	for _, p := range procs {
+		p.Kill()
+	}
+	deadline := time.Now().Add(timeout)
+	for _, p := range procs {
+		if left := time.Until(deadline); left > 0 {
+			p.Wait(left)
 		}
 	}
 }

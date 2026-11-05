@@ -119,8 +119,8 @@ func TestBridgeScriptWindowsPowerShell(t *testing.T) {
 	if err != nil || run.Code != 0 || run.Last != "bridge PowerShell output" || run.LogFile == "" {
 		t.Fatalf("run=%+v, error=%v", run, err)
 	}
-	if got := names(t, m.Root.LogsDir()); len(got) != 10 {
-		t.Fatalf("script did not prune bridge logs: %q", got)
+	if got, err := managedLogFiles(m.Root.LogsDir()); err != nil || len(got) != 10 {
+		t.Fatalf("script did not prune bridge logs: %+v, %v", got, err)
 	}
 	if _, err := os.Stat(run.LogFile); err != nil {
 		t.Fatalf("new script output was removed: %v", err)

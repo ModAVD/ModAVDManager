@@ -23,6 +23,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/win"
 )
 
 const (
@@ -85,7 +86,13 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 		m.Log.Warnf("实例 %d 开机失败，建不了日志目录，不收客体现场: %v", i, err)
 		return ""
 	}
-	dir, err := os.MkdirTemp(logs, "."+root.AvdName(i)+"-bootfail-")
+	self, ok := win.FindProcess(uint32(os.Getpid()))
+	if !ok || self.Created == 0 {
+		m.Log.Warnf("实例 %d 读不到现场收集进程身份，不收客体现场", i)
+		return ""
+	}
+	prefix := fmt.Sprintf(".%s-%s-bootfail-%d-%d-", root.AvdName(i), stamp.Format("20060102-150405"), self.PID, self.Created)
+	dir, err := os.MkdirTemp(logs, prefix)
 	if err != nil {
 		m.Log.Warnf("实例 %d 开机失败，建不了临时现场目录: %v", i, err)
 		return ""

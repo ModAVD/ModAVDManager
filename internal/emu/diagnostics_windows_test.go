@@ -4,6 +4,7 @@
 package emu
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
+	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/win"
 )
@@ -267,5 +269,120 @@ func TestRetentionNeverFollowsReplacementLink(t *testing.T) {
 	}
 	if b, err := os.ReadFile(outside); err != nil || string(b) != "private" {
 		t.Fatalf("outside = %q, %v", b, err)
+	}
+}
+
+func TestPendingBootDiagRetainsOnlyDeadOwners(t *testing.T) {
+	m := diagnosticTestManager(t)
+	self, ok := win.FindProcess(uint32(os.Getpid()))
+	if !ok || self.Created == 0 {
+		t.Fatal("self identity unavailable")
+	}
+	live := fmt.Sprintf(".mas_0-20261105-120000-bootfail-%d-%d-live", self.PID, self.Created)
+	if err := os.Mkdir(filepath.Join(m.Root.LogsDir(), live), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkLog(t, filepath.Join(m.Root.LogsDir(), live), "summary.txt", 1, 0)
+	for k := 0; k < 4; k++ {
+		name := fmt.Sprintf(".mas_0-20261105-12000%d-bootfail-4294967292-1-stale", k)
+		path := filepath.Join(m.Root.LogsDir(), name)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mkLog(t, path, "summary.txt", 2, k)
+		stamp := time.Now().Add(time.Duration(k-10) * time.Minute)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, freed, err := m.cleanupDiagnostics(context.Background(), 0)
+	if err != nil || removed != 1 || freed != 2 {
+		t.Fatalf("stale snapshots = %d/%d/%v", removed, freed, err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Root.LogsDir(), live)); err != nil {
+		t.Fatal("active snapshot removed", err)
+	}
+}
+
+func TestDiagnosticDirectoryGuardAllowsChildRename(t *testing.T) {
+	dir := t.TempDir()
+	info, err := snapshotLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard, err := holdDiagnosticDirectory(dir, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Close()
+	first := filepath.Join(dir, "stage")
+	if err := os.WriteFile(first, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(first, filepath.Join(dir, "published")); err != nil {
+		t.Fatal("directory guard blocked child publish", err)
+	}
+	if err := os.Rename(dir, dir+"-replaced"); err == nil {
+		guard.Close()
+		os.Rename(dir+"-replaced", dir)
+		t.Fatal("directory identity could be replaced while guarded")
+	}
+}
+
+func TestDiagnosticsOnlyDoesNotRewriteInstanceSettings(t *testing.T) {
+	for _, disk := range []string{"64G", "8G"} {
+		t.Run(disk, func(t *testing.T) {
+			m := diagnosticTestManager(t)
+			path := filepath.Join(m.Root.AvdHome(), "mas_0.avd", "config.ini")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := bytes.ReplaceAll(raw, []byte("disk.dataPartition.size=64G"), []byte("disk.dataPartition.size="+disk))
+			before = bytes.ReplaceAll(before, []byte("hw.ramSize=6144M"), []byte("hw.ramSize=auto"))
+			if !bytes.Contains(before, []byte("disk.dataPartition.size="+disk)) || !bytes.Contains(before, []byte("hw.ramSize=auto")) {
+				t.Fatal("fixture settings did not change")
+			}
+			if err := os.WriteFile(path, before, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Root.EditInstanceMeta(0, func(meta *jsonord.Obj) error {
+				meta.Set("memoryMb", jsonord.NewInt(0))
+				meta.Set("unknown", jsonord.NewString("preserve"))
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, enabled := range []bool{true, false} {
+				result, err := m.Update(context.Background(), 0, UpdateRequest{Diagnostics: &enabled})
+				if err != nil || result.AppliesNextBoot || result.Instance.Diagnostics != enabled {
+					t.Fatalf("diagnostics-only update=%+v/%v", result, err)
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatal("diagnostics rewrote hardware config", err)
+				}
+				meta := m.Root.InstanceMeta(0)
+				if memory, _ := meta.Get("memoryMb").Int(); memory != 0 {
+					t.Fatal("diagnostics fixed automatic memory", memory)
+				}
+				if value, _ := meta.Get("unknown").Str(); value != "preserve" {
+					t.Fatal("unknown metadata lost")
+				}
+			}
+		})
+	}
+}
+
+func TestMixedDiagnosticsRequestValidatesHardwareFirst(t *testing.T) {
+	m := diagnosticTestManager(t)
+	enabled := true
+	invalid := 7
+	if _, err := m.Update(context.Background(), 0, UpdateRequest{Diagnostics: &enabled, CPU: &invalid}); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Fatalf("mixed invalid request = %v", err)
+	}
+	states, err := diagnostics.Read(m.Root)
+	if err != nil || states[0].Enabled {
+		t.Fatalf("invalid mixed request changed diagnostics: %+v/%v", states, err)
 	}
 }

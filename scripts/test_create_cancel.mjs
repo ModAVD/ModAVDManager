@@ -244,7 +244,7 @@ test('disabling waits for preview and confirmation, then reports actual cleanup'
   assert.deepEqual(h.requests, [{ method: 'GET', path: '/api/instances/3/diagnostics/preview' }]);
   assert.equal(h.control('s-diagnostics').disabled, true);
   const confirm = h.dialogs[1];
-  assert.match(confirm.options.body.textContent, /3 个诊断日志文件（6 MB）/);
+  assert.match(confirm.options.body.textContent, /3 个日志文件（6 MB）/);
   assert.equal(confirm.options.body.querySelector('#' + confirm.options.desc).textContent, confirm.options.body.textContent);
   await h.submit(); // a second Save must not start another preview or patch
   assert.equal(h.requests.length, 1);
@@ -270,7 +270,7 @@ test('canceling diagnostic cleanup makes no patch and a retry gets a fresh previ
   assert.equal(h.settings.busy, false);
   const retry = h.submit();
   await turn();
-  assert.match(h.dialogs[2].options.body.textContent, /2 个诊断日志文件/);
+  assert.match(h.dialogs[2].options.body.textContent, /2 个日志文件/);
   h.dialogs[2].close();
   await retry;
   assert.equal(h.requests.filter(x => x.method === 'PATCH').length, 0);

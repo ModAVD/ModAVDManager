@@ -13,3 +13,5 @@ import (
 func unlinkRetained(logFile, *logx.Logger) unlinkResult { return unlinkFailed }
 
 func snapshotLog(path string) (fs.FileInfo, error) { return os.Lstat(path) }
+
+func holdDiagnosticDirectory(string, fs.FileInfo) (*os.File, error) { return nil, os.ErrPermission }

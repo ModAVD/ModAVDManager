@@ -65,7 +65,6 @@ const (
 	guestDirtyExpireCs     = 200
 	guestDirtyWritebackCs  = 100
 	balloonReportingOrder  = 9
-	logcatBufferSize       = "16M"
 	guestTmpDir            = "/data/local/tmp"
 	sdcardMountWait        = 60 * time.Second
 	emulatorShmNamePrefix  = "SHM_videmulator"

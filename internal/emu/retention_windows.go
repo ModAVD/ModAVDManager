@@ -36,6 +36,29 @@ func snapshotLog(path string) (fs.FileInfo, error) {
 	return file.Stat()
 }
 
+// Holding a directory without delete sharing prevents a junction/rename replacement while publishing a child.
+// Read/write sharing remains enabled so normal creation and rotation inside it can continue.
+func holdDiagnosticDirectory(path string, expected fs.FileInfo) (*os.File, error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	const readAttributes = 0x80
+	const openReparsePoint = 0x00200000
+	handle, err := syscall.CreateFile(name, readAttributes|1, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil,
+		syscall.OPEN_EXISTING, openReparsePoint|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	info, err := file.Stat()
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !os.SameFile(expected, info) {
+		file.Close()
+		return nil, fmt.Errorf("诊断目录身份变化，未发布")
+	}
+	return file, nil
+}
+
 // openRetained binds deletion to the selected object. No delete sharing keeps a directory's path fixed while its
 // flat contents are visited; OPEN_REPARSE_POINT never follows a replacement junction or symlink.
 func openRetained(candidate logFile) (*os.File, error) {

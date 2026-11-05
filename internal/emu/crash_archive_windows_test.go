@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -284,17 +285,11 @@ func runCrashTestLauncher(args []string) int {
 	if err != nil {
 		return 1
 	}
-	i, err := strconvAtoiForCrashTest(args[1])
+	i, err := strconv.Atoi(args[1])
 	if err != nil {
 		return 2
 	}
 	win.OrphanHelper, _ = os.Executable()
 	New(r, nil).startDiagnosticArchive(i)
 	return 0
-}
-
-func strconvAtoiForCrashTest(value string) (int, error) {
-	var i int
-	_, err := fmt.Sscan(value, &i)
-	return i, err
 }

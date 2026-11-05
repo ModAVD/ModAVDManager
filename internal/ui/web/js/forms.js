@@ -234,7 +234,7 @@ export function openSettings(i, field) {
       const ok = h('button', { class: 'btn btn-danger', type: 'submit' }, h('span', { text: '关闭并清理日志' }));
       const confirm = openDialog({
         title: '关闭诊断模式？', form: true, alert: true, desc,
-        body: h('div', { class: 'dlg-body' }, h('p', { id: desc, text: `预计清理该实例的 ${preview.files} 个诊断日志文件（${fmtBytes(preview.bytes)}）。` })),
+        body: h('div', { class: 'dlg-body' }, h('p', { id: desc, text: `预计清理 ${preview.files} 个日志文件（${fmtBytes(preview.bytes)}）。` })),
         actions: { ok },
         onSubmit() { accepted = true; confirm.close(); },
       });

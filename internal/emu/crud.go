@@ -212,11 +212,17 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if err := m.notCreated(i, "不能修改"); err != nil {
 		return nil, err
 	}
-	applied, err := avd.Update(m.Root, i, avd.UpdateOptions{
-		Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
-	})
-	if err != nil {
-		return nil, err
+	// Diagnostics is an immediate logging policy, not an AVD hardware edit. Do not validate or rewrite unrelated
+	// legacy disk sizes or AUTO-MAS's automatic memory when the request only changes this switch.
+	applied := map[string]any{}
+	var err error
+	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil {
+		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
+			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	if applied == nil {
 		applied = map[string]any{}
@@ -242,7 +248,9 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	}
 	if ok {
 		p = &q
-		m.Log.Infof("魔改 AVD 实例 %d 正在运行，改动下次开机生效", i)
+		if nextBoot {
+			m.Log.Infof("魔改 AVD 实例 %d 正在运行，硬件改动下次开机生效", i)
+		}
 	}
 	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,
 		DiagnosticsCleanup: cleanup}, nil
