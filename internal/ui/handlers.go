@@ -330,7 +330,8 @@ func componentSourceViewOf(s components.SourceSettings) componentSourceView {
 	} else if s.Mirror != "" {
 		source = s.Mirror
 	}
-	return componentSourceView{Source: source, Mirror: s.Mirror, MirrorURLs: append([]string(nil), s.MirrorURLs...), Configured: s.Set}
+	urls := append([]string{}, s.MirrorURLs...)
+	return componentSourceView{Source: source, Mirror: s.Mirror, MirrorURLs: urls, Configured: s.Set}
 }
 
 func componentSourceFromFields(source, mirror string, urls []string) (components.SourceSettings, error) {

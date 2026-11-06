@@ -977,7 +977,8 @@ func componentsSourceResult(s components.SourceSettings) *ComponentsSourceResult
 	} else if strings.TrimSpace(s.Mirror) != "" {
 		source = strings.ToLower(strings.TrimSpace(s.Mirror))
 	}
-	return &ComponentsSourceResult{Source: source, Mirror: s.Mirror, MirrorURLs: append([]string(nil), s.MirrorURLs...), Configured: s.Set}
+	urls := append([]string{}, s.MirrorURLs...)
+	return &ComponentsSourceResult{Source: source, Mirror: s.Mirror, MirrorURLs: urls, Configured: s.Set}
 }
 
 // fetchOptions checks every option of components fetch (before the root is looked up) and wires the output: the

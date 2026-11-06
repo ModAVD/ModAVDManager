@@ -8,9 +8,8 @@ import (
 	"modavd/internal/logx"
 )
 
-// unavailableDiagBackend is intentionally the only real adapter on this
-// branch. Claude can replace this file with the components/report wiring while
-// keeping the UI seam and HTTP behaviour stable.
+// unavailableDiagBackend is a fallback adapter used when the diagnostic
+// backend is not wired in a particular build. It keeps the UI seam stable.
 type unavailableDiagBackend struct{}
 
 func unavailableDiagError() error {
