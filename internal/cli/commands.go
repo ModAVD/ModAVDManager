@@ -995,10 +995,9 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 		KeepDownloads: inv.boolOpt("keep-downloads"), Mirror: inv.strOpt("mirror"), MirrorURLs: inv.strsOpt("mirror-url"),
 		Log: c.log,
 	}
-	// Explicit command-line choices always win. Otherwise apply the saved
-	// per-user source; an interactive first run offers the menu once. Automated
-	// (--accept-license) and JSON invocations never prompt and use automatic
-	// order when no choice has been saved.
+	// --mirror / --mirror-url win. Otherwise the saved per-user source; with none saved, someone at a console is
+	// asked once (and the answer saved), while --accept-license (automation), --json and a stdin that is not a
+	// console (pipe, file, NUL) are never asked: they use the default order and save nothing.
 	if !inv.isSet("mirror") && !inv.isSet("mirror-url") {
 		saved := components.LoadSourceSettings()
 		if !saved.Set && !o.AcceptLicense && !o.JSON && c.deps.stdinTerminal(input) {
@@ -1014,12 +1013,8 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 		}
 		if saved.Set {
 			o.Mirror, o.MirrorURLs = saved.Mirror, append([]string(nil), saved.MirrorURLs...)
-			o.SourceOrigin = "设置"
-		} else {
-			o.SourceOrigin = "默认"
+			o.SourceOrigin = components.SourceFromSettings
 		}
-	} else {
-		o.SourceOrigin = "参数"
 	}
 	for _, t := range []struct {
 		name string

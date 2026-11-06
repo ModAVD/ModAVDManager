@@ -167,13 +167,11 @@ func defaultDeps() deps {
 	}
 }
 
+// readerIsTerminal: stdin is someone at a console (components fetch may ask which mirror to use), not a pipe, a
+// file or NUL. Platform part in terminal_*.go.
 func readerIsTerminal(r io.Reader) bool {
 	f, ok := r.(*os.File)
-	if !ok || f == nil {
-		return false
-	}
-	st, err := f.Stat()
-	return err == nil && st.Mode()&os.ModeCharDevice != 0
+	return ok && f != nil && fileIsTerminal(f)
 }
 
 // Main runs one command and returns the process exit code (errs.ExitCode, see the package comment).
