@@ -56,6 +56,8 @@ var (
 	createStop    = (*Manager).stopAndWait
 	createCheck   = (*Manager).checkCreated
 	createRunning = func(m *Manager, i int) (bool, error) { _, ok, err := m.findQemu(i); return ok, err }
+	// createPlayStore puts the Google Play Store in during the setup of an instance created with it (playstore.go).
+	createPlayStore = (*Manager).putPlayStore
 )
 
 // creation is the creation state of instance i: "" (ready, or made before 0.2.0), "creating" or "failed", with the
@@ -152,7 +154,14 @@ const (
 	stageBridge      = 12.0 // its second: the install and the shutdown
 	stageBridgeCheck = 1.0  // its last: the check that finds it installed
 	stageShutdown    = 6.0
+	stagePlayStore   = 6.0 // pushing the Google Play Store's 230 MB and copying them into the overlay
 )
+
+// withPlayStoreStage is plan with the Google Play Store's step before the shutdown (the last stage).
+func withPlayStoreStage(plan []createStage) []createStage {
+	n := len(plan)
+	return append(append(plan[:n-1:n-1], createStage{"play_store", stagePlayStore}), plan[n-1])
+}
 
 // createPlan is the stages of a setup: one boot (boot is its wait; with the first-boot setup unless the instance is
 // initialized), the bridge rounds of a new instance when the bridge is installed, the shutdown. An instance whose
@@ -295,7 +304,7 @@ func (p *createProgress) boot(ev Progress) {
 		// one boot's setup is over: so is everything before the next bridge round or the shutdown. Not "ready":
 		// the instance is still being created.
 		step, msg = "setup", fmt.Sprintf("实例 %d 这次开机后的设置做完了", p.i)
-		if k := p.next("bridge", "create_stop"); k >= 0 {
+		if k := p.next("bridge", "play_store", "create_stop"); k >= 0 {
 			p.advance(k)
 		}
 	default:
@@ -353,13 +362,18 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 		}
 	}
 	bridge := m.bridgeWanted(i, cfg)
+	store := bridge && m.playStoreWanted(i) // Create refuses --play-store with --no-bridge
 	// the progress is also kept on disk, for status / list in other processes (AUTO-MAS, the manager)
 	defer m.removeCreateProgress(i)
 	boot := stageBoot
 	if req.Resume {
 		boot = stageColdBoot // the instance has booted before
 	}
-	prog := &createProgress{i: i, plan: createPlan(boot, !m.initialized(i), bridge),
+	plan := createPlan(boot, !m.initialized(i), bridge)
+	if store {
+		plan = withPlayStoreStage(plan)
+	}
+	prog := &createProgress{i: i, plan: plan,
 		bootLog: func() string {
 			if mk, ok := m.readSetupMarker(i); ok {
 				return mk.LogFile // written at the launch, before the boot wait
@@ -376,10 +390,18 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	if bridge {
 		what += "、arm64 执行桥"
 	}
+	if store {
+		what += "、Google Play 商店"
+	}
 	prog.stage("create", fmt.Sprintf("实例 %d：后台无头开机，做完%s后正常关机（一般几分钟）", i, what))
 	m.Log.Infof("实例 %d 新建后的初始化：后台无头开机，做完%s后正常关机", i, what)
 
 	sr, err := createStart(m, cctx, i, StartOptions{creating: true, NoBridge: !bridge, Progress: prog.boot})
+	if err == nil && store {
+		// after the bridge's rounds (its overlay is writable by now); the files take effect at the next boot
+		prog.stage("play_store", fmt.Sprintf("实例 %d 放入 Google Play 商店", i))
+		err = createPlayStore(m, cctx, i)
+	}
 	if err == nil {
 		err = createCheck(m, cctx, i, bridge, sr)
 	}

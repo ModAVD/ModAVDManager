@@ -59,6 +59,8 @@ const (
 	IdlePoll     = "mas-idlepoll.sh"
 	WifiFastpath = "mas-wifi-fastpath.sh"
 	VulkanFix    = "vulkanfix.sh"
+	// PlayStore installs, checks and removes the Google Play Store (modavd only, not in AUTO-MAS).
+	PlayStore = "playstore.sh"
 )
 
 // RemoteDir is where the scripts go in the guest.

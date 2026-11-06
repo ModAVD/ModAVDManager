@@ -166,6 +166,13 @@ func (f *fakeManager) Bridge(ctx context.Context, i int, action string) (*emu.Br
 	return &emu.BridgeResult{Index: i, Action: action, Installed: action == "install", Warnings: []string{}}, nil
 }
 
+func (f *fakeManager) PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error) {
+	f.record("playstore " + itoa(i) + " " + action)
+	state := map[string]string{"install": "installed", "uninstall": "absent", "status": "installed"}[action]
+	return &emu.PlayStoreResult{Index: i, Action: action, State: state, Installed: state == "installed",
+		Files: []string{}, Warnings: []string{}}, nil
+}
+
 func (f *fakeManager) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
 	f.record("disk-trim " + itoa(i))
 	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2147483648}, nil

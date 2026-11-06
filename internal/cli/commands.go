@@ -79,8 +79,10 @@ var (
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
 	optCheckMB       = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
 	optNoBridge      = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
-	optAutoMAS       = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
-	optBootNoBridge  = flagSpec{"no-bridge", kindBool, "",
+	optPlayStore     = flagSpec{"play-store", kindBool, "",
+		"自带 Google Play 商店（默认不带）：要有执行桥，并且先用 components fetch --play-store 补全它的组件"}
+	optAutoMAS      = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
+	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
 		"不询问，直接视为同意《Android 软件开发套件许可协议》（自动化用；协议全文照样取回并打印，取不到照样退出）；--json 时必须给"}
@@ -130,15 +132,15 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--resolution 1080|720] [--no-bridge] [--play-store] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
 				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
-				"之后第一次开机和平常一样快。" +
+				"之后第一次开机和平常一样快。--play-store 在执行桥之后再放入 Google Play 商店（取自 Google 官方的 Google Play 版系统镜像，见 playstore 命令）。" +
 				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
 				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
-			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optNoBridge, optCreateTimeout, optResume},
+			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optNoBridge, optPlayStore, optCreateTimeout, optResume},
 			final: true,
 			run:   runCreate, human: humanOf(formatCreate),
 		},
@@ -244,6 +246,17 @@ func init() {
 			posNames: []string{"实例编号", "install、uninstall 或 verify"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
+		},
+		{
+			name: "playstore", args: "<i> install|uninstall|status", summary: "装、卸、查看 Google Play 商店",
+			details: "商店的文件取自 Google 官方的 Google Play 版系统镜像（和实例的镜像同一期），要先用 components fetch --play-store 补全；" +
+				"装在执行桥带来的可写系统镜像覆盖层里，所以实例要有执行桥。install 放入商店和 Google 签名的 Play 服务、GSF、合作伙伴设置，" +
+				"藏起镜像自带的同名占位应用，再冷启动一次生效；uninstall 去掉 Google Play 装的更新、删掉这些文件，冷启动后恢复占位应用。" +
+				"实例原来关着的，做完再关掉；开着的，冷启动后照原来的方式开回来（带窗口或无头）。status：只读，实例要开着。" +
+				"装了商店的实例不能卸执行桥，要先卸商店。新建时带 --play-store 也能装（默认不带）。",
+			posNames: []string{"实例编号", "install、uninstall 或 status"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runPlayStore, human: humanOf(formatPlayStore), exit: exitPlayStore,
 		},
 		{
 			name: "disk", args: "<i> trim|info|compact", summary: "磁盘回收：触发回收或整理把客体已删文件占的空间还给宿主；看数据盘大小",
@@ -475,6 +488,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
 	req.NoBridge = inv.boolOpt("no-bridge")
+	req.PlayStore = inv.boolOpt("play-store")
 	if inv.isSet("timeout") {
 		n := inv.intOpt("timeout")
 		if n <= 0 {
@@ -483,7 +497,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.Timeout = time.Duration(n) * time.Second
 	}
 	if inv.isSet("resume") {
-		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "no-bridge"} {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "no-bridge", "play-store"} {
 			if inv.isSet(o) {
 				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
 			}
@@ -1144,6 +1158,38 @@ func runBridge(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return m.Bridge(c.ctx, i, action)
+}
+
+func runPlayStore(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "install", "uninstall", "status":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 install、uninstall 或 status，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("playstore").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	return m.PlayStore(c.ctx, i, action)
+}
+
+// exitPlayStore: 1 when the store did not end up as asked (installed after install, absent after uninstall). status
+// and --json: 0, the result says it.
+func exitPlayStore(data any, json bool) int {
+	r, ok := data.(*emu.PlayStoreResult)
+	if json || !ok {
+		return 0
+	}
+	if r.Action == "install" && !r.Installed || r.Action == "uninstall" && r.State != "absent" {
+		return 1
+	}
+	return 0
 }
 
 // runDisk dispatches `disk <i> <action>` (trim, info, compact); add a case per new action.

@@ -15,7 +15,7 @@ import (
 )
 
 func TestScriptsHaveNoCR(t *testing.T) {
-	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, VulkanFix} {
+	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, VulkanFix, PlayStore} {
 		b, err := Script(name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

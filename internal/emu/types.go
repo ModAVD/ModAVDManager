@@ -122,6 +122,9 @@ type CreateRequest struct {
 	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
 	// marker and create's setup installs it.
 	NoBridge bool
+	// PlayStore: put the Google Play Store in (playstore.go), after the bridge; off by default. Needs the bridge and
+	// the component (components fetch --play-store), both checked before any file is written.
+	PlayStore bool
 	// Timeout bounds create's whole setup (createinit.go); 0 = DefaultCreateTimeout.
 	Timeout time.Duration
 	// Progress, when set, is told about each step of the setup (same events as StartOptions.Progress, one 0–1000 bar).

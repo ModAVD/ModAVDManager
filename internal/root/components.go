@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"unicode"
+
+	"modavd/internal/playstore"
 )
 
 // ---- Google components -----------------------------------------------------------------------------------------
@@ -88,6 +90,37 @@ func WindowsComponents() []SDKComponent {
 				"SystemImage.GpuSupport=true\nAddon.VendorId=google\nAddon.VendorDisplay=Google Inc.\n",
 		},
 	}
+}
+
+// PlayStoreDir is where the optional Google Play Store component goes, under <sdk>.
+const PlayStoreDir = "playstore"
+
+// PlayStoreName is the Google Play Store component's name.
+const PlayStoreName = "Google Play 商店"
+
+// PlayStoreComponent is the optional Google Play Store (package playstore): the store and the Google-signed Play
+// services, GSF and Partner Setup taken out of Google's Play image of the same release, kept in <sdk>\playstore. It is
+// not in SDKComponents, so check, components status and AUTO-MAS never count it as missing; only `components fetch
+// --play-store` fetches it, and only instances created or set up with the store use it. Complete pins every file's
+// SHA-256. The zip unpacks into one 3 GB system.img that fetch reads the files out of and deletes (ExtractedBytes
+// counts both); on hosts without a catalogue the URL is "".
+func PlayStoreComponent() SDKComponent {
+	files := make([]string, len(playstore.Files))
+	hashes := map[string]string{}
+	for k, f := range playstore.Files {
+		files[k] = f.Name
+		hashes[f.Name] = f.SHA256
+	}
+	c := SDKComponent{ID: "play-store", Name: PlayStoreName,
+		FetchName: "Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）", Version: playstore.Revision,
+		Target: PlayStoreDir, StatusFiles: files, KeyFiles: files, KeyHashes: hashes}
+	if runtime.GOOS == "windows" {
+		c.URL, c.Size, c.SHA1, c.ArchiveRoot = playstore.ImageURL, playstore.ImageSize, playstore.ImageSHA1, "x86_64"
+		c.ExtractedBytes = playstore.ImageMemberSize + playstore.ExtractedBytes()
+		c.Properties = "Pkg.Desc=Google Play Store, Google Play services, GSF and Partner Setup from " +
+			"system-images;android-34;google_apis_playstore;x86_64.\nPkg.Revision=" + playstore.Revision + "\n"
+	}
+	return c
 }
 
 // SDKComponents is this host's table: the Windows one, or on darwin and linux the same two components with the host's

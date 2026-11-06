@@ -50,6 +50,15 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	if err != nil {
 		return nil, err
 	}
+	if req.PlayStore {
+		// before any file is written: the store goes into the bridge's writable overlay, from the component
+		if req.NoBridge {
+			return nil, errs.New(errs.InvalidArgument, "带 Google Play 商店要有 arm64 执行桥（可写系统镜像），不能和 --no-bridge 一起用")
+		}
+		if err := m.playStoreReady(); err != nil {
+			return nil, err
+		}
+	}
 	// A root used by modavd alone has no mas-avd.json yet (AUTO-MAS writes it when the root is added).
 	if _, err := m.Root.EnsureMetadata(); err != nil {
 		return nil, err
@@ -114,6 +123,13 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 		if err := writeBridgeMarker(m.Root, i); err != nil {
 			// first boot writable; the setup below (or, for filesOnly, any start) installs the bridge (bridge.go)
 			m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
+		}
+	}
+	if req.PlayStore {
+		// recorded before the setup, so a resume of a failed one puts the store in too
+		if err := m.setPlayStoreWanted(i, true); err != nil {
+			lock.Unlock()
+			return nil, err
 		}
 	}
 	if req.filesOnly {

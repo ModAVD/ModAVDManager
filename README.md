@@ -62,13 +62,14 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--play-store] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--play-store` 在执行桥之后放入 Google Play 商店（默认不带，见下）。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--diagnostics on\|off]` | 修改；诊断模式立即生效，其余设置下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
+| `playstore <i> install\|uninstall\|status` | 装、卸、查看 Google Play 商店（见下） |
 | `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM；成功只表示触发请求已返回，不等待或确认客体回收完成；模拟器太旧、不支持回收时返回不支持（退出码 4） |
 | `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；关机且取得启动锁后才运行只读的 qcow2 元数据检查，给出已分配和估计可回收大小。整理中或锁不可用时，仅返回可读取的文件头、宿主占用和原因；不可读的数值省略，不修复镜像 |
 | `disk <i> compact` | 整理已关机实例的数据盘；预计收益不足时跳过重写；转换后先校验再原子替换，原盘在替换成功前不动；报告前后占用和增减；大盘预算可达数十小时，正常整理基本不会超时，停止请取消；仅支持 NTFS/ReFS，拒绝快照或重写空间不足，详见[预算与结果契约](internal/emu/COMPACT.md) |
@@ -98,6 +99,15 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - `info` / `list` / `status` 的 `bridge`：`off`（记了不要桥）、`pending`（下次由 modavd 拉起的开机会装）、`installed`（开着的客体里桥在）、`unknown`。只问已经开完机的客体；关着或还在开机的实例，开机标记在桥装好后一直留着，装失败时也在，所以首次开机做过、标记也在时是 `unknown`，要知道确切结果就开机后再查。
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
+
+**Google Play 商店**（`playstore`、`create --play-store`，ModAVD#125）：
+
+- 实例用的 Google APIs 镜像有 Play 服务、没有商店。商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）：`components fetch --play-store` 同意许可协议后下载这个镜像，从里面的 `system.img` 只读取出五个文件，放进 `sdk\playstore\`，然后删掉临时解出的 `system.img`。这五个文件是商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书，每个都核对写死的 SHA-256。这一项是可选的，`components status`、`check` 不把它算进必需组件。
+- 只放商店不够：镜像自带的 Play 服务和 GSF 是测试证书签的，和商店签名对不上，Google 的组件会拒绝工作，所以一起换成 Play 版镜像里同版本的。
+- 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥。`create --play-store` 和 `--no-bridge` 不能一起用；装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
+- `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
+- 设备没有通过 Play 保护机制认证。登录时提示未认证的，按[文档](https://modavd.github.io/guide/playstore)登记这台实例的 GSF ID。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
+- 不带 `--play-store` 新建的实例什么都不动，`mas-avd.json` 里也不多键。带了的记 `instances.<i>.playStore: true`，卸掉后是 `false`。
 
 **按应用走代理**（`proxy`）：
 

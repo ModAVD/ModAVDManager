@@ -642,6 +642,26 @@ func formatBridge(w io.Writer, r *emu.BridgeResult) {
 	}
 }
 
+func formatPlayStore(w io.Writer, r *emu.PlayStoreResult) {
+	state := map[string]string{"installed": "已装", "absent": "没装", "partial": "只装了一部分"}[r.State]
+	if state == "" {
+		state = "不知道（实例关着）"
+	}
+	fmt.Fprintf(w, "实例 %d Google Play 商店 %s：%s\n", r.Index, r.Action, state)
+	for _, l := range r.Files {
+		fmt.Fprintln(w, "  "+l)
+	}
+	if r.Restarted {
+		fmt.Fprintln(w, "为了让改动生效，关机后又开了一次")
+	}
+	if r.Stopped {
+		fmt.Fprintln(w, "实例原来是关着的，做完已经关掉")
+	}
+	if r.Action == "install" && r.Installed {
+		fmt.Fprintln(w, "在实例里打开 Play 商店登录 Google 账号；提示设备未经 Play 保护机制认证时，按文档登记这台实例的 GSF ID")
+	}
+}
+
 func formatDisk(w io.Writer, r *emu.DiskTrimResult) {
 	fmt.Fprintf(w, "实例 %d 已触发磁盘回收（trim）\n", r.Index)
 }
