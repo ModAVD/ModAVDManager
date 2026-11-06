@@ -152,9 +152,6 @@ func TestComponentsFetchOptions(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit %d: %s", res.code, res.stdout)
 	}
-	if got.PlayStore {
-		t.Fatal("PlayStore without --play-store")
-	}
 	if !got.AcceptLicense || !got.JSON || !got.KeepDownloads || got.Mirror != "TENCENT" ||
 		strings.Join(got.MirrorURLs, " ") != "http://a.invalid/ http://b.invalid/,http://c.invalid/" ||
 		got.ConnectTimeout != 7*time.Second || got.StallTimeout != 8*time.Second || got.ManifestTimeout != 9*time.Second ||
@@ -182,13 +179,6 @@ func TestComponentsFetchOptions(t *testing.T) {
 	}
 	if notices != 1 || progress != 2 {
 		t.Fatalf("%d notices, %d progress lines: %s", notices, progress, res.stderr)
-	}
-	// --play-store asks for the store too; status does not take it
-	if res = h.run(t, nil, "--json", "components", "fetch", "--accept-license", "--play-store"); res.code != 0 || !got.PlayStore {
-		t.Fatalf("--play-store: exit %d, %+v", res.code, got)
-	}
-	if res = h.run(t, nil, "components", "status", "--play-store"); res.code != 2 {
-		t.Fatalf("status --play-store: exit %d", res.code)
 	}
 	// --quiet hides progress, never the license.
 	res = h.run(t, nil, "--quiet", "components", "fetch", "--accept-license")

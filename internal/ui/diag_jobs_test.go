@@ -21,7 +21,6 @@ type fakeDiag struct {
 	fetchReturn chan struct{}
 	canceled    chan struct{}
 	zipPath     string // what Collect returns (C:\tmp\diag.zip when empty)
-	playStore   bool   // the last Fetch asked for the Google Play Store too
 }
 
 // the license fakeDiag shows, and the license_sha256 a fetch after reading it carries
@@ -40,10 +39,7 @@ func (f *fakeDiag) Components(context.Context) (*DiagComponentsResult, error) {
 func (f *fakeDiag) License(context.Context, components.SourceSettings) (*DiagLicenseResult, error) {
 	return &DiagLicenseResult{Text: fakeTerms, Source: "mirror", SHA256: fakeTermsSHA}, nil
 }
-func (f *fakeDiag) Fetch(ctx context.Context, accept, playStore bool, _ components.SourceSettings, _ string, progress func(DiagProgress)) (*DiagFetchResult, error) {
-	f.mu.Lock()
-	f.playStore = playStore
-	f.mu.Unlock()
+func (f *fakeDiag) Fetch(ctx context.Context, accept, _ bool, _ components.SourceSettings, _ string, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
 		return nil, errs.New(errs.Usage, "必须同意")
 	}
@@ -118,27 +114,6 @@ func TestDiagnosticsEndpointsAndGuards(t *testing.T) {
 	h.waitJob(j.ID, stateIs(stateCanceled))
 }
 
-// TestComponentsFetchPlayStore: play_store in the body asks the backend for the Google Play Store too; without it, not.
-func TestComponentsFetchPlayStore(t *testing.T) {
-	done := make(chan struct{})
-	close(done)
-	d := &fakeDiag{fetchReturn: done}
-	h := diagHarness(t, d, nil)
-	for _, c := range []struct {
-		extra string
-		want  bool
-	}{{"", false}, {`,"play_store":true`, true}} {
-		var j jobView
-		expect(t, h.do("POST", "/api/components/fetch", fetchBody(c.extra)), http.StatusAccepted, &j)
-		h.waitJob(j.ID, stateIs(stateDone))
-		d.mu.Lock()
-		got := d.playStore
-		d.mu.Unlock()
-		if got != c.want {
-			t.Errorf("%q: playStore %v", c.extra, got)
-		}
-	}
-}
 func TestDiagnosticsCollectSectionsAndPlaceholder(t *testing.T) {
 	d := &fakeDiag{}
 	h := diagHarness(t, d, nil)

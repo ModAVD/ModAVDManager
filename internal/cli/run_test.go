@@ -166,13 +166,6 @@ func (f *fakeManager) Bridge(ctx context.Context, i int, action string) (*emu.Br
 	return &emu.BridgeResult{Index: i, Action: action, Installed: action == "install", Warnings: []string{}}, nil
 }
 
-func (f *fakeManager) PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error) {
-	f.record("playstore " + itoa(i) + " " + action)
-	state := map[string]string{"install": "installed", "uninstall": "absent", "status": "installed"}[action]
-	return &emu.PlayStoreResult{Index: i, Action: action, State: state, Installed: state == "installed",
-		Files: []string{}, Warnings: []string{}}, nil
-}
-
 func (f *fakeManager) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
 	f.record("disk-trim " + itoa(i))
 	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2147483648}, nil
@@ -987,7 +980,7 @@ func TestCreateFlags(t *testing.T) {
 		return &in, nil
 	}
 	r := h.run(t, nil, "create", "--index", "6", "--timeout", "600", "--no-bridge", "--resolution", "720")
-	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge || got[0].PlayStore ||
+	if r.code != 0 || len(got) != 1 || *got[0].Index != 6 || got[0].Timeout != 600*time.Second || !got[0].NoBridge ||
 		got[0].Resolution == nil || *got[0].Resolution != 720 || got[0].Resume || !strings.Contains(r.stderr, "新建中 2%：后台无头开机") ||
 		!strings.Contains(r.stderr, "新建中 35%：实例 6 宿主输入法") || strings.Contains(r.stderr, "新建中 100%") ||
 		!strings.Contains(r.stderr, "实例 6 新建完成") {
@@ -997,14 +990,6 @@ func TestCreateFlags(t *testing.T) {
 	if r.code != 0 || len(got) != 2 || !got[1].Resume || *got[1].Index != 6 {
 		t.Fatalf("resume: exit %d, %+v", r.code, got)
 	}
-	// --play-store asks for the store; --resume keeps what the create recorded and takes no --play-store
-	if r = h.run(t, nil, "create", "--play-store", "--json"); r.code != 0 || len(got) != 3 || !got[2].PlayStore {
-		t.Fatalf("--play-store: exit %d, %+v", r.code, got)
-	}
-	if r = h.run(t, nil, "create", "--resume", "6", "--play-store"); r.code != 2 || len(got) != 3 {
-		t.Fatalf("--resume --play-store: exit %d", r.code)
-	}
-	got = got[:2]
 	for _, bad := range [][]string{{"create", "--resume", "6", "--memory", "4G"}, {"create", "--resume", "6", "--index", "6"},
 		{"create", "--resume", "6", "--resolution", "1080"}, {"create", "--timeout", "0"}, {"create", "--resume", "5"}} {
 		if r := h.run(t, nil, bad...); r.code != 2 {

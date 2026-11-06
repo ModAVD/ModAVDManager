@@ -97,6 +97,14 @@ func (g *psGuest) files(tamper bool) {
 	g.write(g.dir+"/files.txt", list)
 }
 
+// TestPlayStoreScriptEmbedded: the script is embedded without CR (Android's sh chokes on CRLF).
+func TestPlayStoreScriptEmbedded(t *testing.T) {
+	b, err := Script(PlayStore)
+	if err != nil || len(b) == 0 || strings.ContainsRune(string(b), '\r') {
+		t.Fatalf("%d bytes, %v", len(b), err)
+	}
+}
+
 // run is the script's action: its RESULT word and its whole output.
 func (g *psGuest) run(action string) (string, string) {
 	g.t.Helper()

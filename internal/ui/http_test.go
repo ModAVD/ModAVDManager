@@ -134,8 +134,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 		}
 		return h.waitJob(v.ID, stateIs(stateDone))
 	}
-	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720,
-		"play_store": true})
+	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720})
 	if res, _ := j.Result.(map[string]any); j.Index != 2 || res["title"] != "测试机" {
 		t.Fatalf("created %+v", j)
 	}
@@ -154,10 +153,10 @@ func TestCreateUpdateDelete(t *testing.T) {
 	}
 	r := c[0]
 	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 || r.Resolution == nil || *r.Resolution != 720 ||
-		r.Progress == nil || r.Resume || !r.PlayStore {
+		r.Progress == nil || r.Resume {
 		t.Fatalf("create request %+v", r)
 	}
-	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil || r.Resolution != nil || r.PlayStore {
+	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil || r.Resolution != nil {
 		t.Fatalf("empty create request %+v", r)
 	}
 	if r := c[3]; !r.Resume || r.Index == nil || *r.Index != 3 {
