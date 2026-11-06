@@ -46,7 +46,7 @@ func managerTestRoot(t *testing.T, indexes ...int) *root.Root {
 	return r
 }
 
-func TestQemuScanHookAndRunning(t *testing.T) {
+func TestQemuScanHookAndStopTargets(t *testing.T) {
 	m := New(managerTestRoot(t, 2, 3, 4), nil)
 	fake := win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}
 	saved := qemuScan
@@ -73,7 +73,7 @@ func TestQemuScanHookAndRunning(t *testing.T) {
 		t.Errorf("m.qemuOf(4) = %v %v %v", p, ok, err)
 	}
 	asked = nil
-	running, err := m.Running(context.Background())
+	running, err := m.StopTargets(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +87,86 @@ func TestQemuScanHookAndRunning(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := m.Running(ctx); errs.CodeOf(err) != errs.Canceled {
+	if _, err := m.StopTargets(ctx); errs.CodeOf(err) != errs.Canceled {
 		t.Errorf("Running canceled = %v", err)
 	}
-	empty, err := New(managerTestRoot(t), nil).Running(context.Background())
+	empty, err := New(managerTestRoot(t), nil).StopTargets(context.Background())
 	if err != nil || empty == nil || len(empty) != 0 {
 		t.Errorf("Running without instances = %#v, %v (want an empty, non-nil list)", empty, err)
+	}
+}
+
+func TestStopTargetsIncludesOnlyActiveCreationsAndQemu(t *testing.T) {
+	m := New(managerTestRoot(t, 0, 1, 2, 3, 4, 6, 7), nil)
+	for i, state := range map[int]string{1: creationCreating, 2: creationCreating, 3: creationFailed, 4: creationCreating, 6: creationFailed} {
+		if err := m.setCreation(i, state, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 1 is between boots; 2 is also running; 4 is a killed creator's stale state.
+	// A create lock without creating metadata (7) does not publish an attempt.
+	for _, i := range []int{1, 2, 7} {
+		l, ok, err := win.TryLock(m.lockPath(i, "create"))
+		if err != nil || !ok {
+			t.Fatalf("create lock %d: %v %v", i, ok, err)
+		}
+		t.Cleanup(l.Unlock)
+	}
+	savedScan, savedBooted := qemuScan, statusBooted
+	t.Cleanup(func() { qemuScan, statusBooted = savedScan, savedBooted })
+	scans := 0
+	qemuScan = func(indexes []int) map[int]win.Process {
+		scans++
+		if !slices.Equal(indexes, []int{0, 1, 2, 3, 4, 6, 7}) {
+			t.Errorf("scan indexes %v", indexes)
+		}
+		return map[int]win.Process{2: {PID: 4242}, 3: {PID: 4243}, 9: {PID: 4249}}
+	}
+	statusBooted = func(*Manager, context.Context, int) bool {
+		t.Fatal("stop target discovery called adb")
+		return false
+	}
+	targets, err := m.StopTargets(context.Background())
+	if err != nil || !slices.Equal(targets, []int{1, 2, 3}) || scans != 1 {
+		t.Fatalf("targets %v, scans %d, error %v", targets, scans, err)
+	}
+}
+
+func TestStopTargetCreationEndsBeforeStop(t *testing.T) {
+	for _, state := range []string{"ready", "failed", "exited"} {
+		t.Run(state, func(t *testing.T) {
+			m, _ := opsTestManager(t)
+			i := 3
+			if _, err := m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.setCreation(i, creationCreating, "", ""); err != nil {
+				t.Fatal(err)
+			}
+			l, ok, err := win.TryLock(m.lockPath(i, "create"))
+			if err != nil || !ok {
+				t.Fatalf("create lock: %v %v", ok, err)
+			}
+			t.Cleanup(l.Unlock)
+			targets, err := m.StopTargets(context.Background())
+			if err != nil || !slices.Equal(targets, []int{i}) {
+				t.Fatalf("active target: %v %v", targets, err)
+			}
+			switch state {
+			case "ready":
+				err = m.finishCreation(context.Background(), i)
+			case "failed":
+				err = m.setCreation(i, creationFailed, "setup failed", "")
+			}
+			l.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stopped, err := m.Stop(context.Background(), targets[0], StopOptions{CancelCreate: true})
+			if err != nil || stopped.InterruptedCreate || stopped.Method != "already_offline" || m.createCanceled(i) {
+				t.Fatalf("stale creation target: %+v %v, marker %v", stopped, err, m.createCanceled(i))
+			}
+		})
 	}
 }
 
@@ -117,7 +191,7 @@ func TestScanQemuFreshRoot(t *testing.T) {
 	saved := qemuScan
 	qemuScan = nil // the real scan
 	t.Cleanup(func() { qemuScan = saved })
-	running, err := m.Running(context.Background())
+	running, err := m.StopTargets(context.Background())
 	if err != nil || len(running) != 0 {
 		t.Errorf("Running on a fresh root = %v, %v", running, err)
 	}

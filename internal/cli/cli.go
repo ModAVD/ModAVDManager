@@ -128,8 +128,8 @@ type manager interface {
 	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
 	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
 	TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTestResult, error)
-	// Running is the indexes whose qemu runs, from the process table only (no adb).
-	Running(ctx context.Context) ([]int, error)
+	// StopTargets is the running or actively creating indexes, without adb.
+	StopTargets(ctx context.Context) ([]int, error)
 	// Wait waits up to timeout for the manager's background work.
 	Wait(timeout time.Duration)
 }

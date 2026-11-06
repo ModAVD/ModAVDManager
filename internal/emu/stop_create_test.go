@@ -167,7 +167,12 @@ func TestCreateCancellationBetweenBootsAndAtCompletion(t *testing.T) {
 			var stopped *StopResult
 			interrupt := func(m *Manager, i int) {
 				var err error
-				stopped, err = New(m.Root, nil).Stop(context.Background(), i, StopOptions{CancelCreate: true})
+				other := New(m.Root, nil)
+				targets, err := other.StopTargets(context.Background())
+				if err != nil || !slices.Equal(targets, []int{i}) {
+					t.Fatalf("targets between boots: %v %v", targets, err)
+				}
+				stopped, err = other.Stop(context.Background(), targets[0], StopOptions{CancelCreate: true})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -213,6 +218,89 @@ func TestCreateCancellationBetweenBootsAndAtCompletion(t *testing.T) {
 				t.Fatalf("resume after cancel: %+v %v", info, err)
 			}
 		})
+	}
+}
+
+func TestResumePublishedBeforeQemuProbe(t *testing.T) {
+	m, _ := opsTestManager(t)
+	i := 6
+	if _, err := m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.setCreation(i, creationFailed, "old failure", ""); err != nil {
+		t.Fatal(err)
+	}
+	h := &createHooks{}
+	h.install(t)
+	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+		// No watcher scheduling is needed: the next boot must synchronously see the marker.
+		return m.Start(ctx, i, opt)
+	}
+	createRunning = func(m *Manager, i int) (bool, error) {
+		other := New(m.Root, nil)
+		targets, err := other.StopTargets(context.Background())
+		if err != nil || !slices.Equal(targets, []int{i}) {
+			t.Errorf("resume targets before qemu probe: %v %v", targets, err)
+			return false, nil
+		}
+		stopped, err := other.Stop(context.Background(), i, StopOptions{CancelCreate: true})
+		if err != nil || !stopped.InterruptedCreate || stopped.Method != "already_offline" {
+			t.Errorf("cancel resume: %+v %v", stopped, err)
+		}
+		return false, nil
+	}
+	_, err := m.Create(context.Background(), CreateRequest{Index: &i, Resume: true})
+	if errs.CodeOf(err) != errs.Canceled || errs.DetailsOf(err)[errs.InstanceStatus] != "create_failed" ||
+		errs.DetailsOf(err)[errs.QemuRunning] != "false" || m.createCanceled(i) {
+		t.Fatalf("canceled resume: %v, details %v, marker %v", err, errs.DetailsOf(err), m.createCanceled(i))
+	}
+}
+
+func TestCreatingStartRechecksCancelAfterStopLock(t *testing.T) {
+	m := New(managerTestRoot(t, 3), nil)
+	stop, ok, err := win.TryLock(m.lockPath(3, "stop"))
+	if err != nil || !ok {
+		t.Fatalf("stop lock: %v %v", ok, err)
+	}
+	t.Cleanup(stop.Unlock)
+	waiting := make(chan struct{}, 1)
+	m.Log = logx.New(func(_ logx.Level, message string) {
+		if strings.Contains(message, "正在关机") && strings.Contains(message, "等它做完再继续") {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		}
+	})
+	saved := startFindQemu
+	t.Cleanup(func() { startFindQemu = saved })
+	probed := false
+	startFindQemu = func(*Manager, int) (win.Process, bool, error) {
+		probed = true
+		return win.Process{}, false, errs.New(errs.Internal, "must not reach qemu probe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Start(ctx, 3, StartOptions{creating: true, NoBridge: true})
+		done <- err
+	}()
+	select {
+	case <-waiting:
+	case err := <-done:
+		t.Fatalf("start did not wait for stop: %v", err)
+	case <-ctx.Done():
+		t.Fatal("start never reached stop lock")
+	}
+	// A stop publishes cancellation after Start's entry check. Keep the context
+	// live and omit the watcher so the post-lock check must enforce the request.
+	if err := os.WriteFile(m.createCancelPath(3), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop.Unlock()
+	if err := <-done; errs.CodeOf(err) != errs.Canceled || probed {
+		t.Fatalf("start after cancellation: %v, probed qemu %v", err, probed)
 	}
 }
 

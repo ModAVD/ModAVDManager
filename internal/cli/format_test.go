@@ -230,7 +230,7 @@ func TestStartHelpTellsWhatCancelDoes(t *testing.T) {
 		!strings.Contains(start.Usage, "[--window | --headless]") {
 		t.Errorf("start help on the window: %+v", start)
 	}
-	if d := entryOf(findCommand("stop")).Details; !strings.Contains(d, "按进程表找出") {
+	if d := entryOf(findCommand("stop")).Details; !strings.Contains(d, "所有运行中或新建中的实例（包括两次开机之间）") {
 		t.Errorf("stop details: %s", d)
 	}
 }

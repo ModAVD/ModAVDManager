@@ -19,7 +19,7 @@ func TestQemuUnsupportedReachesOperations(t *testing.T) {
 		"show":    func(m *Manager) error { _, err := m.SetWindowVisible(ctx, 1, true); return err },
 		"hide":    func(m *Manager) error { _, err := m.SetWindowVisible(ctx, 1, false); return err },
 		"info":    func(m *Manager) error { _, err := m.Info(ctx, 1); return err },
-		"running": func(m *Manager) error { _, err := m.Running(ctx); return err },
+		"running": func(m *Manager) error { _, err := m.StopTargets(ctx); return err },
 		"list":    func(m *Manager) error { _, err := m.List(ctx); return err },
 		"stop":    func(m *Manager) error { _, err := m.Stop(ctx, 1, StopOptions{}); return err },
 		"start":   func(m *Manager) error { _, err := m.Start(ctx, 1, StartOptions{NoBridge: true}); return err },
