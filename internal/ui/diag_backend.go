@@ -2,8 +2,6 @@ package ui
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -45,8 +43,7 @@ func (b *realDiagBackend) License(ctx context.Context, source components.SourceS
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256([]byte(text))
-	return &DiagLicenseResult{Text: text, Source: from, SHA256: hex.EncodeToString(sum[:])}, nil
+	return &DiagLicenseResult{Text: text, Source: from, SHA256: components.LicenseSHA256(text)}, nil
 }
 
 func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source components.SourceSettings, licenseSHA256 string, progress func(DiagProgress)) (*DiagFetchResult, error) {
@@ -59,9 +56,11 @@ func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source compone
 		Mirror:        source.Mirror,
 		MirrorURLs:    append([]string(nil), source.MirrorURLs...),
 		LicenseSHA256: licenseSHA256,
-		SourceOrigin:  "管理器",
+		SourceOrigin:  components.SourceFromManager,
 		Log:           b.log,
-		Notice:        func(s string) { b.log.Infof("%s", s) },
+		// the license text and the note under it: the user has just read them in the dialog, so they go to the
+		// file log only, not as messages of the job (logs\fetch-components.log and downloads\ keep them too)
+		Notice: func(s string) { b.log.Debugf("%s", s) },
 		Progress: func(p components.Progress) {
 			if progress != nil {
 				progress(diagProgressFromComponent(p))

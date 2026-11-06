@@ -86,7 +86,8 @@ type server struct {
 	mgr        backend      // requests outside jobs; its messages also go to the event stream
 	poll       backend      // the instance poller: file log only, it runs every few seconds
 	newBackend func(log *logx.Logger) backend
-	diag       diagBackend
+	diag       diagBackend                        // requests outside jobs (component status, license, config text)
+	newDiag    func(log *logx.Logger) diagBackend // one per diagnostic job, with the job's logger
 	token      string
 	dev        bool
 	files      map[string]*staticFile
@@ -162,6 +163,7 @@ func newServer(opt Options) (*server, error) {
 		poll:       newBackend(lg),
 		newBackend: newBackend,
 		diag:       newDiagBackend(lg),
+		newDiag:    newDiagBackend,
 		token:      token,
 		dev:        opt.Dev,
 		files:      files,

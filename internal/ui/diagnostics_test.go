@@ -20,13 +20,24 @@ type fakeDiag struct {
 	fetchStart  chan struct{}
 	fetchReturn chan struct{}
 	canceled    chan struct{}
+	zipPath     string // what Collect returns (C:\tmp\diag.zip when empty)
+}
+
+// the license fakeDiag shows, and the license_sha256 a fetch after reading it carries
+const fakeTerms = "terms"
+
+var fakeTermsSHA = components.LicenseSHA256(fakeTerms)
+
+// fetchBody is a POST /api/components/fetch body that agreed to fakeTerms.
+func fetchBody(extra string) string {
+	return `{"accept_license":true,"license_sha256":"` + fakeTermsSHA + `"` + extra + `}`
 }
 
 func (f *fakeDiag) Components(context.Context) (*DiagComponentsResult, error) {
 	return &DiagComponentsResult{Root: fakeRoot.Root, Components: []DiagComponent{{ID: "adb", Name: "adb", Installed: false}}}, nil
 }
 func (f *fakeDiag) License(context.Context, components.SourceSettings) (*DiagLicenseResult, error) {
-	return &DiagLicenseResult{Text: "terms", Source: "mirror", SHA256: ""}, nil
+	return &DiagLicenseResult{Text: fakeTerms, Source: "mirror", SHA256: fakeTermsSHA}, nil
 }
 func (f *fakeDiag) Fetch(ctx context.Context, accept bool, _ components.SourceSettings, _ string, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
@@ -55,7 +66,11 @@ func (f *fakeDiag) Fetch(ctx context.Context, accept bool, _ components.SourceSe
 	return &DiagFetchResult{Root: fakeRoot.Root}, nil
 }
 func (f *fakeDiag) Collect(context.Context, DiagCollectOptions, func(DiagProgress)) (*DiagCollectResult, error) {
-	return &DiagCollectResult{ZipPath: `C:\tmp\diag.zip`, Sections: []DiagSectionResult{{Name: "目录"}, {Name: "日志", Error: "缺少"}}, Errors: []string{"日志：缺少"}}, nil
+	zip := f.zipPath
+	if zip == "" {
+		zip = `C:\tmp\diag.zip`
+	}
+	return &DiagCollectResult{ZipPath: zip, Sections: []DiagSectionResult{{Name: "目录"}, {Name: "日志", Error: "缺少"}}, Errors: []string{"日志：缺少"}}, nil
 }
 func (f *fakeDiag) ReportConfig(context.Context) (string, error) { return "config", nil }
 
@@ -73,20 +88,23 @@ func TestDiagnosticsEndpointsAndGuards(t *testing.T) {
 	d := &fakeDiag{fetchStart: make(chan struct{}), fetchReturn: make(chan struct{}), canceled: make(chan struct{})}
 	h := diagHarness(t, d, nil)
 	expectError(t, h.do("GET", "/api/components", nil, noCookie), http.StatusUnauthorized, "unauthorized")
-	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":false}`), http.StatusBadRequest, errs.Usage)
+	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":false,"license_sha256":"`+fakeTermsSHA+`"}`), http.StatusBadRequest, errs.Usage)
+	// agreeing without the hash of the text that was read, or with something that is not one, is not consent either
+	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":true}`), http.StatusBadRequest, errs.Usage)
+	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":true,"license_sha256":"abc"}`), http.StatusBadRequest, errs.Usage)
 	d.mu.Lock()
 	if d.fetchCalls != 0 {
 		t.Fatalf("fetch called for rejected license")
 	}
 	d.mu.Unlock()
 	var j jobView
-	expect(t, h.do("POST", "/api/components/fetch", `{"accept_license":true}`), http.StatusAccepted, &j)
+	expect(t, h.do("POST", "/api/components/fetch", fetchBody("")), http.StatusAccepted, &j)
 	if j.Kind != kindComponents || j.Index != rootJobIndex {
 		t.Fatalf("root job %+v", j)
 	}
 	<-d.fetchStart
 	expectError(t, h.do("POST", "/api/instances/0/start", `{}`), http.StatusConflict, errs.Busy)
-	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":true}`), http.StatusConflict, errs.Busy)
+	expectError(t, h.do("POST", "/api/components/fetch", fetchBody("")), http.StatusConflict, errs.Busy)
 	expect(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", `{}`), http.StatusOK, nil)
 	select {
 	case <-d.canceled:
@@ -121,7 +139,7 @@ func TestDiagnosticsProgressThrottled(t *testing.T) {
 	h := diagHarness(t, d, nil)
 	stream := h.events()
 	var j jobView
-	expect(t, h.do("POST", "/api/components/fetch", `{"accept_license":true}`), http.StatusAccepted, &j)
+	expect(t, h.do("POST", "/api/components/fetch", fetchBody("")), http.StatusAccepted, &j)
 	<-d.fetchStart
 	first := waitFor[jobView](stream, "job", func(v jobView) bool { return v.ID == j.ID && v.Progress != nil })
 	// A second callback immediately after the first is dropped by the 500 ms limiter.
@@ -151,7 +169,7 @@ func TestComponentsRejectedWhileStarting(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	expectError(t, h.do("POST", "/api/components/fetch", `{"accept_license":true}`), http.StatusConflict, errs.Busy)
+	expectError(t, h.do("POST", "/api/components/fetch", fetchBody("")), http.StatusConflict, errs.Busy)
 	close(gate)
 	h.waitJob(sj.ID, stateIs(stateDone))
 }

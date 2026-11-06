@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -229,10 +230,19 @@ func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Unlock()
 
 	b := s.newBackend(logx.New(s.jobLogSink(j)))
-	s.log.Infof("[%s] 开始%s实例 %d", view.ID, kindLabel(kind), i)
+	s.log.Infof("[%s] 开始%s%s", view.ID, kindLabel(kind), strings.TrimSpace(jobTarget(i)))
 	s.publishJob(view, true)
 	go s.runJob(ctx, j, b, fn)
 	return view, nil
+}
+
+// jobTarget is what a job works on, for the log lines: "实例 3 " (with the space the lines had), nothing for a root
+// job (components, collect-info).
+func jobTarget(i int) string {
+	if i == rootJobIndex {
+		return ""
+	}
+	return "实例 " + strconv.Itoa(i) + " "
 }
 
 func (s *server) startRootJob(kind string, fn jobFunc) (jobView, error) {
@@ -285,11 +295,11 @@ func (s *server) finishJob(ctx context.Context, j *job, res any, err error) {
 
 	switch view.State {
 	case stateDone:
-		s.log.Infof("[%s] %s实例 %d 完成", view.ID, kindLabel(view.Kind), view.Index)
+		s.log.Infof("[%s] %s%s完成", view.ID, kindLabel(view.Kind), jobTarget(view.Index))
 	case stateCanceled:
-		s.log.Infof("[%s] %s实例 %d 已取消", view.ID, kindLabel(view.Kind), view.Index)
+		s.log.Infof("[%s] %s%s已取消", view.ID, kindLabel(view.Kind), jobTarget(view.Index))
 	default:
-		s.log.Warnf("[%s] %s实例 %d 失败: %s", view.ID, kindLabel(view.Kind), view.Index, errs.As(err).Error())
+		s.log.Warnf("[%s] %s%s失败: %s", view.ID, kindLabel(view.Kind), jobTarget(view.Index), errs.As(err).Error())
 	}
 	s.publishJob(view, true)
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/logx"
 	"modavd/internal/root"
 )
 
@@ -225,7 +227,7 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		What  string `json:"what"`
 		Index *int   `json:"index"`
-		Path  string `json:"path"`
+		Job   string `json:"job"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -255,30 +257,16 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 			writeError(w, errs.Newf(errs.NotFound, "实例 %d 的文件夹不存在: %s", *body.Index, dir))
 			return
 		}
-	case "path":
-		if body.Path == "" {
-			writeError(w, errs.New(errs.Usage, "打开路径要给 path"))
-			return
-		}
-		path, err := filepath.Abs(body.Path)
+	case "collect-info":
+		// only the folder of a problem package this manager made: the page names the job, never a path
+		zip, err := s.collectZip(body.Job)
 		if err != nil {
-			writeError(w, errs.Wrap(errs.InvalidArgument, err, "路径不可用"))
+			writeError(w, err)
 			return
 		}
-		st, err := os.Stat(path)
-		if err != nil {
-			writeError(w, errs.Newf(errs.NotFound, "文件不存在: %s", path))
-			return
-		}
-		if st.IsDir() {
-			dir = path
-		} else {
-			// ShellExecute opens the containing folder for a generated zip. The
-			// UI still shows the exact zip path in the result.
-			dir = filepath.Dir(path)
-		}
+		dir = filepath.Dir(zip)
 	default:
-		writeError(w, errs.Newf(errs.InvalidArgument, "what 只能是 root、logs 或 instance（给的是 %q）", body.What))
+		writeError(w, errs.Newf(errs.InvalidArgument, "what 只能是 root、logs、instance 或 collect-info（给的是 %q）", body.What))
 		return
 	}
 	if err := s.openPath(dir); err != nil {
@@ -286,6 +274,27 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// collectZip is the problem package of a finished 收集问题信息 job (errs.NotFound when the job is not one, or the
+// package is gone).
+func (s *server) collectZip(id string) (string, error) {
+	if id == "" {
+		return "", errs.New(errs.Usage, "打开问题包所在文件夹要给 job（收集问题信息的任务 id）")
+	}
+	j, err := s.jobByID(id)
+	if err != nil {
+		return "", err
+	}
+	v := s.jobView(j)
+	res, ok := v.Result.(*DiagCollectResult)
+	if v.Kind != kindCollect || v.State != stateDone || !ok || res == nil || res.ZipPath == "" {
+		return "", errs.Newf(errs.NotFound, "任务 %s 不是做完了的收集问题信息", id)
+	}
+	if st, err := os.Stat(res.ZipPath); err != nil || st.IsDir() {
+		return "", errs.Newf(errs.NotFound, "问题包已经不在了: %s", res.ZipPath)
+	}
+	return res.ZipPath, nil
 }
 
 func (s *server) handleComponents(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +407,13 @@ func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errs.New(errs.Usage, "补全组件必须明确同意许可协议").WithAdvice("先阅读许可协议，再发送 accept_license: true"))
 		return
 	}
+	// the consent is to the text the dialog showed: GET /api/components/license gave its SHA-256, and the fetch stops
+	// when the mirror now serves another one
+	if !isSHA256Hex(body.LicenseSHA256) {
+		writeError(w, errs.New(errs.Usage, "补全组件要带上看过的许可协议的 license_sha256").
+			WithAdvice("先用 GET /api/components/license 取许可协议（和这次一样的下载源），把它的 license_sha256 原样带上"))
+		return
+	}
 	source := components.LoadSourceSettings()
 	if body.Source != "" || body.Mirror != "" || len(body.MirrorURLs) > 0 {
 		var err error
@@ -408,9 +424,23 @@ func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v, err := s.startRootJob(kindComponents, func(ctx context.Context, j *job, _ backend) (any, error) {
-		return s.diag.Fetch(ctx, true, source, body.LicenseSHA256, func(p DiagProgress) { s.setDiagProgress(j, p) })
+		return s.jobDiag(j).Fetch(ctx, true, source, body.LicenseSHA256, func(p DiagProgress) { s.setDiagProgress(j, p) })
 	})
 	s.respondJob(w)(v, err)
+}
+
+// jobDiag is the diagnostic backend of one job: its messages are the job's (file log tagged with the job id, the
+// job's lines in the event stream, warnings), like the instance backend startJob gives the other jobs.
+func (s *server) jobDiag(j *job) diagBackend {
+	return s.newDiag(logx.New(s.jobLogSink(j)))
+}
+
+func isSHA256Hex(v string) bool {
+	if len(v) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(v)
+	return err == nil
 }
 
 func (s *server) handleDiagCollect(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +449,7 @@ func (s *server) handleDiagCollect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := s.startRootJob(kindCollect, func(ctx context.Context, j *job, _ backend) (any, error) {
-		return s.diag.Collect(ctx, body, func(p DiagProgress) { s.setDiagProgress(j, p) })
+		return s.jobDiag(j).Collect(ctx, body, func(p DiagProgress) { s.setDiagProgress(j, p) })
 	})
 	s.respondJob(w)(v, err)
 }
