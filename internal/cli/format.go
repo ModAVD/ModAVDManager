@@ -572,6 +572,9 @@ func formatComponents(w io.Writer, data any) {
 		for _, c := range r.Components {
 			fmt.Fprintln(w, componentLine(c))
 		}
+		fmt.Fprintln(w, playStoreStateLine(r.PlayStore))
+	case *components.PlayStoreImportResult:
+		formatImportPlayStore(w, r)
 	case *components.Result:
 		fetched := false
 		for _, c := range r.Components {

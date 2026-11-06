@@ -28,6 +28,11 @@ const (
 	kindDiskTrim    = "disk-trim"
 	kindDiskCompact = "disk-compact"
 
+	// the Google Play Store (playstore.go): an instance's install and uninstall, the root's import of its files
+	kindPlayStoreInstall   = "playstore-install"
+	kindPlayStoreUninstall = "playstore-uninstall"
+	kindPlayStoreImport    = "playstore-import"
+
 	stateRunning  = "running"
 	stateDone     = "done"
 	stateFailed   = "failed"
@@ -58,8 +63,26 @@ func kindLabel(kind string) string {
 		return "回收磁盘空间"
 	case kindDiskCompact:
 		return "整理磁盘"
+	case kindPlayStoreInstall:
+		return "补全 Google Play 商店"
+	case kindPlayStoreUninstall:
+		return "移除 Google Play 商店"
+	case kindPlayStoreImport:
+		return "导入 Google Play 商店的文件"
 	}
 	return kind
+}
+
+// sdkJob: a root job that writes the root's sdk\ (components fetch, the store's import). bootJob: an instance job that
+// boots the instance, so reads sdk\. The two never run at the same time.
+func sdkJob(kind string) bool { return kind == kindComponents || kind == kindPlayStoreImport }
+
+func bootJob(kind string) bool {
+	switch kind {
+	case kindStart, kindCreate, "restart", kindPlayStoreInstall, kindPlayStoreUninstall:
+		return true
+	}
+	return false
 }
 
 type jobProgress struct {
@@ -200,8 +223,8 @@ func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 		if o.view.State != stateRunning {
 			continue
 		}
-		if (kind == kindComponents && o.view.Index != rootJobIndex && (o.view.Kind == kindStart || o.view.Kind == kindCreate || o.view.Kind == "restart")) ||
-			(i != rootJobIndex && o.view.Kind == kindComponents && (kind == kindStart || kind == kindCreate || kind == "restart")) {
+		if (sdkJob(kind) && o.view.Index != rootJobIndex && bootJob(o.view.Kind)) ||
+			(i != rootJobIndex && sdkJob(o.view.Kind) && bootJob(kind)) {
 			s.jobs.mu.Unlock()
 			return jobView{}, errs.Newf(errs.Busy, "任务 %s 正在运行（任务 %s），等它做完再试", kindLabel(o.view.Kind), o.view.ID)
 		}
@@ -286,7 +309,7 @@ func (s *server) finishJob(ctx context.Context, j *job, res any, err error) {
 	v.Error = newErrorBody(err)
 	view := j.snapshot()
 	s.jobs.mu.Unlock()
-	if view.Kind == kindComponents {
+	if sdkJob(view.Kind) {
 		s.check.mu.Lock()
 		s.check.res, s.check.at = nil, time.Time{}
 		s.check.generation++

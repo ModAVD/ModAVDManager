@@ -61,6 +61,9 @@ type InstanceInfo struct {
 	// instance that is off or still booting and has the bridge's boot marker after its first boot reads unknown, since
 	// the marker stays while the bridge is installed and also after a failed install.
 	Bridge string `json:"bridge"`
+	// PlayStore: the Google Play Store was put in (mas-avd.json instances.<i>.playStore, set by `playstore <i>
+	// install`, cleared by uninstall; playstore.go). Read from that record only; `playstore <i> status` asks the guest.
+	PlayStore bool `json:"play_store"`
 	// Creation is "creating" while create sets the instance up (its headless first boot), "failed" when that stopped
 	// (CreationError says why, CreationLog is that boot's log); "" for a ready instance. See crud.go.
 	Creation      string `json:"creation"`
@@ -122,9 +125,6 @@ type CreateRequest struct {
 	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
 	// marker and create's setup installs it.
 	NoBridge bool
-	// PlayStore: put the Google Play Store in (playstore.go), after the bridge; off by default. Needs the bridge and
-	// the component (components fetch --play-store), both checked before any file is written.
-	PlayStore bool
 	// Timeout bounds create's whole setup (createinit.go); 0 = DefaultCreateTimeout.
 	Timeout time.Duration
 	// Progress, when set, is told about each step of the setup (same events as StartOptions.Progress, one 0–1000 bar).

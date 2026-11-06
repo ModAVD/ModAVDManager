@@ -5,31 +5,42 @@ package emu
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/host"
+	"modavd/internal/root"
 )
 
-// playStoreHooks replaces what the store's code does to a guest for one test: the component check, the guest script
-// (scripted results per action, in order), and for PlayStore the qemu scan, starts and stops.
+// playStoreHooks replaces what the store's code does to a guest for one test: the guest script (scripted results per
+// action, in order), the qemu scan, starts and stops, and with ready set the component check (without it the real
+// check reads the test root's sdk\playstore).
 type playStoreHooks struct {
-	ready   bool
+	ready   *bool
 	running bool
 	results map[string][]string // action -> RESULT words, in order (the last one repeats)
-	calls   []string            // "script <action>", "start", "stop", "ready", "put"
+	calls   []string            // "script <action>", "start", "stop", "ready"
 	starts  []StartOptions
 }
 
 func (h *playStoreHooks) install(t *testing.T) {
 	t.Helper()
-	ready, script, find, start, stop, put := playStoreFilesReady, playStoreScript, playStoreFindQemu, playStoreStart, playStoreStop, createPlayStore
+	ready, script, find, start, stop := playStoreFilesReady, playStoreScript, playStoreFindQemu, playStoreStart, playStoreStop
 	t.Cleanup(func() {
-		playStoreFilesReady, playStoreScript, playStoreFindQemu, playStoreStart, playStoreStop, createPlayStore = ready, script, find, start, stop, put
+		playStoreFilesReady, playStoreScript, playStoreFindQemu, playStoreStart, playStoreStop = ready, script, find, start, stop
 	})
-	playStoreFilesReady = func(string) bool { h.calls = append(h.calls, "ready"); return h.ready }
+	real := playStoreFilesReady
+	playStoreFilesReady = func(dir string) bool {
+		h.calls = append(h.calls, "ready")
+		if h.ready == nil {
+			return real(dir)
+		}
+		return *h.ready
+	}
 	used := map[string]int{}
 	playStoreScript = func(_ *Manager, _ context.Context, _ int, action string) (playStoreRun, error) {
 		h.calls = append(h.calls, "script "+action)
@@ -56,19 +67,39 @@ func (h *playStoreHooks) install(t *testing.T) {
 		h.calls = append(h.calls, "stop")
 		return nil, nil
 	}
-	createPlayStore = func(m *Manager, ctx context.Context, i int) error {
-		h.calls = append(h.calls, "put")
-		return m.putPlayStore(ctx, i)
-	}
 }
 
-// TestCreateWithoutPlayStore: a create that does not ask for the store (the default) does nothing about it: no
-// component check, no guest script, no step in the plan, no key in mas-avd.json.
-func TestCreateWithoutPlayStore(t *testing.T) {
+func yes() *bool { b := true; return &b }
+
+// guestCalls are the calls that touch the instance (boots, stops, guest script runs).
+func (h *playStoreHooks) guestCalls() []string {
+	var out []string
+	for _, c := range h.calls {
+		if c != "ready" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// playStoreInfo is instance i's InstanceInfo.PlayStore, read the way list reads it.
+func playStoreInfo(t *testing.T, m *Manager, i int) bool {
+	t.Helper()
+	in, err := m.instance(i)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.instanceInfo(context.Background(), in, nil, nil).PlayStore
+}
+
+// TestCreateLeavesPlayStoreAlone: create never puts the store in: no component check, no guest script, no step in
+// the plan, no key in mas-avd.json.
+func TestCreateLeavesPlayStoreAlone(t *testing.T) {
 	m, _ := opsTestManager(t)
 	var h createHooks
 	h.install(t)
 	var ps playStoreHooks
+	ps.ready = yes()
 	ps.install(t)
 	var steps []string
 	i := 6
@@ -80,99 +111,34 @@ func TestCreateWithoutPlayStore(t *testing.T) {
 	if len(ps.calls) != 0 {
 		t.Errorf("store calls %v, want none", ps.calls)
 	}
-	if slices.Contains(steps, "play_store") {
+	if slices.ContainsFunc(steps, func(s string) bool { return strings.Contains(s, "play") }) {
 		t.Errorf("progress steps %v", steps)
 	}
 	if meta := m.Root.InstanceMeta(6); meta == nil || meta.Get(playStoreMetaKey) != nil {
 		t.Errorf("mas-avd.json has %s", playStoreMetaKey)
 	}
-	if m.playStoreWanted(6) {
-		t.Error("wanted without asking")
-	}
-}
-
-// TestCreatePlayStoreRefused: --play-store with --no-bridge, or without the component, is refused before any file is
-// written (no instance, no store calls beyond the check).
-func TestCreatePlayStoreRefused(t *testing.T) {
-	m, _ := opsTestManager(t)
-	var h createHooks
-	h.install(t)
-	var ps playStoreHooks
-	ps.install(t)
-	i := 6
-	_, err := m.Create(context.Background(), CreateRequest{Index: &i, PlayStore: true, NoBridge: true})
-	opsSkipIfNotImplemented(t, err)
-	if errs.CodeOf(err) != errs.InvalidArgument || !strings.Contains(err.Error(), "--no-bridge") {
-		t.Errorf("with --no-bridge: %v", err)
-	}
-	_, err = m.Create(context.Background(), CreateRequest{Index: &i, PlayStore: true})
-	if errs.CodeOf(err) != errs.NotReady || !strings.Contains(errs.As(err).Advice, "components fetch --play-store") {
-		t.Errorf("without the component: %v", err)
-	}
-	if left := instanceFilesOnDisk(m.Root, 6); len(left) != 0 || len(h.opts) != 0 {
-		t.Errorf("files %v, boots %d", left, len(h.opts))
-	}
-	if !slices.Equal(ps.calls, []string{"ready"}) {
-		t.Errorf("store calls %v", ps.calls)
-	}
-}
-
-// TestCreatePlayStore: --play-store puts the store in after the setup's boot (the bridge's rounds), before the check
-// and the shutdown, with its own progress step; a failed install fails the create, and --resume puts it in again.
-func TestCreatePlayStore(t *testing.T) {
-	m, _ := opsTestManager(t)
-	var h createHooks
-	var ps playStoreHooks
-	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
-		ps.calls = append(ps.calls, "boot")
-		return &StartResult{HostIME: true}, nil
-	}
-	h.check = nil
-	h.install(t)
-	ps.ready = true
-	ps.results = map[string][]string{"install": {playStoreNotWritable, playStoreInstalled}}
-	ps.install(t)
-	var steps []string
-	i := 6
-	_, err := m.Create(context.Background(), CreateRequest{Index: &i, PlayStore: true,
-		Progress: func(p Progress) { steps = append(steps, p.Step) }})
-	opsSkipIfNotImplemented(t, err)
-	if errs.CodeOf(err) != errs.NotReady || !strings.Contains(err.Error(), "新建失败") {
-		t.Fatalf("an install that cannot write: %v", err)
-	}
-	if !m.playStoreWanted(6) || h.stopped != 1 {
-		t.Fatalf("wanted %v, stopped %d", m.playStoreWanted(6), h.stopped)
-	}
-	ps.calls, steps = nil, nil
-	info, err := m.Create(context.Background(), CreateRequest{Index: &i, Resume: true,
-		Progress: func(p Progress) { steps = append(steps, p.Step) }})
-	if err != nil || info.Status != StatusOffline {
-		t.Fatalf("resume: %+v %v", info, err)
-	}
-	if want := []string{"boot", "put", "script install"}; !slices.Equal(ps.calls, want) {
-		t.Errorf("resume calls %v, want %v", ps.calls, want)
-	}
-	if k := slices.Index(steps, "play_store"); k < 0 || slices.Index(steps, "create_stop") < k {
-		t.Errorf("progress steps %v", steps)
-	}
-	if len(h.opts) == 0 || h.opts[len(h.opts)-1].NoBridge {
-		t.Errorf("setup boots %+v, want the bridge", h.opts)
+	if m.playStoreWanted(6) || playStoreInfo(t, m, 6) {
+		t.Error("the store is recorded without asking")
 	}
 }
 
 // TestPlayStoreInstallUninstall: install on an instance that is off boots it, runs the script, boots cold and checks,
 // then stops it; uninstall runs the script, boots cold when it asks for a reboot, runs it again, and records that
-// the store is gone. A running instance comes back as it ran and is left running.
+// the store is gone. A running instance comes back as it ran and is left running. InstanceInfo.PlayStore follows.
 func TestPlayStoreInstallUninstall(t *testing.T) {
 	m, i := opsTestInstance(t)
 	writeBridgeMarker(m.Root, i)
 	ctx := context.Background()
 	var ps playStoreHooks
-	ps.ready = true
+	ps.ready = yes()
 	ps.results = map[string][]string{"install": {playStoreInstalled}, "status": {playStoreInstalled},
 		"uninstall": {playStoreReboot, playStoreGone}}
 	ps.install(t)
 
+	if err := m.PlayStoreCheck(i, "install"); err != nil {
+		t.Fatalf("check before install: %v", err)
+	}
+	ps.calls = nil
 	res, err := m.PlayStore(ctx, i, "install")
 	if err != nil || !res.Installed || res.State != playStoreInstalled || !res.Restarted || !res.Stopped {
 		t.Fatalf("install: %+v %v", res, err)
@@ -180,8 +146,8 @@ func TestPlayStoreInstallUninstall(t *testing.T) {
 	if want := []string{"ready", "start", "script install", "stop", "start", "script status", "stop"}; !slices.Equal(ps.calls, want) {
 		t.Errorf("install calls %v, want %v", ps.calls, want)
 	}
-	if !m.playStoreWanted(i) || len(res.Files) != 2 {
-		t.Errorf("wanted %v, files %q", m.playStoreWanted(i), res.Files)
+	if !m.playStoreWanted(i) || !playStoreInfo(t, m, i) || len(res.Files) != 2 {
+		t.Errorf("wanted %v, info %v, files %q", m.playStoreWanted(i), playStoreInfo(t, m, i), res.Files)
 	}
 	if _, err := m.Bridge(ctx, i, "uninstall"); errs.CodeOf(err) != errs.NotReady || !strings.Contains(err.Error(), "Google Play") {
 		t.Errorf("bridge uninstall with the store: %v", err)
@@ -196,8 +162,8 @@ func TestPlayStoreInstallUninstall(t *testing.T) {
 	if want := []string{"script uninstall", "stop", "start", "script uninstall", "script status"}; !slices.Equal(ps.calls, want) {
 		t.Errorf("uninstall calls %v, want %v", ps.calls, want)
 	}
-	if m.playStoreWanted(i) {
-		t.Error("still wanted after uninstall")
+	if m.playStoreWanted(i) || playStoreInfo(t, m, i) {
+		t.Error("still recorded after uninstall")
 	}
 	for k, opt := range ps.starts {
 		if opt.NoBridge || opt.Headless || !opt.bridgeLocked {
@@ -210,8 +176,9 @@ func TestPlayStoreInstallUninstall(t *testing.T) {
 // bridge wait), so one held elsewhere makes them busy.
 func TestPlayStoreTakesBridgeLock(t *testing.T) {
 	m, i := opsTestInstance(t)
+	writeBridgeMarker(m.Root, i)
 	var ps playStoreHooks
-	ps.ready = true
+	ps.ready = yes()
 	ps.install(t)
 	l, ok, err := host.TryLock(m.lockPath(i, "bridge"))
 	if err != nil || !ok {
@@ -223,35 +190,84 @@ func TestPlayStoreTakesBridgeLock(t *testing.T) {
 			t.Errorf("%s while the bridge lock is held: %v", action, err)
 		}
 	}
-	if slices.Contains(ps.calls, "start") || slices.ContainsFunc(ps.calls, func(c string) bool { return strings.HasPrefix(c, "script") }) {
-		t.Errorf("calls %v", ps.calls)
+	if calls := ps.guestCalls(); len(calls) != 0 {
+		t.Errorf("calls %v", calls)
 	}
 }
 
-// TestPlayStoreRefused: install needs the bridge and the component, status a running instance, the action a known
-// word; a script that cannot write is not ready, one that stops early a failure; nothing is recorded then.
+// TestPlayStoreRefused: install needs the bridge and the root's five files (the real check: their pinned SHA-256),
+// status a running instance, the action a known word. Those refusals come before the instance is touched (no boot,
+// no script, nothing recorded), carry the reason the manager offers a way out by, and PlayStoreCheck gives the same.
+// A script that cannot write is not ready, one that stops early a failure; nothing is recorded then either.
 func TestPlayStoreRefused(t *testing.T) {
 	m, i := opsTestInstance(t)
 	ctx := context.Background()
 	var ps playStoreHooks
 	ps.install(t)
 	os.Remove(bridgeMarker(m.Root, i)) // a files-only create placed it
-	if _, err := m.PlayStore(ctx, i, "install"); errs.CodeOf(err) != errs.NotReady || !strings.Contains(err.Error(), "执行桥") {
-		t.Errorf("without the bridge marker: %v", err)
+	untouched := func(what string) {
+		t.Helper()
+		if calls := ps.guestCalls(); len(calls) != 0 {
+			t.Errorf("%s: calls %v", what, calls)
+		}
+		if meta := m.Root.InstanceMeta(i); meta == nil || meta.Get(playStoreMetaKey) != nil {
+			t.Errorf("%s: mas-avd.json has %s", what, playStoreMetaKey)
+		}
 	}
+	reason := func(err error) string { return errs.DetailsOf(err)[errs.Reason] }
+	both := []func() error{
+		func() error { _, err := m.PlayStore(ctx, i, "install"); return err },
+		func() error { return m.PlayStoreCheck(i, "install") },
+	}
+
+	for _, call := range both {
+		if err := call(); errs.CodeOf(err) != errs.NotReady || reason(err) != PlayStoreReasonNoBridge || !strings.Contains(err.Error(), "执行桥") {
+			t.Errorf("without the bridge marker: %v %v", err, errs.DetailsOf(err))
+		}
+	}
+	untouched("without the bridge")
+
 	writeBridgeMarker(m.Root, i)
-	if _, err := m.PlayStore(ctx, i, "install"); errs.CodeOf(err) != errs.NotReady || !strings.Contains(err.Error(), "组件") {
-		t.Errorf("without the component: %v", err)
+	for _, call := range both {
+		err := call()
+		if errs.CodeOf(err) != errs.NotReady || reason(err) != PlayStoreReasonFiles ||
+			!strings.Contains(errs.As(err).Advice, "components import-playstore") {
+			t.Errorf("without the files: %v %v", err, errs.DetailsOf(err))
+		}
 	}
+	untouched("without the files")
+	// files of the right names that are not the store's: still refused
+	dir := filepath.Join(m.Root.RuntimeSDK(), root.PlayStoreDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range root.PlayStoreComponent().KeyFiles {
+		os.WriteFile(filepath.Join(dir, name), []byte("not the store"), 0o644)
+	}
+	os.WriteFile(filepath.Join(dir, "source.properties"), []byte("Pkg.Revision=14\n"), 0o644)
+	if _, err := m.PlayStore(ctx, i, "install"); reason(err) != PlayStoreReasonFiles {
+		t.Errorf("with damaged files: %v", err)
+	}
+	untouched("with damaged files")
+
 	if _, err := m.PlayStore(ctx, i, "status"); errs.CodeOf(err) != errs.Unsupported {
 		t.Errorf("status of an instance that is off: %v", err)
 	}
 	if _, err := m.PlayStore(ctx, i, "remove"); errs.CodeOf(err) != errs.Usage {
 		t.Errorf("unknown action: %v", err)
 	}
-	ps.ready = true
+	if err := m.PlayStoreCheck(i, "uninstall"); err != nil {
+		t.Errorf("uninstall needs neither the files nor the bridge check: %v", err)
+	}
+	if err := m.PlayStoreCheck(7, "install"); errs.CodeOf(err) != errs.NotFound {
+		t.Errorf("an instance that is not there: %v", err)
+	}
+	untouched("status, unknown action and checks")
+
+	ps.ready = yes()
 	ps.results = map[string][]string{"install": {playStoreNotWritable}}
-	if _, err := m.PlayStore(ctx, i, "install"); errs.CodeOf(err) != errs.NotReady || !strings.Contains(errs.As(err).Advice, "bridge") {
+	if _, err := m.PlayStore(ctx, i, "install"); errs.CodeOf(err) != errs.NotReady || reason(err) != PlayStoreReasonNoBridge ||
+		!strings.Contains(errs.As(err).Advice, "bridge") {
 		t.Errorf("not writable: %v", err)
 	}
 	ps.results = map[string][]string{"install": {"bad-file"}}
@@ -262,8 +278,28 @@ func TestPlayStoreRefused(t *testing.T) {
 	if _, err := m.PlayStore(ctx, i, "uninstall"); err == nil {
 		t.Error("an uninstall that never finishes passed")
 	}
-	if _, err := m.PlayStore(ctx, i, "uninstall"); err == nil || m.playStoreWanted(i) {
-		t.Errorf("after the failures: wanted %v, %v", m.playStoreWanted(i), err)
+	if m.playStoreWanted(i) {
+		t.Error("recorded after the failures")
+	}
+}
+
+// TestPlayStoreArm64Guest: an arm64 guest has no store, refused as unsupported.
+func TestPlayStoreArm64Guest(t *testing.T) {
+	m, i := opsTestInstance(t)
+	var ps playStoreHooks
+	ps.ready = yes()
+	ps.install(t)
+	cfg := avd.ConfigPath(m.Root, i)
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, append(b, "\r\nabi.type=arm64-v8a\r\nhw.cpu.arch=arm64\r\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = m.PlayStoreCheck(i, "install")
+	if errs.CodeOf(err) != errs.Unsupported || errs.DetailsOf(err)[errs.Reason] != PlayStoreReasonUnsupported {
+		t.Errorf("arm64: %v %v", err, errs.DetailsOf(err))
 	}
 }
 

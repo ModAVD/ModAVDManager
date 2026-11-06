@@ -20,6 +20,7 @@ var (
 	diagComponents = func(r *root.Root) []emu.ComponentStatus { return emu.ComponentStatuses(r.Components()) }
 	diagLicense    = components.License
 	diagFetch      = components.Fetch
+	diagImport     = components.ImportPlayStore
 	diagCollect    = report.Collect
 	diagConfig     = report.BuildConfig
 )
@@ -35,7 +36,9 @@ func (b *realDiagBackend) Components(ctx context.Context) (*DiagComponentsResult
 	if err := ctx.Err(); err != nil {
 		return nil, errs.Wrap(errs.Canceled, err, "已取消")
 	}
-	return &DiagComponentsResult{Root: b.r.Dir, Components: append(toDiagComponents(diagComponents(b.r)), playStoreComponent(b.r))}, nil
+	store := components.PlayStoreState(b.r)
+	return &DiagComponentsResult{Root: b.r.Dir, Components: append(toDiagComponents(diagComponents(b.r)), playStoreComponent(store)),
+		PlayStore: store}, nil
 }
 
 func (b *realDiagBackend) License(ctx context.Context, source components.SourceSettings) (*DiagLicenseResult, error) {
@@ -75,6 +78,14 @@ func (b *realDiagBackend) Fetch(ctx context.Context, accept, playStore bool, sou
 		Components: toDiagFetchComponents(res.Components), Downloads: res.Downloads}, nil
 }
 
+func (b *realDiagBackend) ImportPlayStore(ctx context.Context, files []components.ImportFile, progress func(DiagProgress)) (*components.PlayStoreImportResult, error) {
+	return diagImport(ctx, b.r, files, components.Options{Log: b.log, Progress: func(p components.Progress) {
+		if progress != nil {
+			progress(diagProgressFromComponent(p))
+		}
+	}})
+}
+
 func (b *realDiagBackend) Collect(ctx context.Context, opt DiagCollectOptions, progress func(DiagProgress)) (*DiagCollectResult, error) {
 	res, err := diagCollect(ctx, b.r, report.CollectOptions{
 		OutDir: opt.OutDir, StageDir: opt.StageDir, KeepStage: opt.KeepStage, NoExplorer: true,
@@ -100,14 +111,12 @@ func (b *realDiagBackend) ReportConfig(ctx context.Context) (string, error) {
 	return res.Text, nil
 }
 
-// playStoreComponent is the optional Google Play Store as the component list shows it: there when its files are
-// (Present; the pinned hashes are checked where it is used, create and playstore install).
-func playStoreComponent(r *root.Root) DiagComponent {
-	c := root.PlayStoreComponent()
-	dir := c.Dir(r.RuntimeSDK())
-	d := DiagComponent{ID: c.ID, Name: c.Name, Optional: true, Installed: c.Present(dir)}
-	if d.Installed {
-		d.Version = root.Revision(dir)
+// playStoreComponent is the optional Google Play Store as the component list shows it: installed when its five files
+// are there (PlayStoreStatus.Ready; the pinned hashes are checked where they are put in and used).
+func playStoreComponent(s components.PlayStoreStatus) DiagComponent {
+	d := DiagComponent{ID: "play-store", Name: root.PlayStoreName, Optional: true, Installed: s.Ready}
+	if s.Ready {
+		d.Version = s.Version
 	}
 	return d
 }

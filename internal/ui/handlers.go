@@ -61,13 +61,12 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		FPS             *int    `json:"fps"`
 		Resolution      *int    `json:"resolution"`
-		PlayStore       bool    `json:"play_store"` // with the Google Play Store (off by default; needs its component)
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	req := emu.CreateRequest{Index: body.Index, MemoryMB: body.MemoryMB, CPU: body.CPU,
-		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution, PlayStore: body.PlayStore}
+		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution}
 	if body.Title != nil {
 		req.Title = *body.Title
 	}

@@ -30,6 +30,10 @@ type backend interface {
 	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
 	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
 	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
+	// PlayStore is `modavd playstore <i> <action>`; PlayStoreCheck what it refuses before touching the instance (no
+	// bridge, the root has not got the files ...), quick enough for a request.
+	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
+	PlayStoreCheck(i int, action string) error
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
 	// Serial is instance i's adb serial in the root's port plan.

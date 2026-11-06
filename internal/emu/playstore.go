@@ -1,13 +1,13 @@
 package emu
 
-// The Google Play Store (ModAVD/ModAVD#125, package playstore). Off unless asked for: create --play-store, or
-// `modavd playstore <i> install` on an existing instance. Its files (root.PlayStoreComponent, sdk\playstore, fetched
-// by `components fetch --play-store` after the license) are pushed into the guest, where the guest script
+// The Google Play Store (ModAVD/ModAVD#125, package playstore). Off unless asked for: `modavd playstore <i> install`,
+// the manager's 「补全 Google Play 商店」 on an instance; new instances never get it. Its five files
+// (root.PlayStoreComponent, sdk\playstore) come from the root, put there by `components fetch --play-store` or
+// `components import-playstore` (package components); they are pushed into the guest, where the guest script
 // (guest/scripts/playstore.sh) checks them against the pinned SHA-256 and copies them into the instance's writable
 // system overlay, hiding the image's own placeholder com.android.vending. That overlay exists only on instances with
-// the execution bridge (its boot marker makes the emulator boot writable, bridge.go), so the store needs the bridge,
-// and is put in after the bridge's rounds. The files take effect at the next boot: a create's setup ends with its
-// shutdown anyway, an install on an existing instance boots it cold once.
+// the execution bridge (its boot marker makes the emulator boot writable, bridge.go), so the store needs the bridge.
+// The files take effect at the next boot: an install boots the instance cold once.
 //
 // Uninstalling takes two runs of the script with a cold boot between: the first disables the store (so it cannot
 // update itself again), removes the updates Google Play installed for the store, Play services, GSF and Partner Setup
@@ -32,8 +32,8 @@ import (
 )
 
 const (
-	// playStoreMetaKey is instances.<i>.playStore in mas-avd.json: true once the store was asked for (create
-	// --play-store, playstore install), false after playstore uninstall. Absent on every instance that never had it.
+	// playStoreMetaKey is instances.<i>.playStore in mas-avd.json: true once playstore install put the store in, false
+	// after playstore uninstall. Absent on every instance that never had it.
 	playStoreMetaKey = "playStore"
 	// playStoreGuestDir is where the files and the script are pushed to; removed after each run.
 	playStoreGuestDir = "/data/local/tmp/modavd-playstore"
@@ -51,6 +51,14 @@ const (
 	playStoreReboot      = "reboot"
 	playStoreGone        = "gone"
 	playStoreNotWritable = "not-writable"
+)
+
+// Values of errs.Reason on the store's refusals, for callers that offer the way out (the manager: 补全组件 for the
+// files, the bridge for the rest).
+const (
+	PlayStoreReasonFiles       = "playstore_files_missing" // errs.NotReady: the root has not got the five files (or they are damaged)
+	PlayStoreReasonNoBridge    = "no_bridge"               // errs.NotReady: the instance does not boot with a writable system
+	PlayStoreReasonUnsupported = "unsupported_guest"       // errs.Unsupported: an arm64 guest
 )
 
 // PlayStoreResult is the result of `modavd playstore`.
@@ -73,7 +81,7 @@ type playStoreRun struct {
 	Lines  []string // its other output lines
 }
 
-// Hooks for the tests (PlayStore and the create step without an emulator).
+// Hooks for the tests (PlayStore without an emulator).
 var (
 	playStoreFindQemu = (*Manager).findQemu
 	playStoreStart    = (*Manager).Start
@@ -94,15 +102,16 @@ func (m *Manager) playStoreDir() string {
 	return filepath.Join(m.Root.RuntimeSDK(), root.PlayStoreDir)
 }
 
-// playStoreReady: the component is there and every file matches its pinned SHA-256; otherwise errs.NotReady with
-// what to run.
+// playStoreReady: the component is there and every file matches its pinned SHA-256; otherwise errs.NotReady
+// (PlayStoreReasonFiles) with the ways to get them.
 func (m *Manager) playStoreReady() error {
 	if playStoreFilesReady(m.playStoreDir()) {
 		return nil
 	}
-	return errs.Newf(errs.NotReady, "还没有补全「%s」组件（%s）", root.PlayStoreName, m.playStoreDir()).
-		WithAdvice("先运行 modavd components fetch --play-store：同意《Android 软件开发套件许可协议》后，" +
-			"从 Google 下载 Google Play 版系统镜像（约 1.5 GB），取出商店的文件")
+	e := errs.Newf(errs.NotReady, "这个根目录还没有 Google Play 商店的五个文件，或者文件不全、已损坏（%s）", m.playStoreDir()).
+		WithAdvice("先在管理器的「补全组件」里勾选「补全 Google Play 商店服务」（或者用自己的文件导入）；" +
+			"命令行是 modavd components fetch --play-store（下载约 1.5 GB，只留五个文件）或 modavd components import-playstore <文件>")
+	return errs.WithDetail(e, errs.Reason, PlayStoreReasonFiles)
 }
 
 // playStoreWanted: instances.<i>.playStore is true.
@@ -129,13 +138,51 @@ func (m *Manager) setPlayStoreWanted(i int, on bool) error {
 // playStoreBridgeError is nil when instance i boots with a writable system (it has the bridge and its marker).
 func (m *Manager) playStoreBridgeError(i int, cfg *avd.Ini) error {
 	if !bridgeGuestSupported(cfg) {
-		return errs.New(errs.Unsupported, "arm64 客体没有 Google Play 商店这一项")
+		return errs.WithDetail(errs.New(errs.Unsupported, "arm64 客体没有 Google Play 商店这一项"),
+			errs.Reason, PlayStoreReasonUnsupported)
 	}
 	if !m.bridgeWanted(i, cfg) || !regularFile(bridgeMarker(m.Root, i)) {
-		return errs.Newf(errs.NotReady, "实例 %d 没有 arm64 执行桥，不按可写系统镜像开机，放不进 Google Play 商店", i).
-			WithAdvice(fmt.Sprintf("先运行 modavd bridge %d install 装上执行桥，再装商店", i))
+		e := errs.Newf(errs.NotReady, "实例 %d 没有 arm64 执行桥，不按可写系统镜像开机，放不进 Google Play 商店", i).
+			WithAdvice(fmt.Sprintf("先运行 modavd bridge %d install 装上执行桥，再补全商店", i))
+		return errs.WithDetail(e, errs.Reason, PlayStoreReasonNoBridge)
 	}
 	return nil
+}
+
+// PlayStoreCheck is what PlayStore checks before it touches anything, without a lock or a boot: the host, the
+// action, the instance (there, not being created) and, for install, a writable system (the bridge) and the root's
+// five files (their pinned SHA-256). The manager calls it before it starts the job, so the button hears at once.
+func (m *Manager) PlayStoreCheck(i int, action string) error {
+	_, err := m.playStoreCheck(i, action)
+	return err
+}
+
+func (m *Manager) playStoreCheck(i int, action string) (*avd.Instance, error) {
+	if err := requireWindows(); err != nil {
+		return nil, err
+	}
+	switch action {
+	case "install", "uninstall", "status":
+	default:
+		return nil, errs.Newf(errs.Usage, "只能是 install、uninstall 或 status，收到「%s」", action)
+	}
+	in, err := m.instance(i)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.notCreated(i, "不能装卸 Google Play 商店"); err != nil {
+		return nil, err
+	}
+	if action == "install" {
+		// the bridge first: without it the files would not help
+		if err := m.playStoreBridgeError(i, in.Config); err != nil {
+			return nil, err
+		}
+		if err := m.playStoreReady(); err != nil {
+			return nil, err
+		}
+	}
+	return in, nil
 }
 
 // runPlayStoreScript runs the guest script's action on instance i (running) as root: the script and the file list
@@ -212,59 +259,25 @@ func fileLines(lines []string) []string {
 	return out
 }
 
-// putPlayStore is create's step: the guest script's install on the running instance i. The files take effect at the
-// next boot (the setup's shutdown comes next).
-func (m *Manager) putPlayStore(ctx context.Context, i int) error {
-	run, err := playStoreScript(m, ctx, i, "install")
-	if err != nil {
-		return err
-	}
-	if run.Result != playStoreInstalled {
-		return playStoreFailed(i, "install", run)
-	}
-	m.Log.Infof("实例 %d 已放好 Google Play 商店（下次开机生效）", i)
-	return nil
-}
-
 func playStoreFailed(i int, action string, run playStoreRun) error {
 	what := map[string]string{"install": "装", "uninstall": "卸", "status": "查"}[action]
 	msg := fmt.Sprintf("实例 %d 没%s好 Google Play 商店（%s）", i, what, run.Result)
 	if len(run.Lines) > 0 {
 		msg += "：" + run.Lines[len(run.Lines)-1]
 	}
-	e := errs.New(errs.LaunchFailed, msg)
 	if run.Result == playStoreNotWritable {
-		e = errs.New(errs.NotReady, msg).WithAdvice(fmt.Sprintf("实例的系统镜像不可写：先运行 modavd bridge %d install，再试一次", i))
+		e := errs.New(errs.NotReady, msg).WithAdvice(fmt.Sprintf("实例的系统镜像不可写：先运行 modavd bridge %d install，再试一次", i))
+		return errs.WithDetail(e, errs.Reason, PlayStoreReasonNoBridge)
 	}
-	return e
+	return errs.New(errs.LaunchFailed, msg)
 }
 
 // PlayStore installs, uninstalls or checks (status) the Google Play Store on instance i. install and uninstall boot an
 // instance that is off and stop it again; their cold boots bring a running instance back the way it ran (window or
-// headless). status needs it running.
+// headless). status needs it running. Everything PlayStoreCheck refuses is refused before the instance is touched.
 func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlayStoreResult, error) {
-	if err := requireWindows(); err != nil {
+	if _, err := m.playStoreCheck(i, action); err != nil {
 		return nil, err
-	}
-	switch action {
-	case "install", "uninstall", "status":
-	default:
-		return nil, errs.Newf(errs.Usage, "只能是 install、uninstall 或 status，收到「%s」", action)
-	}
-	in, err := m.instance(i)
-	if err != nil {
-		return nil, err
-	}
-	if err := m.notCreated(i, "不能装卸 Google Play 商店"); err != nil {
-		return nil, err
-	}
-	if action == "install" {
-		if err := m.playStoreBridgeError(i, in.Config); err != nil {
-			return nil, err
-		}
-		if err := m.playStoreReady(); err != nil {
-			return nil, err
-		}
 	}
 	// the bridge lock: the store lives in the bridge's overlay, and holding it makes status say busy (bridging), keeps
 	// delete, compact and bridge actions out meanwhile; the starts below run the bridge step under it (bridgeLocked)
