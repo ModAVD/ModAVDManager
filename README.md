@@ -62,21 +62,21 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--play-store] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--play-store` 在执行桥之后放入 Google Play 商店（默认不带，见下）。`--resume N` 重做新建失败的那台的初始化 |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--diagnostics on\|off]` | 修改；诊断模式立即生效，其余设置下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
-| `playstore <i> install\|uninstall\|status` | 装、卸、查看 Google Play 商店（见下） |
+| `playstore <i> install\|uninstall\|status` | 给实例补全、移除、查看 Google Play 商店（见下） |
 | `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM；成功只表示触发请求已返回，不等待或确认客体回收完成；模拟器太旧、不支持回收时返回不支持（退出码 4） |
 | `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；关机且取得启动锁后才运行只读的 qcow2 元数据检查，给出已分配和估计可回收大小。整理中或锁不可用时，仅返回可读取的文件头、宿主占用和原因；不可读的数值省略，不修复镜像 |
 | `disk <i> compact` | 整理已关机实例的数据盘；预计收益不足时跳过重写；转换后先校验再原子替换，原盘在替换成功前不动；报告前后占用和增减；大盘预算可达数十小时，正常整理基本不会超时，停止请取消；仅支持 NTFS/ReFS，拒绝快照或重写空间不足，详见[预算与结果契约](internal/emu/COMPACT.md) |
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
-| `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」） |
+| `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`、`components import-playstore <文件或文件夹>…` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」）；`--play-store`、`import-playstore` 补全可选的 Google Play 商店（见下） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
@@ -100,14 +100,18 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
 
-**Google Play 商店**（`playstore`、`create --play-store`，ModAVD#125）：
+**Google Play 商店**（`components fetch --play-store`、`components import-playstore`、`playstore`，ModAVD#125）：
 
-- 实例用的 Google APIs 镜像有 Play 服务、没有商店。商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）：`components fetch --play-store` 同意许可协议后下载这个镜像，从里面的 `system.img` 只读取出五个文件，放进 `sdk\playstore\`，然后删掉临时解出的 `system.img`。这五个文件是商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书，每个都核对写死的 SHA-256。这一项是可选的，`components status`、`check` 不把它算进必需组件。
+- 实例用的 Google APIs 镜像有 Play 服务、没有商店。商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）里的五个文件：商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书。根目录只留这五个文件（`sdk\playstore\`），每台实例要的时候再装进去；新建的实例不带。
+- 根目录的五个文件有两种来法，都是可选的，`components status`、`check` 不把它们算进必需组件：
+  - 下载：`components fetch --play-store`（管理器「补全组件」里勾选「补全 Google Play 商店服务」）同意许可协议后下载这个镜像（约 1.5 GB），从里面的 `system.img` 只读取出五个文件，每个都核对写死的大小和 SHA-256，然后删掉解出的 `system.img` 和下载的压缩包（`--keep-downloads` 时压缩包留着）。已经有了就跳过。
+  - 用自己的文件：`components import-playstore <文件或文件夹>…`（管理器里「使用我自己的文件」）。给 Google 官方的压缩包 `x86_64-34_r14.zip`（名字不限，按 Google 仓库清单核对大小 1,510,752,654 字节和 SHA-1，再像下载的一样取出五个文件），或者那五个文件本身（名字不限，逐个核对大小和 SHA-256，值和[文档站](https://modavd.github.io/guide/playstore)的表一样；给文件夹就取里面同名的几个）。认不出的文件、对不上的哈希、缺了文件，一律拒收（退出码 9，`components_rejected`，`--json` 的 `error.details.reason` 是 `unknown_file`、`mismatch` 或 `incomplete`），什么也不改；只读你的文件，不动它们。不下载，也不问许可协议。
+  - `components status` 列出五个文件在不在、从哪来（`play_store.source`：`download` 或 `import`）。
 - 只放商店不够：镜像自带的 Play 服务和 GSF 是测试证书签的，和商店签名对不上，Google 的组件会拒绝工作，所以一起换成 Play 版镜像里同版本的。
-- 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥。`create --play-store` 和 `--no-bridge` 不能一起用；装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
+- 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥：没有的 `install` 报 `not_ready`（`details.reason` 为 `no_bridge`），根目录还没有五个文件的报 `not_ready`（`playstore_files_missing`），这两种都在动实例之前就拒绝。装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
 - `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
 - 设备没有通过 Play 保护机制认证。登录时提示未认证的，按[文档](https://modavd.github.io/guide/playstore)登记这台实例的 GSF ID。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
-- 不带 `--play-store` 新建的实例什么都不动，`mas-avd.json` 里也不多键。带了的记 `instances.<i>.playStore: true`，卸掉后是 `false`。
+- 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`；`info` / `list` 的 `play_store` 就是这一项。
 
 **按应用走代理**（`proxy`）：
 
@@ -268,7 +272,7 @@ ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google A
 - 已经齐全的组件跳过；默认装好就删 zip，`--keep-downloads` 保留。
 - 路径里有非 ASCII 字符、不是 ModAVD 根目录、`mas-avd.json` 设了 `sdkRoot`、空间不够（下载加解压再留 500 MB），先拒绝。`--test-free-space-mb` 只给测试用，假装只剩这么多 MB。
 - 超时与 `update` 共用，`components fetch` 可用 `--connect-timeout`（连接、TLS 握手、收到响应头，1–600 秒，默认 20）、`--stall-timeout`（一个字节都没收到，1–600 秒，默认 30）、`--manifest-timeout`（取清单整体，1–1800 秒，默认 40）。代理：设了 `HTTPS_PROXY` / `HTTP_PROXY` 就照环境变量，否则用 Windows「Internet 选项」里手动设的代理；`NO_PROXY` 对两者都生效，只设它不会禁用系统代理；自动配置脚本（PAC）不支持，这时请设 `HTTPS_PROXY`。
-- 只写 `downloads\`、`logs\fetch-components.log`（和同目录的 `.lock`，一个根目录同时只跑一个）、`sdk\` 下的两个组件目录和 `sdk\.staging\`。不碰 adb server，不写注册表，不要管理员。日志里每次下载只记开始和结束，进度只显示不记。
+- 只写 `downloads\`、`logs\fetch-components.log`（和同目录的 `.lock`，一个根目录同时只跑一个）、`sdk\` 下的两个组件目录（`--play-store` 和 `import-playstore` 再加 `sdk\playstore`）和 `sdk\.staging\`。不碰 adb server，不写注册表，不要管理员。日志里每次下载只记开始和结束，进度只显示不记。
 - 只有 Windows 有组件清单；macOS、Linux 返回 `unsupported`（退出码 4）。
 - 退出码：没同意许可协议是 2（`license_declined`）；路径有中文、空间不够是 4（`precheck_failed`），不是 ModAVD 根目录或设了 `sdkRoot` 也是 4（`not_ready`）；正在补全是 5（`busy`）；许可协议或组件从哪个镜像都没下成是 9（`components_unavailable`），下载的 zip 在每个镜像上 SHA-1 都不对、或者解压后没通过核对也是 9（`components_rejected`）；读不出剩余空间是 1。
 - `components status`（默认）和 `check` 的组件一项是同一份结果，判断规则和 AUTO-MAS 一致（关键文件在就算装了）；`fetch` 判断「齐全」更严（照脚本：关键文件不为空，adb 还要核对钉住的哈希和版本号），所以 `status` 显示已装、`fetch` 仍会重装的情况是有的，旧目录会被改名留着。

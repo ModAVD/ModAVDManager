@@ -8,7 +8,7 @@
 - 启动器打开 `/?t=<令牌>`：服务回 `Set-Cookie: modavd_ui_<端口>=<令牌>; HttpOnly; SameSite=Strict; Path=/` 和 302 跳到 `/`。令牌每次启动随机生成（32 字节）。cookie 名带端口：cookie 只按主机分、不按端口分，所有管理器窗口又共用一个 Edge 配置，同名的话后开的管理器会把先开的那个顶掉。
 - 所有 `/api/*` 都要带这个 cookie，没有或不对回 401。
 - `Host` 不是 `127.0.0.1:<端口>` 或 `localhost:<端口>` 的请求一律 403（防 DNS 重绑定）。
-- 非 GET 请求：`Origin` 必须是本服务自己的地址（浏览器会带），否则 403；请求体是 JSON（`Content-Type: application/json`），上传 APK 例外。
+- 非 GET 请求：`Origin` 必须是本服务自己的地址（浏览器会带），否则 403；请求体是 JSON（`Content-Type: application/json`），上传 APK 和导入 Google Play 商店的文件例外。
 - 静态文件 `/`、`/app.css`、`/js/*`、`/assets/*` 不要 cookie（页面要先加载才能带 cookie），但同样校验 Host。
 
 ## 错误
@@ -35,7 +35,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, play_store?: bool}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。`play_store: true` 在执行桥之后放入 Google Play 商店（默认不带）；它的组件还没补全时立即报 `not_ready`，先用下面的补全接口带 `play_store` 补上 |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
 | PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效 |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
@@ -46,6 +46,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：请求开着的安卓回收空间；`done` 和 100% 仅表示触发请求已返回，不等待或确认客体 FITRIM 完成，任务耗时也是请求耗时；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |
 | POST | `/api/instances/{i}/disk-compact` | `{}` | 202 `Job`（`kind` 是 `disk-compact`）：整理已关机实例的数据盘文件；预估收益不足时跳过重写；实例没关机时任务失败，code 是 `busy`；结果是 `DiskCompactResult` |
 | POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |
+| POST | `/api/instances/{i}/playstore-install` | `{}` | 202 `Job`（`kind` 是 `playstore-install`）：把根目录里的五个文件装进这台实例（同 `modavd playstore <i> install`：放进执行桥的可写覆盖层、藏起占位应用、冷启动一次；关着的做完再关上，开着的照原来的方式开回来，要几分钟）；结果是 `PlayStoreResult`。开始前先检查，不行立即回错误、不开任务：根目录还没有五个文件（或文件不全、损坏）是 422 `not_ready`，`details.reason` 为 `playstore_files_missing`（页面引导去「补全组件」勾选或导入）；实例没有执行桥是 422 `not_ready`，`details.reason` 为 `no_bridge`；arm64 客体是 422 `unsupported`（`unsupported_guest`）；新建中 409 `busy`；不存在 404。任务里客体脚本发现系统不可写也是 `not_ready` / `no_bridge` |
+| POST | `/api/instances/{i}/playstore-uninstall` | `{}` | 202 `Job`（`kind` 是 `playstore-uninstall`）：从实例里移除商店（去掉 Google Play 装的更新、删掉五个文件、冷启动后恢复占位应用；同 `playstore <i> uninstall`）；结果是 `PlayStoreResult`。不要五个文件，也不检查执行桥 |
 | POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是这台实例显示的像素（1280×720 或 1920×1080，竖屏时宽高对调））或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
 | GET | `/api/instances/{i}/screenshot` | | `image/png`（`adb exec-out screencap -p`），`Cache-Control: no-store`；没开机回 409 |
 | GET | `/api/instances/{i}/log?kind=emulator\|logcat&lines=300` | | `text/plain; charset=utf-8`，最新那份日志的末尾；没有回 404 |
@@ -55,11 +57,12 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
 | POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
 | POST | `/api/open` | `{what: "root"\|"logs"\|"instance"\|"collect-info", index?, job?}` | `{}`，在资源管理器里打开；`collect-info` 打开那个做完了的收集问题信息任务（`job` 是任务 id）生成的问题包所在的文件夹，不接受页面给的路径 |
-| GET | `/api/components` | | 组件状态；最后一项是可选的 Google Play 商店（`id` 为 `play-store`，`optional: true`，文件在就是 `installed`） |
+| GET | `/api/components` | | `{"root","components":[…],"play_store":PlayStoreStatus}`：组件状态；`components` 最后一项是可选的 Google Play 商店的概要（`id` 为 `play-store`，`optional: true`，五个文件都在就是 `installed`），`play_store` 是它的细节，见下 |
 | GET | `/api/components/license` | `?source=auto\|googledownloads_cn\|tencent\|google\|custom&mirror_urls=…`（可重复；不带时用保存的下载源） | `{"license":"全文","license_source":"镜像来源","license_sha256":"全文的 SHA-256"}`：从这个下载源取的许可协议，和补全时取的是同一份；不下载组件 |
 | GET | `/api/components/source` | | 当前组件下载源：`source` 为 `auto`、内置镜像 ID 或 `custom`，以及 `mirror_urls`、`configured` |
 | PUT | `/api/components/source` | `{"source":"auto"\|"googledownloads_cn"\|"tencent"\|"google"\|"custom", "mirror_urls":[...]}` | 保存当前用户的组件下载源；自定义地址只接受 HTTP(S) 目录 |
-| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下。`"play_store": true` 再补全可选的 Google Play 商店（下 Google Play 版系统镜像，只留商店等 5 个文件） |
+| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下。`"play_store": true` 再补全可选的 Google Play 商店：根目录还没有五个文件时下 Google Play 版系统镜像（约 1.5 GB），取出五个文件后压缩包和解出的 `system.img` 都删掉，只留这五个；已经有了（下载的或导入的）就跳过 |
+| POST | `/api/components/import-playstore` | `multipart/form-data`，文件字段 `file`，每个文件一个（1–8 个）：Google 官方的 Google Play 版镜像压缩包 `x86_64-34_r14.zip`，或者那五个文件本身（文件名都不限） | 202 `Job`（`kind` 是 `playstore-import`，根任务，`index` 为 `-1`）：「使用我自己的文件」。不下载、不问许可协议。服务端把上传存到临时文件夹，任务结束删掉；任务按大小认出每个文件，压缩包核对 Google 仓库清单的大小和 SHA-1，五个文件各自核对写死的大小和 SHA-256；结果是 `PlayStoreImportResult`。上传本身不对时立即回 400：不是 multipart 是 `usage`，没有 `file` 字段是 `usage`，空文件、超过 8 个、单个比压缩包还大是 `invalid_argument`。文件被拒收时任务以 `components_rejected` 失败，什么也不改，`details.reason`：`unknown_file`（大小既不是压缩包也不是五个文件之一）、`mismatch`（大小对上了、哈希对不上）、`incomplete`（只给了一部分，根目录里又没有其余的）；另一个补全或导入在跑是 409 `busy`；空间不够 422 `precheck_failed` |
 | POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
 | GET | `/api/diag/report-config` | | `{"text":"…"}` |
 | GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
@@ -87,16 +90,16 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
  "result":null,"error":null,"warnings":[]}
 ```
 
-- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
+- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact` / `playstore-install` / `playstore-uninstall` / `playstore-import`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
 - `state`：`running` / `done` / `failed` / `canceled`。
-- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；磁盘任务进行中是 `disk_info` / `disk_trim` / `disk_compact`、做完是 `done`（进行中没有百分比，`total` 为 0，页面显示不定长进度条；做完 `done` = `total` = 1000）；装执行桥的每一轮是 `bridge`；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
+- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；磁盘任务进行中是 `disk_info` / `disk_trim` / `disk_compact`、做完是 `done`（进行中没有百分比，`total` 为 0，页面显示不定长进度条；做完 `done` = `total` = 1000）；装执行桥的每一轮是 `bridge`；商店的装、卸进行中是 `playstore-install` / `playstore-uninstall`（没有百分比）、做完是 `done`；导入时核对文件是 `verifying`、解压镜像是 `extracting`（`done` / `total` 是字节）；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
 - 安装任务的 `result.apk` 是用户上传的文件名，不是服务端的临时路径（临时文件任务结束就删了）。
-- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult` / `DiskInfoResult` / `DiskTrimResult` / `DiskCompactResult` / `InstanceInfo`（新建），没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
+- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult` / `DiskInfoResult` / `DiskTrimResult` / `DiskCompactResult` / `InstanceInfo`（新建）/ `PlayStoreResult` / `PlayStoreImportResult`，没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
 
 `DiskCompactResult` 保留非负的 `freed_bytes`。`before_on_disk_bytes` 和 `after_on_disk_bytes` 是整理前后宿主实际占用，新增的 `on_disk_delta_bytes` 等于后者减前者，正值表示占用增大。`skipped=true` 表示检查通过、预计收益不足，未重写原盘；此时前后占用相等、变化和释放量均为零。结果还包含 `reclaim_threshold_bytes` 和可省略的 `estimated_reclaimable_bytes`，详见 [整理预算与结果契约](../emu/COMPACT.md)。
 - 同一实例同时只能有一个任务在跑；第二个回 409 `busy`。**例外**：开机任务进行中可以发关机（和 emu 一致：开机中照样能关）。
 - 取消开机：只停止等待，模拟器继续开机，不会被强制结束。
-- `components` 和 `collect-info` 是根目录任务，`index` 为 `-1`；取消会传给诊断后端上下文。
+- `components`、`playstore-import` 和 `collect-info` 是根目录任务，`index` 为 `-1`，同时只跑一个；取消会传给诊断后端上下文。`components`、`playstore-import` 在跑时，开机、新建、商店的装卸回 409 `busy`，反过来也一样（它们会改 `sdk\`）。
 
 ### 事件流 `/api/events`
 
@@ -132,6 +135,22 @@ data: {}                    每 15 秒
   - `text` 是给人看的一句话。
 - 卡片的标记：页面连着时，服务每 30 秒问一次每个开着这个设置、已开机的实例（一条 root 命令），实例的状态或设置一变就马上问；正在开机、关机或做开机后设置的不问。GET、PUT 的结果也会更新标记。
 - 没开机的实例没有 `ProxyMark`：页面按 `InstanceInfo.app_proxy`（只读配置的概要）显示「下次开机生效」。
+
+### Google Play 商店 `PlayStoreStatus`、`PlayStoreImportResult`、`PlayStoreResult`
+
+商店是可选的：根目录里留五个文件（`sdk\playstore\`，补全组件时勾选下载，或者导入自己的文件），每台实例要的时候再装进去；新建实例不带。
+
+- `PlayStoreStatus`（`GET /api/components` 的 `play_store`，和 `modavd components status --json` 的 `data.play_store` 相同）：`{"dir","ready","source","version","files":[{"name","guest","size","present"}]}`。
+  - `ready`：五个文件都在、`source.properties` 的版本对（只看大小，SHA-256 在放进来和装进实例时核对）。实例的「补全 Google Play 商店」按钮按它决定是直接装，还是先引导去补全组件。
+  - `source`：`download`（补全组件时下载的）、`import`（用自己的文件导入的），没有或来历不明是 `""`。
+  - `files` 固定五项，顺序同文档站：`Phonesky.apk`、`PrebuiltGmsCore.apk`、`GoogleServicesFramework.apk`、`PartnerSetupPrebuilt.apk`、`play_store_fsi_cert.der`；`guest` 是装进实例后的路径，`present` 是这个文件在、大小对。
+- `PlayStoreImportResult`（`playstore-import` 任务的结果，同 `modavd components import-playstore --json`）：`{"root","from","used","kept","skipped","set_aside","status":PlayStoreStatus}`。
+  - `from`：`zip`（给了压缩包）或 `files`（给了文件本身）；`used`：核对通过、用上了的文件（按上传时的文件名）；`kept`：这次没给、根目录里原有且核对无误留下的。
+  - `skipped`：根目录里五个文件本来就齐全，给的文件也核对过了，什么都没改。
+  - `set_aside`：原来不完整的 `sdk\playstore` 改名后的位置（`sdk\playstore.incomplete-<时间>`），没有是 `""`。
+- `PlayStoreResult`（`playstore-install` / `playstore-uninstall` 任务的结果，同 `modavd playstore <i> … --json`）：`{"index","action","state","installed","files","restarted","stopped","warnings"}`；`state` 是做完后客体里的情况：`installed`、`absent` 或 `partial`。
+- `InstanceInfo.play_store`（bool）：这台实例装着商店（按 `mas-avd.json` 的记录，装成功后为 `true`，移除后 `false`；不问客体）。按钮据此显示「补全 Google Play 商店」或「移除 Google Play 商店」；`bridge` 为 `off` 的实例装不了（会回 `no_bridge`）。
+- 页面选文件和装 APK 一样：`<input type="file">`（可多选），每个文件追加一个 `file` 字段，用 `FormData` 发 `multipart/form-data`。
 
 ### 更新 `UpdateView`
 
