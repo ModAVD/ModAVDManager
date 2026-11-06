@@ -180,7 +180,18 @@ func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (
 	if req.FPS != nil {
 		applied["fps"] = *req.FPS
 	}
+	if req.Diagnostics != nil {
+		in.Diagnostics = *req.Diagnostics
+		applied["diagnostics"] = *req.Diagnostics
+	}
 	return &emu.UpdateResult{Instance: in, Applied: applied}, nil
+}
+
+func (b fakeBackend) PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error) {
+	if _, ok := b.f.get(i); !ok {
+		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+	}
+	return &emu.DiagnosticsPreview{Index: i, DiagnosticsCleanup: emu.DiagnosticsCleanup{Files: 2, Bytes: 1024}}, nil
 }
 
 func (b fakeBackend) Delete(ctx context.Context, i int) (*emu.DeleteResult, error) {

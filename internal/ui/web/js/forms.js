@@ -4,7 +4,7 @@ import { h, icon, btn, ibtn, showError, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, lastJob } from './store.js';
 import { openDialog, toast } from './ui.js';
-import { quoted, label, uptime } from './format.js';
+import { quoted, label, uptime, fmtBytes } from './format.js';
 import * as A from './actions.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
@@ -138,12 +138,15 @@ export function openSettings(i, field) {
   if (!inst0 || settingsOpen.has(i)) return;
   const cfg = inst0.config || {};
   const initTitle = inst0.title && inst0.title !== inst0.name ? inst0.title : '';
+  const initDiagnostics = inst0.diagnostics === true;
   const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: inst0.name });
-  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，改动在下次开机生效。' }));
+  const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
+  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率和分辨率在下次开机生效。诊断设置立即生效。' }));
   const kv = h('dl', { class: 'kv' });
   const box = errorBox();
   const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: '保存' }));
   const del = btn('btn btn-danger-ghost left', [icon('trash'), '删除…'], () => { if (!instance(i).running) openDelete(i); });
+  let confirmation = null;
   const ctl = openDialog({
     title: '设置', sub: `${label(inst0)} · ${inst0.name}`, cls: 'drawer', form: true,
     focus: field === 'memory' ? 'input[name="memory"]:checked' : '#s-title',
@@ -154,16 +157,13 @@ export function openSettings(i, field) {
         segRow('内存', 'memory', MEM, cfg.memory_mb),
         segRow('CPU', 'cpu', CPU, cfg.cpu),
         segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源')),
-        segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改'))),
+        segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
+        inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
+          hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h'))),
       box,
       h('h3', { class: 'sec-title', text: '实例信息' }), kv),
     actions: { left: del, ok: save },
-    onSubmit: () => submit(ctl, save, '正在保存…', box, async () => {
-      const r = await api.patch(`/api/instances/${i}`, changes());
-      const k = S.list.instances.findIndex((x) => x.index === i);
-      if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
-      return r.applies_next_boot ? { title: '已保存，下次开机生效', text: '实例正在运行，这次开机还是原来的设置。' } : { title: '已保存' };
-    }, dirty),
+    onSubmit: saveSettings,
   });
   settingsOpen.set(i, ctl);
 
@@ -171,6 +171,7 @@ export function openSettings(i, field) {
     const f = ctl.form.elements;
     const out = {};
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
+    if (diagnostics.checked !== initDiagnostics) out.diagnostics = diagnostics.checked;
     for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
       const v = f[k].value === '' ? null : Number(f[k].value);
       if (v != null && v !== cfg[key]) out[key] = v;
@@ -182,6 +183,66 @@ export function openSettings(i, field) {
   }
   ctl.form.addEventListener('input', dirty);
   ctl.form.addEventListener('change', dirty);
+
+  async function saveSettings() {
+    if (ctl.busy || save.getAttribute('aria-disabled') === 'true') return;
+    const pending = changes();
+    if (pending.diagnostics === false) {
+      ctl.busy = true;
+      diagnostics.disabled = true;
+      box.hidden = true;
+      setBusy(save, true, '正在读取清理范围…');
+      try {
+        const preview = await api.get(`/api/instances/${i}/diagnostics/preview`);
+        if (ctl.closed) return;
+        if (!preview || preview.index !== i || !Number.isSafeInteger(preview.files) || preview.files < 0 || !Number.isSafeInteger(preview.bytes) || preview.bytes < 0) {
+          throw new Error('读不到诊断日志清理范围，请稍后重试');
+        }
+        if (!await confirmDisable(preview)) return;
+      } catch (e) {
+        showError(box, e);
+        return;
+      } finally {
+        ctl.busy = false;
+        diagnostics.disabled = false;
+        setBusy(save, false);
+        dirty();
+      }
+      if (ctl.closed) return;
+    }
+    return submit(ctl, save, '正在保存…', box, async () => {
+      const r = await api.patch(`/api/instances/${i}`, pending);
+      const k = S.list.instances.findIndex((x) => x.index === i);
+      if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
+      if ('diagnostics' in pending) {
+        let text = '诊断模式已开启，立即生效。';
+        if (!pending.diagnostics) {
+          const cleanup = r.diagnostics_cleanup;
+          text = cleanup ? `诊断模式已关闭，已清理 ${cleanup.files} 个文件（${fmtBytes(cleanup.bytes)}）。` : '诊断模式已关闭。';
+        }
+        if (r.applies_next_boot && Object.keys(pending).some((k) => k !== 'diagnostics')) text += '其他设置在下次开机生效。';
+        if (r.warnings && r.warnings.length) text += r.warnings.join('；');
+        return { title: '已保存', text };
+      }
+      return r.applies_next_boot ? { title: '已保存，下次开机生效', text: '实例正在运行，这次开机还是原来的设置。' } : { title: '已保存' };
+    }, dirty);
+  }
+
+  function confirmDisable(preview) {
+    return new Promise((resolve) => {
+      let accepted = false;
+      const desc = 's-diagnostics-off-' + i;
+      const ok = h('button', { class: 'btn btn-danger', type: 'submit' }, h('span', { text: '关闭并清理日志' }));
+      const confirm = openDialog({
+        title: '关闭诊断模式？', form: true, alert: true, desc,
+        body: h('div', { class: 'dlg-body' }, h('p', { id: desc, text: `预计清理 ${preview.files} 个日志文件（${fmtBytes(preview.bytes)}）。` })),
+        actions: { ok },
+        onSubmit() { accepted = true; confirm.close(); },
+      });
+      confirmation = confirm;
+      confirm.onClose.push(() => { confirmation = null; resolve(accepted); });
+    });
+  }
 
   let sig = '';
   const render = () => {
@@ -199,7 +260,7 @@ export function openSettings(i, field) {
   };
   const un = subscribe(render);
   render();
-  ctl.onClose.push(() => { un(); settingsOpen.delete(i); });
+  ctl.onClose.push(() => { if (confirmation) confirmation.close(); un(); settingsOpen.delete(i); });
 }
 
 function infoRows(inst) {

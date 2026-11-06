@@ -36,7 +36,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`） |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?}` | `UpdateResult` |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效 |
+| GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
 | POST | `/api/instances/{i}/stop` | `{force?: bool, cancel_create?: bool}` | 202 `Job`；新建中默认 busy，显式 `cancel_create: true` 才取消；`force` 只管是否跳过 Android 正常关机。被取消的新建在结果里标记 `interrupted_create: true` |
@@ -53,7 +54,14 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/instances/{i}/packages` | | `{"packages":[{"package","name","uid","system"}]}`：实例里装的第三方应用，加上装了的话「Google Play 服务」（`system: true`）；`name` 是认得的游戏的中文名和「Google Play 服务」，其余是 `""`。认得的游戏在前，然后按包名排。没开机回 409 `busy` |
 | GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
 | POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
-| POST | `/api/open` | `{what: "root"\|"logs"\|"instance", index?}` | `{}`，在资源管理器里打开 |
+| POST | `/api/open` | `{what: "root"\|"logs"\|"instance"\|"collect-info", index?, job?}` | `{}`，在资源管理器里打开；`collect-info` 打开那个做完了的收集问题信息任务（`job` 是任务 id）生成的问题包所在的文件夹，不接受页面给的路径 |
+| GET | `/api/components` | | 组件状态 |
+| GET | `/api/components/license` | `?source=auto\|googledownloads_cn\|tencent\|google\|custom&mirror_urls=…`（可重复；不带时用保存的下载源） | `{"license":"全文","license_source":"镜像来源","license_sha256":"全文的 SHA-256"}`：从这个下载源取的许可协议，和补全时取的是同一份；不下载组件 |
+| GET | `/api/components/source` | | 当前组件下载源：`source` 为 `auto`、内置镜像 ID 或 `custom`，以及 `mirror_urls`、`configured` |
+| PUT | `/api/components/source` | `{"source":"auto"\|"googledownloads_cn"\|"tencent"\|"google"\|"custom", "mirror_urls":[...]}` | 保存当前用户的组件下载源；自定义地址只接受 HTTP(S) 目录 |
+| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下 |
+| POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
+| GET | `/api/diag/report-config` | | `{"text":"…"}` |
 | GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
 | GET | `/api/jobs` | | `{"jobs":[Job]}`，新的在前，最多 50 个 |
 | GET | `/api/jobs/{id}` | | `Job` |
@@ -67,6 +75,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 
 - JSON 请求体：不认识的字段回 400 `usage`（拼错的字段名页面能直接看到）；空请求体等于全用默认值；PATCH 一个字段都没给回 400 `usage`。
 - 截图、输入、列应用遇到实例没开机：409，code 是 `busy`。
+- `InstanceInfo` 带 `diagnostics: bool`，开启时带 `diagnostics_since`。PATCH 修改诊断时，`UpdateResult` 带 `diagnostics_cleanup: {files, bytes}`，只报实际删除量。关闭预览包含重新加入普通全根目录 1 GiB 池后需淘汰的其它普通实例旧日志；活跃文件不在预览和删除范围内。预览和提交之间现场可能变化，页面以提交结果为准。关闭部分失败时开关已保存为关，再次提交 `diagnostics: false` 会继续清理和客体恢复。
+- 诊断设置成功但宿主 logcat 由外部程序采集时，`UpdateResult.warnings` 说明未接管；不结束外部进程，也不等待它切换后才返回。前端显示该提示。
 
 ### Job
 
@@ -77,7 +87,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
  "result":null,"error":null,"warnings":[]}
 ```
 
-- `kind`：`start` / `stop` / `install` / `create` / `disk-info` / `disk-trim` / `disk-compact`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
+- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
 - `state`：`running` / `done` / `failed` / `canceled`。
 - `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；磁盘任务进行中是 `disk_info` / `disk_trim` / `disk_compact`、做完是 `done`（进行中没有百分比，`total` 为 0，页面显示不定长进度条；做完 `done` = `total` = 1000）；装执行桥的每一轮是 `bridge`；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
 - 安装任务的 `result.apk` 是用户上传的文件名，不是服务端的临时路径（临时文件任务结束就删了）。
@@ -86,6 +96,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 `DiskCompactResult` 保留非负的 `freed_bytes`。`before_on_disk_bytes` 和 `after_on_disk_bytes` 是整理前后宿主实际占用，新增的 `on_disk_delta_bytes` 等于后者减前者，正值表示占用增大。`skipped=true` 表示检查通过、预计收益不足，未重写原盘；此时前后占用相等、变化和释放量均为零。结果还包含 `reclaim_threshold_bytes` 和可省略的 `estimated_reclaimable_bytes`，详见 [整理预算与结果契约](../emu/COMPACT.md)。
 - 同一实例同时只能有一个任务在跑；第二个回 409 `busy`。**例外**：开机任务进行中可以发关机（和 emu 一致：开机中照样能关）。
 - 取消开机：只停止等待，模拟器继续开机，不会被强制结束。
+- `components` 和 `collect-info` 是根目录任务，`index` 为 `-1`；取消会传给诊断后端上下文。
 
 ### 事件流 `/api/events`
 

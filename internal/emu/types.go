@@ -86,6 +86,8 @@ type InstanceInfo struct {
 	Renderer    string         `json:"renderer"`
 	// SoftwareRenderer: the first boot found SwiftShader (no usable GPU driver).
 	SoftwareRenderer bool   `json:"software_renderer"`
+	Diagnostics      bool   `json:"diagnostics"`
+	DiagnosticsSince string `json:"diagnostics_since,omitempty"`
 	Path             string `json:"path"` // <root>\avd\mas_<i>.avd
 	// AppProxy is the per-app proxy as set (mas-avd.json only; `modavd proxy <i>` asks the guest); null when never set.
 	AppProxy *AppProxySummary `json:"app_proxy"`
@@ -131,20 +133,33 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
-	Title      *string
-	MemoryMB   *int
-	CPU        *int
-	FPS        *int
-	Resolution *int
+	Diagnostics *bool
+	Title       *string
+	MemoryMB    *int
+	CPU         *int
+	FPS         *int
+	Resolution  *int
 	// DataPartitionGB raises the data partition (never lowers it); see avd.UpdateOptions.
 	DataPartitionGB *int
 }
 
 type UpdateResult struct {
-	Instance InstanceInfo   `json:"instance"`
-	Applied  map[string]any `json:"applied"` // option name -> new value
+	Warnings           []string            `json:"warnings,omitempty"`
+	DiagnosticsCleanup *DiagnosticsCleanup `json:"diagnostics_cleanup,omitempty"`
+	Instance           InstanceInfo        `json:"instance"`
+	Applied            map[string]any      `json:"applied"` // option name -> new value
 	// AppliesNextBoot: the instance is running; the changes take effect when it boots next.
 	AppliesNextBoot bool `json:"applies_next_boot"`
+}
+
+type DiagnosticsCleanup struct {
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
+}
+
+type DiagnosticsPreview struct {
+	Index int `json:"index"`
+	DiagnosticsCleanup
 }
 
 type DeleteResult struct {
