@@ -24,6 +24,10 @@ const LogcatCaptureArg = "__logcat"
 // Rotate at the first newline at or beyond 256 MiB, so a record never spans two files.
 const logcatSegmentBytes int64 = 256 << 20
 
+const capturePollInterval = 2 * time.Second
+
+var errLogcatPresent = errors.New("已有其它 logcat 采集，保持外部采集")
+
 // logcatWriter owns the only host output handle. adb keeps writing to the same pipe during every rotation.
 // The next file is opened before the previous one is closed; pruning therefore always sees the active file busy.
 type logcatWriter struct {
@@ -142,7 +146,7 @@ func RunLogcatCapture(args []string, stderr io.Writer) int {
 }
 
 func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
-	if len(args) != 4 {
+	if len(args) != 4 && len(args) != 5 {
 		return 2
 	}
 	i, err := strconv.Atoi(args[1])
@@ -155,6 +159,15 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 	if err != nil {
 		return 1
 	}
+	if len(args) == 5 {
+		r, err = captureRuntimeFromToken(r, args[4])
+	} else {
+		r, err = r.SnapshotRuntime()
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "无法确认日志采集的 SDK/adb 目标，不猜默认配置: %v\n", err)
+		return 1
+	}
 	m := New(r, logx.New(logx.JSONSink(stderr, logx.Info)))
 	l, free, err := win.Lock(m.lockPath(i, "logcat"), 5*time.Second)
 	if err != nil || !free {
@@ -165,15 +178,14 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 	if !q.Alive() {
 		return 0
 	}
-	// A legacy capture, or a helper started concurrently, may already have an adb client.
-	if running, err := m.findLogcatProcesses(r.Ports().Serial(i)); err != nil || len(running) > 0 {
+	verified, found, err := m.findQemu(i)
+	if err != nil || !found || verified.PID != q.PID || verified.Created != q.Created {
+		fmt.Fprintln(stderr, "日志采集的 qemu 身份、端口或根目录归属不匹配")
 		return 1
 	}
-	w, err := newLogcatWriter(r.LogsDir(), i, limit, func() { m.pruneLogs(i) })
-	if err != nil {
-		return 1
-	}
-	defer w.Close()
+	// The lifetime lock owns this helper, its adb child and its rotating writer. Policy/server changes cancel
+	// only this child; independent one-shot logcat calls never participate in capture ownership.
+	defer os.Remove(m.captureStatePath(i))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -184,14 +196,92 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		}
 		cancel()
 	}()
-	if err := captureLogcat(ctx, r.AdbExe(), logcatArgs(r.AdbServerPort(), r.Ports().Serial(i)), m.ADB.Env(), w); err != nil && ctx.Err() == nil {
-		m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
-		return 1
+	for ctx.Err() == nil {
+		// Check again after each owned stream ends. An external watchdog can fill the restart gap.
+		if err := m.logcatStartGuard(i); err != nil {
+			m.Log.Warnf("实例 %d 不起重复采集: %v", i, err)
+			return 0
+		}
+		policy := m.diagnosticPolicy(i)
+		if _, err := m.applyDiagnosticGuest(ctx, i); err != nil {
+			m.Log.Warnf("实例 %d 客体日志缓冲区设置失败: %v", i, err)
+		}
+		w, err := newLogcatWriter(r.LogsDir(), i, limit, func() { m.pruneLogs(i) })
+		if err != nil {
+			return 1
+		}
+		if policy.Enabled {
+			dmesg := m.su(ctx, i, "dmesg", 5*time.Second)
+			if dmesg.Code == 0 {
+				if _, err := w.Write([]byte("=== dmesg ===\n" + dmesg.Out + "\n=== logcat ===\n")); err != nil {
+					w.Close()
+					return 1
+				}
+			}
+		}
+		captureCtx, stopCapture := context.WithCancel(ctx)
+		server := captureServerProcess(m)
+		watchDone := make(chan struct{})
+		go func() {
+			observedServer := server
+			ticker := time.NewTicker(capturePollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-watchDone:
+					return
+				case <-captureCtx.Done():
+					return
+				case <-ticker.C:
+					current := m.diagnosticPolicy(i)
+					if current != policy || captureServerChanged(&observedServer, captureServerProcess(m)) {
+						stopCapture()
+						return
+					}
+				}
+			}
+		}()
+		// Buffer setup/dmesg can take seconds. Inspect the process table immediately before starting adb as well.
+		err = captureLogcatStarted(captureCtx, r.AdbExe(), diagnosticLogcatArgs(r.AdbServerPort(), r.Ports().Serial(i), policy.Enabled),
+			m.ADB.Env(), w, func() error { return m.logcatStartGuard(i) }, m.captureStarted(i, q, policy, server))
+		stoppedForChange := captureCtx.Err() != nil
+		close(watchDone)
+		stopCapture()
+		w.Close()
+		os.Remove(m.captureStatePath(i))
+		if ctx.Err() != nil {
+			break
+		}
+		if !stoppedForChange {
+			if errors.Is(err, errLogcatPresent) {
+				return 0
+			}
+			if err != nil {
+				m.Log.Warnf("实例 %d 客体日志采集已结束: %v", i, err)
+				return 1
+			}
+			return 0
+		}
 	}
 	return 0
 }
 
 func captureLogcat(ctx context.Context, exe string, args, env []string, output io.Writer) error {
+	return captureLogcatStarted(ctx, exe, args, env, output, nil, nil)
+}
+
+func (m *Manager) logcatStartGuard(i int) error {
+	processes, err := m.findLogcatProcesses(m.Root.Ports().Serial(i))
+	if err != nil {
+		return err
+	}
+	if len(processes) > 0 {
+		return errLogcatPresent
+	}
+	return nil
+}
+
+func captureLogcatStarted(ctx context.Context, exe string, args, env []string, output io.Writer, beforeStart func() error, started func(int) error) error {
 	r, pipe, err := os.Pipe()
 	if err != nil {
 		return err
@@ -200,11 +290,24 @@ func captureLogcat(ctx context.Context, exe string, args, env []string, output i
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = filepath.Dir(exe), env, pipe, pipe
 	win.HideConsoleCmd(cmd)
+	if beforeStart != nil {
+		if err := beforeStart(); err != nil {
+			pipe.Close()
+			return err
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		pipe.Close()
 		return err
 	}
 	pipe.Close()
+	if started != nil {
+		if err := started(cmd.Process.Pid); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			return err
+		}
+	}
 	_, copyErr := io.Copy(output, r)
 	if copyErr != nil {
 		// Do not leave a live adb capture after a disk error: ensureLogcat must be able to start it again.

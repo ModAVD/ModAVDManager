@@ -66,6 +66,7 @@ var (
 	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
+	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
 	optHeadless      = flagSpec{"headless", kindBool, "", "无头开机（不带 --window 时本来就是无头）；实例已经带窗口运行时报错，不接管"}
@@ -142,11 +143,11 @@ func init() {
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N]",
-			summary: "修改实例的标题、内存、核数、帧率、分辨率、数据盘大小",
-			details: "至少给一个选项。改动写进实例配置，下次开机生效。" +
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--diagnostics on|off]",
+			summary: "修改实例设置和诊断模式",
+			details: "至少给一个选项。诊断模式立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optDiagnostics},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -514,8 +515,16 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
 	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
-	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb 中的一个").
+	if inv.isSet("diagnostics") {
+		value := strings.ToLower(inv.strOpt("diagnostics"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--diagnostics 只能是 on 或 off")
+		}
+		enabled := value == "on"
+		req.Diagnostics = &enabled
+	}
+	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil && req.Diagnostics == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--diagnostics 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

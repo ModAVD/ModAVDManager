@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -268,7 +269,34 @@ func TestCollectMatchesScript(t *testing.T) {
 			for _, l := range lines(wantSummary) {
 				wantLines = append(wantLines, f.modavdLine(l))
 			}
-			compareLines(t, "summary.txt", lines(strings.TrimPrefix(got, "\ufeff")), wantLines)
+			// ModAVD adds a diagnostic state line for each canonical instance.
+			var scriptLines []string
+			var stateLines []string
+			for _, line := range lines(strings.TrimPrefix(got, "\ufeff")) {
+				if strings.HasSuffix(line, "：诊断模式 关") {
+					stateLines = append(stateLines, line)
+					continue
+				}
+				scriptLines = append(scriptLines, line)
+			}
+			entries, err := os.ReadDir(filepath.Join(f.root, "avd"))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			var expectedStates []string
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".ini") {
+					continue
+				}
+				name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+				if _, ok := diagnosticIndex(name); ok {
+					expectedStates = append(expectedStates, name+"：诊断模式 关")
+				}
+			}
+			sort.Strings(stateLines)
+			sort.Strings(expectedStates)
+			compareLines(t, "diagnostic state", stateLines, expectedStates)
+			compareLines(t, "summary.txt", scriptLines, wantLines)
 			if !strings.HasSuffix(got, "\r\n") || strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\n") {
 				t.Error("summary.txt lines do not all end with CRLF")
 			}

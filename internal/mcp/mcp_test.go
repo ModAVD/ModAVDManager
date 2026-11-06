@@ -24,12 +24,13 @@ import (
 // ---- fake backend ------------------------------------------------------------------------------------------------
 
 type fake struct {
-	mu      sync.Mutex
-	calls   []string
-	creates []emu.CreateRequest
-	updates []emu.UpdateRequest
-	starts  []emu.StartOptions
-	stops   []emu.StopOptions
+	diagnostics bool
+	mu          sync.Mutex
+	calls       []string
+	creates     []emu.CreateRequest
+	updates     []emu.UpdateRequest
+	starts      []emu.StartOptions
+	stops       []emu.StopOptions
 	// proxySets are the changes set_app_proxy passed
 	proxySets []appproxy.Change
 	shells    []string
@@ -91,6 +92,10 @@ func (f *fake) List(ctx context.Context) (*emu.ListResult, error) {
 	running := sampleInstance(1)
 	running.Status, running.Running, running.Booted, running.PID = emu.StatusOnline, true, true, 4242
 	running.StartedAt = "2026-10-28T15:04:05+01:00"
+	running.Diagnostics = f.diagnostics
+	if f.diagnostics {
+		running.DiagnosticsSince = "2026-11-05T12:00:00Z"
+	}
 	return &emu.ListResult{RootInfo: sampleRoot(), Instances: []emu.InstanceInfo{sampleInstance(0), running}}, nil
 }
 
@@ -100,6 +105,10 @@ func (f *fake) Info(ctx context.Context, i int) (*emu.InstanceInfo, error) {
 		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i).WithAdvice("先用 list_instances 看有哪些实例")
 	}
 	in := sampleInstance(i)
+	in.Diagnostics = f.diagnostics
+	if f.diagnostics {
+		in.DiagnosticsSince = "2026-11-05T12:00:00Z"
+	}
 	return &in, nil
 }
 
