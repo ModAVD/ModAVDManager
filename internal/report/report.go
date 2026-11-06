@@ -28,8 +28,10 @@ import (
 	"modavd/internal/root"
 )
 
-// PrivacyNote is collect-info.ps1's $PrivacyNote, word for word: the head of summary.txt and the last thing printed.
-const PrivacyNote = "隐私提示：问题包只保存在本机，脚本不会上传。\r\n" +
+// PrivacyNote is the head of summary.txt and the last thing printed: collect-info.ps1's $PrivacyNote word for word,
+// but for the first line. The script's said "脚本不会上传"; from ModAVD 0.38.2 the package has no such script any
+// more (ModAVD/ModAVD#45), and what collects and what could upload is the manager or the CLI, so it says those.
+const PrivacyNote = "隐私提示：问题包只保存在本机，管理器和命令行都不会上传它。\r\n" +
 	"- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n" +
 	"- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。\r\n" +
 	"- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。\r\n" +
