@@ -679,7 +679,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 	case "uninstall":
 		if m.playStoreWanted(i) {
 			// the store lives in the overlay the bridge's marker makes the emulator boot with (playstore.go)
-			return nil, errs.Newf(errs.NotReady, "实例 %d 装着 Google Play 商店，它离不开执行桥带来的可写系统镜像", i).
+			return nil, errs.Newf(errs.NotReady, "实例 %d 装着（或者装了一部分）Google Play 商店，它离不开执行桥带来的可写系统镜像", i).
 				WithAdvice(fmt.Sprintf("要卸执行桥，先运行 modavd playstore %d uninstall", i))
 		}
 		// recorded first, so none of the starts below (nor any later one) puts it back

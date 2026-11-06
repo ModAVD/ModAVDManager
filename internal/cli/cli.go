@@ -122,6 +122,7 @@ type manager interface {
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
 	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
+	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
 	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
 	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
 	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)

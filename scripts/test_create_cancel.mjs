@@ -23,7 +23,7 @@ async function harness() {
     'proxy.js': { openProxy: noop, markOf: noop },
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop, runCheck: noop },
-    'playstore.js': { openPlayStore: noop },
+    'playstore.js': { openPlayStore: noop, openGSFID: noop },
   };
   async function load(name) {
     if (cache.has(name)) return cache.get(name);
@@ -178,7 +178,7 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch 
     'proxy.js': { openProxy: noop, markOf: () => null },
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop },
-    'playstore.js': { openPlayStore: noop },
+    'playstore.js': { openPlayStore: noop, openGSFID: noop },
   };
   async function load(name) {
     if (cache.has(name)) return cache.get(name);

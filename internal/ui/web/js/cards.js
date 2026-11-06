@@ -10,7 +10,7 @@ import { openSettings, openDelete } from './forms.js';
 import { openProxy, markOf } from './proxy.js';
 import { openViewer, openLogs } from './viewer.js';
 import { openActivity } from './panels.js';
-import { openPlayStore } from './playstore.js';
+import { openPlayStore, openGSFID } from './playstore.js';
 
 const cards = new Map();
 let grid;
@@ -308,12 +308,7 @@ function menuItems(c) {
       : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
-    // the Google Play Store (InstanceInfo.play_store): on or off, it boots the instance cold once (playstore.js asks
-    // first). It lives in the execution bridge's writable system overlay, so an instance without the bridge cannot.
-    inst.play_store
-      ? { label: '移除 Google Play 商店…', icon: 'x', disabled: fresh || busy || !!v.kind, run: () => openPlayStore(i, 'uninstall') }
-      : { label: '补全 Google Play 商店…', icon: 'plus', disabled: fresh || busy || !!v.kind || inst.bridge === 'off',
-        hint: inst.bridge === 'off' ? '要执行桥' : '', run: () => openPlayStore(i, 'install') },
+    ...storeItems(inst, i, fresh || busy || !!v.kind),
     // 磁盘占用 reads only (on or off); 回收 needs the guest booted; 整理 rewrites the data disk file, so the instance must be off.
     // Any job running on the instance blocks all three (the server would answer busy).
     { label: '磁盘占用', icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
@@ -326,6 +321,22 @@ function menuItems(c) {
     { label: '按应用走代理…', icon: 'shield', disabled: fresh, run: () => openProxy(i) },
     { label: '删除…', icon: 'trash', danger: true, disabled: running || busy, hint: running || busy ? '先关机' : '', run: () => openDelete(i) },
   ];
+}
+
+// The Google Play Store's items (InstanceInfo.play_store, play_store_partial). 补全 and 移除 boot the instance cold once
+// (playstore.js asks first); the store lives in the execution bridge's writable system overlay, so an instance without
+// the bridge cannot get it. With the store: 移除 and 复制 GSF ID (the running guest's, to register it); after an
+// install that failed half way (partial): 补全 to finish it and 移除 to take it out. held: setup not done, a boot or
+// stop, or a job on the instance.
+function storeItems(inst, i, held) {
+  const add = { label: '补全 Google Play 商店…', icon: 'plus', disabled: held || inst.bridge === 'off',
+    hint: inst.bridge === 'off' ? '要执行桥' : '', run: () => openPlayStore(i, 'install') };
+  const remove = { label: '移除 Google Play 商店…', icon: 'x', disabled: held, run: () => openPlayStore(i, 'uninstall') };
+  if (inst.play_store) {
+    const online = inst.status === 'online';
+    return [remove, { label: '复制 GSF ID', icon: 'copy', disabled: held || !online, hint: online ? '' : '开机后可用', run: () => openGSFID(i) }];
+  }
+  return inst.play_store_partial ? [add, remove] : [add];
 }
 
 // ---- thumbnails: about every 5 s, only while the card view is on screen, the window has focus and no dialog covers

@@ -9,8 +9,9 @@ import { openActivity, runCheck } from './panels.js';
 const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
   components: '补全组件', 'collect-info': '收集问题信息', 'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店',
   'playstore-import': '导入 Google Play 商店的文件' };
-// what the store needs once it is in an instance (the documentation site's 「自己装 Google Play 商店」)
-const GSF = '第一次用商店前，按文档站「自己装 Google Play 商店」在 Google 登记这台设备（GSF ID）。';
+// what the store needs once it is in an instance: registering its GSF ID (playstore.js openGSFID, the page is
+// playstore.js UNCERTIFIED; not imported from there, as playstore.js imports this module)
+const GSF = '登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。';
 // an import the server refused (components_rejected, details.reason) when its message has no advice of its own
 const IMPORT_ADVICE = {
   unknown_file: '要的是 Google 官方的 Google Play 版镜像压缩包 x86_64-34_r14.zip，或者从它里面取出的五个文件。',

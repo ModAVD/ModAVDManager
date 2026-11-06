@@ -34,6 +34,8 @@ type backend interface {
 	// bridge, the root has not got the files ...), quick enough for a request.
 	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
 	PlayStoreCheck(i int, action string) error
+	// PlayStoreGSFID is `modavd playstore <i> gsfid`: a few seconds on a running instance.
+	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
 	// Serial is instance i's adb serial in the root's port plan.

@@ -17,7 +17,7 @@ import (
 	"modavd/internal/testutil"
 )
 
-// playStoreErr, when set, is what the fake manager's PlayStore returns.
+// playStoreErr, when set, is what the fake manager's PlayStore and PlayStoreGSFID return.
 var playStoreErr error
 
 func (f *fakeManager) PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error) {
@@ -28,6 +28,14 @@ func (f *fakeManager) PlayStore(ctx context.Context, i int, action string) (*emu
 	state := map[string]string{"install": "installed", "uninstall": "absent", "status": "installed"}[action]
 	return &emu.PlayStoreResult{Index: i, Action: action, State: state, Installed: state == "installed",
 		Files: []string{}, Warnings: []string{}}, nil
+}
+
+func (f *fakeManager) PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error) {
+	f.record("gsfid " + itoa(i))
+	if playStoreErr != nil {
+		return nil, playStoreErr
+	}
+	return &emu.PlayStoreGSFIDResult{Index: i, Decimal: "3881793548573364239", Hex: "35dee6aa721e500f"}, nil
 }
 
 // TestCreateHasNoPlayStore: new instances never get the store; create takes no --play-store.
@@ -181,5 +189,39 @@ func TestPlayStoreCommand(t *testing.T) {
 	e := envelope(t, r.stdout)["error"].(map[string]any)
 	if r.code != 4 || e["code"] != "not_ready" || e["details"].(map[string]any)["reason"] != "playstore_files_missing" {
 		t.Errorf("refused: exit %d, %v", r.code, e)
+	}
+}
+
+// TestPlayStoreGSFIDCommand: playstore <i> gsfid gives the ID in decimal and hex (--json: decimal, hex) and where to
+// register it; no ID yet keeps its code, reason and exit code. A finished install points at gsfid and the page.
+func TestPlayStoreGSFIDCommand(t *testing.T) {
+	h := newHarness()
+	r := h.run(t, nil, "--json", "playstore", "3", "gsfid")
+	data, _ := envelope(t, r.stdout)["data"].(map[string]any)
+	if r.code != 0 || data["index"] != float64(3) || data["decimal"] != "3881793548573364239" || data["hex"] != "35dee6aa721e500f" {
+		t.Fatalf("exit %d, %s", r.code, r.stdout)
+	}
+	r = h.run(t, nil, "playstore", "3", "GSFID")
+	for _, want := range []string{"十进制：3881793548573364239", "十六进制：35dee6aa721e500f", emu.PlayStoreUncertifiedURL} {
+		if r.code != 0 || !strings.Contains(r.stdout, want) {
+			t.Errorf("human: exit %d, want %q in\n%s", r.code, want, r.stdout)
+		}
+	}
+	if want := []string{"gsfid 3", "gsfid 3"}; !slices.Equal(h.fake.calls, want) {
+		t.Errorf("calls %v", h.fake.calls)
+	}
+
+	playStoreErr = errs.WithDetail(errs.New(errs.NotReady, "实例 3 还没有 GSF ID").WithAdvice("开着网等一两分钟，再试一次"), errs.Reason, emu.PlayStoreReasonNoGSFID)
+	t.Cleanup(func() { playStoreErr = nil })
+	r = h.run(t, nil, "--json", "playstore", "3", "gsfid")
+	e := envelope(t, r.stdout)["error"].(map[string]any)
+	if r.code != 4 || e["code"] != "not_ready" || e["details"].(map[string]any)["reason"] != "no_gsf_id" || !strings.Contains(e["advice"].(string), "等一两分钟") {
+		t.Errorf("no ID: exit %d, %v", r.code, e)
+	}
+
+	var b strings.Builder
+	formatPlayStore(&b, &emu.PlayStoreResult{Index: 3, Action: "install", State: "installed", Installed: true})
+	if !strings.Contains(b.String(), "modavd playstore 3 gsfid") || !strings.Contains(b.String(), emu.PlayStoreUncertifiedURL) {
+		t.Errorf("after install: %s", b.String())
 	}
 }

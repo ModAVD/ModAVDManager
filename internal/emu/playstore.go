@@ -13,12 +13,21 @@ package emu
 // update itself again), removes the updates Google Play installed for the store, Play services, GSF and Partner Setup
 // and deletes the files from the overlay's upper layer; the second, after the boot, enables com.android.vending again,
 // by then the image's placeholder.
+//
+// An install that fails half way (the overlay out of space ...) is taken back by the script; what it cannot take back
+// makes it partial, recorded as such (playStore: "partial"), so the manager offers 移除 too and bridge uninstall still
+// refuses. An instance that was off is shut down again after a failure as well.
+//
+// `playstore <i> gsfid` reads the instance's GSF ID, which https://www.google.com/android/uncertified/ registers so
+// Google's apps work on a device that is not Play Protect certified.
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +35,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/guest"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/playstore"
 	"modavd/internal/root"
@@ -33,7 +43,8 @@ import (
 
 const (
 	// playStoreMetaKey is instances.<i>.playStore in mas-avd.json: true once playstore install put the store in, false
-	// after playstore uninstall. Absent on every instance that never had it.
+	// after playstore uninstall, "partial" after an install that failed and could not take back all it put in (or
+	// stopped without saying). Absent on every instance that never had it.
 	playStoreMetaKey = "playStore"
 	// playStoreGuestDir is where the files and the script are pushed to; removed after each run.
 	playStoreGuestDir = "/data/local/tmp/modavd-playstore"
@@ -51,7 +62,17 @@ const (
 	playStoreReboot      = "reboot"
 	playStoreGone        = "gone"
 	playStoreNotWritable = "not-writable"
+	playStoreFailure     = "failed" // install: what the run put in is taken back
+	playStoreOK          = "ok"     // gsfid: the lines "decimal <id>" and "hex <id>" follow
+	playStoreNoID        = "no-id"  // gsfid: GSF has not got an ID yet
 )
+
+// playStoreUndoneAtBoot is the line of an install's undo when some of it (a file that replaced one of the image's,
+// the placeholder's whiteout) was taken back in the overlay's upper layer, which the guest sees from its next boot.
+const playStoreUndoneAtBoot = "undone from the next boot"
+
+// PlayStoreUncertifiedURL is where a GSF ID is registered (the documentation site's step 6).
+const PlayStoreUncertifiedURL = "https://www.google.com/android/uncertified/"
 
 // Values of errs.Reason on the store's refusals, for callers that offer the way out (the manager: 补全组件 for the
 // files, the bridge for the rest).
@@ -59,6 +80,7 @@ const (
 	PlayStoreReasonFiles       = "playstore_files_missing" // errs.NotReady: the root has not got the five files (or they are damaged)
 	PlayStoreReasonNoBridge    = "no_bridge"               // errs.NotReady: the instance does not boot with a writable system
 	PlayStoreReasonUnsupported = "unsupported_guest"       // errs.Unsupported: an arm64 guest
+	PlayStoreReasonNoGSFID     = "no_gsf_id"               // errs.NotReady: GSF has no ID yet (gsfid; it registers once online)
 )
 
 // PlayStoreResult is the result of `modavd playstore`.
@@ -75,10 +97,20 @@ type PlayStoreResult struct {
 	Warnings  []string `json:"warnings"`
 }
 
+// PlayStoreGSFIDResult is the result of `modavd playstore <i> gsfid`: the GSF ID (Google Services Framework's
+// android_id) registered at PlayStoreUncertifiedURL. Decimal as GSF keeps it, Hex the same number (lower case; two's
+// complement for a negative one, as printf %x writes it).
+type PlayStoreGSFIDResult struct {
+	Index   int    `json:"index"`
+	Decimal string `json:"decimal"`
+	Hex     string `json:"hex"`
+}
+
 // playStoreRun is one run of the guest script.
 type playStoreRun struct {
 	Result string   // the word after RESULT, "" when the script did not get there
 	Lines  []string // its other output lines
+	Ran    bool     // the script was started (a Result of "" then: it may have changed something before it stopped)
 }
 
 // Hooks for the tests (PlayStore without an emulator).
@@ -114,23 +146,34 @@ func (m *Manager) playStoreReady() error {
 	return errs.WithDetail(e, errs.Reason, PlayStoreReasonFiles)
 }
 
-// playStoreWanted: instances.<i>.playStore is true.
-func (m *Manager) playStoreWanted(i int) bool {
-	meta := m.Root.InstanceMeta(i)
+// playStoreRecord is what instances.<i>.playStore says: playStoreInstalled (true), playStorePartial ("partial") or ""
+// (false, absent, anything else).
+func playStoreRecord(meta *jsonord.Obj) string {
 	if meta == nil {
-		return false
+		return ""
 	}
 	v := meta.Get(playStoreMetaKey)
-	if v == nil {
-		return false
+	if b, ok := v.BoolVal(); ok && b {
+		return playStoreInstalled
 	}
-	b, ok := v.BoolVal()
-	return ok && b
+	if s, ok := v.Str(); ok && s == playStorePartial {
+		return playStorePartial
+	}
+	return ""
+}
+
+// playStoreWanted: instances.<i>.playStore says the store, or some of it, is in the overlay (bridge uninstall refuses).
+func (m *Manager) playStoreWanted(i int) bool {
+	return playStoreRecord(m.Root.InstanceMeta(i)) != ""
 }
 
 func (m *Manager) setPlayStoreWanted(i int, on bool) error {
+	return m.setPlayStoreRecord(i, jsonord.NewBool(on))
+}
+
+func (m *Manager) setPlayStoreRecord(i int, v *jsonord.Value) error {
 	return m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
-		meta.Set(playStoreMetaKey, jsonord.NewBool(on))
+		meta.Set(playStoreMetaKey, v)
 		return nil
 	})
 }
@@ -149,9 +192,10 @@ func (m *Manager) playStoreBridgeError(i int, cfg *avd.Ini) error {
 	return nil
 }
 
-// PlayStoreCheck is what PlayStore checks before it touches anything, without a lock or a boot: the host, the
-// action, the instance (there, not being created) and, for install, a writable system (the bridge) and the root's
-// five files (their pinned SHA-256). The manager calls it before it starts the job, so the button hears at once.
+// PlayStoreCheck is what PlayStore (and PlayStoreGSFID, action gsfid) checks before it touches anything, without a
+// lock or a boot: the host, the action, the instance (there, not being created) and, for install, a writable system
+// (the bridge) and the root's five files (their pinned SHA-256). The manager calls it before it starts the job, so
+// the button hears at once.
 func (m *Manager) PlayStoreCheck(i int, action string) error {
 	_, err := m.playStoreCheck(i, action)
 	return err
@@ -162,9 +206,9 @@ func (m *Manager) playStoreCheck(i int, action string) (*avd.Instance, error) {
 		return nil, err
 	}
 	switch action {
-	case "install", "uninstall", "status":
+	case "install", "uninstall", "status", "gsfid":
 	default:
-		return nil, errs.Newf(errs.Usage, "只能是 install、uninstall 或 status，收到「%s」", action)
+		return nil, errs.Newf(errs.Usage, "只能是 install、uninstall、status 或 gsfid，收到「%s」", action)
 	}
 	in, err := m.instance(i)
 	if err != nil {
@@ -223,6 +267,7 @@ func (m *Manager) runPlayStoreScript(ctx context.Context, i int, action string) 
 	}
 	res := sh(fmt.Sprintf("su 0 sh %s/%s %s %s", playStoreGuestDir, guest.PlayStore, action, playStoreGuestDir), playStoreScriptTimeout)
 	run := parsePlayStoreRun(res.Out)
+	run.Ran = true
 	if run.Result == "" {
 		return run, errs.Newf(errs.LaunchFailed, "实例 %d 的 Google Play 商店脚本（%s）没有跑完：%s", i, action, tail(res.Out, 300))
 	}
@@ -245,11 +290,11 @@ func parsePlayStoreRun(out string) playStoreRun {
 	return run
 }
 
-// fileLines are the lines of a status about the files and the placeholder.
+// fileLines are the lines of a status about the files (staged: a copy an install left half way) and the placeholder.
 func fileLines(lines []string) []string {
 	out := []string{}
 	for _, l := range lines {
-		for _, p := range []string{"play ", "image ", "absent ", "stub ", "package "} {
+		for _, p := range []string{"play ", "image ", "absent ", "staged ", "stub ", "package "} {
 			if strings.HasPrefix(l, p) {
 				out = append(out, l)
 				break
@@ -262,25 +307,62 @@ func fileLines(lines []string) []string {
 func playStoreFailed(i int, action string, run playStoreRun) error {
 	what := map[string]string{"install": "装", "uninstall": "卸", "status": "查"}[action]
 	msg := fmt.Sprintf("实例 %d 没%s好 Google Play 商店（%s）", i, what, run.Result)
+	if action == "gsfid" {
+		msg = fmt.Sprintf("实例 %d 没取到 GSF ID（%s）", i, run.Result)
+	}
 	if len(run.Lines) > 0 {
 		msg += "：" + run.Lines[len(run.Lines)-1]
 	}
-	if run.Result == playStoreNotWritable {
+	switch {
+	case run.Result == playStoreNotWritable:
 		e := errs.New(errs.NotReady, msg).WithAdvice(fmt.Sprintf("实例的系统镜像不可写：先运行 modavd bridge %d install，再试一次", i))
 		return errs.WithDetail(e, errs.Reason, PlayStoreReasonNoBridge)
+	case action == "install" && run.Result == playStorePartial:
+		return errs.New(errs.LaunchFailed, msg).WithAdvice(fmt.Sprintf("放进去的文件没能全部撤回：运行 modavd playstore %d uninstall 移除（管理器里是「移除 Google Play 商店」），"+
+			"或者解决问题后再补全一次", i))
+	case action == "install" && run.Result == playStoreFailure:
+		return errs.New(errs.LaunchFailed, msg).WithAdvice("这次放进去的文件已经撤回，解决问题后可以再补全一次")
 	}
 	return errs.New(errs.LaunchFailed, msg)
 }
 
-// PlayStore installs, uninstalls or checks (status) the Google Play Store on instance i. install and uninstall boot an
-// instance that is off and stop it again; their cold boots bring a running instance back the way it ran (window or
-// headless). status needs it running. Everything PlayStoreCheck refuses is refused before the instance is touched.
-func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlayStoreResult, error) {
-	if _, err := m.playStoreCheck(i, action); err != nil {
-		return nil, err
+// noGSFID: GSF has not registered the instance yet (it does once online).
+func noGSFID(i int) error {
+	e := errs.Newf(errs.NotReady, "实例 %d 还没有 GSF ID", i).
+		WithAdvice("Google 服务框架联网登记后才有：开着网等一两分钟，再试一次")
+	return errs.WithDetail(e, errs.Reason, PlayStoreReasonNoGSFID)
+}
+
+// parseGSFID reads a gsfid run: its decimal line (hex is worked out here, not taken from the guest's printf).
+func parseGSFID(i int, run playStoreRun) (*PlayStoreGSFIDResult, error) {
+	switch run.Result {
+	case playStoreOK:
+	case playStoreNoID:
+		return nil, noGSFID(i)
+	default:
+		return nil, playStoreFailed(i, "gsfid", run)
 	}
-	// the bridge lock: the store lives in the bridge's overlay, and holding it makes status say busy (bridging), keeps
-	// delete, compact and bridge actions out meanwhile; the starts below run the bridge step under it (bridgeLocked)
+	for _, l := range run.Lines {
+		d, ok := strings.CutPrefix(l, "decimal ")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(d), 10, 64)
+		if err != nil {
+			return nil, errs.Newf(errs.LaunchFailed, "实例 %d 的 GSF ID 不是数字：%s", i, d)
+		}
+		if n == 0 {
+			return nil, noGSFID(i)
+		}
+		return &PlayStoreGSFIDResult{Index: i, Decimal: strconv.FormatInt(n, 10), Hex: strconv.FormatUint(uint64(n), 16)}, nil
+	}
+	return nil, noGSFID(i)
+}
+
+// playStoreLock takes instance i's bridge lock: the store lives in the bridge's overlay, and holding it makes status
+// say busy (bridging), keeps delete, compact, bridge actions and the store's other actions (they share the guest's push
+// directory) out meanwhile; the starts of PlayStore run the bridge step under it (bridgeLocked).
+func (m *Manager) playStoreLock(i int) (*host.FileLock, error) {
 	lock, ok, err := m.tryOperationLock(i, "bridge")
 	if err != nil {
 		return nil, err
@@ -288,6 +370,31 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 	if !ok {
 		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装卸执行桥或 Google Play 商店，稍后再试", i),
 			map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
+	}
+	return lock, nil
+}
+
+func playStoreNotRunning(i int) error {
+	return errs.Newf(errs.Unsupported, "实例 %d 没开机", i).WithAdvice(fmt.Sprintf("先 modavd start %d", i))
+}
+
+// PlayStore installs, uninstalls or checks (status) the Google Play Store on instance i. install and uninstall boot an
+// instance that is off and stop it again, also when they fail (best effort: what stands in the way is a warning);
+// their cold boots bring a running instance back the way it ran (window or headless). status needs it running.
+// Everything PlayStoreCheck refuses is refused before the instance is touched. An install that fails leaves the
+// record as it was, unless the script could not take back all it put in (or stopped without saying): then it is
+// partial.
+func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlayStoreResult, error) {
+	if action == "gsfid" {
+		// its own result: PlayStoreGSFID
+		return nil, errs.New(errs.Usage, "gsfid 用 PlayStoreGSFID")
+	}
+	if _, err := m.playStoreCheck(i, action); err != nil {
+		return nil, err
+	}
+	lock, err := m.playStoreLock(i)
+	if err != nil {
+		return nil, err
 	}
 	defer lock.Unlock()
 
@@ -302,13 +409,21 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 	}
 	if action == "status" {
 		if !wasRunning {
-			return nil, errs.Newf(errs.Unsupported, "实例 %d 没开机", i).WithAdvice(fmt.Sprintf("先 modavd start %d", i))
+			return nil, playStoreNotRunning(i)
 		}
 		return res, m.playStoreStatus(ctx, i, res)
 	}
 
+	warn := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		m.Log.Warnf("%s", msg)
+		res.Warnings = append(res.Warnings, msg)
+	}
+	// ours: the last start was this call's (one that is busy found another start under way, not to be stopped)
+	ours := false
 	boot := func() error {
 		sr, err := playStoreStart(m, ctx, i, StartOptions{Window: windowed, bridgeLocked: true})
+		ours = errs.CodeOf(err) != errs.Busy
 		if err != nil {
 			return err
 		}
@@ -324,50 +439,76 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 		res.Restarted = true
 		return boot()
 	}
+	// fail ends a failed install or uninstall: an instance that was off is shut down again, even after a cancel (best
+	// effort; what stands in the way goes into the warnings and the log, the error stays the one that failed).
+	fail := func(err error) (*PlayStoreResult, error) {
+		if wasRunning || !ours {
+			return res, err
+		}
+		w, serr := playStoreStop(m, context.WithoutCancel(ctx), i)
+		res.Warnings = append(res.Warnings, w...)
+		if serr != nil {
+			warn("实例 %d 原来是关着的，没做成后也没能关机：%s", i, errs.As(serr).Error())
+			return res, err
+		}
+		res.Stopped = true
+		m.Log.Infof("实例 %d 原来是关着的，没做成后已经关机", i)
+		return res, err
+	}
 	if !wasRunning {
 		if err := boot(); err != nil {
-			return res, err
+			return fail(err)
 		}
 	}
 
 	switch action {
 	case "install":
 		run, err := playStoreScript(m, ctx, i, "install")
-		if err != nil {
-			return res, err
+		if err == nil && run.Result != playStoreInstalled {
+			err = playStoreFailed(i, "install", run)
 		}
-		if run.Result != playStoreInstalled {
-			return res, playStoreFailed(i, "install", run)
+		if err != nil {
+			if run.Result == playStorePartial || run.Ran && run.Result == "" {
+				// some of it may be in the overlay: recorded, so 移除 is offered and bridge uninstall refuses
+				res.State = playStorePartial
+				if werr := m.setPlayStoreRecord(i, jsonord.NewString(playStorePartial)); werr != nil {
+					warn("实例 %d 记不下 Google Play 商店只装了一部分：%s", i, errs.As(werr).Error())
+				}
+			}
+			if wasRunning && slices.Contains(run.Lines, playStoreUndoneAtBoot) {
+				warn("实例 %d 撤回的改动有一部分要关机再开机后才生效", i)
+			}
+			return fail(err)
 		}
 		// recorded once it is in (bridge uninstall refuses from then on)
 		if err := m.setPlayStoreWanted(i, true); err != nil {
-			return res, err
+			return fail(err)
 		}
 		if err := restart(); err != nil {
-			return res, err
+			return fail(err)
 		}
 	case "uninstall":
 		run, err := playStoreScript(m, ctx, i, "uninstall")
 		if err != nil {
-			return res, err
+			return fail(err)
 		}
 		if run.Result == playStoreReboot {
 			if err := restart(); err != nil {
-				return res, err
+				return fail(err)
 			}
 			if run, err = playStoreScript(m, ctx, i, "uninstall"); err != nil {
-				return res, err
+				return fail(err)
 			}
 		}
 		if run.Result != playStoreGone {
-			return res, playStoreFailed(i, "uninstall", run)
+			return fail(playStoreFailed(i, "uninstall", run))
 		}
 		if err := m.setPlayStoreWanted(i, false); err != nil {
-			return res, err
+			return fail(err)
 		}
 	}
 	if err := m.playStoreStatus(ctx, i, res); err != nil {
-		return res, err
+		return fail(err)
 	}
 	if !wasRunning {
 		w, err := playStoreStop(m, ctx, i)
@@ -378,6 +519,33 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 		res.Stopped = true
 	}
 	return res, nil
+}
+
+// PlayStoreGSFID reads instance i's GSF ID (`modavd playstore <i> gsfid`): the guest script's gsfid, the documentation
+// site's query of GSF's database. The instance must be running; GSF without an ID yet is errs.NotReady with
+// PlayStoreReasonNoGSFID (wait online a minute or two). Read only, but under the bridge lock like the store's other
+// actions.
+func (m *Manager) PlayStoreGSFID(ctx context.Context, i int) (*PlayStoreGSFIDResult, error) {
+	if _, err := m.playStoreCheck(i, "gsfid"); err != nil {
+		return nil, err
+	}
+	lock, err := m.playStoreLock(i)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
+	_, running, err := playStoreFindQemu(m, i)
+	if err != nil {
+		return nil, err
+	}
+	if !running {
+		return nil, playStoreNotRunning(i)
+	}
+	run, err := playStoreScript(m, ctx, i, "gsfid")
+	if err != nil {
+		return nil, err
+	}
+	return parseGSFID(i, run)
 }
 
 // playStoreStatus fills res from the guest script's status.

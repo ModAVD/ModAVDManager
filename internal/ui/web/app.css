@@ -993,6 +993,12 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .store-q { color: var(--text-2); margin-bottom: 12px; }
 .store-q strong { color: var(--text); font-weight: 400; }
 .dlg-store .note-box { margin-bottom: 0; }
+/* 复制 GSF ID: the ID in both spellings and where to register it */
+.dlg-gsf { --w: 520px; }
+.gsf-steps { margin: 16px 0 0; padding-left: 20px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.gsf-steps .mono { color: var(--text); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.gsf-steps .icon-btn.sm { margin-left: 4px; vertical-align: middle; }
+.gsf-note { margin: 12px 0 0; color: var(--text-3); font-size: 12px; }
 .sk-row { height: 40px; margin: 10px 0; }
 
 /* activity */

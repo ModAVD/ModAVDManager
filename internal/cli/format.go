@@ -661,8 +661,17 @@ func formatPlayStore(w io.Writer, r *emu.PlayStoreResult) {
 		fmt.Fprintln(w, "实例原来是关着的，做完已经关掉")
 	}
 	if r.Action == "install" && r.Installed {
-		fmt.Fprintln(w, "在实例里打开 Play 商店登录 Google 账号；提示设备未经 Play 保护机制认证时，按文档登记这台实例的 GSF ID")
+		fmt.Fprintf(w, "在实例里打开 Play 商店登录 Google 账号；提示设备未经 Play 保护机制认证时，用 modavd playstore %d gsfid 取这台实例的 GSF ID，"+
+			"到 %s 登记\n", r.Index, emu.PlayStoreUncertifiedURL)
 	}
+}
+
+func formatPlayStoreGSFID(w io.Writer, r *emu.PlayStoreGSFIDResult) {
+	fmt.Fprintf(w, "实例 %d 的 GSF ID\n", r.Index)
+	fmt.Fprintf(w, "  十进制：%s\n", r.Decimal)
+	fmt.Fprintf(w, "  十六进制：%s\n", r.Hex)
+	fmt.Fprintf(w, "在电脑的浏览器里打开 %s ，用要在实例里登录的 Google 账号登录，填入 GSF ID（登记页要哪种写法就填哪种）提交；"+
+		"等一会儿让登记生效，把实例关机再开机，再去登录\n", emu.PlayStoreUncertifiedURL)
 }
 
 func formatDisk(w io.Writer, r *emu.DiskTrimResult) {

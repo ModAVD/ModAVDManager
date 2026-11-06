@@ -64,6 +64,9 @@ type InstanceInfo struct {
 	// PlayStore: the Google Play Store was put in (mas-avd.json instances.<i>.playStore, set by `playstore <i>
 	// install`, cleared by uninstall; playstore.go). Read from that record only; `playstore <i> status` asks the guest.
 	PlayStore bool `json:"play_store"`
+	// PlayStorePartial: an install failed and could not take back all it put in (the record is "partial"); uninstall
+	// removes what is there, another install completes it.
+	PlayStorePartial bool `json:"play_store_partial"`
 	// Creation is "creating" while create sets the instance up (its headless first boot), "failed" when that stopped
 	// (CreationError says why, CreationLog is that boot's log); "" for a ready instance. See crud.go.
 	Creation      string `json:"creation"`

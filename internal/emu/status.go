@@ -206,7 +206,8 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.Renderer = metaText(meta.Get("renderer"))
 		info.SoftwareRenderer = metaTruthy(meta.Get("softwareRenderer"))
 		info.AppProxy = appProxySummary(meta)
-		info.PlayStore, _ = meta.Get(playStoreMetaKey).BoolVal()
+		store := playStoreRecord(meta)
+		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 	}
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info

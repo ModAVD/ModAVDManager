@@ -256,16 +256,19 @@ func init() {
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
 		},
 		{
-			name: "playstore", args: "<i> install|uninstall|status", summary: "装、卸、查看 Google Play 商店",
+			name: "playstore", args: "<i> install|uninstall|status|gsfid", summary: "装、卸、查看 Google Play 商店，取 GSF ID",
 			details: "商店的五个文件取自 Google 官方的 Google Play 版系统镜像（和实例的镜像同一期），要先在根目录补全：" +
 				"components fetch --play-store（下载）或 components import-playstore（用自己的文件）；没有就报 not_ready（details.reason 为 playstore_files_missing）。" +
 				"装在执行桥带来的可写系统镜像覆盖层里，所以实例要有执行桥。install 放入商店和 Google 签名的 Play 服务、GSF、合作伙伴设置，" +
 				"藏起镜像自带的同名占位应用，再冷启动一次生效；uninstall 去掉 Google Play 装的更新、删掉这些文件，冷启动后恢复占位应用。" +
-				"实例原来关着的，做完再关掉；开着的，冷启动后照原来的方式开回来（带窗口或无头）。status：只读，实例要开着。" +
+				"实例原来关着的，做完再关掉（没做成也关掉）；开着的，冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"install 中途失败时撤回这次放进去的文件；撤不干净的记为只装了一部分（list 的 play_store_partial），用 uninstall 移除或再 install 补全。" +
+				"status：只读，实例要开着。gsfid：取这台实例的 GSF ID（十进制和十六进制，--json 是 decimal、hex），" +
+				"设备未经 Play 保护机制认证时到 " + emu.PlayStoreUncertifiedURL + " 登记；实例要开着，还没有 ID 时报 not_ready（details.reason 为 no_gsf_id），开着网等一两分钟再试。" +
 				"没有执行桥的报 not_ready（details.reason 为 no_bridge）。装了商店的实例不能卸执行桥，要先卸商店。新建的实例都不带商店。",
-			posNames: []string{"实例编号", "install、uninstall 或 status"}, minPos: 2, maxPos: 2,
+			posNames: []string{"实例编号", "install、uninstall、status 或 gsfid"}, minPos: 2, maxPos: 2,
 			final: true,
-			run:   runPlayStore, human: humanOf(formatPlayStore), exit: exitPlayStore,
+			run:   runPlayStore, human: humanPlayStore, exit: exitPlayStore,
 		},
 		{
 			name: "disk", args: "<i> trim|info|compact", summary: "磁盘回收：触发回收或整理把客体已删文件占的空间还给宿主；看数据盘大小",
@@ -1182,16 +1185,28 @@ func runPlayStore(c *cmdCtx) (any, error) {
 	}
 	action := strings.ToLower(c.inv.pos[1])
 	switch action {
-	case "install", "uninstall", "status":
+	case "install", "uninstall", "status", "gsfid":
 	default:
-		return nil, errs.Newf(errs.Usage, "第二个参数只能是 install、uninstall 或 status，收到「%s」", c.inv.pos[1]).
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 install、uninstall、status 或 gsfid，收到「%s」", c.inv.pos[1]).
 			WithAdvice(findCommand("playstore").usageAdvice())
 	}
 	m, err := c.mgr()
 	if err != nil {
 		return nil, err
 	}
+	if action == "gsfid" {
+		return m.PlayStoreGSFID(c.ctx, i)
+	}
 	return m.PlayStore(c.ctx, i, action)
+}
+
+func humanPlayStore(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.PlayStoreResult:
+		formatPlayStore(w, r)
+	case *emu.PlayStoreGSFIDResult:
+		formatPlayStoreGSFID(w, r)
+	}
 }
 
 // exitPlayStore: 1 when the store did not end up as asked (installed after install, absent after uninstall). status
