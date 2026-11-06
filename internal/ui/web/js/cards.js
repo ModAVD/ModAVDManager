@@ -182,7 +182,9 @@ function updateCard(c, inst) {
   if (inst.title && inst.title !== inst.name) sub.push(inst.name);
   if (live && inst.started_at) sub.push(uptime(inst.started_at));
   const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
-  setText(c.sub, subtitle + (inst.diagnostics ? ' · 诊断模式' : ''));
+  const headless = inst.running && inst.window === false && v.key !== 'creating';
+  setText(c.sub, subtitle + (headless ? ' · 无头' : '') + (inst.diagnostics ? ' · 诊断模式' : ''));
+  c.sub.title = headless ? '命令行开的，没有窗口，可以在这里关机' : '';
   setText(c.cfg, cfgText(inst.config));
 
   let [pt, tone] = PILL[v.key];
