@@ -49,7 +49,7 @@ export function openUpdate() {
     ...[['auto', '自动'], ['googledownloads_cn', 'googledownloads_cn'], ['tencent', 'tencent'], ['google', 'google'], ['custom', '自定义地址']]
       .map(([value, text]) => h('option', { value, text })));
   const componentURLs = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', spellcheck: 'false' });
-  const componentSave = btn('btn btn-secondary', '保存', async () => {
+  async function saveComponentSource() {
     const urls = componentSource.value === 'custom' ? componentURLs.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
     if (componentSource.value === 'custom' && !urls.length) {
       toast({ tone: 'err', title: '需要自定义地址', text: '请填写至少一个 HTTP(S) 下载目录。' });
@@ -59,9 +59,13 @@ export function openUpdate() {
       await api.put('/api/components/source', { source: componentSource.value, mirror_urls: urls });
       toast({ title: '已保存组件下载源' });
     } catch (e) { toastError(e); }
-  });
+  }
+  const componentSave = btn('btn btn-secondary', '保存', saveComponentSource);
   const componentURLsRow = h('div', { class: 'f-ctl' }, componentURLs, componentSave);
-  componentSource.addEventListener('change', () => { componentURLsRow.hidden = componentSource.value !== 'custom'; });
+  componentSource.addEventListener('change', () => {
+    componentURLsRow.hidden = componentSource.value !== 'custom';
+    if (componentSource.value !== 'custom') saveComponentSource();
+  });
   const fields = h('div', { class: 'fields' },
     h('span', { class: 'f-label', id: 'upd-src-l', text: '更新源' }), h('div', { class: 'f-ctl' }, seg),
     h('label', { class: 'f-label', for: 'upd-cdk', text: 'Mirror 酱 CDK' }),

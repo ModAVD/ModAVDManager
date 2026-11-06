@@ -4,8 +4,9 @@ import { h, icon, btn, attr, setText, showError } from './dom.js';
 import { S, update, subscribe } from './store.js';
 import { api } from './api.js';
 import { openDialog, toast, toastError, copyText } from './ui.js';
+import { openCheck } from './panels.js';
 
-const PRIVACY = '隐私提示：问题包只保存在本机，脚本不会上传。\r\n- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。\r\n- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。\r\n- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。';
+const PRIVACY = '隐私提示：问题包只保存在本机，不会自动上传。\r\n- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。\r\n- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。\r\n- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。';
 
 export function loadDiagnostics() {
   return api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch((e) => {
@@ -26,6 +27,11 @@ function startJob(p) {
 
 function cancel(id) {
   api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`).then((j) => { S.jobs.set(j.id, j); update(); }).catch(toastError);
+}
+
+export function openComponentFetch() {
+  Promise.all([api.get('/api/components/license'), api.get('/api/components/source')])
+    .then(([v, saved]) => openLicense(v.license, v.license_source, saved)).catch(toastError);
 }
 
 function openLicense(license, source, saved = {}) {
@@ -62,10 +68,7 @@ export function openDiagnostics() {
   if (ctl) return;
   const componentBox = h('div', { class: 'diag-components' });
   const componentError = h('div', { class: 'form-error', role: 'alert', hidden: true });
-  const fetchBtn = btn('btn btn-secondary', [icon('download'), '补全组件'], () => {
-    Promise.all([api.get('/api/components/license'), api.get('/api/components/source')])
-      .then(([v, saved]) => openLicense(v.license, v.license_source, saved)).catch(toastError);
-  });
+  const fetchBtn = btn('btn btn-ghost', '去检测页补全', () => { ctl.close(); openCheck(); });
   const compHead = h('div', { class: 'diag-head' }, h('strong', { text: '组件' }), fetchBtn);
   const compNote = h('p', { class: 'f-hint', text: '缺少组件时先查看许可协议；只有亲手点“同意并下载”才会开始下载。' });
 
@@ -90,8 +93,9 @@ export function openDiagnostics() {
     const c = S.components;
     if (c && Array.isArray(c.components)) {
       componentBox.replaceChildren(...c.components.map((x) => h('div', { class: 'comp-row' },
-        h('span', { text: x.name || x.id }), h('span', { class: 'v', text: x.version || x.build || '未知版本' }),
-        h('span', { class: x.installed ? 'tone-ok' : 'tone-err', text: x.installed ? '已安装' : '缺少' }))));
+        h('span', null, x.name || x.id, x.optional && h('span', { class: 'muted', text: '（可选）' })),
+        h('span', { class: 'v', text: x.version || x.build || '未知版本' }),
+        h('span', { class: x.installed ? 'tone-ok' : x.optional ? 'tone-idle' : 'tone-err', text: x.installed ? '已安装' : x.optional ? '未安装' : '缺少' }))));
       fetchBtn.hidden = !c.components.some((x) => !x.optional && !x.installed);
     }
     if (S.componentsError) { showError(componentError, S.componentsError); componentError.hidden = false; }

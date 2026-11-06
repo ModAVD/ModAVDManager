@@ -4,7 +4,7 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
-import { openDiagnostics } from './diagnostics.js';
+import { openComponentFetch, openDiagnostics } from './diagnostics.js';
 import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import * as A from './actions.js';
 
@@ -46,7 +46,7 @@ function itemView(it) {
 const RANK = (it) => (it.ok === false ? (it.blocking ? 0 : 1) : it.ok == null ? 2 : 3);
 
 function checkRow() {
-  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div'), state: h('span', { class: 'ci-state' }) };
+  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }), action: btn('btn btn-secondary btn-sm', [icon('download'), '补全组件'], openComponentFetch) };
   r.el = h('li', { class: 'check-item' }, r.ic, h('div', null, h('div', { class: 'ci-title' }, r.title, r.tag), r.reason, r.adv), r.state);
   return r;
 }
@@ -59,7 +59,12 @@ function fillCheckRow(r, it) {
   r.tag.hidden = it.blocking;
   setText(r.reason, it.reason);
   const a = it.ok !== true && it.advice ? it.advice : '';
-  if (r.a !== a) r.adv.replaceChildren((r.a = a) ? advice(a) : '');
+  const componentAction = it.id === 'components' && it.ok !== true;
+  if (r.a !== a || r.componentAction !== componentAction) {
+    r.a = a;
+    r.componentAction = componentAction;
+    r.adv.replaceChildren(a ? advice(a) : '', componentAction ? r.action : '');
+  }
   setText(r.state, word);
 }
 
@@ -173,7 +178,7 @@ export function renderBanner(el) {
         h('span', { class: 'muted', text: '缺少的组件：' }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),
       blockers.length > 1 && h('p', { class: 'banner-more', text: `另外还有 ${blockers.length - 1} 项必需检查没通过，详情见电脑检查。` }),
       h('div', { class: 'banner-actions' },
-        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), '补全组件'], openDiagnostics),
+        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), '补全组件'], openComponentFetch),
         btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
 }
 
