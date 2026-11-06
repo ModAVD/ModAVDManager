@@ -31,12 +31,17 @@ type sourceSettingsFile struct {
 // settings, but a separate file so the two settings cannot overwrite one
 // another.
 var sourceSettingsPath = func() string {
-	if !root.CurrentPlatform().Windows() {
-		return ""
-	}
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+	var base string
+	if root.CurrentPlatform().Windows() {
+		base = os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
+		}
+	} else {
+		base, _ = os.UserConfigDir()
+		if base == "" {
+			return ""
+		}
 	}
 	return filepath.Join(base, "ModAVD", "components-settings.json")
 }
@@ -70,9 +75,6 @@ func LoadSourceSettings() SourceSettings {
 func SaveSourceSettings(mirror string, urls []string) (SourceSettings, error) {
 	mirror = strings.TrimSpace(mirror)
 	urls = normalizeURLs(urls)
-	if !root.CurrentPlatform().Windows() {
-		return SourceSettings{}, errs.New(errs.Unsupported, "当前平台暂不支持保存组件下载源")
-	}
 	if err := validateSource(mirror, urls); err != nil {
 		return SourceSettings{}, err
 	}
