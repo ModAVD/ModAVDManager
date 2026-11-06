@@ -61,10 +61,15 @@ esac`)
 	for _, name := range []string{"am", "remount", "chcon", "chown"} {
 		stub(name, "exit 0")
 	}
-	sep := string(os.PathListSeparator)
-	g.env = append(os.Environ(), "MODAVD_PS_ROOT="+g.root, "PATH="+bin+sep+os.Getenv("PATH"))
+	// the stubs go first on PATH inside the shell (run): Git for Windows' bin\sh.exe puts its usr\bin, which has a real
+	// chcon and chown, before the PATH it is given
+	g.env = append(os.Environ(), "MODAVD_PS_ROOT="+g.root, "MODAVD_PS_STUBS="+filepath.ToSlash(bin))
 	return g
 }
+
+// stubbedSh runs `sh <args>` with the stubs first on PATH: set by the shell itself, in its own spelling of the
+// directory (pwd: /c/... under Git's sh), as a PATH entry cannot hold a drive letter's colon.
+const stubbedSh = `S=$(cd "$MODAVD_PS_STUBS" && pwd) || exit 97; PATH="$S:$PATH"; export PATH; exec sh "$@"`
 
 func (g *psGuest) write(p, data string) {
 	g.t.Helper()
@@ -116,7 +121,7 @@ func (g *psGuest) run(action string) (string, string) {
 	if err := os.WriteFile(script, b, 0o644); err != nil {
 		g.t.Fatal(err)
 	}
-	cmd := exec.Command(g.sh, filepath.ToSlash(script), action, g.dir)
+	cmd := exec.Command(g.sh, "-c", stubbedSh, "sh", filepath.ToSlash(script), action, g.dir)
 	cmd.Env = g.env
 	out, _ := cmd.CombinedOutput()
 	result := ""

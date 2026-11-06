@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"modavd/internal/errs"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // playStoreHooks replaces what the store's code does to a guest for one test: the component check, the guest script
@@ -41,11 +41,11 @@ func (h *playStoreHooks) install(t *testing.T) {
 		used[action]++
 		return playStoreRun{Result: rs[k], Lines: []string{"play /product/priv-app/Phonesky/Phonesky.apk", "stub hidden", "other"}}, nil
 	}
-	playStoreFindQemu = func(*Manager, int) (win.Process, bool, error) {
+	playStoreFindQemu = func(*Manager, int) (host.Process, bool, error) {
 		if h.running {
-			return win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true, nil
+			return host.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true, nil
 		}
-		return win.Process{}, false, nil
+		return host.Process{}, false, nil
 	}
 	playStoreStart = func(_ *Manager, _ context.Context, _ int, opt StartOptions) (*StartResult, error) {
 		h.calls = append(h.calls, "start")
@@ -213,7 +213,7 @@ func TestPlayStoreTakesBridgeLock(t *testing.T) {
 	var ps playStoreHooks
 	ps.ready = true
 	ps.install(t)
-	l, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	l, ok, err := host.TryLock(m.lockPath(i, "bridge"))
 	if err != nil || !ok {
 		t.Fatalf("TryLock: %v %v", ok, err)
 	}
