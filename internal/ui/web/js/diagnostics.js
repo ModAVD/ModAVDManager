@@ -151,6 +151,7 @@ export function openComponentFetch() {
   d.onClose.push(() => { licenseCtl = null; seq++; });
   agree.disabled = true;
   api.get('/api/components/source').catch(() => ({})).then((saved) => {
+    if (licenseCtl !== d) return; // closed meanwhile
     select.value = SOURCES.some(([v]) => v === saved.source) ? saved.source : 'auto';
     custom.value = (saved.mirror_urls || []).join(',');
     load();
