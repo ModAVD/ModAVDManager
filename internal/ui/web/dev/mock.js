@@ -1,15 +1,18 @@
 // Mock backend for design work: ?mock=normal|empty|notready|busy|many replaces fetch('/api/…') and EventSource with
 // an in-memory fake that follows internal/ui/API.md. Extra params: drop=1 (the event stream drops after 1.5 s and
 // stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500), diag=components-error|components-fail
-// (component status request or fetch fails). window.__mockShots counts screenshot requests per instance. Never used in
-// production: the server does not serve /dev/.
+// (component status request or fetch fails), store=download|import (the root has the Google Play Store's five files,
+// fetched or imported), storefail=1 (an instance's 补全 Google Play 商店 fails in the guest). window.__mockShots counts
+// screenshot requests per instance. Never used in production: the server does not serve /dev/.
 // Screens are drawn on a canvas: abstract shapes only, no real game content.
 
 const ROOT = 'X:\\ModAVD';
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MEM = [3072, 4096, 5120, 6144];
 const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true, diagMode: '', componentsReady: false,
-  componentSource: { source: 'auto', mirror: '', mirror_urls: [], configured: false } };
+  componentSource: { source: 'auto', mirror: '', mirror_urls: [], configured: false },
+  // the root's Google Play Store files (sdk\playstore): source is download | import once they are there
+  store: { ready: false, source: '' } };
 const now = () => Date.now();
 const iso = (t = now()) => {
   const d = new Date(t);
@@ -50,6 +53,8 @@ function mk(i, title, o = {}) {
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
     app_proxy: null,
+    // the execution bridge (off | pending | installed | unknown) and the Google Play Store's record
+    bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store,
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
@@ -130,7 +135,7 @@ function setup(sc) {
     mk(6, '碧蓝航线', { status: 'offline', mem: 4096, cpu: 4, fps: 30 });
     mk(7, '日常备用', { status: 'online', upMin: 7, scene: 1, sw: true, mem: 3072, cpu: 2, fps: 30 });
     mk(8, '', { status: 'offline', initialized: false, disk: 32 });
-    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4 });
+    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4, bridge: 'off' });
     longStart(3, 9);
     return;
   }
@@ -169,7 +174,7 @@ function setup(sc) {
   }
   // normal
   mk(0, '明日方舟 · 主号', { status: 'online', upMin: 133, scene: 0, proxy: ['com.example.globalgame', 'com.google.android.gms'] });
-  mk(1, '星穹铁道', { status: 'offline', mem: 6144, proxy: ['com.miHoYo.hkrpg'] });
+  mk(1, '星穹铁道', { status: 'offline', mem: 6144, proxy: ['com.miHoYo.hkrpg'], store: true });
   mk(8, '重返未来 1999', { status: 'starting', upMin: 0.3, scene: 2 });
   oldJob('stop', 1, 'done', 5400, 7, { result: { index: 1, name: 'mas_1', method: 'graceful', synced: true, seconds: 6.9, warnings: [] } });
   oldJob('start', 0, 'done', 133 * 60, 38, { result: { launched: true, boot_seconds: 19.2, total_seconds: 37.6, first_boot: false, warnings: [], zygote_restarted: false } });
@@ -220,8 +225,6 @@ function checkResult() {
     { id: 'system-image', name: '系统镜像 Android 14 Google APIs x86_64', version: '14', build: 'r07', installed: true, optional: false, local_sdk: false },
     { id: 'launcher', name: '轻量桌面 µLauncher', version: '0.6.1', build: '', installed: true, optional: true, local_sdk: false },
     { id: 'ime', name: '宿主输入法', version: '1.2.0', build: '', installed: true, optional: true, local_sdk: false },
-    // the Google Play Store: optional, only after a fetch with play_store
-    { id: 'play-store', name: 'Google Play 商店', version: db.playStore ? '14' : '', build: '', installed: !!db.playStore, optional: true, local_sdk: false },
   ];
   if (db.check === 'warn') {
     Object.assign(items[4], { ok: false, reason: '没有找到能用 Vulkan 的显卡（只有 Microsoft Basic Render Driver）', advice: '安装或更新显卡驱动（NVIDIA / AMD / Intel 官网驱动自带 Vulkan）。没有可用的显卡时模拟器只能软件渲染，游戏会占满 CPU，性能会很差' });
@@ -240,6 +243,105 @@ function checkResult() {
   }
   const ready = !items.some((x) => x.blocking && x.ok === false);
   return { ...rootInfo(), ready, items, components: comps };
+}
+
+// ---- the Google Play Store: the root's five files (GET /api/components play_store) -------------------------------------
+
+const STORE_FILES = [['Phonesky.apk', '/product/priv-app/Phonesky/Phonesky.apk', 74664153],
+  ['PrebuiltGmsCore.apk', '/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk', 144060779],
+  ['GoogleServicesFramework.apk', '/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk', 5744939],
+  ['PartnerSetupPrebuilt.apk', '/product/priv-app/PartnerSetupPrebuilt/PartnerSetupPrebuilt.apk', 726118],
+  ['play_store_fsi_cert.der', '/product/etc/security/fsverity/play_store_fsi_cert.der', 1422]];
+const STORE_ZIP = 1510752654;
+
+function storeStatus() {
+  const s = db.store;
+  return { dir: ROOT + '\\sdk\\playstore', ready: s.ready, source: s.ready ? s.source : '', version: s.ready ? '14' : '',
+    files: STORE_FILES.map(([name, guest, size]) => ({ name, guest, size, present: s.ready })) };
+}
+
+// GET /api/components: the components, then the store's summary item
+function componentList() {
+  return [...checkResult().components,
+    { id: 'play-store', name: 'Google Play 商店', version: db.store.ready ? '14' : '', build: '', installed: db.store.ready, optional: true, local_sdk: false }];
+}
+
+const sdkJob = () => db.jobs.find((j) => (j.kind === 'components' || j.kind === 'playstore-import') && j.state === 'running');
+
+// 使用我自己的文件: the mock knows a file by its name (the real import by its size, then its hash): *.zip is the Play
+// image, the five names are the files, a name with "bad" fails its hash, anything else is not one of them.
+function runImport(j, files) {
+  const named = files.map((f) => ({ f, zip: /\.zip$/i.test(f.name), slot: STORE_FILES.findIndex(([n]) => n === f.name) }));
+  const unknown = named.find((x) => !x.zip && x.slot < 0);
+  const zip = named.find((x) => x.zip);
+  const steps = [];
+  for (const x of named) if (x.zip || x.slot >= 0) steps.push(['verifying', `校验 ${x.f.name}${x.zip ? '（SHA-1）' : `（${STORE_FILES[x.slot][0]}）`}`, x.zip ? STORE_ZIP : STORE_FILES[x.slot][2]]);
+  if (zip) steps.push(['extracting', `解压 ${zip.f.name}`, 3101687808]);
+  log('info', '魔改 AVD：用自己的文件补全 Google Play 商店', j.id);
+  let k = 0;
+  const timer = setInterval(() => {
+    if (j.state !== 'running') { clearInterval(timer); return; }
+    if (unknown) {
+      clearInterval(timer);
+      return failJob(j, 'components_rejected', `${unknown.f.name}（${unknown.f.size} 字节）不是 Google Play 版镜像的压缩包 x86_64-34_r14.zip，也不是商店的五个文件（${STORE_FILES.map(([n]) => n).join('、')}）之一`, '', { reason: 'unknown_file' });
+    }
+    if (k < steps.length) {
+      const [step, name, total] = steps[k++];
+      j.progress = { step, name, message: `  ${name}  100.0%  ${(total / 1048576).toFixed(1)} MB / ${(total / 1048576).toFixed(1)} MB`, done: total, total };
+      emit('job', j);
+      log('info', name + '…', j.id);
+      const bad = named.find((x) => /bad/i.test(x.f.name));
+      if (bad && name.includes(bad.f.name)) {
+        clearInterval(timer);
+        failJob(j, 'components_rejected', bad.zip
+          ? `${bad.f.name} 的 SHA-1 是 0123…（mock），应为 01d32617fd1937e540faf8731d70cf50e35af854：不是 Google 仓库里那份 Google Play 版镜像（x86_64-34_r14.zip）`
+          : `${bad.f.name} 和 Google Play 版镜像 r14 里的 ${STORE_FILES[bad.slot][0]} 大小一样，SHA-256 却对不上（mock）`, '', { reason: 'mismatch' });
+      }
+      return;
+    }
+    clearInterval(timer);
+    const got = new Set(named.filter((x) => !x.zip).map((x) => x.slot));
+    if (!zip && !db.store.ready && got.size < STORE_FILES.length) {
+      const missing = STORE_FILES.filter((_, s) => !got.has(s)).map(([n]) => n);
+      return failJob(j, 'components_rejected', `还缺 ${missing.join('、')}，什么也没有改`, '把五个文件一起给出，或者给 Google Play 版镜像的压缩包 x86_64-34_r14.zip', { reason: 'incomplete' });
+    }
+    const skipped = db.store.ready;
+    if (!skipped) db.store = { ready: true, source: 'import' };
+    finishJob(j, { root: ROOT, from: zip ? 'zip' : 'files', used: files.map((f) => f.name), kept: [], skipped, set_aside: '', status: storeStatus() });
+  }, 700);
+}
+
+// 补全 / 移除 Google Play 商店 on an instance: boots it cold once (an instance that was off is booted for it and stopped
+// again); the card follows the instance through the stop and the boot.
+function runPlayStore(inst, j, action) {
+  const i = inst.index;
+  const was = inst.running;
+  const set = (o) => { Object.assign(inst, o); emit('instances', list()); };
+  const stopIt = () => { set({ busy: 'stopping' }); };
+  const off = () => { set({ status: 'offline', running: false, booted: false, busy: '', pid: 0, started_at: '' }); inst.screencap.shm_ready = false; };
+  const boot = () => set({ status: 'starting', running: true, busy: 'starting', pid: 10000 + Math.floor(Math.random() * 9000), started_at: iso() });
+  const up = () => { set({ status: 'online', booted: true, busy: '' }); inst.screencap.shm_ready = true; };
+  const doing = action === 'install' ? '正在补全 Google Play 商店（会冷启动一次）' : '正在移除 Google Play 商店（会冷启动一次）';
+  j.progress = { step: j.kind, message: `实例 ${i} ${doing}`, done: 0, total: 1000 };
+  emit('job', j);
+  log('info', `实例 ${i} ${doing}`, j.id);
+  const steps = [];
+  if (!was) steps.push([600, boot], [2500, up]);
+  steps.push([1500, () => log('info', action === 'install' ? `实例 ${i} 推送商店的五个文件，放进系统覆盖层` : `实例 ${i} 卸掉 Google Play 装的更新，删掉商店的文件`, j.id)]);
+  if (action === 'install' && db.storefail) {
+    steps.push([800, () => failJob(j, 'launch_failed', `实例 ${i} 的 Google Play 商店脚本（install）没有跑完：cp: /product/priv-app/Phonesky/Phonesky.apk.new: No space left on device（mock）`, '')]);
+    run(j, steps);
+    return;
+  }
+  steps.push([800, stopIt], [1600, off], [700, boot], [2600, up]);
+  if (!was) steps.push([800, stopIt], [1400, off]);
+  steps.push([600, () => {
+    inst.play_store = action === 'install';
+    const state = action === 'install' ? 'installed' : 'absent';
+    finishJob(j, { index: i, action, state, installed: state === 'installed', files: STORE_FILES.map(([, g]) => `${state === 'installed' ? 'play' : 'absent'} ${g}`),
+      restarted: true, stopped: !was, warnings: [] });
+  }]);
+  run(j, steps);
 }
 
 // ---- jobs ------------------------------------------------------------------------------------------------------------
@@ -271,11 +373,11 @@ function finishJob(j, result, warnings = []) {
   emit('instances', list());
 }
 
-function failJob(j, code, message, advice) {
+function failJob(j, code, message, advice, details) {
   if (j.state !== 'running') return;
   j.state = 'failed';
   j.finished_at = iso();
-  j.error = { code, message, advice };
+  j.error = { code, message, advice, ...(details ? { details } : {}) };
   emit('job', j);
   log('error', message, j.id);
   emit('instances', list());
@@ -325,12 +427,15 @@ function mockLicense(source, urls) {
   return { license, license_source: from, license_sha256: x.toString(16).padStart(8, '0').repeat(8) };
 }
 
-function runDiag(j, kind = j.kind) {
+function runDiag(j, kind = j.kind, store = false) {
   const stages = kind === 'components'
     ? [['downloading', '平台工具（adb）', 2.7, 8.0, 1.1], ['downloading', '平台工具（adb）', 6.4, 8.0, 1.3], ['extracting', '平台工具（adb）', 8.0, 8.0, 0],
       ['downloading', '系统镜像（Android 14 Google APIs x86_64）', 310, 1480, 24], ['downloading', '系统镜像（Android 14 Google APIs x86_64）', 960, 1480, 26],
       ['extracting', '系统镜像（Android 14 Google APIs x86_64）', 1480, 1480, 0]]
     : [['collect', '正在收集目录与版本', 1, 12, 0.4], ['collect', '正在收集日志', 4, 12, 0.8], ['collect', '正在收集现场状态', 8, 12, 1.1], ['zip', '正在压缩问题包', 11, 12, 1.4], ['done', '问题包已生成', 12, 12, 0]];
+  // play_store: Google's Play image too, of which only the five files stay
+  if (store) stages.push(['downloading', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 420, 1441, 25], ['downloading', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 1180, 1441, 27],
+    ['extracting', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 2958, 2958, 0]);
   if (kind === 'components') ['魔改 AVD：补全 Google 组件（adb、Android 14 系统镜像）', '已在管理器里同意许可协议。'].forEach((m) => log('info', m, j.id));
   let n = 0;
   const timer = setInterval(() => {
@@ -346,7 +451,8 @@ function runDiag(j, kind = j.kind) {
       clearInterval(timer);
       if (kind === 'components') {
         db.componentsReady = true;
-        finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: checkResult().components, downloads: [] });
+        if (store) db.store = { ready: true, source: 'download' };
+        finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: componentList(), downloads: [] });
       } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', problems: [], mas_found: true, entries: ['summary.txt'],
         privacy_note: '隐私提示（mock）：问题包只保存在本机，不会自动上传。\r\n- 可以公开：summary.txt 和日志。\r\n- 不要公开：crash 文件夹。' });
     }
@@ -687,8 +793,8 @@ async function screenshot(inst) {
 // ---- HTTP ------------------------------------------------------------------------------------------------------------
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-const fail = (status, code, message, advice = '') => json({ error: { code, message, advice } }, status);
-const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, canceled: 499, launch_failed: 502, proxy_unavailable: 502, timeout: 504 };
+const fail = (status, code, message, advice = '', details) => json({ error: { code, message, advice, ...(details ? { details } : {}) } }, status);
+const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, unsupported: 422, canceled: 499, launch_failed: 502, proxy_unavailable: 502, timeout: 504 };
 const PKG = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 
 // what speaks at a typed proxy address: 7890 / 7897 a mixed port, 7891 an HTTP proxy, anything else nothing
@@ -730,6 +836,7 @@ async function handle(url, init) {
   if (p === '/api/info') return json({ version: '0.1.0', protocol: 1, root: rootInfo() });
   if (p === '/api/instances' && method === 'GET') return json(list());
   if (p === '/api/instances' && method === 'POST') {
+    if ('play_store' in body) return errResp('usage', '新建不带 Google Play 商店（没有 play_store 字段）', '建好后在实例的「更多操作」里补全');
     const bad = validate(body, true);
     if (bad) return errResp(...bad);
     let i = body.index;
@@ -753,7 +860,21 @@ async function handle(url, init) {
   }
   if (p === '/api/components' && method === 'GET') {
     if (db.diagMode === 'components-error') return errResp('internal', '组件状态暂不可用', '稍后重试');
-    return json({ root: ROOT, components: checkResult().components });
+    return json({ root: ROOT, components: componentList(), play_store: storeStatus() });
+  }
+  if (p === '/api/components/import-playstore' && method === 'POST') {
+    if (!(init.body instanceof FormData)) return errResp('usage', '导入要用 multipart/form-data 上传，文件字段名 file（每个文件一个）');
+    const running = sdkJob();
+    if (running) return errResp('busy', `任务 ${running.kind === 'components' ? '补全组件' : '导入 Google Play 商店的文件'} 正在运行（任务 ${running.id}），等它做完再试`);
+    const files = init.body.getAll('file');
+    if (!files.length) return errResp('usage', '上传里没有文件字段 file');
+    if (files.length > 8) return errResp('invalid_argument', '一次最多导入 8 个文件');
+    const empty = files.find((f) => !f.size);
+    if (empty) return errResp('invalid_argument', `上传的 ${empty.name} 是空文件`);
+    await sleep(Math.min(3000, files.reduce((n, f) => n + f.size, 0) / 1e6)); // the upload itself
+    const j = newJob('playstore-import', -1);
+    runImport(j, files);
+    return json(j, 202);
   }
   if (p === '/api/components/license' && method === 'GET') {
     await sleep(400);
@@ -775,9 +896,8 @@ async function handle(url, init) {
     if (body.accept_license !== true) return errResp('usage', '补全组件必须明确同意许可协议');
     const lic = mockLicense(body.source || db.componentSource.source, body.mirror_urls || db.componentSource.mirror_urls);
     if (lic.error || body.license_sha256 !== lic.license_sha256) return errResp('usage', '补全组件要带上看过的许可协议的 license_sha256');
-    if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');
-    if (body.play_store === true) db.playStore = true;
-    const j = newJob('components', -1); runDiag(j, 'components'); return json(j, 202);
+    if (sdkJob()) return errResp('busy', sdkJob().kind === 'components' ? '组件补全正在进行' : '正在导入 Google Play 商店的文件，等它做完再试');
+    const j = newJob('components', -1); runDiag(j, 'components', body.play_store === true && !db.store.ready); return json(j, 202);
   }
   if (p === '/api/diag/collect' && method === 'POST') {
     if (db.jobs.some((j) => j.kind === 'collect-info' && j.state === 'running')) return errResp('busy', '收集问题信息正在进行');
@@ -803,7 +923,7 @@ async function handle(url, init) {
     const j = db.jobs.find((x) => x.id === decodeURIComponent(m[1]));
     if (!j) return errResp('not_found', `没有任务 ${m[1]}`);
     if (m[2] && method === 'POST') {
-      if (j.state === 'running' && (j.kind === 'start' || j.kind === 'components' || j.kind === 'collect-info')) {
+      if (j.state === 'running' && (j.kind === 'start' || j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import')) {
         j.state = 'canceled';
         j.finished_at = iso();
         j.error = { code: 'canceled', message: j.kind === 'start' ? '已停止等待，模拟器继续开机' : '已取消后台任务', advice: '' };
@@ -877,6 +997,22 @@ async function handle(url, init) {
     const j = newJob('install', i);
     log('info', `实例 ${i} 开始安装 ${f.name}（${(f.size / 1048576).toFixed(1)} MB）`, j.id);
     setTimeout(() => finishJob(j, { index: i, apk: f.name, package: 'com.example.' + f.name.replace(/\.apk$/i, '').replace(/\W+/g, '').toLowerCase(), output: 'Success' }), 3000);
+    return json(j, 202);
+  }
+  if (act === 'playstore-install' || act === 'playstore-uninstall') {
+    const install = act === 'playstore-install';
+    const reason = (code, message, advice, r) => fail(STATUS_OF[code], code, message, advice, { reason: r });
+    if (busyJob || inst.status === 'creating') return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (sdkJob()) return errResp('busy', `任务 ${sdkJob().kind === 'components' ? '补全组件' : '导入 Google Play 商店的文件'} 正在运行（任务 ${sdkJob().id}），等它做完再试`);
+    if (install && !db.store.ready) {
+      return reason('not_ready', `这个根目录还没有 Google Play 商店的五个文件，或者文件不全、已损坏（${ROOT}\\sdk\\playstore）`,
+        '先在管理器的「补全组件」里勾选「补全 Google Play 商店服务」（或者用自己的文件导入）', 'playstore_files_missing');
+    }
+    if (install && inst.bridge === 'off') {
+      return reason('not_ready', `实例 ${i} 没有 arm64 执行桥，不按可写系统镜像开机，放不进 Google Play 商店`, `先运行 modavd bridge ${i} install 装上执行桥，再补全商店`, 'no_bridge');
+    }
+    const j = newJob(act, i);
+    runPlayStore(inst, j, install ? 'install' : 'uninstall');
     return json(j, 202);
   }
   if (act === 'disk-info' || act === 'disk-trim' || act === 'disk-compact') {
@@ -1040,6 +1176,8 @@ export function install(scenario, params) {
   db.shotfail = params.get('shotfail') === '1';
   db.proxyfail = params.get('proxyfail') === '1';
   db.diagMode = params.get('diag') || (scenario === 'components-fail' ? 'components-fail' : scenario === 'diag-fail' ? 'diag-fail' : '');
+  if (['download', 'import'].includes(params.get('store'))) db.store = { ready: true, source: params.get('store') };
+  db.storefail = params.get('storefail') === '1';
   window.__mockShots = {};
   setup(scenario);
   const real = window.fetch.bind(window);

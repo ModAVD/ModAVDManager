@@ -10,6 +10,7 @@ import { openSettings, openDelete } from './forms.js';
 import { openProxy, markOf } from './proxy.js';
 import { openViewer, openLogs } from './viewer.js';
 import { openActivity } from './panels.js';
+import { openPlayStore } from './playstore.js';
 
 const cards = new Map();
 let grid;
@@ -86,7 +87,10 @@ export function viewState(inst) {
 
 const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
   creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
-const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败', 'disk-info': '查看磁盘占用失败', 'disk-trim': '回收磁盘空间失败', 'disk-compact': '整理磁盘失败' };
+const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败', 'disk-info': '查看磁盘占用失败', 'disk-trim': '回收磁盘空间失败', 'disk-compact': '整理磁盘失败',
+  'playstore-install': '补全 Google Play 商店失败', 'playstore-uninstall': '移除 Google Play 商店失败' };
+// 补全 / 移除 Google Play 商店: stops and boots the instance cold; the card is busy with it the whole time
+const STORE_JOB = { 'playstore-install': ['补全商店中', '正在补全 Google Play 商店…'], 'playstore-uninstall': ['移除商店中', '正在移除 Google Play 商店…'] };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -214,18 +218,20 @@ function updateCard(c, inst) {
     c.next = 0;
     c.hold = null;
   }
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact';
+  const store = STORE_JOB[v.kind];
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact' || !!store;
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
   setText(c.phText, v.key === 'error' ? '上次开机没有成功' : v.key === 'createfail' ? '新建时的初始化没做完' : live ? '正在取画面…' : '未开机');
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…'
+    const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…'
       : v.kind === 'disk-trim' ? '正在触发磁盘回收…' : v.kind === 'disk-compact' ? '正在整理磁盘…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
-    const n = cp ?? pct(p);
+    // the store's jobs report no percentage while they run (done 0 of 1000): an indeterminate bar, not a stuck 0%
+    const n = store ? null : cp ?? pct(p);
     for (const [bar, fill] of [[c.progBar, c.progFill], [c.lbar, c.lfill]]) {
       bar.classList.toggle('indet', n == null);
       fill.style.width = n == null ? '' : n.toFixed(1) + '%';
@@ -235,7 +241,7 @@ function updateCard(c, inst) {
   c.view.title = live ? '实时画面，可以点按' : '开机后才能看画面';
 
   const blocked = rootBlocked();
-  const mode = v.key === 'starting' || v.key === 'creating' ? ['busy', pt] : v.key === 'createfail' ? ['resume', '重试初始化']
+  const mode = store ? ['busy', store[0]] : v.key === 'starting' || v.key === 'creating' ? ['busy', pt] : v.key === 'createfail' ? ['resume', '重试初始化']
     : v.key === 'stopping' ? ['busy', '关机中'] : inst.running ? ['stop', '关机']
     : blocked ? ['blocked', '开机'] : ['start', '开机'];
   const sig = mode.join();
@@ -300,6 +306,12 @@ function menuItems(c) {
       : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
+    // the Google Play Store (InstanceInfo.play_store): on or off, it boots the instance cold once (playstore.js asks
+    // first). It lives in the execution bridge's writable system overlay, so an instance without the bridge cannot.
+    inst.play_store
+      ? { label: '移除 Google Play 商店…', icon: 'x', disabled: fresh || busy || !!v.kind, run: () => openPlayStore(i, 'uninstall') }
+      : { label: '补全 Google Play 商店…', icon: 'plus', disabled: fresh || busy || !!v.kind || inst.bridge === 'off',
+        hint: inst.bridge === 'off' ? '要执行桥' : '', run: () => openPlayStore(i, 'install') },
     // 磁盘占用 reads only (on or off); 回收 needs the guest booted; 整理 rewrites the data disk file, so the instance must be off.
     // Any job running on the instance blocks all three (the server would answer busy).
     { label: '磁盘占用', icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },

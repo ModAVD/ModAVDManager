@@ -1,11 +1,13 @@
 // The HTTP contract (internal/ui/API.md): JSON in and out, errors as {error:{code,message,advice}}.
 
 export class ApiError extends Error {
-  constructor(status, code, message, advice) {
+  // details: the machine-readable extras of some errors (details.reason says which way out to offer)
+  constructor(status, code, message, advice, details) {
     super(message);
     this.status = status;
     this.code = code;
     this.advice = advice || '';
+    this.details = details || {};
   }
 }
 
@@ -39,7 +41,7 @@ async function toError(res) {
   let e = null;
   try { e = (await res.json()).error; } catch { /* not JSON */ }
   return new ApiError(res.status, (e && e.code) || 'http_' + res.status,
-    (e && e.message) || `请求没有成功（HTTP ${res.status}）`, e && e.advice);
+    (e && e.message) || `请求没有成功（HTTP ${res.status}）`, e && e.advice, e && e.details);
 }
 
 export const api = {

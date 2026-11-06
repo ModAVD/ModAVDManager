@@ -1,7 +1,9 @@
 // Formatting for people (zh-CN).
 
-export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', components: '补全组件', 'collect-info': '收集问题信息', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
-export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk' };
+export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', components: '补全组件', 'collect-info': '收集问题信息', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
+  'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店', 'playstore-import': '导入 Google Play 商店的文件' };
+export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk',
+  'playstore-install': 'plus', 'playstore-uninstall': 'x', 'playstore-import': 'download' };
 export const STATE = { running: '进行中', done: '完成', failed: '失败', canceled: '已取消' };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };
 
@@ -77,6 +79,21 @@ export function diskCompactText(r) {
   const delta = r.on_disk_delta_bytes ?? (r.after_on_disk_bytes - r.before_on_disk_bytes);
   const change = delta > 0 ? `增加 ${fmtBytes(delta)}` : `释放 ${fmtBytes(r.freed_bytes)}`;
   return `磁盘文件从 ${fmtBytes(r.before_on_disk_bytes)} 变为 ${fmtBytes(r.after_on_disk_bytes)}，${change}。`;
+}
+
+// The Google Play Store jobs (API.md "Google Play 商店"): PlayStoreResult of an instance's install / uninstall (stopped:
+// it was off and is off again; restarted: it was running and booted cold), PlayStoreImportResult of the root's import.
+export function playStoreText(kind, r) {
+  if (!r) return '';
+  if (kind === 'playstore-import') {
+    if (r.skipped) return '五个文件本来就齐全，给的文件也核对无误，没有改动。';
+    const kept = (r.kept || []).length ? `，原有的 ${r.kept.length} 个留用` : '';
+    return `${r.from === 'zip' ? '已从镜像压缩包取出五个文件' : `已导入 ${(r.used || []).length} 个文件${kept}`}，核对无误。`;
+  }
+  const done = kind === 'playstore-install' ? r.state === 'installed' : r.state === 'absent';
+  const how = r.stopped ? '实例照原样关着' : r.restarted ? '实例冷启动过一次' : '';
+  if (kind === 'playstore-install') return (done ? '商店已放进实例' : '商店只放进去了一部分，可以再补全一次') + (how ? `，${how}` : '') + '。';
+  return (done ? '已移除商店，换回了系统原来的占位应用' : '没有移除干净，可以再移除一次') + (how ? `，${how}` : '') + '。';
 }
 
 export function uptime(started) {

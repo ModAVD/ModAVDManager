@@ -970,6 +970,29 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .comps summary .muted { font-weight: 400; }
 .comp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .comp-row .v { color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* Google Play 商店服务: its own block in 电脑检查, and the option under the license in 补全组件 */
+.store-box {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--r-card); outline: none;
+  transition: box-shadow .3s var(--ease), border-color .3s var(--ease);
+}
+.store-box.flash { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-ring); }
+.store-head { display: flex; align-items: center; gap: 8px; }
+.store-head strong { font-size: 14px; font-weight: 600; }
+.store-note { color: var(--text-2); font-size: 13px; }
+.store-box .diag-running, .store-opt .diag-running { margin: 0; overflow-wrap: anywhere; }
+.store-box .form-error, .store-opt .form-error { margin: 0; }
+.store-opt { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.store-choose .f-hint, .store-own { margin-left: 28px; }
+.store-choose .checkbox input:disabled { opacity: .5; cursor: default; }
+.store-own { margin-top: 6px; }
+.store-own .btn { margin-left: -10px; }
+.store-state { margin: 0; color: var(--tf); font-size: 13px; overflow-wrap: anywhere; }
+/* 补全 / 移除 Google Play 商店 on an instance */
+.dlg-store { --w: 480px; }
+.store-q { color: var(--text-2); margin-bottom: 12px; }
+.store-q strong { color: var(--text); font-weight: 400; }
+.dlg-store .note-box { margin-bottom: 0; }
 .sk-row { height: 40px; margin: 10px 0; }
 
 /* activity */

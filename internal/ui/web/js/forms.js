@@ -76,8 +76,6 @@ export function openCreate() {
   const idx = h('select', { class: 'select', id: 'c-index' }, h('option', { value: '', text: `自动（编号 ${free[0]}）` }),
     free.map((i) => h('option', { value: String(i), text: `编号 ${i}` })));
   const idxHint = hint('');
-  // the Google Play Store (ModAVD#125): off unless asked for
-  const store = h('input', { type: 'checkbox', id: 'c-store', 'aria-describedby': 'c-store-h' });
   // the root's port plan (mas-avd.json portBase); a manager without port_base only knows 20000
   const base = S.list.port_base || 20000;
   const sync = () => {
@@ -105,11 +103,9 @@ export function openCreate() {
       segRow('帧率', 'fps', FPS, 60, hint('30 更省资源')),
       segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
       inputRow('数据盘上限', h('span', { class: 'with-suffix' }, disk, h('span', { class: 'suffix', text: 'GB' })), diskHint, diskErr),
-      inputRow('编号', idx, idxHint),
-      inputRow('Google Play 商店', h('span', { class: 'checkbox p-switch' }, store),
-        hint('默认不带。勾上后，在执行桥之后放入从 Google 官方 Google Play 版系统镜像取出的商店；第一次要先同意许可协议、下载约 1.5 GB。', 'c-store-h'))), box),
+      inputRow('编号', idx, idxHint)), box),
     actions: { ok },
-    async onSubmit() {
+    onSubmit() {
       const f = ctl.form.elements;
       const n = Number(disk.value);
       if (!disk.value.trim() || !Number.isInteger(n) || n < 16 || n > 512) {
@@ -121,39 +117,18 @@ export function openCreate() {
         disk.focus();
         return;
       }
-      const body = {
-        title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
-        fps: Number(f.fps.value), resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
-      };
-      if (store.checked) body.play_store = true;
-      // a job: the setup boots the instance headless for a few minutes; its card shows the progress
-      const post = async () => {
-        const job = await api.post('/api/instances', body);
+      submit(ctl, ok, '正在新建…', box, async () => {
+        // a job: the setup boots the instance headless for a few minutes; its card shows the progress
+        const job = await api.post('/api/instances', {
+          title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
+          fps: Number(f.fps.value), resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
+        });
         A.onJob(job);
         S.watch.add(job.id);
         return { title: `正在新建实例 ${job.index}`, text: `后台无头开机做完初始化后关机，${CREATE_TIME}；关掉窗口也会在后台做完。` };
-      };
-      if (store.checked && !(await playStoreReady())) {
-        // the component first (license, source, download, as 补全组件); the create follows once that job is done
-        ctl.close();
-        // loaded only here: forms.js stays free of the diagnostics module's imports
-        const { openComponentFetch } = await import('./diagnostics.js');
-        openComponentFetch({ playStore: true, then: () => post().then(toast, (e) => toast({ tone: 'err', title: '没有新建实例', text: e.message, advice: e.advice })) });
-        return;
-      }
-      submit(ctl, ok, '正在新建…', box, post);
+      });
     },
   });
-}
-
-// playStoreReady: the Google Play Store component is there (what 组件 lists; create checks its files' hashes itself).
-async function playStoreReady() {
-  try {
-    const c = await api.get('/api/components');
-    return (c.components || []).some((x) => x.id === 'play-store' && x.installed);
-  } catch {
-    return false;
-  }
 }
 
 // ---- settings
@@ -304,6 +279,8 @@ function infoRows(inst) {
     ['渲染器', inst.renderer || (inst.initialized ? '未知' : '首次开机后才知道'), inst.software_renderer ? '软件渲染（没有可用的显卡驱动）' : ''],
     ['截图共享内存', shm.shm || '—', shm.shm ? (shm.shm_ready ? '已就绪' : '未就绪') : ''],
     ['首次初始化', inst.initialized ? '已完成' : `还没做（首次开机时做，${MIN12}）`],
+    // the record in mas-avd.json (InstanceInfo.play_store); the card's 「更多操作」 menu adds or removes it
+    ['Google Play 商店', inst.play_store ? '已补全' : '没有', inst.play_store ? '' : '要用的话在实例的「更多操作」菜单里补全'],
     ['路径', inst.path, 'mono', ibtn('folder', '打开实例目录', () => A.openFolder('instance', inst.index))],
   ];
 }

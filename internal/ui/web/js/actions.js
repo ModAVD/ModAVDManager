@@ -3,11 +3,29 @@
 import { api } from './api.js';
 import { S, update, instance } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
-import { quoted, dur, diskInfoText, diskTrimText, diskCompactText } from './format.js';
+import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText } from './format.js';
 import { openActivity, runCheck } from './panels.js';
 
 const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
-  components: '补全组件', 'collect-info': '收集问题信息' };
+  components: '补全组件', 'collect-info': '收集问题信息', 'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店',
+  'playstore-import': '导入 Google Play 商店的文件' };
+// what the store needs once it is in an instance (the documentation site's 「自己装 Google Play 商店」)
+const GSF = '第一次用商店前，按文档站「自己装 Google Play 商店」在 Google 登记这台设备（GSF ID）。';
+// an import the server refused (components_rejected, details.reason) when its message has no advice of its own
+const IMPORT_ADVICE = {
+  unknown_file: '要的是 Google 官方的 Google Play 版镜像压缩包 x86_64-34_r14.zip，或者从它里面取出的五个文件。',
+  mismatch: '这个文件和 Google 发布的那份不一样（可能没下载完整或被改过），重新下载后再试。',
+  incomplete: '五个文件要一起选上，或者只选镜像压缩包。',
+};
+
+export function importAdvice(e) {
+  return (e && (e.advice || (e.code === 'components_rejected' && IMPORT_ADVICE[e.details?.reason]))) || '';
+}
+
+// The root's components changed (a fetch or an import finished): 组件 and the Google Play Store state read again.
+function reloadComponents() {
+  api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch(() => {});
+}
 const isBoot = (j) => j.kind === 'start';
 const activity = { label: '查看活动', run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
@@ -21,6 +39,7 @@ export function onJob(job) {
   S.jobs.set(job.id, job);
   // components were just installed: 电脑检查 and the banner read the root again (the server dropped its cached check)
   if (job.kind === 'components' && job.state === 'done' && prev && prev.state === 'running') runCheck(true);
+  if ((job.kind === 'components' || job.kind === 'playstore-import') && job.state !== 'running' && prev && prev.state === 'running') reloadComponents();
   if (job.state !== 'running' && S.watch.delete(job.id)) notify(job);
   if (S.jobs.size > 80) {
     const old = [...S.jobs.values()].filter((j) => j.state !== 'running').sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
@@ -36,7 +55,7 @@ function notify(job) {
   const who = job.index < 0 ? '' : quoted(instance(job.index), job.index);
   const r = job.result || {};
   const e = job.error || {};
-  if (job.state === 'failed') toast({ tone: 'err', title: `${who}${VERB[job.kind] || ''}没有成功`, text: e.message, advice: e.advice, action: activity });
+  if (job.state === 'failed') toast({ tone: 'err', title: `${who}${VERB[job.kind] || ''}没有成功`, text: e.message, advice: job.kind === 'playstore-import' ? importAdvice(e) : e.advice, action: activity });
   else if (job.state === 'canceled') { if (isBoot(job)) toast({ tone: 'info', title: '已停止等待', text: `${who}的模拟器会继续开机。` }); }
   else if (isBoot(job)) {
     const w = Math.max((r.warnings || []).length, (job.warnings || []).length);
@@ -51,9 +70,19 @@ function notify(job) {
   else if (job.kind === 'disk-info') toast({ tone: 'info', title: `${who}的磁盘占用`, text: diskInfoText(r), timeout: 9000 });
   else if (job.kind === 'disk-trim') toast({ title: `${who}已触发磁盘回收`, text: diskTrimText(), timeout: 6000 });
   else if (job.kind === 'disk-compact') toast({ title: r.skipped ? `${who}已跳过磁盘重写` : `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
+  else if (job.kind === 'playstore-install') {
+    toast({ tone: r.installed ? 'ok' : 'warn', title: r.installed ? `${who}已补全 Google Play 商店` : `${who}的 Google Play 商店没装全`,
+      text: playStoreText(job.kind, r) + (r.installed ? GSF : ''), action: r.installed ? null : activity, timeout: 12000 });
+  } else if (job.kind === 'playstore-uninstall') {
+    toast({ tone: r.state === 'absent' ? 'ok' : 'warn', title: r.state === 'absent' ? `${who}已移除 Google Play 商店` : `${who}的 Google Play 商店没移除干净`,
+      text: playStoreText(job.kind, r), action: r.state === 'absent' ? null : activity, timeout: 6000 });
+  } else if (job.kind === 'playstore-import') {
+    toast({ title: 'Google Play 商店的文件已就绪', text: `${playStoreText(job.kind, r)}要用的实例在「更多操作」里补全商店。`, timeout: 9000 });
+  }
 }
 
-async function run(i, kind, body) {
+// onErr: what to do when the server refuses at once (default: a toast with its message and advice)
+async function run(i, kind, body, onErr = toastError) {
   S.pending[i] = kind;
   update();
   try {
@@ -66,7 +95,7 @@ async function run(i, kind, body) {
     }
     return job;
   } catch (e) {
-    toastError(e);
+    onErr(e);
   } finally {
     delete S.pending[i];
     update();
@@ -92,6 +121,9 @@ export const diskTrim = (i) => run(i, 'disk-trim', {});
 export async function diskCompact(i) {
   if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: '正在整理磁盘', text: `${quoted(instance(i), i)}正在检查并整理，期间不能开机`, timeout: 5000 });
 }
+
+// 补全 / 移除 Google Play 商店 (action install | uninstall): a job that boots the instance cold once (playstore.js asks first)
+export const playStore = (i, action, onErr) => run(i, 'playstore-' + action, {}, onErr);
 
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));
 export const openFolder = safe((what, index) => api.post('/api/open', index == null ? { what } : { what, index }));

@@ -4,8 +4,8 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
-import { openComponentFetch, activeJob, latestJob, progressText } from './diagnostics.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
+import { openComponentFetch, activeJob, latestJob, progressText, loadDiagnostics, storeBox, fillStoreBox } from './diagnostics.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -114,8 +114,15 @@ function fillCheckRow(r, it) {
 
 let checkCtl = null;
 
-export function openCheck() {
-  if (checkCtl) return;
+// opts.playStore: opened to get the Google Play Store's files (an instance's 「补全 Google Play 商店」 without them):
+// that block comes into view with its first button focused. Called as a click handler too (opts is the event then).
+export function openCheck(opts) {
+  const toStore = !!(opts && opts.playStore === true);
+  if (checkCtl) {
+    if (toStore) checkCtl.toStore = true;
+    update();
+    return;
+  }
   const sum = h('div', { class: 'check-sum' });
   const box = h('div', { class: 'form-error', role: 'alert', hidden: true });
   const list = h('ul', { class: 'check-list' });
@@ -125,20 +132,40 @@ export function openCheck() {
   const passed = h('details', { class: 'passed tone-ok', hidden: true },
     h('summary', null, icon('ok'), passText, h('span', { class: 'spacer' }), icon('chevron')), passList);
   const comps = h('details', { class: 'comps', hidden: true });
+  // the optional Google Play Store's files (GET /api/components play_store): not a check, never blocks a boot
+  const store = storeBox('check');
+  store.el.hidden = true;
   const when = h('span', { class: 'foot-note' });
   const again = btn('btn btn-secondary', null, () => runCheck(true));
   const ctl = openDialog({
     title: '电脑检查', sub: '开机前会自动检查这些项目，没通过的项目会说明原因和处理办法。', cls: 'dlg-check', light: true,
-    body: h('div', { class: 'dlg-body' }, sum, box, list, passed, comps),
+    body: h('div', { class: 'dlg-body' }, sum, box, list, passed, comps, store.el),
     foot: h('footer', { class: 'dlg-foot' }, when, folderBtn('btn btn-ghost'), again),
   });
   checkCtl = ctl;
+  ctl.toStore = toStore;
+  // brings the store block into view once what is above it has its final height (the check result and the store state)
+  const showStore = () => {
+    if (!ctl.toStore || store.el.hidden || !S.check) return;
+    ctl.toStore = false;
+    requestAnimationFrame(() => {
+      if (ctl.closed) return;
+      store.el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      const target = [store.get, store.own].find((x) => !x.closest('[hidden]') && x.getAttribute('aria-disabled') !== 'true');
+      (target || store.el).focus({ preventScroll: true });
+      store.el.classList.add('flash');
+      setTimeout(() => store.el.classList.remove('flash'), 1600);
+    });
+  };
   const rows = new Map();
   const passRows = new Map();
   let sigs = [];
 
   const render = () => {
     const c = S.check;
+    store.el.hidden = !(S.components && S.components.play_store);
+    if (!store.el.hidden) fillStoreBox(store);
+    showStore();
     if (sigs[0] !== S.checking) {
       sigs[0] = S.checking;
       again.replaceChildren(S.checking ? h('span', { class: 'spin' }) : icon('refresh'), S.checking ? '正在检查…' : '重新检查');
@@ -197,6 +224,7 @@ export function openCheck() {
   render();
   ctl.onClose.push(() => { un(); checkCtl = null; });
   if (!S.check && !S.checking) runCheck(false);
+  loadDiagnostics().catch(() => {});
 }
 
 // ---- banner: the root cannot boot (a blocking check failed or components are missing)
@@ -318,14 +346,17 @@ function updateJob(r, j) {
   r.prog.hidden = !running;
   if (running) {
     const p = j.progress;
-    const n = pct(p);
+    // 补全 / 移除 Google Play 商店 report no percentage while they run (done 0 of 1000)
+    const n = j.kind === 'playstore-install' || j.kind === 'playstore-uninstall' ? null : pct(p);
     setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…'
-      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在触发磁盘回收…' : j.kind === 'disk-compact' ? '正在整理磁盘…' : '进行中…'));
+      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在触发磁盘回收…' : j.kind === 'disk-compact' ? '正在整理磁盘…'
+      : j.kind === 'playstore-install' ? '正在补全 Google Play 商店…' : j.kind === 'playstore-uninstall' ? '正在移除 Google Play 商店…'
+      : j.kind === 'playstore-import' ? '正在核对文件…' : '进行中…'));
     setText(r.pctEl, n == null ? '' : Math.round(n) + '%');
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  const cancelBackend = j.kind === 'components' || j.kind === 'collect-info';
+  const cancelBackend = j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import';
   r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || cancelBackend));
   setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : cancelBackend ? '取消' : '取消等待');
   r.cancelHint.hidden = j.kind === 'disk-compact' || cancelBackend;
@@ -376,6 +407,7 @@ function resultText(j) {
   if (j.kind === 'disk-compact') return diskCompactText(r);
   if (j.kind === 'components') return '组件补全完成。';
   if (j.kind === 'collect-info') return r.zip_path ? `问题包：${r.zip_path}` : '问题包已生成。';
+  if (j.kind.startsWith('playstore-')) return playStoreText(j.kind, r);
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
     r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';
