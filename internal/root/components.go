@@ -49,6 +49,7 @@ type SDKComponent struct {
 	// What components fetch needs; URL is "" on hosts that have no catalogue yet (darwin, linux), where Complete means
 	// nothing.
 	URL            string            // relative to a mirror's base URL
+	ZipName        string            // its name in downloads\, "" for the URL's last part
 	Size           int64             // of the zip
 	SHA1           string            // of the zip, lower hex
 	ArchiveRoot    string            // the zip's top directory, which becomes Target
@@ -116,6 +117,9 @@ func PlayStoreComponent() SDKComponent {
 		Target: PlayStoreDir, StatusFiles: files, KeyFiles: files, KeyHashes: hashes}
 	if runtime.GOOS == "windows" {
 		c.URL, c.Size, c.SHA1, c.ArchiveRoot = playstore.ImageURL, playstore.ImageSize, playstore.ImageSHA1, "x86_64"
+		// the Google APIs image's zip has the same last part (x86_64-34_r14.zip): another name, or a .part of one
+		// would be resumed as the other
+		c.ZipName = "google_apis_playstore-x86_64-34_r14.zip"
 		c.ExtractedBytes = playstore.ImageMemberSize + playstore.ExtractedBytes()
 		c.Properties = "Pkg.Desc=Google Play Store, Google Play services, GSF and Partner Setup from " +
 			"system-images;android-34;google_apis_playstore;x86_64.\nPkg.Revision=" + playstore.Revision + "\n"

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/playstore"
 	"modavd/internal/root"
 )
 
@@ -73,8 +74,78 @@ func (f *fetcher) install(ctx context.Context, c root.SDKComponent, zipPath stri
 	if err := f.checkStaged(c, staging); err != nil {
 		return "", err
 	}
-	extracted := filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot))
+	return f.place(c, filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot)))
+}
 
+// installPlayStore is install for the Google Play Store (root.PlayStoreComponent): only the system image is unpacked
+// from the Play image's zip, into sdk\.staging\<id>; the store's files are read out of it (playstore.Extract, each
+// checked against its pinned size and SHA-256), the 3 GB image is deleted, and the files go into place like a
+// component's directory.
+func (f *fetcher) installPlayStore(ctx context.Context, c root.SDKComponent, zipPath string) (setAside string, err error) {
+	staging := filepath.Join(f.stagingRoot(), c.ID)
+	f.where = "从 " + filepath.Base(zipPath) + " 解出 " + playstore.ImageMember
+	f.removeStaging(staging)
+	out := filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot))
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return "", errs.Wrap(errs.Internal, err, "建不了 "+out+"："+err.Error())
+	}
+	defer f.removeStaging(staging)
+	img := filepath.Join(staging, "system.img")
+	if err := f.extractMember(ctx, c, zipPath, playstore.ImageMember, img); err != nil {
+		return "", err
+	}
+	f.where = "从 system.img 取出 Google Play 商店的文件"
+	f.say("  从系统镜像里取出商店、Play 服务、GSF、合作伙伴设置…")
+	if err := playStoreExtract(img, playstore.Files, out); err != nil {
+		return "", rejected("从 Google Play 版系统镜像里取商店的文件失败：%v", err)
+	}
+	if err := os.Remove(img); err != nil {
+		return "", errs.Wrap(errs.Internal, err, "删不掉临时解出的 "+img+"："+err.Error())
+	}
+	if err := os.WriteFile(filepath.Join(out, "source.properties"), []byte(c.Properties), 0o644); err != nil {
+		return "", errs.Wrap(errs.Internal, err, "写不了 source.properties："+err.Error())
+	}
+	if !c.Complete(out) {
+		return "", rejected("取出的 %s 校验失败", c.FetchName)
+	}
+	return f.place(c, out)
+}
+
+// extractMember unpacks the one entry name of zipPath to dest (refused like extract's entries: encrypted, another
+// method, a size that does not match).
+func (f *fetcher) extractMember(ctx context.Context, c root.SDKComponent, zipPath, name, dest string) error {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return rejected("压缩包打不开：%v", err)
+	}
+	defer zr.Close()
+	for _, e := range zr.File {
+		if strings.ReplaceAll(e.Name, `\`, "/") != name {
+			continue
+		}
+		if e.Flags&1 != 0 {
+			return rejected("压缩包里的 %s 是加密的", e.Name)
+		}
+		if e.Method != zip.Store && e.Method != zip.Deflate {
+			return rejected("压缩包里 %s 用了不支持的压缩方式 %d", e.Name, e.Method)
+		}
+		m := newMeter(f.o.Progress, "extracting", c.FetchName, max(int64(e.UncompressedSize64), 1), 0)
+		n, err := f.extractFile(ctx, e, dest, make([]byte, 1<<20), 0, m)
+		if err != nil {
+			return err
+		}
+		if n != int64(e.UncompressedSize64) {
+			return rejected("解压出的 %s 大小不对", e.Name)
+		}
+		m.finish(n)
+		return nil
+	}
+	return rejected("压缩包里没有 %s", name)
+}
+
+// place moves an unpacked, checked component directory (extracted) into sdk\<target> (the end of the script's
+// Install-Component), see install.
+func (f *fetcher) place(c root.SDKComponent, extracted string) (setAside string, err error) {
 	f.where = `把解压好的 ` + c.FetchName + ` 挪到 sdk\` + c.Target
 	target := c.Dir(f.sdk)
 	if _, err := os.Lstat(target); err == nil {

@@ -57,7 +57,7 @@ func (d *sourceRecordingDiag) License(_ context.Context, s components.SourceSett
 	return &DiagLicenseResult{Text: fakeTerms, Source: "mirror", SHA256: fakeTermsSHA}, nil
 }
 
-func (d *sourceRecordingDiag) Fetch(_ context.Context, _ bool, s components.SourceSettings, hash string, _ func(DiagProgress)) (*DiagFetchResult, error) {
+func (d *sourceRecordingDiag) Fetch(_ context.Context, _, _ bool, s components.SourceSettings, hash string, _ func(DiagProgress)) (*DiagFetchResult, error) {
 	d.mu.Lock()
 	d.fetched = append(d.fetched, s)
 	d.hashes = append(d.hashes, hash)

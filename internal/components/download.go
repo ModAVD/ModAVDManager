@@ -167,6 +167,9 @@ func attr(e xml.StartElement, name string) string {
 // ---- component zips --------------------------------------------------------------------------------------------
 
 func (f *fetcher) zipPath(c root.SDKComponent) string {
+	if c.ZipName != "" {
+		return filepath.Join(f.r.Dir, "downloads", c.ZipName)
+	}
 	return filepath.Join(f.r.Dir, "downloads", path.Base(c.URL))
 }
 

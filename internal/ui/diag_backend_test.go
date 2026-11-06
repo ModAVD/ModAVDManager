@@ -20,7 +20,7 @@ func TestRealDiagBackendRejectsDeclinedLicense(t *testing.T) {
 		return &components.Result{}, nil
 	}
 	b := newRealDiagBackend(&root.Root{Dir: `C:\root`}, logx.Nop())
-	if _, err := b.Fetch(context.Background(), false, components.SourceSettings{}, fakeHash, nil); err == nil || calls != 0 {
+	if _, err := b.Fetch(context.Background(), false, false, components.SourceSettings{}, fakeHash, nil); err == nil || calls != 0 {
 		t.Fatalf("declined license: err=%v calls=%d", err, calls)
 	}
 }
@@ -42,13 +42,16 @@ func TestRealDiagBackendPassesSourceAndLicenseHash(t *testing.T) {
 	var lines []string
 	log := logx.New(func(level logx.Level, msg string) { lines = append(lines, level.String()+" "+msg) })
 	b := newRealDiagBackend(&root.Root{Dir: `C:\root`}, log)
-	for _, s := range []components.SourceSettings{
+	for k, s := range []components.SourceSettings{
 		{Mirror: "google", Set: true},
 		{MirrorURLs: []string{"https://a.example/x/", "https://b.example/y/"}, Set: true},
 	} {
-		if _, err := b.Fetch(context.Background(), true, s, fakeHash, nil); err != nil {
+		if _, err := b.Fetch(context.Background(), true, k == 1, s, fakeHash, nil); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if len(got) != 2 || got[0].PlayStore || !got[1].PlayStore {
+		t.Fatalf("PlayStore not passed: %+v", got)
 	}
 	if len(got) != 2 || got[0].Mirror != "google" || len(got[0].MirrorURLs) != 0 ||
 		got[1].Mirror != "" || strings.Join(got[1].MirrorURLs, ",") != "https://a.example/x/,https://b.example/y/" {

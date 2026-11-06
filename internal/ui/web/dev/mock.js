@@ -220,6 +220,8 @@ function checkResult() {
     { id: 'system-image', name: '系统镜像 Android 14 Google APIs x86_64', version: '14', build: 'r07', installed: true, optional: false, local_sdk: false },
     { id: 'launcher', name: '轻量桌面 µLauncher', version: '0.6.1', build: '', installed: true, optional: true, local_sdk: false },
     { id: 'ime', name: '宿主输入法', version: '1.2.0', build: '', installed: true, optional: true, local_sdk: false },
+    // the Google Play Store: optional, only after a fetch with play_store
+    { id: 'play-store', name: 'Google Play 商店', version: db.playStore ? '14' : '', build: '', installed: !!db.playStore, optional: true, local_sdk: false },
   ];
   if (db.check === 'warn') {
     Object.assign(items[4], { ok: false, reason: '没有找到能用 Vulkan 的显卡（只有 Microsoft Basic Render Driver）', advice: '安装或更新显卡驱动（NVIDIA / AMD / Intel 官网驱动自带 Vulkan）。没有可用的显卡时模拟器只能软件渲染，游戏会占满 CPU，性能会很差' });
@@ -774,6 +776,7 @@ async function handle(url, init) {
     const lic = mockLicense(body.source || db.componentSource.source, body.mirror_urls || db.componentSource.mirror_urls);
     if (lic.error || body.license_sha256 !== lic.license_sha256) return errResp('usage', '补全组件要带上看过的许可协议的 license_sha256');
     if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');
+    if (body.play_store === true) db.playStore = true;
     const j = newJob('components', -1); runDiag(j, 'components'); return json(j, 202);
   }
   if (p === '/api/diag/collect' && method === 'POST') {

@@ -35,7 +35,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`） |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, play_store?: bool}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。`play_store: true` 在执行桥之后放入 Google Play 商店（默认不带）；它的组件还没补全时立即报 `not_ready`，先用下面的补全接口带 `play_store` 补上 |
 | PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效 |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
@@ -55,11 +55,11 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
 | POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
 | POST | `/api/open` | `{what: "root"\|"logs"\|"instance"\|"collect-info", index?, job?}` | `{}`，在资源管理器里打开；`collect-info` 打开那个做完了的收集问题信息任务（`job` 是任务 id）生成的问题包所在的文件夹，不接受页面给的路径 |
-| GET | `/api/components` | | 组件状态 |
+| GET | `/api/components` | | 组件状态；最后一项是可选的 Google Play 商店（`id` 为 `play-store`，`optional: true`，文件在就是 `installed`） |
 | GET | `/api/components/license` | `?source=auto\|googledownloads_cn\|tencent\|google\|custom&mirror_urls=…`（可重复；不带时用保存的下载源） | `{"license":"全文","license_source":"镜像来源","license_sha256":"全文的 SHA-256"}`：从这个下载源取的许可协议，和补全时取的是同一份；不下载组件 |
 | GET | `/api/components/source` | | 当前组件下载源：`source` 为 `auto`、内置镜像 ID 或 `custom`，以及 `mirror_urls`、`configured` |
 | PUT | `/api/components/source` | `{"source":"auto"\|"googledownloads_cn"\|"tencent"\|"google"\|"custom", "mirror_urls":[...]}` | 保存当前用户的组件下载源；自定义地址只接受 HTTP(S) 目录 |
-| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下 |
+| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下。`"play_store": true` 再补全可选的 Google Play 商店（下 Google Play 版系统镜像，只留商店等 5 个文件） |
 | POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
 | GET | `/api/diag/report-config` | | `{"text":"…"}` |
 | GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |

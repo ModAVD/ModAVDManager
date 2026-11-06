@@ -62,13 +62,30 @@ function licenseURL(source, urls) {
 
 let licenseCtl = null;
 
+// afterJob calls fn once the job id is done (not when it fails or is canceled: its own toast says so).
+function afterJob(id, fn) {
+  let fired = false;
+  let un = null;
+  const check = () => {
+    const j = S.jobs.get(id);
+    if (fired || !j || j.state === 'running') return;
+    fired = true;
+    if (un) un();
+    if (j.state === 'done') fn();
+  };
+  un = subscribe(check);
+  check();
+}
+
 // 补全组件: pick the source, read the license that source serves, agree, the job starts. The dialog opens at once
 // with the saved source, so a source that cannot be reached shows its error here and another one can be picked.
-export function openComponentFetch() {
+// opts.playStore also fetches the optional Google Play Store (create's 「Google Play 商店」); opts.then runs once that
+// job is done.
+export function openComponentFetch(opts = {}) {
   if (licenseCtl) return;
   const running = activeJob('components');
   if (running) {
-    toast({ tone: 'info', title: '组件正在补全', text: progressText(running) });
+    toast({ tone: 'info', title: '组件正在补全', text: opts.then ? `等它做完再新建：${progressText(running)}` : progressText(running) });
     return;
   }
   const select = h('select', { class: 'input', id: 'lic-src' }, ...SOURCES.map(([value, text]) => h('option', { value, text })));
@@ -131,7 +148,11 @@ export function openComponentFetch() {
     const body = { source: p.source, mirror_urls: p.urls };
     try {
       await api.put('/api/components/source', body);
-      await startJob(api.post('/api/components/fetch', { accept_license: true, ...body, license_sha256: shown.sha }));
+      const fetchBody = { accept_license: true, ...body, license_sha256: shown.sha };
+      if (opts.playStore) fetchBody.play_store = true;
+      const j = await startJob(api.post('/api/components/fetch', fetchBody));
+      started = true;
+      if (opts.then) afterJob(j.id, opts.then);
       d.close();
     } catch (e) {
       agree.disabled = false;
@@ -142,13 +163,21 @@ export function openComponentFetch() {
   custom.addEventListener('change', load);
   custom.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); load(); } });
 
+  let started = false;
+  const sub = opts.playStore
+    ? '组件由 Google 提供，Google Play 商店取自 Google 官方的 Google Play 版系统镜像（约 1.5 GB），同样受这份协议约束。先选下载源，读完从它取到的许可协议再决定。'
+    : '组件由 Google 提供。先选下载源，读完从它取到的许可协议再决定。';
   const d = openDialog({
-    title: 'Android 软件开发套件许可协议', sub: '组件由 Google 提供。先选下载源，读完从它取到的许可协议再决定。', cls: 'dlg-update', light: true,
+    title: 'Android 软件开发套件许可协议', sub, cls: 'dlg-update', light: true,
     body: h('div', { class: 'dlg-body diag-license-body' }, fields, status, note, text),
     actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), cancel: false, ok: agree },
   });
   licenseCtl = d;
-  d.onClose.push(() => { licenseCtl = null; seq++; });
+  d.onClose.push(() => {
+    licenseCtl = null;
+    seq++;
+    if (opts.then && !started) toast({ tone: 'info', title: '没有新建实例', text: '要带 Google Play 商店，得先同意许可协议、补全它的组件。' });
+  });
   agree.disabled = true;
   api.get('/api/components/source').catch(() => ({})).then((saved) => {
     if (licenseCtl !== d) return; // closed meanwhile

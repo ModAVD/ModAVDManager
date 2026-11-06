@@ -87,8 +87,10 @@ var (
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
 		"不询问，直接视为同意《Android 软件开发套件许可协议》（自动化用；协议全文照样取回并打印，取不到照样退出）；--json 时必须给"}
 	optKeepDownloads = flagSpec{"keep-downloads", kindBool, "", "装好后保留 downloads 里的 zip（默认装好即删，省 1.5 GB）"}
-	optMirror        = flagSpec{"mirror", kindString, "ID", "只用一个内置镜像：googledownloads_cn / tencent / google"}
-	optMirrorURL     = flagSpec{"mirror-url", kindStrings, "URL",
+	optFetchStore    = flagSpec{"play-store", kindBool, "",
+		"也补全可选的 Google Play 商店：下 Google Play 版系统镜像（约 1.5 GB），只取出商店等 5 个文件（约 230 MB）"}
+	optMirror    = flagSpec{"mirror", kindString, "ID", "只用一个内置镜像：googledownloads_cn / tencent / google"}
+	optMirrorURL = flagSpec{"mirror-url", kindStrings, "URL",
 		"自建或测试用：用这个目录地址代替内置的三个镜像，可写多次或用逗号隔开，按顺序试；给了就不看 --mirror"}
 	optConnectTO = flagSpec{"connect-timeout", kindInt, "秒",
 		"等服务器回应（连接、TLS 握手、返回响应头）的上限，1–600，默认 20，超时换下一个镜像"}
@@ -104,8 +106,8 @@ var (
 )
 
 // fetchFlags are the options only components fetch takes.
-var fetchFlags = []flagSpec{optAcceptLicense, optKeepDownloads, optMirror, optMirrorURL, optConnectTO, optStallTO,
-	optManifestTO, optTestFreeSpace}
+var fetchFlags = []flagSpec{optAcceptLicense, optKeepDownloads, optFetchStore, optMirror, optMirrorURL, optConnectTO,
+	optStallTO, optManifestTO, optTestFreeSpace}
 
 var commands []*command
 
@@ -214,12 +216,14 @@ func init() {
 			run: runCollectInfo, human: humanCollectInfo,
 		},
 		{
-			name: "components", args: "[status] | source [auto|googledownloads_cn|tencent|google] | fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]",
+			name: "components", args: "[status] | source [auto|googledownloads_cn|tencent|google] | fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]",
 			summary: "查看或补全 Google 组件（adb 和系统镜像）",
 			details: "status（默认）查看组件，和 check 里的组件一样。fetch 补全缺少的组件：" +
 				"先从镜像取《Android 软件开发套件许可协议》全文并显示，输入 y 同意才继续，否则什么也不下；" +
 				"再依次试 googledownloads.cn、腾讯云镜像、dl.google.com，下载缺少的 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），" +
 				"校验后装进 sdk\\。已经齐全的跳过；不完整的旧目录改名为 <目录>.incomplete-<时间> 留着，不删。" +
+				"--play-store 再补全可选的 Google Play 商店（新建时 --play-store、playstore 命令要用）：下 Google Play 版系统镜像，" +
+				"从里面的 system.img 只取出商店、Play 服务、GSF、合作伙伴设置和商店的证书，核对 SHA-256 后放进 sdk\\playstore，解出的镜像随即删掉。status 不把它算进必需组件。" +
 				"不带参数时默认查看组件；source 查看或修改记住的下载源（auto、googledownloads_cn、tencent、google）。" +
 				"--json 时必须给 --accept-license（仅 fetch）。只有 Windows 有组件清单，darwin、linux 返回 unsupported。" +
 				"退出码：没同意许可协议是 2（license_declined），路径有中文、空间不够、不是魔改 AVD 的文件夹是 4，" +
@@ -1016,7 +1020,8 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	o := components.Options{
 		AcceptLicense: inv.boolOpt("accept-license"), JSON: inv.json, Input: input,
 		KeepDownloads: inv.boolOpt("keep-downloads"), Mirror: inv.strOpt("mirror"), MirrorURLs: inv.strsOpt("mirror-url"),
-		Log: c.log,
+		PlayStore: inv.boolOpt("play-store"),
+		Log:       c.log,
 	}
 	// --mirror / --mirror-url win. Otherwise the saved per-user source; with none saved, someone at a console is
 	// asked once (and the answer saved), while --accept-license (automation), --json and a stdin that is not a

@@ -35,7 +35,7 @@ func (b *realDiagBackend) Components(ctx context.Context) (*DiagComponentsResult
 	if err := ctx.Err(); err != nil {
 		return nil, errs.Wrap(errs.Canceled, err, "已取消")
 	}
-	return &DiagComponentsResult{Root: b.r.Dir, Components: toDiagComponents(diagComponents(b.r))}, nil
+	return &DiagComponentsResult{Root: b.r.Dir, Components: append(toDiagComponents(diagComponents(b.r)), playStoreComponent(b.r))}, nil
 }
 
 func (b *realDiagBackend) License(ctx context.Context, source components.SourceSettings) (*DiagLicenseResult, error) {
@@ -46,7 +46,7 @@ func (b *realDiagBackend) License(ctx context.Context, source components.SourceS
 	return &DiagLicenseResult{Text: text, Source: from, SHA256: components.LicenseSHA256(text)}, nil
 }
 
-func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source components.SourceSettings, licenseSHA256 string, progress func(DiagProgress)) (*DiagFetchResult, error) {
+func (b *realDiagBackend) Fetch(ctx context.Context, accept, playStore bool, source components.SourceSettings, licenseSHA256 string, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
 		return nil, errs.New(errs.LicenseDeclined, "没有同意许可协议，已退出，什么也没有下载")
 	}
@@ -56,6 +56,7 @@ func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source compone
 		Mirror:        source.Mirror,
 		MirrorURLs:    append([]string(nil), source.MirrorURLs...),
 		LicenseSHA256: licenseSHA256,
+		PlayStore:     playStore,
 		SourceOrigin:  components.SourceFromManager,
 		Log:           b.log,
 		// the license text and the note under it: the user has just read them in the dialog, so they go to the
@@ -97,6 +98,18 @@ func (b *realDiagBackend) ReportConfig(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return res.Text, nil
+}
+
+// playStoreComponent is the optional Google Play Store as the component list shows it: there when its files are
+// (Present; the pinned hashes are checked where it is used, create and playstore install).
+func playStoreComponent(r *root.Root) DiagComponent {
+	c := root.PlayStoreComponent()
+	dir := c.Dir(r.RuntimeSDK())
+	d := DiagComponent{ID: c.ID, Name: c.Name, Optional: true, Installed: c.Present(dir)}
+	if d.Installed {
+		d.Version = root.Revision(dir)
+	}
+	return d
 }
 
 func toDiagComponents(in []emu.ComponentStatus) []DiagComponent {
