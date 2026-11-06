@@ -4,7 +4,7 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
-import { openComponentFetch, openDiagnostics } from './diagnostics.js';
+import { openComponentFetch, activeJob, latestJob, progressText } from './diagnostics.js';
 import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import * as A from './actions.js';
 
@@ -12,8 +12,14 @@ const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', {
 const folderBtn = (cls) => btn(cls, [icon('folder'), '打开目录'], () => A.openFolder('root'));
 
 // ---- check
+let refreshAgain = false;
+
+// refresh: a new check, not the cached one. Asked while one runs (components just installed), it runs again after.
 export async function runCheck(refresh) {
-  if (S.checking) return;
+  if (S.checking) {
+    if (refresh) refreshAgain = true;
+    return;
+  }
   S.checking = true;
   S.checkError = null;
   update();
@@ -25,6 +31,10 @@ export async function runCheck(refresh) {
   }
   S.checking = false;
   update();
+  if (refreshAgain) {
+    refreshAgain = false;
+    runCheck(true);
+  }
 }
 
 export function checkSummary(c) {
@@ -46,9 +56,41 @@ function itemView(it) {
 const RANK = (it) => (it.ok === false ? (it.blocking ? 0 : 1) : it.ok == null ? 2 : 3);
 
 function checkRow() {
-  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }), action: btn('btn btn-secondary btn-sm', [icon('download'), '补全组件'], openComponentFetch) };
+  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }) };
   r.el = h('li', { class: 'check-item' }, r.ic, h('div', null, h('div', { class: 'ci-title' }, r.title, r.tag), r.reason, r.adv), r.state);
   return r;
+}
+
+// 补全组件 under the 组件 item when it did not pass: the button (license dialog), then the running job's progress
+// with 取消, then, when the last fetch failed, why and 重试. Built once per row and only updated.
+function fetchBox() {
+  const b = { id: '' };
+  b.go = btn('btn btn-secondary btn-sm', null, openComponentFetch);
+  b.text = h('span');
+  b.running = h('div', { class: 'diag-running', role: 'status', hidden: true }, h('span', { class: 'spin' }), b.text,
+    btn('btn btn-ghost btn-sm', '取消', () => b.id && A.cancelJob(b.id)));
+  b.err = h('div', { class: 'form-error', role: 'alert', hidden: true });
+  b.el = h('div', { class: 'ci-fetch' }, b.running, b.err, b.go);
+  return b;
+}
+
+function fillFetchBox(b) {
+  const run = activeJob('components');
+  const last = run ? null : latestJob('components');
+  const failed = last && last.state === 'failed' ? last : null;
+  b.running.hidden = !run;
+  b.go.hidden = !!run;
+  if (run) {
+    b.id = run.id;
+    setText(b.text, progressText(run));
+  }
+  const sig = failed ? failed.id : '';
+  if (b.sig !== sig) {
+    b.sig = sig;
+    if (failed) showError(b.err, { message: `补全组件没有成功：${failed.error?.message || '原因未知'}`, advice: failed.error?.advice });
+    b.err.hidden = !failed;
+    b.go.replaceChildren(icon(failed ? 'refresh' : 'download'), failed ? '重试' : '补全组件');
+  }
 }
 
 function fillCheckRow(r, it) {
@@ -59,12 +101,14 @@ function fillCheckRow(r, it) {
   r.tag.hidden = it.blocking;
   setText(r.reason, it.reason);
   const a = it.ok !== true && it.advice ? it.advice : '';
-  const componentAction = it.id === 'components' && it.ok !== true;
-  if (r.a !== a || r.componentAction !== componentAction) {
+  const needsFetch = it.id === 'components' && it.ok === false;
+  if (needsFetch && !r.fetch) r.fetch = fetchBox();
+  if (r.a !== a || r.fetchShown !== needsFetch) {
     r.a = a;
-    r.componentAction = componentAction;
-    r.adv.replaceChildren(a ? advice(a) : '', componentAction ? r.action : '');
+    r.fetchShown = needsFetch;
+    r.adv.replaceChildren(a ? advice(a) : '', needsFetch ? r.fetch.el : '');
   }
+  if (needsFetch) fillFetchBox(r.fetch);
   setText(r.state, word);
 }
 
@@ -146,7 +190,7 @@ export function openCheck() {
         ...cs.map((x) => h('div', { class: 'comp-row' },
           h('span', null, x.name, x.optional && h('span', { class: 'muted', text: '（可选）' })),
           h('span', { class: 'v', text: [x.version, x.build].filter(Boolean).join(' · ') }),
-          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: x.installed ? '已安装' : '缺少' }))));
+          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: x.installed ? '已安装' : x.optional ? '未安装' : '缺少' }))));
     }
   };
   const un = subscribe(render);
@@ -255,11 +299,14 @@ function jobRow(j) {
 }
 
 function updateJob(r, j) {
-  const inst = instance(j.index);
-  const name = inst ? label(inst) : `实例 ${j.index}`;
+  // components / collect-info belong to the root (index -1): no instance name
+  const rootJob = j.index < 0;
+  const inst = rootJob ? null : instance(j.index);
+  const name = rootJob ? '' : inst ? label(inst) : `实例 ${j.index}`;
   if (r.name !== name) {
     r.name = name;
-    r.title.replaceChildren(`${KIND[j.kind] || j.kind}「${name}」`, inst && name !== inst.name && h('span', { class: 'muted', text: inst.name }));
+    r.title.replaceChildren(...[rootJob ? KIND[j.kind] || j.kind : `${KIND[j.kind] || j.kind}「${name}」`,
+      inst && name !== inst.name && h('span', { class: 'muted', text: inst.name })].filter(Boolean));
   }
   const running = j.state === 'running';
   const t0 = parseTime(j.created_at);

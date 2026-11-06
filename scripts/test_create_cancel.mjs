@@ -22,7 +22,7 @@ async function harness() {
     'forms.js': { openSettings: noop, openDelete: noop },
     'proxy.js': { openProxy: noop, markOf: noop },
     'viewer.js': { openViewer: noop, openLogs: noop },
-    'panels.js': { openActivity: noop },
+    'panels.js': { openActivity: noop, runCheck: noop },
   };
   async function load(name) {
     if (cache.has(name)) return cache.get(name);

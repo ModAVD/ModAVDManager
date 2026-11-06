@@ -224,14 +224,17 @@ function checkResult() {
   if (db.check === 'warn') {
     Object.assign(items[4], { ok: false, reason: '没有找到能用 Vulkan 的显卡（只有 Microsoft Basic Render Driver）', advice: '安装或更新显卡驱动（NVIDIA / AMD / Intel 官网驱动自带 Vulkan）。没有可用的显卡时模拟器只能软件渲染，游戏会占满 CPU，性能会很差' });
   }
+  if (db.check === 'notready' && !db.componentsReady) Object.assign(items[1], { ok: false, reason: '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', advice: '在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次' });
   if (db.check === 'notready') {
-    Object.assign(items[1], { ok: false, reason: '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', advice: '在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次' });
     Object.assign(items[3], { ok: false, reason: '硬件虚拟化（Windows 虚拟机监控程序平台）不可用，魔改 AVD 无法启动（检查结果：WHPX is not installed）', advice: '先在 BIOS/UEFI 里打开 VT-x/SVM，再在「启用或关闭 Windows 功能」里勾选「Windows 虚拟机监控程序平台」，然后重启' });
     Object.assign(items[4], { ok: null, reason: '查不了 Vulkan：探测程序 8 秒内没有结束' });
     Object.assign(items[2], { reason: '内测包 0.35.0（37.2.10）' });
+    // the host IME is optional and stays missing, also after a fetch (it is not a downloaded component)
+    comps[4].installed = false; comps[4].version = '';
+  }
+  if (db.check === 'notready' && !db.componentsReady) {
     comps[0].installed = false; comps[0].version = '';
     comps[2].installed = false; comps[2].version = ''; comps[2].build = '';
-    comps[4].installed = false; comps[4].version = '';
   }
   const ready = !items.some((x) => x.blocking && x.ok === false);
   return { ...rootInfo(), ready, items, components: comps };
@@ -290,31 +293,60 @@ function run(j, steps) {
   next();
 }
 
+// [stage, name, done MB, total MB, speed MB/s]: a download's message is the real backend's line (internal/components
+// progress.go), name and sizes included; the collect steps only have a message
+const mb = (x) => (x >= 1024 ? `${(x / 1024).toFixed(2)} GB` : `${x.toFixed(1)} MB`);
 function diagProgress(j, stages, done) {
   if (j.state !== 'running') return;
-  const p = stages[Math.min(done, stages.length - 1)];
-  j.progress = { step: p[0], message: p[1], done: p[2] * 1048576, total: p[3] * 1048576, speed: p[4] * 1048576, remaining: p[5] };
-  emit('job', j); log('info', p[1], j.id); emit('instances', list());
+  const [step, name, d, total, speed] = stages[Math.min(done, stages.length - 1)];
+  const pct = total ? ((d * 100) / total).toFixed(1).padStart(5) : '';
+  const message = step === 'downloading' ? `  ${name}  ${pct}%  ${mb(d)} / ${mb(total)}  ${mb(speed)}/s  剩余 00:${String(Math.round((total - d) / speed)).padStart(2, '0')}`
+    : step === 'extracting' ? `  解压 ${name}  ${pct}%  ${mb(d)} / ${mb(total)}` : name;
+  j.progress = { step, name, message, done: d * 1048576, total: total * 1048576, speed: speed * 1048576 };
+  emit('job', j); emit('instances', list());
+}
+
+// the license each source serves (a custom one says its address), with a stand-in for its SHA-256
+function mockLicense(source, urls) {
+  const names = { auto: 'Google 中国下载（googledownloads.cn）', googledownloads_cn: 'Google 中国下载（googledownloads.cn）', tencent: '腾讯云镜像（mirrors.cloud.tencent.com）', google: 'Google 官方（dl.google.com）' };
+  let from = names[source];
+  if (source === 'custom') {
+    if (!urls.length) return { error: ['usage', '自定义组件下载源至少要有一个地址'] };
+    if (urls.some((u) => !/^https?:\/\/[^/?#\s@]+/i.test(u) || /[?#\s]/.test(u))) return { error: ['invalid_argument', `自定义下载地址要写 http:// 或 https:// 开头、带主机名的目录地址，收到「${urls[0]}」`] };
+    if (urls.every((u) => /unreachable/.test(u))) return { error: ['components_unavailable', '所有镜像都取不到许可协议（mock）', '检查地址，或换一个下载源'] };
+    from = `自定义镜像（${urls[0].replace(/\/?$/, '/')}）`;
+  }
+  if (!from) return { error: ['invalid_argument', `组件下载源只能是 auto、googledownloads_cn、tencent、google 或 custom，收到「${source}」`] };
+  const license = `Terms and Conditions (mock, served by ${from})\n\nThis is the Android Software Development Kit License Agreement as ${from} serves it.\n\n1. Introduction\n1.1 The Android Software Development Kit (referred to in the License Agreement as the "SDK") …`;
+  let x = 0x811c9dc5;
+  for (const ch of license) x = Math.imul(x ^ ch.codePointAt(0), 16777619) >>> 0;
+  return { license, license_source: from, license_sha256: x.toString(16).padStart(8, '0').repeat(8) };
 }
 
 function runDiag(j, kind = j.kind) {
   const stages = kind === 'components'
-    ? [['license', '已取回许可协议', 80, 1491, 0, 0], ['download', '正在下载平台工具（adb）', 260, 1491, 72, 17], ['download', '正在下载系统镜像', 650, 1491, 96, 9], ['extract', '正在解压组件', 1120, 1491, 64, 6], ['verify', '正在校验组件', 1410, 1491, 20, 2], ['done', '组件补全完成', 1491, 1491, 0, 0]]
-    : [['collect', '正在收集目录与版本', 1, 12, 0.4, 28], ['collect', '正在收集日志', 4, 12, 0.8, 10], ['collect', '正在收集现场状态', 8, 12, 1.1, 4], ['zip', '正在压缩问题包', 11, 12, 1.4, 1], ['done', '问题包已生成', 12, 12, 0, 0]];
+    ? [['downloading', '平台工具（adb）', 2.7, 8.0, 1.1], ['downloading', '平台工具（adb）', 6.4, 8.0, 1.3], ['extracting', '平台工具（adb）', 8.0, 8.0, 0],
+      ['downloading', '系统镜像（Android 14 Google APIs x86_64）', 310, 1480, 24], ['downloading', '系统镜像（Android 14 Google APIs x86_64）', 960, 1480, 26],
+      ['extracting', '系统镜像（Android 14 Google APIs x86_64）', 1480, 1480, 0]]
+    : [['collect', '正在收集目录与版本', 1, 12, 0.4], ['collect', '正在收集日志', 4, 12, 0.8], ['collect', '正在收集现场状态', 8, 12, 1.1], ['zip', '正在压缩问题包', 11, 12, 1.4], ['done', '问题包已生成', 12, 12, 0]];
+  if (kind === 'components') ['魔改 AVD：补全 Google 组件（adb、Android 14 系统镜像）', '已在管理器里同意许可协议。'].forEach((m) => log('info', m, j.id));
   let n = 0;
   const timer = setInterval(() => {
     if (j.state !== 'running') { clearInterval(timer); return; }
     diagProgress(j, stages, n);
     n++;
-    if (kind === 'components' && db.diagMode === 'components-fail' && n === 3) {
-      clearInterval(timer); failJob(j, 'internal', '模拟下载失败', '稍后再试'); return;
+    // components-fail: the first fetch of the page fails half way (so 重试 can be tried), the next ones work
+    if (kind === 'components' && db.diagMode === 'components-fail' && !db.diagFailed && n === 3) {
+      db.diagFailed = true;
+      clearInterval(timer); failJob(j, 'components_unavailable', '所有镜像都没下成：系统镜像（Android 14 Google APIs x86_64）', '检查网络或换一个下载源后重试；已经下好的部分会接着下'); return;
     }
     if (n >= stages.length) {
       clearInterval(timer);
       if (kind === 'components') {
         db.componentsReady = true;
         finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: checkResult().components, downloads: [] });
-      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', privacy_note: '问题包只保存在本机，上传前请检查内容。', problems: [], mas_found: true, entries: ['summary.txt'] });
+      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', problems: [], mas_found: true, entries: ['summary.txt'],
+        privacy_note: '隐私提示（mock）：问题包只保存在本机，不会自动上传。\r\n- 可以公开：summary.txt 和日志。\r\n- 不要公开：crash 文件夹。' });
     }
   }, 500);
 }
@@ -709,14 +741,22 @@ async function handle(url, init) {
     emit('instances', list());
     return json(pub(inst), 201);
   }
-  if (p === '/api/open') return json({});
+  if (p === '/api/open') {
+    if (body.what === 'collect-info') {
+      const cj = db.jobs.find((j) => j.id === body.job);
+      return cj && cj.kind === 'collect-info' && cj.state === 'done' ? json({}) : errResp('not_found', `任务 ${body.job} 不是做完了的收集问题信息`);
+    }
+    if (!['root', 'logs', 'instance'].includes(body.what)) return errResp('invalid_argument', `what 只能是 root、logs、instance 或 collect-info（给的是 "${body.what}"）`);
+    return json({});
+  }
   if (p === '/api/components' && method === 'GET') {
     if (db.diagMode === 'components-error') return errResp('internal', '组件状态暂不可用', '稍后重试');
     return json({ root: ROOT, components: checkResult().components });
   }
   if (p === '/api/components/license' && method === 'GET') {
-    const source = url.searchParams.get('source') || 'auto';
-    return json({ license: `Android Software Development Kit License Agreement\n\n(mock: ${source})`, license_source: source, license_sha256: `mock-license-${source}` });
+    await sleep(400);
+    const lic = mockLicense(url.searchParams.get('source') || db.componentSource.source, url.searchParams.getAll('mirror_urls'));
+    return lic.error ? errResp(...lic.error) : json(lic);
   }
   if (p === '/api/components/source' && method === 'GET') return json({ ...db.componentSource, mirror_urls: [...db.componentSource.mirror_urls] });
   if (p === '/api/components/source' && method === 'PUT') {
@@ -731,6 +771,8 @@ async function handle(url, init) {
   }
   if (p === '/api/components/fetch' && method === 'POST') {
     if (body.accept_license !== true) return errResp('usage', '补全组件必须明确同意许可协议');
+    const lic = mockLicense(body.source || db.componentSource.source, body.mirror_urls || db.componentSource.mirror_urls);
+    if (lic.error || body.license_sha256 !== lic.license_sha256) return errResp('usage', '补全组件要带上看过的许可协议的 license_sha256');
     if (db.jobs.some((j) => j.kind === 'components' && j.state === 'running')) return errResp('busy', '组件补全正在进行');
     const j = newJob('components', -1); runDiag(j, 'components'); return json(j, 202);
   }

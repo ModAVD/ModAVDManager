@@ -45,32 +45,48 @@ export function openUpdate() {
   const cdkState = h('p', { class: 'f-hint' });
   const save = btn('btn btn-secondary', '保存 CDK', () => cdk.value.trim() && post({ cdk: cdk.value.trim() }, '已保存 CDK'));
   const clear = btn('btn btn-ghost', '清除', () => post({ cdk: '' }, '已清除 CDK'));
-  const componentSource = h('select', { class: 'input', 'aria-label': '组件下载源' },
+  const componentSource = h('select', { class: 'input', id: 'upd-comp' },
     ...[['auto', '自动'], ['googledownloads_cn', 'googledownloads_cn'], ['tencent', 'tencent'], ['google', 'google'], ['custom', '自定义地址']]
       .map(([value, text]) => h('option', { value, text })));
-  const componentURLs = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', spellcheck: 'false' });
+  const componentURLs = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', spellcheck: 'false', 'aria-label': '自定义下载地址' });
+  // a built-in choice is saved when picked (like 更新源); 自定义地址 when its addresses are saved
+  let savedSource = 'auto';
+  const showSaved = (v) => {
+    savedSource = v.source || 'auto';
+    componentSource.value = savedSource;
+    componentURLs.value = (v.mirror_urls || []).join(',');
+    componentURLsRow.hidden = savedSource !== 'custom';
+  };
   async function saveComponentSource() {
-    const urls = componentSource.value === 'custom' ? componentURLs.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
-    if (componentSource.value === 'custom' && !urls.length) {
+    const source = componentSource.value;
+    const urls = source === 'custom' ? componentURLs.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
+    if (source === 'custom' && !urls.length) {
       toast({ tone: 'err', title: '需要自定义地址', text: '请填写至少一个 HTTP(S) 下载目录。' });
       return;
     }
     try {
-      await api.put('/api/components/source', { source: componentSource.value, mirror_urls: urls });
-      toast({ title: '已保存组件下载源' });
-    } catch (e) { toastError(e); }
+      const v = await api.put('/api/components/source', { source, mirror_urls: urls });
+      showSaved(v);
+      toast({ title: '已保存组件下载源', text: source === 'custom' ? (v.mirror_urls || []).join('、') : source === 'auto' ? '自动' : source });
+    } catch (e) {
+      toastError(e);
+      if (source !== 'custom') { componentSource.value = savedSource; componentURLsRow.hidden = savedSource !== 'custom'; }
+    }
   }
   const componentSave = btn('btn btn-secondary', '保存', saveComponentSource);
-  const componentURLsRow = h('div', { class: 'f-ctl' }, componentURLs, componentSave);
+  const componentURLsRow = h('div', { class: 'upd-cdk upd-urls' }, componentURLs, componentSave);
   componentSource.addEventListener('change', () => {
     componentURLsRow.hidden = componentSource.value !== 'custom';
     if (componentSource.value !== 'custom') saveComponentSource();
+    else componentURLs.focus();
   });
+  componentURLs.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveComponentSource(); } });
   const fields = h('div', { class: 'fields' },
     h('span', { class: 'f-label', id: 'upd-src-l', text: '更新源' }), h('div', { class: 'f-ctl' }, seg),
     h('label', { class: 'f-label', for: 'upd-cdk', text: 'Mirror 酱 CDK' }),
     h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState),
-    h('label', { class: 'f-label', text: '组件下载源' }), h('div', { class: 'f-ctl' }, componentSource), componentURLsRow);
+    h('label', { class: 'f-label', for: 'upd-comp', text: '组件下载源' }), h('div', { class: 'f-ctl' }, componentSource, componentURLsRow,
+      h('p', { class: 'f-hint', text: '「补全组件」和 modavd components fetch 都从这里选的源下载；选了就保存。' })));
   const note = h('p', { class: 'f-hint', text: '更新现在由 AUTO-MAS 发起（它调用 modavd update），会按这里选的更新源和 CDK 下载；这里先不能直接更新。' });
   const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], () => { ctl.close(); openDiagnostics(); });
   const when = h('span', { class: 'foot-note' });
@@ -122,10 +138,6 @@ export function openUpdate() {
   };
   const un = subscribe(render);
   ctl.onClose.push(() => { un(); ctl = null; });
-  api.get('/api/components/source').then((v) => {
-    componentSource.value = v.source || 'auto';
-    componentURLs.value = (v.mirror_urls || []).join(',');
-    componentURLsRow.hidden = componentSource.value !== 'custom';
-  }).catch(() => {});
+  api.get('/api/components/source').then(showSaved).catch(() => {});
   render();
 }
