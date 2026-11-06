@@ -424,8 +424,8 @@ func (r *Root) lockMetadata() (*fileLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, "mas-avd.json 的锁文件打不开: "+path)
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
-			metadataLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
+			metadataLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "metadata"})
 	}
 	return l, nil
 }
@@ -653,8 +653,8 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %s 的锁文件打不开: %s（%v）", AvdName(i), path, err))
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
-			i, configLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
+			i, configLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "config"})
 	}
 	return &InstanceLock{l: l}, nil
 }

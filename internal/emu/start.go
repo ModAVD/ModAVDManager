@@ -314,7 +314,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				i, adopted.PID)
 			continue
 		}
-		return nil, m.saveBootFailure(ctx, i, owed(err))
+		return nil, m.startFailure(ctx, i, owed(err), string(StatusStarting))
 	}
 	if res.Launched {
 		res.BootSeconds = time.Since(launchedAt).Seconds()
@@ -344,7 +344,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	}
 	ab, err := m.afterBoot(ctx, inst, mode, owedUntil, res.LogFile, prog)
 	if err != nil {
-		return nil, m.saveBootFailure(ctx, i, owed(err))
+		return nil, m.startFailure(ctx, i, owed(err), unknownState)
 	}
 	res.FirstBoot = ab.FirstBoot
 	res.ZygoteRestarted = ab.ZygoteRestarted
@@ -549,8 +549,8 @@ func (m *Manager) waitShutdown(ctx context.Context, i int, p win.Process, prog *
 		if err := ctxErr(ctx); err != nil {
 			return win.Process{}, false, err
 		}
-		return win.Process{}, false, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
-			shutdownExitWait.Seconds(), p.PID).WithAdvice(fmt.Sprintf("稍后再开机；一直关不掉的话先 modavd stop %d", i))
+		return win.Process{}, false, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
+			shutdownExitWait.Seconds(), p.PID).WithAdvice(fmt.Sprintf("稍后再开机；一直关不掉的话先 modavd stop %d", i)), map[string]string{errs.Reason: "stopping"})
 	}
 	return m.findQemu(i)
 }

@@ -566,6 +566,7 @@ type processUse struct {
 	Name           string
 	Unknown        bool // its path could not be read; matched by name
 	ShutdownHelper bool // verified root executable and complete shutdown-helper argv
+	RootProgram    bool // verified ModAVD.exe or tools/modavd.exe of this root
 }
 
 // emulatorNames are the image names that count as the emulator's when a process's path cannot be read (another
@@ -577,9 +578,40 @@ var emulatorNames = []string{"qemu-system", "emulator", "netsimd"}
 // exes do not stop a directory rename, so they are checked first. With programs, also the other processes running the
 // root's ModAVD.exe or tools\modavd.exe (the manager, MCP servers, helpers), which the swap replaces.
 func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
-	if u.scan != nil {
-		return u.scan(programs)
+	scan := u.scan
+	if scan == nil {
+		scan = func(programs bool) ([]processUse, error) {
+			return u.scanProcesses(programs, win.ListProcesses, win.Process.ImagePath)
+		}
 	}
+	return scanWithProgramRetries(programs, scan, time.Sleep)
+}
+
+// A short CLI query may finish before the next scan. Never ignore a live program:
+// retry the full scan twice, keeping the caller's locks held throughout.
+func scanWithProgramRetries(programs bool, scan func(bool) ([]processUse, error), sleep func(time.Duration)) ([]processUse, error) {
+	for attempt := 0; ; attempt++ {
+		uses, err := scan(programs)
+		if err != nil || !programs || attempt == 2 {
+			return uses, err
+		}
+		haveProgram := false
+		for _, p := range uses {
+			if p.Unknown || (!p.ShutdownHelper && !p.RootProgram) {
+				return uses, nil
+			}
+			if p.RootProgram && !p.ShutdownHelper {
+				haveProgram = true
+			}
+		}
+		if !haveProgram {
+			return uses, nil
+		}
+		sleep(250 * time.Millisecond)
+	}
+}
+
+func (u *Updater) scanProcesses(programs bool, list func() ([]win.Process, error), imagePath func(win.Process) (string, error)) ([]processUse, error) {
 	var prefixes []string
 	dirs := []string{u.l.emulator()}
 	if phaseOf(u.l.readState()) == phaseSwapping {
@@ -595,7 +627,7 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 	for _, rel := range []string{"ModAVD.exe", "tools/modavd.exe"} {
 		progs[strings.ToLower(realOrSame(u.l.at(rel)))] = true
 	}
-	procs, err := win.ListProcesses()
+	procs, err := list()
 	if err != nil {
 		return nil, err
 	}
@@ -605,12 +637,16 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 		if p.PID == self || p.PID == 0 {
 			continue
 		}
-		path, err := p.ImagePath()
+		path, err := imagePath(p)
 		if err != nil {
 			name := strings.ToLower(p.Name)
 			for _, n := range emulatorNames {
 				if strings.HasPrefix(name, n) {
-					out = append(out, processUse{PID: p.PID, Name: p.Name, Unknown: true})
+					// A snapshot can outlive the process. Alive also checks its
+					// creation time, so a reused PID is not the old occupant.
+					if p.Alive() {
+						out = append(out, processUse{PID: p.PID, Name: p.Name, Unknown: true})
+					}
 					break
 				}
 			}
@@ -625,7 +661,11 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 		}
 		if hit {
 			args, err := p.CommandLine()
+			if err != nil && !p.Alive() {
+				continue // It may also exit after ImagePath succeeded.
+			}
 			out = append(out, processUse{PID: p.PID, Name: p.Name,
+				RootProgram:    progs[lp],
 				ShutdownHelper: err == nil && u.shutdownHelper(path, args)})
 		}
 	}

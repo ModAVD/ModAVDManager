@@ -326,7 +326,7 @@ func (m *Manager) lock(ctx context.Context, i int, kind string, wait time.Durati
 			return l, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, errs.Newf(errs.Busy, "实例 %d %s，等了 %.0f 秒仍没做完", i, what, wait.Seconds())
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d %s，等了 %.0f 秒仍没做完", i, what, wait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: kind})
 		}
 	}
 }

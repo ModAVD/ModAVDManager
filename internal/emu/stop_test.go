@@ -1051,6 +1051,7 @@ func TestStopWhileStartHasNotLaunched(t *testing.T) {
 	if errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正在开机，模拟器还没起来，稍后再关") {
 		t.Fatalf("stop while starting: %v", err)
 	}
+	wantErrorDetails(t, err, map[string]string{errs.Reason: "starting"})
 	ls := <-late
 	if ls.err != nil {
 		t.Fatal(ls.err)

@@ -37,6 +37,9 @@ func TestStopCreatingInstance(t *testing.T) {
 			if failed.Error == nil || failed.Error.Code != errs.Busy || !strings.Contains(failed.Error.Advice, "--cancel-create") {
 				t.Fatalf("default stop: %+v", failed)
 			}
+			if d := failed.Error.Details; d[errs.Reason] != "locked" || d[errs.Lock] != "create" {
+				t.Errorf("job error details: %v", d)
+			}
 		} else {
 			finished := h.waitJob(j.ID, func(v jobView) bool { return v.State != stateRunning })
 			if finished.State != stateDone {

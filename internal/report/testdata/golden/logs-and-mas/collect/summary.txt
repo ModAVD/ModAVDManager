@@ -71,7 +71,7 @@ mas_10：模拟器日志 1 份，logcat 0 份（各取最新 8 份）
 mas_3：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
 mas_4：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
 mas_7：模拟器日志 0 份，logcat 0 份（各取最新 8 份）
-modavd-bridge-1：模拟器日志 1 份，logcat 0 份（各取最新 8 份）
+mas_1：执行桥日志 1 份（取最新 10 份）
 共复制 13 份，8.5 KB
 启动卡死线程转储（startup-*-hang-threads.txt）：取了最新 3 份：startup-odd-hang-threads.txt、startup-mas_1-20260112-080000-hang-threads.txt、startup-mas_1-20260111-080000-hang-threads.txt
 补全组件日志（fetch-components.log）：已收

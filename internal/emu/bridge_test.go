@@ -109,9 +109,21 @@ func TestBridgeScriptWindowsPowerShell(t *testing.T) {
 		[]byte("Write-Output 'bridge PowerShell output'; exit 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(m.Root.LogsDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for k := 0; k < 12; k++ {
+		mkLog(t, m.Root.LogsDir(), fmt.Sprintf("modavd-bridge-1-20261028-1200%02d.log", k), 1, k)
+	}
 	run, err := m.runBridgeScript(context.Background(), 1, "verify", false)
 	if err != nil || run.Code != 0 || run.Last != "bridge PowerShell output" || run.LogFile == "" {
 		t.Fatalf("run=%+v, error=%v", run, err)
+	}
+	if got := names(t, m.Root.LogsDir()); len(got) != 10 {
+		t.Fatalf("script did not prune bridge logs: %q", got)
+	}
+	if _, err := os.Stat(run.LogFile); err != nil {
+		t.Fatalf("new script output was removed: %v", err)
 	}
 }
 

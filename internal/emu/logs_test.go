@@ -201,6 +201,43 @@ func TestPruneLogDirMissing(t *testing.T) {
 	}
 }
 
+func TestPruneBridgeLogs(t *testing.T) {
+	dir := testutil.TempDir(t)
+	for k := 0; k < 13; k++ {
+		mkLog(t, dir, fmt.Sprintf("modavd-bridge-0-20261028-1200%02d.log", k), 10, k)
+	}
+	for k := 0; k < 11; k++ {
+		mkLog(t, dir, fmt.Sprintf("modavd-bridge-1-20261028-1200%02d.log", k), 10, k)
+	}
+	for _, name := range []string{"modavd-bridge-0-notes.log", "modavd-bridge-x-20261028-120000.log", "modavd-ui.log"} {
+		mkLog(t, dir, name, 10000, -1)
+	}
+	held, err := os.OpenFile(filepath.Join(dir, "modavd-bridge-0-20261028-120000.log"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	removed, freed, err := pruneLogDir(dir, 0, 10, 1<<30, logx.Nop())
+	if err != nil || removed != 2 || freed != 20 {
+		t.Fatalf("per instance: %d / %d / %v", removed, freed, err)
+	}
+	for _, k := range []int{1, 2} {
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("modavd-bridge-0-20261028-1200%02d.log", k))); !os.IsNotExist(err) {
+			t.Fatalf("old bridge log %d remains: %v", k, err)
+		}
+	}
+	if got := names(t, dir); len(got) != 25 {
+		t.Fatalf("unexpected files after per-instance cleanup: %q", got)
+	}
+	removed, freed, err = pruneLogDir(dir, 0, 10, 30, logx.Nop())
+	if err != nil || removed != 18 || freed != 180 {
+		t.Fatalf("total budget: %d / %d / %v", removed, freed, err)
+	}
+	if got := names(t, dir); len(got) != 7 {
+		t.Fatalf("unexpected files after size cleanup: %q", got)
+	}
+}
+
 func TestPruneLogDirLogsRemoval(t *testing.T) {
 	dir := testutil.TempDir(t)
 	for k := 0; k < 11; k++ {

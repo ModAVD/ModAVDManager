@@ -59,6 +59,9 @@ func TestWindowConflict(t *testing.T) {
 			continue
 		}
 		e := errs.As(err)
+		if errs.DetailsOf(err)[errs.Reason] != "window_mismatch" {
+			t.Errorf("details: %v", errs.DetailsOf(err))
+		}
 		if e == nil || e.Code != errs.Busy || errs.ExitCode(err) != 5 || !strings.Contains(e.Message, "实例 3 "+c.want) ||
 			!strings.Contains(e.Advice, "先关机再换：modavd stop 3") {
 			t.Errorf("%+v on windowed=%v: %v", c.opt, c.windowed, err)
