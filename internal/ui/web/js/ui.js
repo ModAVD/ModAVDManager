@@ -67,7 +67,8 @@ export function openDialog(o) {
     class: 'dlg ' + (o.cls || ''), role: o.alert ? 'alertdialog' : 'dialog', 'aria-modal': 'true',
     'aria-labelledby': id + 't', 'aria-describedby': o.desc || (o.sub && id + 's'),
   }, h('header', { class: 'dlg-head' }, o.lead, h('div', { class: 'dlg-titles' }, titleEl, subEl), o.tools, ibtn('x', '关闭', () => close(), 'icon-btn dlg-x')));
-  const parts = [o.body, o.actions ? h('footer', { class: 'dlg-foot' }, o.actions.left, btn('btn btn-ghost', '取消', () => close()), o.actions.ok) : o.foot];
+  const parts = [o.body, o.actions ? h('footer', { class: 'dlg-foot' }, o.actions.left,
+    o.actions.cancel === false ? null : btn('btn btn-ghost', '取消', () => close()), o.actions.ok) : o.foot];
   let form = null;
   if (o.form) {
     el.append((form = h('form', { class: 'dlg-form', novalidate: true }, parts)));

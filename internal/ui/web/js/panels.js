@@ -4,6 +4,7 @@ import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
+import { openComponentFetch, activeJob, latestJob, progressText } from './diagnostics.js';
 import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText } from './format.js';
 import * as A from './actions.js';
 
@@ -11,8 +12,14 @@ const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', {
 const folderBtn = (cls) => btn(cls, [icon('folder'), '打开目录'], () => A.openFolder('root'));
 
 // ---- check
+let refreshAgain = false;
+
+// refresh: a new check, not the cached one. Asked while one runs (components just installed), it runs again after.
 export async function runCheck(refresh) {
-  if (S.checking) return;
+  if (S.checking) {
+    if (refresh) refreshAgain = true;
+    return;
+  }
   S.checking = true;
   S.checkError = null;
   update();
@@ -24,6 +31,10 @@ export async function runCheck(refresh) {
   }
   S.checking = false;
   update();
+  if (refreshAgain) {
+    refreshAgain = false;
+    runCheck(true);
+  }
 }
 
 export function checkSummary(c) {
@@ -45,9 +56,41 @@ function itemView(it) {
 const RANK = (it) => (it.ok === false ? (it.blocking ? 0 : 1) : it.ok == null ? 2 : 3);
 
 function checkRow() {
-  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div'), state: h('span', { class: 'ci-state' }) };
+  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }) };
   r.el = h('li', { class: 'check-item' }, r.ic, h('div', null, h('div', { class: 'ci-title' }, r.title, r.tag), r.reason, r.adv), r.state);
   return r;
+}
+
+// 补全组件 under the 组件 item when it did not pass: the button (license dialog), then the running job's progress
+// with 取消, then, when the last fetch failed, why and 重试. Built once per row and only updated.
+function fetchBox() {
+  const b = { id: '' };
+  b.go = btn('btn btn-secondary btn-sm', null, openComponentFetch);
+  b.text = h('span');
+  b.running = h('div', { class: 'diag-running', role: 'status', hidden: true }, h('span', { class: 'spin' }), b.text,
+    btn('btn btn-ghost btn-sm', '取消', () => b.id && A.cancelJob(b.id)));
+  b.err = h('div', { class: 'form-error', role: 'alert', hidden: true });
+  b.el = h('div', { class: 'ci-fetch' }, b.running, b.err, b.go);
+  return b;
+}
+
+function fillFetchBox(b) {
+  const run = activeJob('components');
+  const last = run ? null : latestJob('components');
+  const failed = last && last.state === 'failed' ? last : null;
+  b.running.hidden = !run;
+  b.go.hidden = !!run;
+  if (run) {
+    b.id = run.id;
+    setText(b.text, progressText(run));
+  }
+  const sig = failed ? failed.id : '';
+  if (b.sig !== sig) {
+    b.sig = sig;
+    if (failed) showError(b.err, { message: `补全组件没有成功：${failed.error?.message || '原因未知'}`, advice: failed.error?.advice });
+    b.err.hidden = !failed;
+    b.go.replaceChildren(icon(failed ? 'refresh' : 'download'), failed ? '重试' : '补全组件');
+  }
 }
 
 function fillCheckRow(r, it) {
@@ -58,7 +101,14 @@ function fillCheckRow(r, it) {
   r.tag.hidden = it.blocking;
   setText(r.reason, it.reason);
   const a = it.ok !== true && it.advice ? it.advice : '';
-  if (r.a !== a) r.adv.replaceChildren((r.a = a) ? advice(a) : '');
+  const needsFetch = it.id === 'components' && it.ok === false;
+  if (needsFetch && !r.fetch) r.fetch = fetchBox();
+  if (r.a !== a || r.fetchShown !== needsFetch) {
+    r.a = a;
+    r.fetchShown = needsFetch;
+    r.adv.replaceChildren(a ? advice(a) : '', needsFetch ? r.fetch.el : '');
+  }
+  if (needsFetch) fillFetchBox(r.fetch);
   setText(r.state, word);
 }
 
@@ -140,7 +190,7 @@ export function openCheck() {
         ...cs.map((x) => h('div', { class: 'comp-row' },
           h('span', null, x.name, x.optional && h('span', { class: 'muted', text: '（可选）' })),
           h('span', { class: 'v', text: [x.version, x.build].filter(Boolean).join(' · ') }),
-          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: x.installed ? '已安装' : '缺少' }))));
+          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: x.installed ? '已安装' : x.optional ? '未安装' : '缺少' }))));
     }
   };
   const un = subscribe(render);
@@ -165,11 +215,15 @@ export function renderBanner(el) {
     h('div', { class: 'banner-main' },
       h('h2', { text: '这个目录现在还不能开机' }),
       first && h('p', { text: first.reason }),
-      first && first.advice && advice(first.advice),
+      first && first.advice && advice(first.id === 'components'
+        ? '请点下面的「补全组件」打开许可协议并下载，或运行 tools\\modavd.exe components fetch。'
+        : first.advice),
       missing.length && !(first && first.id === 'components') && h('div', { class: 'banner-missing' },
         h('span', { class: 'muted', text: '缺少的组件：' }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),
       blockers.length > 1 && h('p', { class: 'banner-more', text: `另外还有 ${blockers.length - 1} 项必需检查没通过，详情见电脑检查。` }),
-      h('div', { class: 'banner-actions' }, btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
+      h('div', { class: 'banner-actions' },
+        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), '补全组件'], openComponentFetch),
+        btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
 }
 
 // ---- activity
@@ -245,11 +299,14 @@ function jobRow(j) {
 }
 
 function updateJob(r, j) {
-  const inst = instance(j.index);
-  const name = inst ? label(inst) : `实例 ${j.index}`;
+  // components / collect-info belong to the root (index -1): no instance name
+  const rootJob = j.index < 0;
+  const inst = rootJob ? null : instance(j.index);
+  const name = rootJob ? '' : inst ? label(inst) : `实例 ${j.index}`;
   if (r.name !== name) {
     r.name = name;
-    r.title.replaceChildren(`${KIND[j.kind] || j.kind}「${name}」`, inst && name !== inst.name && h('span', { class: 'muted', text: inst.name }));
+    r.title.replaceChildren(...[rootJob ? KIND[j.kind] || j.kind : `${KIND[j.kind] || j.kind}「${name}」`,
+      inst && name !== inst.name && h('span', { class: 'muted', text: inst.name })].filter(Boolean));
   }
   const running = j.state === 'running';
   const t0 = parseTime(j.created_at);
@@ -268,9 +325,10 @@ function updateJob(r, j) {
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact'));
-  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : '取消等待');
-  r.cancelHint.hidden = j.kind === 'disk-compact';
+  const cancelBackend = j.kind === 'components' || j.kind === 'collect-info';
+  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || cancelBackend));
+  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : cancelBackend ? '取消' : '取消等待');
+  r.cancelHint.hidden = j.kind === 'disk-compact' || cancelBackend;
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
   const why = j.state === 'canceled' && j.error ? j.error.message || '' : '';
@@ -316,6 +374,8 @@ function resultText(j) {
   if (j.kind === 'disk-info') return diskInfoText(r);
   if (j.kind === 'disk-trim') return diskTrimText();
   if (j.kind === 'disk-compact') return diskCompactText(r);
+  if (j.kind === 'components') return '组件补全完成。';
+  if (j.kind === 'collect-info') return r.zip_path ? `问题包：${r.zip_path}` : '问题包已生成。';
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
     r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';

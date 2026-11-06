@@ -339,3 +339,64 @@ func TestCreateFileObservationUnknown(t *testing.T) {
 		t.Fatalf("absence was already established without an instance lookup, queries %d", queries)
 	}
 }
+
+// A warning about a legacy plan prevents new boots, but does not make its port observation unreliable.
+// A malformed value that fell back to the default plan must never scan that default segment as if it were ours.
+func TestErrorObservationPortPlanTrust(t *testing.T) {
+	for _, c := range []struct {
+		raw, want string
+		scans     int
+	}{
+		{`{}`, "false", 1},
+		{`{"portBase":20000}`, "false", 1},
+		{`{"portBase":21000}`, "false", 1},
+		{`{"portBase":5500}`, "false", 1},
+		{`{"portBase":"5500"}`, "false", 1},
+		{`{"portBase":49100}`, "false", 1},
+		{`{"portBase":49100.0}`, "false", 1},
+		{`{"portBase":65400}`, "false", 1},
+		{`{"portBase":"invalid"}`, unknownState, 0},
+		{`{"portBase":21050}`, unknownState, 0},
+		{`{"portBase":1000}`, unknownState, 0},
+		{`{"portBase":65500}`, unknownState, 0},
+		{`{"portBase":null}`, unknownState, 0},
+		{`broken json`, unknownState, 0},
+	} {
+		t.Run(c.raw, func(t *testing.T) {
+			m, _ := opsTestManager(t)
+			if err := os.WriteFile(m.Root.MetadataPath(), []byte(c.raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			saved := listQemuProcesses
+			t.Cleanup(func() { listQemuProcesses = saved })
+			scans := 0
+			listQemuProcesses = func() ([]win.Process, error) { scans++; return nil, nil }
+			if got := errorRunning(m, 6); got != c.want || scans != c.scans {
+				t.Fatalf("running=%s scans=%d, want %s/%d", got, scans, c.want, c.scans)
+			}
+		})
+	}
+}
+
+func TestErrorObservationLockedMetadataDoesNotScan(t *testing.T) {
+	m, _ := opsTestManager(t)
+	if err := os.WriteFile(m.Root.MetadataPath(), []byte(`{"portBase":5500}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := syscall.UTF16PtrFromString(m.Root.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syscall.CreateFile(path, syscall.GENERIC_READ, 0, nil, syscall.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.CloseHandle(file)
+	saved := listQemuProcesses
+	t.Cleanup(func() { listQemuProcesses = saved })
+	scans := 0
+	listQemuProcesses = func() ([]win.Process, error) { scans++; return nil, nil }
+	if got := errorRunning(m, 6); got != unknownState || scans != 0 {
+		t.Fatalf("running=%s scans=%d with unreadable metadata", got, scans)
+	}
+}

@@ -52,13 +52,14 @@ type Options struct {
 	IdleExit time.Duration
 
 	// Test hooks.
-	newBackend func(log *logx.Logger) backend
-	token      string
-	web        fs.FS
-	openPath   func(path string) error
-	launch     func(url string) (*Window, error)
-	removeOld  func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
-	proxyEvery time.Duration
+	newBackend     func(log *logx.Logger) backend
+	newDiagBackend func(log *logx.Logger) diagBackend
+	token          string
+	web            fs.FS
+	openPath       func(path string) error
+	launch         func(url string) (*Window, error)
+	removeOld      func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
+	proxyEvery     time.Duration
 }
 
 const (
@@ -85,6 +86,8 @@ type server struct {
 	mgr        backend      // requests outside jobs; its messages also go to the event stream
 	poll       backend      // the instance poller: file log only, it runs every few seconds
 	newBackend func(log *logx.Logger) backend
+	diag       diagBackend                        // requests outside jobs (component status, license, config text)
+	newDiag    func(log *logx.Logger) diagBackend // one per diagnostic job, with the job's logger
 	token      string
 	dev        bool
 	files      map[string]*staticFile
@@ -125,6 +128,11 @@ func newServer(opt Options) (*server, error) {
 		r := opt.Root
 		newBackend = func(l *logx.Logger) backend { return managerBackend{emu.New(r, l)} }
 	}
+	newDiagBackend := opt.newDiagBackend
+	if newDiagBackend == nil {
+		r := opt.Root
+		newDiagBackend = func(l *logx.Logger) diagBackend { return newRealDiagBackend(r, l) }
+	}
 	token := opt.token
 	if token == "" {
 		b := make([]byte, 32)
@@ -154,6 +162,8 @@ func newServer(opt Options) (*server, error) {
 		log:        lg,
 		poll:       newBackend(lg),
 		newBackend: newBackend,
+		diag:       newDiagBackend(lg),
+		newDiag:    newDiagBackend,
 		token:      token,
 		dev:        opt.Dev,
 		files:      files,
@@ -353,10 +363,12 @@ func (w logWriter) Write(p []byte) (int, error) {
 // on every visit of its check view. sem serializes runs; a request waits for a run in progress instead of starting
 // another one.
 type checkCache struct {
-	once sync.Once
-	sem  chan struct{}
-	res  *emu.CheckResult
-	at   time.Time
+	once       sync.Once
+	sem        chan struct{}
+	mu         sync.Mutex
+	generation uint64
+	res        *emu.CheckResult
+	at         time.Time
 }
 
 func (c *checkCache) lock(ctx context.Context) error {

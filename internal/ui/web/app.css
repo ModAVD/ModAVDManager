@@ -882,6 +882,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .upd-msg { margin: 0; color: var(--text); }
 .upd-cdk { display: flex; gap: 8px; align-items: center; }
 .upd-cdk .input { flex: 1; min-width: 0; }
+.upd-urls { margin-top: 8px; }
 .upd-dot { min-width: 8px; height: 8px; padding: 0; }
 /* 按应用走代理 */
 .dlg-proxy { --w: 520px; }
@@ -909,6 +910,31 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .p-count.tone-err { color: var(--err); }
 .p-gms { margin: 16px 0 0; }
 .p-state { margin-bottom: 0; }
+.diag-launch { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.diag-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.diag-head strong { font-size: 14px; font-weight: 600; }
+.diag-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.diag-components { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.diag-components:empty::before { content: "正在读取组件状态…"; display: block; padding: 12px; color: var(--text-3); font-size: 13px; }
+.diag-components .comp-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.diag-running { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; color: var(--text-2); font-size: 13px; }
+.diag-running .btn { margin-left: auto; }
+.diag-path { margin: 10px 0 0; color: var(--text-2); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.diag-privacy { white-space: pre-line; }
+.diag-sections { margin: 10px 0 0; padding-left: 20px; font-size: 12px; }
+.diag-license { max-height: min(52vh, 460px); white-space: pre-wrap; }
+.diag-config { max-height: min(58vh, 520px); white-space: pre-wrap; }
+/* 电脑检查 → 组件: 补全组件, the running fetch, the last failure */
+.ci-fetch { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.ci-fetch .diag-running { margin: 0; overflow-wrap: anywhere; }
+.ci-fetch .form-error { margin: 0; }
+.diag-state { margin: 10px 0 0; color: var(--tf, var(--text-2)); font-size: 13px; overflow-wrap: anywhere; }
+/* the license dialog: source first, then where the text came from and the text */
+.diag-license-body { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+.diag-license-body .fields { row-gap: 12px; }
+.diag-license-body .form-error { margin-top: 0; }
+.diag-license-body .form-error > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diag-license-body .form-error > .btn { flex: none; }
 .check-sum { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 16px; margin-bottom: 8px; border-radius: var(--r-card); background: var(--tb); }
 .check-sum > .sk-row { flex: 1; margin: 0; }
 .check-sum > .ic { width: 22px; height: 22px; color: var(--tf); }
