@@ -178,8 +178,10 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		// 8b) no vCPU halts while the data disk is busy with small requests (see the script's header)
 		func() { m.setupIdlepoll(ctx, i, idlepollCap(cores, spare)) },
 		func() {
-			// 9) guest log: 16 MB buffers (persistent), streamed to <root>\logs from now on
-			m.shell(ctx, i, "su 0 setprop persist.logd.size "+logcatBufferSize+"; logcat -G "+logcatBufferSize, 0)
+			// 9) guest logs follow the latest per-instance policy, including after a guest-only reboot.
+			if _, err := m.applyDiagnosticGuest(ctx, i); err != nil {
+				m.Log.Warnf("实例 %d 设置日志缓冲区失败: %v", i, err)
+			}
 			r.LogcatFile = m.ensureLogcat(ctx, i)
 		},
 		func() {

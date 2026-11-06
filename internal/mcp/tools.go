@@ -119,6 +119,7 @@ func newTool(name, title, desc string, ann *annotations, out reflect.Type, props
 	}
 	if out != nil {
 		t.OutputSchema = schemaOf(out)
+		diagnosticToolSchema(name, t.OutputSchema)
 	}
 	return t
 }
@@ -129,7 +130,7 @@ func toolDefs() []*toolDef {
 	return []*toolDef{
 		newTool("list_instances", "List instances",
 			"List every ModAVD instance under the server's root (fixed by --root) with its status (offline / "+
-				"starting / online), adb serial and address, ports and the options of its next boot.",
+				"starting / online), adb serial and address, ports, diagnostics logging state and the options of its next boot.",
 			readOnly(), reflect.TypeFor[emu.ListResult](), nil,
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				return b.List(ctx)

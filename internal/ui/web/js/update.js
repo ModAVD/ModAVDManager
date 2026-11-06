@@ -6,6 +6,7 @@ import { h, icon, btn, attr, setText, showError } from './dom.js';
 import { S, update, subscribe } from './store.js';
 import { api } from './api.js';
 import { openDialog, toast, toastError } from './ui.js';
+import { openDiagnostics } from './diagnostics.js';
 
 const clock = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
 const ver = (v) => (v ? v.replace(/^v/, '') : '');
@@ -44,11 +45,50 @@ export function openUpdate() {
   const cdkState = h('p', { class: 'f-hint' });
   const save = btn('btn btn-secondary', '保存 CDK', () => cdk.value.trim() && post({ cdk: cdk.value.trim() }, '已保存 CDK'));
   const clear = btn('btn btn-ghost', '清除', () => post({ cdk: '' }, '已清除 CDK'));
+  const componentSource = h('select', { class: 'input', id: 'upd-comp' },
+    ...[['auto', '自动'], ['googledownloads_cn', 'googledownloads_cn'], ['tencent', 'tencent'], ['google', 'google'], ['custom', '自定义地址']]
+      .map(([value, text]) => h('option', { value, text })));
+  const componentURLs = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', spellcheck: 'false', 'aria-label': '自定义下载地址' });
+  // a built-in choice is saved when picked (like 更新源); 自定义地址 when its addresses are saved
+  let savedSource = 'auto';
+  const showSaved = (v) => {
+    savedSource = v.source || 'auto';
+    componentSource.value = savedSource;
+    componentURLs.value = (v.mirror_urls || []).join(',');
+    componentURLsRow.hidden = savedSource !== 'custom';
+  };
+  async function saveComponentSource() {
+    const source = componentSource.value;
+    const urls = source === 'custom' ? componentURLs.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
+    if (source === 'custom' && !urls.length) {
+      toast({ tone: 'err', title: '需要自定义地址', text: '请填写至少一个 HTTP(S) 下载目录。' });
+      return;
+    }
+    try {
+      const v = await api.put('/api/components/source', { source, mirror_urls: urls });
+      showSaved(v);
+      toast({ title: '已保存组件下载源', text: source === 'custom' ? (v.mirror_urls || []).join('、') : source === 'auto' ? '自动' : source });
+    } catch (e) {
+      toastError(e);
+      if (source !== 'custom') { componentSource.value = savedSource; componentURLsRow.hidden = savedSource !== 'custom'; }
+    }
+  }
+  const componentSave = btn('btn btn-secondary', '保存', saveComponentSource);
+  const componentURLsRow = h('div', { class: 'upd-cdk upd-urls' }, componentURLs, componentSave);
+  componentSource.addEventListener('change', () => {
+    componentURLsRow.hidden = componentSource.value !== 'custom';
+    if (componentSource.value !== 'custom') saveComponentSource();
+    else componentURLs.focus();
+  });
+  componentURLs.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveComponentSource(); } });
   const fields = h('div', { class: 'fields' },
     h('span', { class: 'f-label', id: 'upd-src-l', text: '更新源' }), h('div', { class: 'f-ctl' }, seg),
     h('label', { class: 'f-label', for: 'upd-cdk', text: 'Mirror 酱 CDK' }),
-    h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState));
+    h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState),
+    h('label', { class: 'f-label', for: 'upd-comp', text: '组件下载源' }), h('div', { class: 'f-ctl' }, componentSource, componentURLsRow,
+      h('p', { class: 'f-hint', text: '「补全组件」和 modavd components fetch 都从这里选的源下载；选了就保存。' })));
   const note = h('p', { class: 'f-hint', text: '更新现在由 AUTO-MAS 发起（它调用 modavd update），会按这里选的更新源和 CDK 下载；这里先不能直接更新。' });
+  const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], () => { ctl.close(); openDiagnostics(); });
   const when = h('span', { class: 'foot-note' });
   const checkBtn = btn('btn btn-secondary', null, () => run(api.post('/api/update/check')));
   const installBtn = btn('btn btn-primary', [icon('download'), '更新'], null,
@@ -57,7 +97,7 @@ export function openUpdate() {
 
   ctl = openDialog({
     title: '设置', sub: 'ModAVD 更新：模拟器、组件、脚本和管理器整包更新', cls: 'dlg-update', light: true,
-    body: h('div', { class: 'dlg-body' }, msg, box, kv, fields, note),
+    body: h('div', { class: 'dlg-body' }, msg, box, kv, fields, note, h('div', { class: 'diag-launch' }, diagBtn)),
     foot: h('footer', { class: 'dlg-foot' }, when, checkBtn, installBtn),
   });
 
@@ -90,6 +130,7 @@ export function openUpdate() {
     setText(cdkState, v.cdk_set ? '已填（加密保存在本机，只有这个 Windows 用户能读）' : v.source === 'mirrorchyan' ? '没填：没有 CDK 时只能从 GitHub 下载' : '选 Mirror 酱时才用到');
     cdk.placeholder = v.cdk_set ? '已填，输入新的会替换' : '粘贴 CDK';
     clear.hidden = !v.cdk_set;
+    componentURLsRow.hidden = componentSource.value !== 'custom';
     setText(when, v.checked_at ? `检查于 ${clock(v.checked_at)}` : '');
     checkBtn.replaceChildren(v.checking ? h('span', { class: 'spin' }) : icon('refresh'), v.checking ? '正在检查…' : '检查更新');
     checkBtn.disabled = !!v.checking;
@@ -97,5 +138,6 @@ export function openUpdate() {
   };
   const un = subscribe(render);
   ctl.onClose.push(() => { un(); ctl = null; });
+  api.get('/api/components/source').then(showSaved).catch(() => {});
   render();
 }

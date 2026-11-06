@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 
 	"modavd/internal/appproxy"
 	"modavd/internal/buildinfo"
+	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
@@ -33,7 +35,9 @@ var (
 	masLogTailBytes int64 = 30 * mb  // $MasLogTailBytes: only the end of a longer AUTO-MAS log
 	dumpMaxBytes    int64 = 100 * mb // $DumpMaxBytes: larger crash dumps are listed, not taken
 	// modavd's own: the failed boots' directories (bootDiagDirs); not in the script
-	bootDiagCapBytes int64 = 100 * mb
+	bootDiagCapBytes       int64 = 100 * mb
+	diagnosticLogCapBytes  int64 = diagnostics.CollectLogBytes
+	diagnosticBootCapBytes int64 = diagnostics.CollectBootBytes
 )
 
 const (
@@ -53,10 +57,13 @@ type CollectOptions struct {
 	Host     Host // nil: this computer
 
 	// tests
-	now      func() time.Time
-	getenv   func(string) string
-	pid      int
-	explorer func(path string) error
+	now               func() time.Time
+	getenv            func(string) string
+	pid               int
+	explorer          func(path string) error
+	beforeLogCopy     func()
+	beforeBoundedOpen func()
+	beforeBoundedRead func()
 }
 
 // CollectResult describes the zip that was written.
@@ -120,6 +127,9 @@ type collector struct {
 	running           []liveTarget
 	cmdlineUnreadable bool
 	masFound          bool
+	diagnostics       map[int]diagnostics.State
+	diagnosticBytes   map[int]int64
+	stageError        error // a partial file could not be removed; do not pack it
 }
 
 func (c *collector) L(s string) { c.lines = append(c.lines, s) }
@@ -236,6 +246,13 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	// the script names the PowerShell that ran it here
 	c.L("modavd：" + buildinfo.Version + "（" + runtime.Version() + "）")
 
+	var diagErr error
+	c.diagnostics, diagErr = diagnostics.Read(&root.Root{Dir: c.root})
+	if diagErr != nil {
+		msg := "诊断模式状态未知，按普通规则收集：" + errText(diagErr)
+		c.L(msg)
+		c.problems = append(c.problems, msg)
+	}
 	c.step("ModAVD 目录与版本", c.rootAndVersions)
 	c.step("Windows / CPU / 内存 / 显卡", c.computer)
 	c.step("虚拟化功能", c.features)
@@ -245,11 +262,19 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	c.step("正在运行的模拟器与 adb", c.runningAndAdb)
 	c.step("模拟器日志", c.emulatorLogs)
 	c.step("模拟器崩溃转储", c.crashDumps)
+	if err := c.diagnosticDumps(); err != nil {
+		msg := "诊断崩溃转储：" + errText(err)
+		c.L("[本节出错] " + msg)
+		c.problems = append(c.problems, msg)
+	}
 	c.step("AUTO-MAS 日志", c.autoMAS)
 	c.step("系统事件日志", c.events)
 	c.step("现场截图与状态", c.live)
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if c.stageError != nil {
+		return nil, packFailed(c.stageError, stage)
 	}
 
 	elapsed := opt.now().Sub(start).Seconds()
@@ -600,6 +625,20 @@ func (c *collector) instanceFiles() error {
 	}
 	for k, ini := range inis {
 		name := c.instances[k]
+		if c.diagnostics != nil {
+			if i, ok := diagnosticIndex(name); ok {
+				state := c.diagnostics[i]
+				if state.Enabled {
+					since := state.Since
+					if since == "" {
+						since = "未记录"
+					}
+					c.L(fmt.Sprintf("%s：诊断模式 开，开启时间：%s", name, since))
+				} else {
+					c.L(name + "：诊断模式 关")
+				}
+			}
+		}
 		// one at a time: a broken instance is written down and the next one collected
 		if err := c.instanceFilesOf(avdDir, ini, name); err != nil {
 			c.L(fmt.Sprintf("%s：收集这台实例时出错：%s", name, errText(err)))
@@ -806,11 +845,12 @@ var (
 
 // logCandidate is one emulator log or logcat that may be copied.
 type logCandidate struct {
-	file  fs.FileInfo
-	path  string
-	kind  string // emu / logcat / bridge
-	stamp string
-	len   int64
+	file     fs.FileInfo
+	path     string
+	kind     string // emu / logcat / bridge
+	stamp    string
+	len      int64
+	instance int // -1 means the ordinary shared pool
 }
 
 func (c *collector) emulatorLogs() error {
@@ -848,8 +888,12 @@ func (c *collector) emulatorLogs() error {
 		emuRe := regexp.MustCompile(`(?i)^` + esc + `-[0-9]{8}-[0-9]{6}\.log$`)
 		catRe := regexp.MustCompile(`(?i)^logcat-` + esc + `-[0-9]{8}-[0-9]{6}\.txt$`)
 		// the time stamp in the name is the boot time: by name, descending, is newest first
-		emuLogs := newestByName(all, emuRe, 8)
-		catLogs := newestByName(all, catRe, 8)
+		keep, instance := 8, -1
+		if i, ok := diagnosticIndex(n); ok && c.diagnostics[i].Enabled {
+			keep, instance = diagnostics.CollectKeep, i
+		}
+		emuLogs := newestByName(all, emuRe, keep)
+		catLogs := newestByName(all, catRe, keep)
 		for _, group := range []struct {
 			kind  string
 			files []fs.FileInfo
@@ -860,10 +904,10 @@ func (c *collector) emulatorLogs() error {
 				if err != nil {
 					return err
 				}
-				cand = append(cand, logCandidate{file: f, path: p, kind: group.kind, stamp: logStamp.ReplaceAllString(f.Name(), "$1"), len: n})
+				cand = append(cand, logCandidate{file: f, path: p, kind: group.kind, stamp: logStamp.ReplaceAllString(f.Name(), "$1"), len: n, instance: instance})
 			}
 		}
-		c.L(fmt.Sprintf("%s：模拟器日志 %d 份，logcat %d 份（各取最新 8 份）", n, len(emuLogs), len(catLogs)))
+		c.L(fmt.Sprintf("%s：模拟器日志 %d 份，logcat %d 份（各取最新 %d 份）", n, len(emuLogs), len(catLogs), keep))
 	}
 	// Bridge logs belong to the numbered instance, not an invented instance named modavd-bridge-<i>.
 	// Keep their original filenames in the archive and count them toward the same log budget.
@@ -877,61 +921,92 @@ func (c *collector) emulatorLogs() error {
 	for _, index := range bridges {
 		re := regexp.MustCompile(`(?i)^modavd-bridge-` + regexp.QuoteMeta(index) + `-[0-9]{8}-[0-9]{6}\.log$`)
 		logs := newestByName(all, re, 10)
+		instance := -1
+		if i, err := strconv.Atoi(index); err == nil && strconv.Itoa(i) == index && root.ValidIndex(i) && c.diagnostics[i].Enabled {
+			instance = i
+		}
 		for _, f := range logs {
 			p := filepath.Join(logDir, f.Name())
 			n, err := trueLength(p)
 			if err != nil {
 				return err
 			}
-			cand = append(cand, logCandidate{file: f, path: p, kind: "bridge", stamp: logStamp.ReplaceAllString(f.Name(), "$1"), len: n})
+			cand = append(cand, logCandidate{file: f, path: p, kind: "bridge", stamp: logStamp.ReplaceAllString(f.Name(), "$1"), len: n, instance: instance})
 		}
 		c.L(fmt.Sprintf("mas_%s：执行桥日志 %d 份（取最新 10 份）", index, len(logs)))
 	}
-	var total int64
+	pools := map[int][]logCandidate{}
 	for _, k := range cand {
-		total += k.len
+		pools[k.instance] = append(pools[k.instance], k)
 	}
-	if total > logCapBytes {
-		// over the cap: the oldest logcats go first, then the oldest emulator logs
-		order := append([]logCandidate(nil), cand...)
-		sort.SliceStable(order, func(i, j int) bool {
-			ki, kj := order[i].kind != "logcat", order[j].kind != "logcat"
-			if ki != kj {
-				return !ki
-			}
-			return cultureCompare(order[i].stamp, order[j].stamp) < 0
-		})
-		drop := map[string]bool{}
-		dropped := 0
-		for _, k := range order {
-			if total <= logCapBytes {
-				break
-			}
-			drop[strings.ToLower(k.path)] = true
-			total -= k.len
-			dropped++
-		}
-		var kept []logCandidate
-		for _, k := range cand {
-			if !drop[strings.ToLower(k.path)] {
-				kept = append(kept, k)
-			}
-		}
-		cand = kept
-		c.L(fmt.Sprintf("原始总量超过 %s，丢掉了最旧的 %d 份", formatSize(float64(logCapBytes)), dropped))
-	}
+	c.diagnosticBytes = map[int]int64{}
 	var copied int64
-	n := 0
-	for _, k := range cand {
-		got, err := copyShared(k.path, filepath.Join(c.stage, root.LogsDir, k.file.Name()), 0)
-		if err != nil {
-			c.L("  复制 " + k.file.Name() + " 失败：" + errText(err))
-			continue
-		}
-		copied += got
-		n++
+	count := 0
+	if c.opt.beforeLogCopy != nil {
+		c.opt.beforeLogCopy()
 	}
-	c.L(fmt.Sprintf("共复制 %d 份，%s", n, formatSize(float64(copied))))
+	ids := make([]int, 0, len(pools))
+	for id := range pools {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		candidates := pools[id]
+		capBytes := logCapBytes
+		if id >= 0 {
+			capBytes = diagnosticLogCapBytes
+		}
+		var total int64
+		for _, k := range candidates {
+			total += k.len
+		}
+		if total > capBytes {
+			order := append([]logCandidate(nil), candidates...)
+			sort.SliceStable(order, func(i, j int) bool {
+				ki, kj := order[i].kind != "logcat", order[j].kind != "logcat"
+				if ki != kj {
+					return !ki
+				}
+				return cultureCompare(order[i].stamp, order[j].stamp) < 0
+			})
+			drop := map[string]bool{}
+			for _, k := range order {
+				if total <= capBytes {
+					break
+				}
+				drop[strings.ToLower(k.path)] = true
+				total -= k.len
+			}
+			kept := candidates[:0]
+			for _, k := range candidates {
+				if !drop[strings.ToLower(k.path)] {
+					kept = append(kept, k)
+				}
+			}
+			if id == -1 {
+				c.L(fmt.Sprintf("原始总量超过 %s，丢掉了最旧的 %d 份", formatSize(float64(capBytes)), len(candidates)-len(kept)))
+			} else {
+				c.L(fmt.Sprintf("%s：诊断日志超过 %s，丢掉了最旧的 %d 份", root.AvdName(id), formatSize(float64(capBytes)), len(candidates)-len(kept)))
+			}
+			candidates = kept
+		}
+		var used int64
+		for _, k := range candidates {
+			limit := min(k.len, capBytes-used)
+			got, _, err := c.copyBounded(k.path, filepath.Join(c.stage, root.LogsDir, k.file.Name()), limit)
+			if err != nil {
+				c.L("  复制 " + k.file.Name() + " 失败：" + errText(err))
+				continue
+			}
+			used += got
+			copied += got
+			count++
+		}
+		if id >= 0 {
+			c.diagnosticBytes[id] = used
+		}
+	}
+	c.L(fmt.Sprintf("共复制 %d 份，%s", count, formatSize(float64(copied))))
 
 	// thread dumps of a start-up that hung, a dozen KB each: the newest 3 by the time in the name, outside the cap
 	var hang []fs.FileInfo
@@ -986,7 +1061,7 @@ func (c *collector) emulatorLogs() error {
 	return nil
 }
 
-var bootDiagName = regexp.MustCompile(`(?i)^.+-([0-9]{8}-[0-9]{6})-bootfail$`)
+var bootDiagName = regexp.MustCompile(`(?i)^(.+)-([0-9]{8}-[0-9]{6})-bootfail$`)
 
 // bootDiagDirs copies the guest state of failed boots (modavd start / create, logs\<instance>-<time>-bootfail\): the
 // newest 3 by the time in the name, outside the cap like the thread dumps, but no more once they reach
@@ -1006,16 +1081,67 @@ func (c *collector) bootDiagDirs(logDir string) {
 	if len(dirs) == 0 {
 		return
 	}
-	stamp := func(n string) string { return bootDiagName.FindStringSubmatch(n)[1] }
+	stamp := func(n string) string { return bootDiagName.FindStringSubmatch(n)[2] }
 	sort.SliceStable(dirs, func(i, j int) bool {
 		if d := cultureCompare(stamp(dirs[i]), stamp(dirs[j])); d != 0 {
 			return d > 0
 		}
 		return cultureCompare(dirs[i], dirs[j]) > 0
 	})
+	var ordinary []string
+	diagTaken := map[int][]string{}
+	diagBytes := map[int]int64{}
+	for _, d := range dirs {
+		m := bootDiagName.FindStringSubmatch(d)
+		name := m[1]
+		i, ok := diagnosticIndex(name)
+		if !ok || !c.diagnostics[i].Enabled {
+			ordinary = append(ordinary, d)
+			continue
+		}
+		files, err := listFiles(filepath.Join(logDir, d))
+		if err != nil {
+			c.L("  读不了 " + d + "：" + errText(err))
+			continue
+		}
+		var copiedDir bool
+		for _, f := range files {
+			if !f.Mode().IsRegular() {
+				continue
+			}
+			if diagBytes[i] >= diagnosticBootCapBytes {
+				c.L("  " + d + `\` + f.Name() + "：诊断开机现场预算不足，跳过")
+				continue
+			}
+			if f.Size() > diagnosticBootCapBytes-diagBytes[i] {
+				c.L("  " + d + `\` + f.Name() + "：诊断开机现场预算不足，截断")
+			}
+			got, _, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), min(f.Size(), diagnosticBootCapBytes-diagBytes[i]))
+			if err != nil {
+				c.L("  复制 " + d + `\` + f.Name() + " 失败：" + errText(err))
+				continue
+			}
+			diagBytes[i] += got
+			copiedDir = true
+		}
+		if copiedDir {
+			diagTaken[i] = append(diagTaken[i], d)
+		}
+	}
+	ids := make([]int, 0, len(diagTaken))
+	for i := range diagTaken {
+		ids = append(ids, i)
+	}
+	sort.Ints(ids)
+	for _, i := range ids {
+		c.L(fmt.Sprintf("%s：诊断开机失败现场 %d 个，%s", root.AvdName(i), len(diagTaken[i]), formatSize(float64(diagBytes[i]))))
+	}
+	if len(ordinary) == 0 {
+		return
+	}
 	var taken []string
 	var total int64
-	for _, d := range dirs {
+	for _, d := range ordinary {
 		if len(taken) == 3 || (len(taken) > 0 && total >= bootDiagCapBytes) {
 			break
 		}
@@ -1025,7 +1151,7 @@ func (c *collector) bootDiagDirs(logDir string) {
 			continue
 		}
 		for _, f := range files {
-			got, err := copyShared(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), 0)
+			got, _, err := c.copyBounded(filepath.Join(logDir, d, f.Name()), filepath.Join(c.stage, root.LogsDir, d, f.Name()), f.Size())
 			if err != nil {
 				c.L("  复制 " + d + `\` + f.Name() + " 失败：" + errText(err))
 				continue
@@ -1034,7 +1160,7 @@ func (c *collector) bootDiagDirs(logDir string) {
 		}
 		taken = append(taken, d)
 	}
-	c.L(fmt.Sprintf("开机失败时的客体现场（*-bootfail）：共 %d 个，取了最新 %d 个，%s：%s", len(dirs), len(taken),
+	c.L(fmt.Sprintf("开机失败时的客体现场（*-bootfail）：共 %d 个，取了最新 %d 个，%s：%s", len(ordinary), len(taken),
 		formatSize(float64(total)), strings.Join(taken, "、")))
 }
 
@@ -1094,8 +1220,16 @@ func (c *collector) crashDumps() error {
 				continue
 			}
 			for _, f := range findFiles(filepath.Join(b, db.Name()), func(n string) bool { return strings.HasSuffix(strings.ToLower(n), ".dmp") }) {
-				if !f.info.ModTime().Before(since) {
-					dumps = append(dumps, dump{path: f.path, db: db.Name(), info: f.info})
+				if !f.info.Mode().IsRegular() {
+					continue
+				}
+				info, err := boundedSnapshot(f.path)
+				if err != nil {
+					c.L("  无法读取转储 " + f.path + "：" + errText(err))
+					continue
+				}
+				if !info.ModTime().Before(since) {
+					dumps = append(dumps, dump{path: f.path, db: db.Name(), info: info})
 				}
 			}
 		}
@@ -1114,12 +1248,185 @@ func (c *collector) crashDumps() error {
 			c.L(info + "（超过 " + formatSize(float64(dumpMaxBytes)) + "，没拿）")
 			continue
 		}
-		if _, err := copyShared(d.path, filepath.Join(c.stage, "crash", d.db, d.info.Name()), 0); err != nil {
+		dst := filepath.Join(c.stage, "crash", d.db, d.info.Name())
+		n, opened, err := c.copyBounded(d.path, dst, d.info.Size())
+		if err != nil {
 			return err
+		}
+		if !sourceUnchanged(d.path, d.info, opened, n) {
+			if err := c.discardStageFile(dst); err != nil {
+				return err
+			}
+			c.L(info + "（复制期间文件变化，没拿）")
+			continue
 		}
 		c.L(info)
 	}
 	return nil
+}
+
+// diagnosticDumps adds only flat regular dump files from enabled instances. Copies already present in the
+// ordinary crashpad collection (or another diagnostic archive) are identified by their complete staged bytes.
+func (c *collector) diagnosticDumps() error {
+	ids := make([]int, 0, len(c.diagnostics))
+	for i, state := range c.diagnostics {
+		if state.Enabled {
+			ids = append(ids, i)
+		}
+	}
+	sort.Ints(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[[32]byte]bool{}
+	ordinary := findFiles(filepath.Join(c.stage, "crash"), func(n string) bool { return strings.HasSuffix(strings.ToLower(n), ".dmp") })
+	for _, f := range ordinary {
+		if !f.info.Mode().IsRegular() || f.info.Size() > dumpMaxBytes {
+			continue
+		}
+		h, err := c.fileDigest(f.path, f.info.Size())
+		if err != nil {
+			return err
+		}
+		seen[h] = true
+	}
+	var failures []error
+	for _, i := range ids {
+		err := func() error {
+			dir := filepath.Join(c.root, root.LogsDir, root.AvdName(i)+"-crashdumps")
+			info, err := os.Lstat(dir)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s：诊断转储目录不是目录", root.AvdName(i))
+			}
+			files, err := listFiles(dir)
+			if err != nil {
+				return err
+			}
+			var snapshots []fs.FileInfo
+			for _, f := range files {
+				if !f.Mode().IsRegular() || !strings.HasSuffix(strings.ToLower(f.Name()), ".dmp") {
+					continue
+				}
+				info, err := boundedSnapshot(filepath.Join(dir, f.Name()))
+				if err != nil {
+					return err
+				}
+				if !info.ModTime().Before(c.opt.now().Add(-diagnostics.MaxAge)) {
+					snapshots = append(snapshots, info)
+				}
+			}
+			sort.SliceStable(snapshots, func(a, b int) bool { return snapshots[a].ModTime().After(snapshots[b].ModTime()) })
+			var taken, skipped, duplicates int
+			for _, f := range snapshots {
+				remaining := diagnosticLogCapBytes - c.diagnosticBytes[i]
+				if f.Size() > remaining {
+					skipped++
+					c.L(fmt.Sprintf("  %s：诊断日志预算不足，跳过", filepath.Join(dir, f.Name())))
+					continue
+				}
+				dst := filepath.Join(c.stage, root.LogsDir, root.AvdName(i)+"-crashdumps", f.Name())
+				n, opened, err := c.copyBounded(filepath.Join(dir, f.Name()), dst, f.Size())
+				if err != nil {
+					return err
+				}
+				if !sourceUnchanged(filepath.Join(dir, f.Name()), f, opened, n) {
+					if err := c.discardStageFile(dst); err != nil {
+						return err
+					}
+					skipped++
+					c.L("  " + f.Name() + "：复制期间文件变化，跳过")
+					continue
+				}
+				h, err := c.fileDigest(dst, n)
+				if err != nil {
+					if cleanupErr := c.discardStageFile(dst); cleanupErr != nil {
+						return cleanupErr
+					}
+					return err
+				}
+				if seen[h] {
+					if err := c.discardStageFile(dst); err != nil {
+						return err
+					}
+					duplicates++
+					continue
+				}
+				seen[h] = true
+				if err := os.Chtimes(dst, f.ModTime(), f.ModTime()); err != nil {
+					if cleanupErr := c.discardStageFile(dst); cleanupErr != nil {
+						return cleanupErr
+					}
+					return err
+				}
+				if c.diagnosticBytes == nil {
+					c.diagnosticBytes = map[int]int64{}
+				}
+				c.diagnosticBytes[i] += n
+				taken++
+			}
+			c.L(fmt.Sprintf("%s：近 30 天诊断转储 %d 份，重复 %d 份，预算或文件变化跳过 %d 份；诊断日志共 %s / %s", root.AvdName(i), taken, duplicates, skipped, formatSize(float64(c.diagnosticBytes[i])), formatSize(float64(diagnosticLogCapBytes))))
+			return nil
+		}()
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s：%w", root.AvdName(i), err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// FileInfo from directory listings may load its identity lazily on Windows. Pin dump identity
+// at selection time so a replacement before copy cannot become the selected file retroactively.
+func boundedSnapshot(path string) (fs.FileInfo, error) {
+	f, err := openBoundedSource(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("不是常规文件：%s", path)
+	}
+	return info, nil
+}
+
+func sourceUnchanged(path string, before, opened fs.FileInfo, copied int64) bool {
+	after, err := os.Lstat(path)
+	return err == nil && after.Mode().IsRegular() && copied == before.Size() &&
+		opened.Size() == before.Size() && opened.ModTime().Equal(before.ModTime()) && os.SameFile(before, opened) &&
+		after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && os.SameFile(opened, after)
+}
+
+func (c *collector) fileDigest(path string, size int64) ([32]byte, error) {
+	var zero [32]byte
+	f, err := root.OpenShared(path)
+	if err != nil {
+		return zero, err
+	}
+	defer f.Close()
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(zipReader{ctx: ctx, r: f}, size))
+	if err != nil {
+		return zero, err
+	}
+	if n != size {
+		return zero, io.ErrUnexpectedEOF
+	}
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
 }
 
 var (
@@ -1376,6 +1683,13 @@ func (c *collector) live() error {
 				c.L(fmt.Sprintf("  %s 出错：%s", lc.tag, errText(err)))
 			}
 		}
+		if i, ok := diagnosticIndex(t.name); ok && c.diagnostics[i].Enabled {
+			for _, lc := range diagnosticLiveCommands {
+				if err := c.liveCommand(liveDir, t.name, serial, lc.tag, lc.kind, lc.args); err != nil {
+					c.L(fmt.Sprintf("  %s 出错：%s", lc.tag, errText(err)))
+				}
+			}
+		}
 		// not in the script: the per-app proxy's guest state and log, for the instances that have one set
 		if proxied[strings.ToLower(t.name)] {
 			if err := c.liveCommand(liveDir, t.name, serial, "app-proxy", "shell", appProxyCommand); err != nil {
@@ -1384,6 +1698,113 @@ func (c *collector) live() error {
 		}
 	}
 	return nil
+}
+
+// diagnosticIndex accepts only canonical instance names, so another instance cannot borrow its budget.
+func diagnosticIndex(name string) (int, bool) {
+	if !strings.HasPrefix(strings.ToLower(name), root.AvdNamePrefix) {
+		return 0, false
+	}
+	i, err := strconv.Atoi(name[len(root.AvdNamePrefix):])
+	return i, err == nil && root.ValidIndex(i) && strings.EqualFold(name, root.AvdName(i))
+}
+
+// copyBounded copies at most the size planned for this file, even if a live source grows.
+// Failed partial files are removed so neither the budget nor the ZIP can contain unaccounted bytes.
+func (c *collector) copyBounded(src, dst string, limit int64) (int64, fs.FileInfo, error) {
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+	}
+	pathInfo, err := os.Lstat(src)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return 0, nil, fmt.Errorf("不是常规文件：%s", src)
+	}
+	// Pin the identity before any later path lookup. On Windows Lstat's file ID is lazy,
+	// so SameFile(Lstat, opened) alone can identify a replacement instead of the original.
+	pinned, err := openBoundedSource(src)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer pinned.Close()
+	pinnedInfo, err := pinned.Stat()
+	if err != nil {
+		return 0, nil, err
+	}
+	if !pinnedInfo.Mode().IsRegular() {
+		return 0, nil, fmt.Errorf("不是常规文件：%s", src)
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return 0, nil, err
+	}
+	if c.opt.beforeBoundedOpen != nil {
+		c.opt.beforeBoundedOpen()
+	}
+	in, err := root.OpenShared(src)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer in.Close()
+	opened, err := in.Stat()
+	if err != nil {
+		return 0, nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(pinnedInfo, opened) {
+		return 0, nil, fmt.Errorf("源文件在打开前发生替换：%s", src)
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return 0, nil, err
+	}
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.opt.beforeBoundedRead != nil {
+		c.opt.beforeBoundedRead()
+	}
+	n, err := io.Copy(out, io.LimitReader(zipReader{ctx: ctx, r: in}, limit))
+	if e := out.Close(); err == nil {
+		err = e
+	}
+	if err == nil {
+		opened, err = in.Stat()
+	}
+	if err != nil {
+		if cleanupErr := c.discardStageFile(dst); cleanupErr != nil {
+			return 0, nil, cleanupErr
+		}
+		return 0, nil, err
+	}
+	if opened.Size() > n {
+		c.L(fmt.Sprintf("  %s：仅复制前 %d 字节，复制结束时源文件 %d 字节（快照截断）", src, n, opened.Size()))
+	}
+	return n, opened, nil
+}
+
+func (c *collector) discardStageFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.stageError = fmt.Errorf("删除未完成的暂存文件 %s 失败：%w", path, err)
+		return c.stageError
+	}
+	return nil
+}
+
+var diagnosticLiveCommands = []struct {
+	tag, kind string
+	args      []string
+}{
+	{"logcat-all", "logcat", []string{"-d", "-b", "all"}},
+	{"dmesg", "shell", []string{"su 0 dmesg || dmesg"}},
+	{"meminfo", "shell", []string{"cat /proc/meminfo"}},
+	{"activity-processes", "shell", []string{"dumpsys activity processes | head -n 300"}},
 }
 
 // appProxyCommand reads the per-app proxy daemon's state and the end of its log, as the shell user (the daemon writes

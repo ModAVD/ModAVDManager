@@ -5,6 +5,7 @@ package emu
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -282,6 +283,11 @@ const (
 )
 
 func fakeLogcatStream(args []string) int {
+	if path := os.Getenv("MODAVD_TEST_CAPTURE_ENV"); path != "" {
+		exe, _ := os.Executable()
+		b, _ := json.Marshal(map[string]any{"exe": exe, "args": args, "sdk": os.Getenv("ANDROID_SDK_ROOT"), "home": os.Getenv("ANDROID_HOME"), "avd": os.Getenv("ANDROID_AVD_HOME"), "server": os.Getenv("ANDROID_ADB_SERVER_PORT")})
+		os.WriteFile(path, b, 0o644)
+	}
 	serial := args[slices.Index(args, "-s")+1]
 	for n := 0; n < 15; n++ {
 		fmt.Printf("%s sequence=%06d payload=abcdefghijk\n", serial, n)
@@ -304,7 +310,8 @@ func fakeLogcatStream(args []string) int {
 func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 	r, _ := portPlanRoot(t)
 	copyTestExe(t, filepath.Join(r.Dir, "tools", "modavd.exe"))
-	q := fakeQemu(t, filepath.Join(r.Dir, "fake-qemu"), 6, 21060, false, "")
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	q := fakeQemu(t, filepath.Join(r.RuntimeSDK(), "emulator", "qemu", "windows-x86_64"), 6, 21060, false, filepath.Join(r.AvdHome(), "mas_6.avd"))
 	savedScan := qemuScan
 	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: q} }
 	t.Cleanup(func() { qemuScan = savedScan })
@@ -371,7 +378,8 @@ func TestLogcatOrphanSurvivesLauncherAndRestartsOnce(t *testing.T) {
 func TestLogcatQemuExitEndsStubbornAdbAndReleasesFiles(t *testing.T) {
 	r, _ := portPlanRoot(t)
 	copyTestExe(t, filepath.Join(r.Dir, "tools", "modavd.exe"))
-	q := fakeQemu(t, filepath.Join(r.Dir, "fake-qemu"), 6, 21060, false, "")
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	q := fakeQemu(t, filepath.Join(r.RuntimeSDK(), "emulator", "qemu", "windows-x86_64"), 6, 21060, false, filepath.Join(r.AvdHome(), "mas_6.avd"))
 	gate := filepath.Join(r.Dir, "keep-adb-running")
 	if err := os.WriteFile(gate, nil, 0o644); err != nil {
 		t.Fatal(err)

@@ -4,9 +4,10 @@ import { api } from './api.js';
 import { S, update, instance } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur, diskInfoText, diskTrimText, diskCompactText } from './format.js';
-import { openActivity } from './panels.js';
+import { openActivity, runCheck } from './panels.js';
 
-const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘' };
+const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
+  components: '补全组件', 'collect-info': '收集问题信息' };
 const isBoot = (j) => j.kind === 'start';
 const activity = { label: '查看活动', run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
@@ -18,6 +19,8 @@ export function onJob(job) {
   const prev = S.jobs.get(job.id);
   if (prev && job.state === 'running' && (prev.state !== 'running' || (prev.progress && job.progress && job.progress.done < prev.progress.done))) return;
   S.jobs.set(job.id, job);
+  // components were just installed: 电脑检查 and the banner read the root again (the server dropped its cached check)
+  if (job.kind === 'components' && job.state === 'done' && prev && prev.state === 'running') runCheck(true);
   if (job.state !== 'running' && S.watch.delete(job.id)) notify(job);
   if (S.jobs.size > 80) {
     const old = [...S.jobs.values()].filter((j) => j.state !== 'running').sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
@@ -26,8 +29,11 @@ export function onJob(job) {
   update();
 }
 
+export function notifyJob(job) { notify(job); }
+
 function notify(job) {
-  const who = quoted(instance(job.index), job.index);
+  // components / collect-info belong to the root (index -1), not to an instance
+  const who = job.index < 0 ? '' : quoted(instance(job.index), job.index);
   const r = job.result || {};
   const e = job.error || {};
   if (job.state === 'failed') toast({ tone: 'err', title: `${who}${VERB[job.kind] || ''}没有成功`, text: e.message, advice: e.advice, action: activity });
@@ -36,7 +42,9 @@ function notify(job) {
     const w = Math.max((r.warnings || []).length, (job.warnings || []).length);
     toast({ tone: w ? 'warn' : 'ok', title: `${who}已开机`, action: w ? activity : null,
       text: [r.first_boot && '首次初始化已完成', r.total_seconds && `用时 ${dur(r.total_seconds)}`, w && `有 ${w} 个设置步骤没成功`].filter(Boolean).join('，') });
-  } else if (job.kind === 'create') toast({ title: `${who}新建好了`, text: '初始化已做完，已关机；第一次开机和平常一样快。' });
+  } else if (job.kind === 'components') toast({ title: '组件补全完成', text: '已重新检查这台电脑。' });
+  else if (job.kind === 'collect-info') toast({ title: '问题信息已收集', text: r.zip_path ? `问题包：${r.zip_path}` : '', timeout: 9000 });
+  else if (job.kind === 'create') toast({ title: `${who}新建好了`, text: '初始化已做完，已关机；第一次开机和平常一样快。' });
   else if (job.kind === 'stop') toast({ title: `${who}已关机` });
   else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
   // the sizes are the answer, so they stay long enough to read
