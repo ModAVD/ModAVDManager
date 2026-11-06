@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -231,6 +232,14 @@ func TestDiagnosticCrashHelperSurvivesShortLauncher(t *testing.T) {
 	if helper.PID == 0 || !helper.Alive() {
 		t.Fatal("orphan did not survive launcher")
 	}
+	// The exit code outlives a process only while some handle to it is open (win.Process.ExitCode). The helper was
+	// found in the process table, so nothing in this test holds one: hold it here, or on a machine where nobody else
+	// does (the CI runner) its exit code is gone by the time it is read below.
+	held, err := syscall.OpenProcess(syscall.SYNCHRONIZE|syscall.PROCESS_QUERY_INFORMATION, false, helper.PID)
+	if err != nil {
+		t.Fatal("open copy helper", err)
+	}
+	t.Cleanup(func() { syscall.CloseHandle(held) })
 	t.Cleanup(func() { helper.Kill(); helper.Wait(time.Second) })
 	if _, err := os.Stat(m.crashScanPath(0)); !os.IsNotExist(err) {
 		t.Fatal("unfinished copy advanced watermark")
