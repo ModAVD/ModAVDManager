@@ -9,7 +9,7 @@ import (
 
 // Progress is one report of a download or an unpack: at most one every progressEvery, plus a final one each.
 type Progress struct {
-	Stage   string  // downloading / extracting
+	Stage   string  // downloading / extracting / verifying (ImportPlayStore reading the given files)
 	Name    string  // the component (fetch-components.ps1 display name)
 	Done    int64   // bytes so far (a resumed download counts what was there)
 	Total   int64   // bytes in all
@@ -67,10 +67,18 @@ func (m *meter) add(done int64) {
 		p.Message = fmt.Sprintf("  %s  %5s%%  %s / %s  %s/s  剩余 %s", m.name, fixed(percent(done, m.total), 1),
 			formatSize(float64(done)), formatSize(float64(m.total)), formatSize(m.speed), formatDuration(eta))
 	} else {
-		p.Message = fmt.Sprintf("  解压 %s  %5s%%  %s / %s", m.name, fixed(percent(done, m.total), 1),
+		p.Message = fmt.Sprintf("  %s %s  %5s%%  %s / %s", m.verb(), m.name, fixed(percent(done, m.total), 1),
 			formatSize(float64(done)), formatSize(float64(m.total)))
 	}
 	m.report(p)
+}
+
+// verb names what a stage other than downloading does: 校验 (verifying, an import reading the user's files) or 解压.
+func (m *meter) verb() string {
+	if m.stage == "verifying" {
+		return "校验"
+	}
+	return "解压"
 }
 
 // finish is the final report.
@@ -86,7 +94,7 @@ func (m *meter) finish(done int64) {
 		p.Message = fmt.Sprintf("  %s  %5s%%  %s / %s  平均 %s/s", m.name, fixed(percent(done, m.total), 1),
 			formatSize(float64(done)), formatSize(float64(m.total)), formatSize(p.Speed))
 	} else {
-		p.Message = fmt.Sprintf("  解压 %s  100.0%%  %s", m.name, formatSize(float64(done)))
+		p.Message = fmt.Sprintf("  %s %s  100.0%%  %s", m.verb(), m.name, formatSize(float64(done)))
 	}
 	m.report(p)
 }

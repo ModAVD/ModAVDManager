@@ -77,36 +77,62 @@ func (f *fetcher) install(ctx context.Context, c root.SDKComponent, zipPath stri
 	return f.place(c, filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot)))
 }
 
-// installPlayStore is install for the Google Play Store (root.PlayStoreComponent): only the system image is unpacked
-// from the Play image's zip, into sdk\.staging\<id>; the store's files are read out of it (playstore.Extract, each
-// checked against its pinned size and SHA-256), the 3 GB image is deleted, and the files go into place like a
-// component's directory.
+// installPlayStore is install for the Google Play Store (root.PlayStoreComponent): the five files are taken out of
+// the Play image's zip into sdk\.staging\<id> (playStoreFromZip) and go into place like a component's directory; the
+// unpacked 3 GB image is gone by then, and fetch deletes the zip afterwards (unless KeepDownloads), so only the five
+// files stay.
 func (f *fetcher) installPlayStore(ctx context.Context, c root.SDKComponent, zipPath string) (setAside string, err error) {
-	staging := filepath.Join(f.stagingRoot(), c.ID)
-	f.where = "从 " + filepath.Base(zipPath) + " 解出 " + playstore.ImageMember
-	f.removeStaging(staging)
-	out := filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot))
-	if err := os.MkdirAll(out, 0o755); err != nil {
-		return "", errs.Wrap(errs.Internal, err, "建不了 "+out+"："+err.Error())
-	}
-	defer f.removeStaging(staging)
-	img := filepath.Join(staging, "system.img")
-	if err := f.extractMember(ctx, c, zipPath, playstore.ImageMember, img); err != nil {
+	staging, out, err := f.playStoreStaging(c)
+	if err != nil {
 		return "", err
 	}
-	f.where = "从 system.img 取出 Google Play 商店的文件"
-	f.say("  从系统镜像里取出商店、Play 服务、GSF、合作伙伴设置…")
-	if err := playStoreExtract(img, playstore.Files, out); err != nil {
-		return "", rejected("从 Google Play 版系统镜像里取商店的文件失败：%v", err)
+	defer f.removeStaging(staging)
+	if err := f.playStoreFromZip(ctx, c, zipPath, staging, out); err != nil {
+		return "", err
 	}
-	if err := os.Remove(img); err != nil {
-		return "", errs.Wrap(errs.Internal, err, "删不掉临时解出的 "+img+"："+err.Error())
+	return f.finishPlayStore(c, out, PlayStoreFromDownload)
+}
+
+// playStoreStaging is a fresh sdk\.staging\<id> and the directory in it the five files are gathered in.
+func (f *fetcher) playStoreStaging(c root.SDKComponent) (staging, out string, err error) {
+	staging = filepath.Join(f.stagingRoot(), c.ID)
+	f.removeStaging(staging)
+	out = filepath.Join(staging, root.PlayStoreDir)
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return "", "", errs.Wrap(errs.Internal, err, "建不了 "+out+"："+err.Error())
 	}
-	if err := os.WriteFile(filepath.Join(out, "source.properties"), []byte(c.Properties), 0o644); err != nil {
+	return staging, out, nil
+}
+
+// playStoreFromZip takes the five files out of the Play image's zip into out: only the system image is unpacked, to
+// staging\system.img, read without mounting anything (playStoreExtract checks each file's size and SHA-256) and
+// deleted again, whether that worked or not.
+func (f *fetcher) playStoreFromZip(ctx context.Context, c root.SDKComponent, zipPath, staging, out string) error {
+	f.where = "从 " + filepath.Base(zipPath) + " 解出 " + playstore.ImageMember
+	img := filepath.Join(staging, "system.img")
+	err := f.extractMember(ctx, c, zipPath, playstore.ImageMember, img)
+	if err == nil {
+		f.where = "从 system.img 取出 Google Play 商店的文件"
+		f.say("  从系统镜像里取出商店、Play 服务、GSF、合作伙伴设置…")
+		if xerr := playStoreExtract(img, playStoreFiles, out); xerr != nil {
+			err = rejected("从 Google Play 版系统镜像里取商店的文件失败：%v", xerr)
+		}
+	}
+	if rerr := os.Remove(img); err == nil && rerr != nil {
+		return errs.Wrap(errs.Internal, rerr, "删不掉临时解出的 "+img+"："+rerr.Error())
+	}
+	return err
+}
+
+// finishPlayStore writes out's source.properties (with where the files came from), checks out as a whole (Complete:
+// every pin and the revision) and moves it into sdk\playstore.
+func (f *fetcher) finishPlayStore(c root.SDKComponent, out, source string) (setAside string, err error) {
+	props := c.Properties + playStoreSourceKey + "=" + source + "\n"
+	if err := os.WriteFile(filepath.Join(out, "source.properties"), []byte(props), 0o644); err != nil {
 		return "", errs.Wrap(errs.Internal, err, "写不了 source.properties："+err.Error())
 	}
 	if !c.Complete(out) {
-		return "", rejected("取出的 %s 校验失败", c.FetchName)
+		return "", rejected("%s 的文件校验失败", c.FetchName)
 	}
 	return f.place(c, out)
 }
