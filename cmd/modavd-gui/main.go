@@ -33,20 +33,20 @@ import (
 	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/ui"
-	"modavd/internal/win"
 )
 
 func main() {
-	// Hidden subcommands first, before any flag parsing or root lookup: emu and win re-run this executable as the
-	// spawn helper of win.StartOrphan, as the Vulkan probe child and as the boot watch (same routing as internal/cli
+	// Hidden subcommands first, before any flag parsing or root lookup: emu and host re-run this executable as the
+	// spawn helper of host.StartOrphan, as the Vulkan probe child and as the boot watch (same routing as internal/cli
 	// Main).
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case win.SpawnHelperArg:
-			os.Exit(win.SpawnHelperMain(os.Args[2:], os.Stdout))
+		case host.SpawnHelperArg:
+			os.Exit(host.SpawnHelperMain(os.Args[2:], os.Stdout))
 		case emu.VulkanProbeArg:
 			os.Exit(emu.RunVulkanProbe(os.Stdout))
 		case emu.BootWatchArg:
@@ -56,7 +56,7 @@ func main() {
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		win.OrphanHelper = exe
+		host.SetOrphanHelper(exe)
 	}
 	os.Exit(run(os.Args[1:]))
 }

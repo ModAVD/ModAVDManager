@@ -24,8 +24,8 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // userdataOverlay / userdataBacking name the data-disk files inside an instance
@@ -232,7 +232,7 @@ func (m *Manager) runQemuImgCheck(ctx context.Context, image string) (out []byte
 	}
 	cctx, cancel := context.WithTimeout(ctx, diskCheckTimeout)
 	defer cancel()
-	stdout, stderr, state, err := win.RunBound(cctx, exe, "check", "--output=json", image)
+	stdout, stderr, state, err := host.RunBound(cctx, exe, "check", "--output=json", image)
 	if ctx.Err() != nil {
 		return nil, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
@@ -315,7 +315,7 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
 	}
 
-	if onDisk, err := win.GetCompressedFileSize(overlay); err != nil {
+	if onDisk, err := host.GetCompressedFileSize(overlay); err != nil {
 		res.Warnings = append(res.Warnings, "读不到数据盘的宿主占用："+err.Error())
 	} else {
 		res.OnDiskBytes = new(int64(onDisk))
@@ -385,7 +385,7 @@ var compactFileSystems = map[string]bool{"NTFS": true, "REFS": true}
 // mid-rename could leave only the temp file, and the emulator would then build an empty overlay over the backing,
 // so a later run would delete the one good copy (ModAVD/ModAVD#2 P2-1).
 func requireCompactFS(overlay string) error {
-	fs, err := win.VolumeFileSystem(overlay)
+	fs, err := host.VolumeFileSystem(overlay)
 	if err != nil {
 		return err
 	}
@@ -432,7 +432,7 @@ func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 		{"bridge", "正在装卸执行桥"},
 		{"create", "正在新建"},
 	}
-	var locks []*win.FileLock
+	var locks []*host.FileLock
 	unlock := func() {
 		for k := len(locks) - 1; k >= 0; k-- {
 			locks[k].Unlock()
@@ -440,14 +440,14 @@ func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 	}
 	for _, kw := range kinds {
 		path := m.lockPath(i, kw.kind)
-		var l *win.FileLock
+		var l *host.FileLock
 		var ok bool
 		var err error
 		if kw.kind == "disk" {
 			// Let a short shared probe finish. Lifecycle locks below never wait.
-			l, ok, err = win.Lock(path, 100*time.Millisecond)
+			l, ok, err = host.Lock(path, 100*time.Millisecond)
 		} else {
-			l, ok, err = win.TryLock(path)
+			l, ok, err = host.TryLock(path)
 		}
 		if err != nil {
 			unlock()
@@ -479,7 +479,7 @@ func (m *Manager) runQemuImg(ctx context.Context, timeout time.Duration, args ..
 	}
 	cctx, cancel := qemuImgContext(ctx, timeout)
 	defer cancel()
-	so, se, state, runErr := win.RunBound(cctx, exe, args...)
+	so, se, state, runErr := host.RunBound(cctx, exe, args...)
 	if ctx.Err() != nil {
 		return nil, nil, 0, errs.Wrap(errs.Canceled, ctx.Err(), "已取消（qemu-img 没跑完）")
 	}
@@ -629,7 +629,7 @@ func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clu
 }
 
 func compactHostBytes(path string) (int64, error) {
-	n, err := win.GetCompressedFileSize(path)
+	n, err := host.GetCompressedFileSize(path)
 	if err != nil {
 		return 0, err
 	}
@@ -775,7 +775,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	if allocated != nil {
 		workAllocated = *allocated
 	}
-	free, err := win.DiskFree(in.Dir)
+	free, err := host.DiskFree(in.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -825,7 +825,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		_ = os.Remove(tmp)
 		return nil, err
 	}
-	if err := win.MoveFileReplaceThrough(tmp, overlay); err != nil {
+	if err := host.MoveFileReplaceThrough(tmp, overlay); err != nil {
 		_ = os.Remove(tmp)
 		return nil, err
 	}

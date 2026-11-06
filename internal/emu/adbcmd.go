@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 const passthroughServerWait = 20 * time.Second
@@ -66,7 +66,7 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	if !hasConsole() {
 		// Without a console of ours a console child would get a new, visible one.
-		win.HideConsoleCmd(cmd)
+		host.HideConsoleCmd(cmd)
 	}
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Run()
@@ -88,5 +88,5 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 
 // hasConsole: this process is attached to a console (a child then shares it and opens no window of its own).
 func hasConsole() bool {
-	return win.GetConsoleWindow() != 0
+	return host.GetConsoleWindow() != 0
 }

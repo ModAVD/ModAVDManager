@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"modavd/internal/diagnostics"
+	"modavd/internal/host"
 	"modavd/internal/logx"
-	"modavd/internal/win"
 )
 
 type logKind uint8
@@ -186,11 +186,11 @@ func applyCleanup(plan cleanupPlan, log *logx.Logger) (removed int, freed int64,
 	return removed, freed, err
 }
 
-func (m *Manager) retentionLock() (*win.FileLock, error) {
+func (m *Manager) retentionLock() (*host.FileLock, error) {
 	if err := os.MkdirAll(m.Root.LogsDir(), 0o755); err != nil {
 		return nil, err
 	}
-	l, ok, err := win.Lock(filepath.Join(m.Root.LogsDir(), ".modavd-retention.lock"), 5*time.Second)
+	l, ok, err := host.Lock(filepath.Join(m.Root.LogsDir(), ".modavd-retention.lock"), 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (m *Manager) retentionLock() (*win.FileLock, error) {
 	return l, nil
 }
 
-var diagnosticDiskFree = win.DiskFree
+var diagnosticDiskFree = host.DiskFree
 
 // diagnosticCleanup runs while retentionLock is held. Invalid metadata or an unknown disk budget deletes nothing.
 func (m *Manager) diagnosticCleanup(i int, previewOff bool) (cleanupPlan, error) {
@@ -249,7 +249,7 @@ func (m *Manager) diagnosticCleanup(i int, previewOff bool) (cleanupPlan, error)
 			if pidErr != nil || createdErr != nil || pid == 0 || created == 0 {
 				continue
 			}
-			if (win.Process{PID: uint32(pid), Created: created}).Alive() {
+			if (host.Process{PID: uint32(pid), Created: created}).Alive() {
 				continue
 			}
 			path := filepath.Join(m.Root.LogsDir(), entry.Name())

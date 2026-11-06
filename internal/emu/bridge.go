@@ -34,10 +34,10 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const (
@@ -296,7 +296,7 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 	cmd := bridgeCommandContext(cctx, ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	// the script's adb calls: same environment as ours (an adb that starts a server must not scan local ports either)
 	cmd.Env = m.ADB.Env()
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	// a killed powershell may leave an adb child holding the output pipe: stop waiting for it (as adbcmd.go)
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
@@ -340,7 +340,7 @@ func (m *Manager) finishBridge(ctx context.Context, i int, opt StartOptions, res
 		return res, err
 	}
 	// Two starts of one instance (CLI, MCP, the manager) must not install at the same time: the second one leaves it.
-	lock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	lock, ok, err := host.TryLock(m.lockPath(i, "bridge"))
 	if err != nil || !ok {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥正由另一次 modavd 在装，这次不装", i))
 		return res, nil
@@ -420,7 +420,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 // or an app is in the foreground once the setup is done (someone began to use the instance meanwhile; the update
 // restarts adbd and boots cold), and a script that fails is only a warning, as in finishBridge.
 func (m *Manager) updateBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
-	lock, ok, err := win.TryLock(m.lockPath(i, "bridge"))
+	lock, ok, err := host.TryLock(m.lockPath(i, "bridge"))
 	if err != nil {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("实例 %d 的执行桥锁文件打不开，这次不看执行桥要不要更新: %v", i, err))
 		return res, nil
@@ -507,7 +507,7 @@ func bridgeUpdateRecovery(i int, marker, logFile string) string {
 // bridgeUpdateBlocked: an install holds the guest lock or an app is in the foreground (the rules of owedMountGate,
 // checked once; nothing stays held), so the update, which restarts adbd and boots cold, waits.
 func (m *Manager) bridgeUpdateBlocked(ctx context.Context, i int) (mountBlocker, bool) {
-	l, free, err := win.TryLock(m.guestLockPath(i))
+	l, free, err := host.TryLock(m.guestLockPath(i))
 	if err != nil || !free {
 		return installBlocker(err), true
 	}

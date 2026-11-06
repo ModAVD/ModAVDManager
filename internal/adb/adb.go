@@ -24,9 +24,9 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // DefaultTimeout of one adb command.
@@ -232,7 +232,7 @@ func (c *Client) portConflict(k serverKind, port int, pid uint32, name string) *
 // listener reports whether somebody listens on port, with its PID and process name ("" when unreadable). Reads the
 // system table only; connecting to an emulator's adb port would disturb it.
 func listener(port int) (up bool, pid uint32, name string, err error) {
-	pid, up, err = win.ListenerPID(port)
+	pid, up, err = host.ListenerPID(port)
 	if err != nil {
 		return false, 0, "", errs.Wrap(errs.Internal, err, "读不出系统的 TCP 监听表: "+err.Error())
 	}
@@ -240,7 +240,7 @@ func listener(port int) (up bool, pid uint32, name string, err error) {
 		return false, 0, "", nil
 	}
 	if pid != 0 {
-		name = win.ProcessName(pid)
+		name = host.ProcessName(pid)
 	}
 	return true, pid, name, nil
 }
@@ -310,10 +310,10 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	c.Log.Infof("启动魔改 AVD %s adb server（端口 %d）", k.label, port)
 	// StartOrphan rather than StartDetached: an MCP client ends modavd's whole process tree when it disconnects, and
 	// while the start-server client (our child for ~2 s) is alive the server it forks is part of that tree. Losing
-	// the server is not harmless: the emulator registers with it only once, at boot. Without win.OrphanHelper (unit
-	// tests) StartOrphan is StartDetached. Output goes nowhere, like AUTO-MAS (stdout=DEVNULL).
-	client, err := win.StartOrphan(c.Root.AdbExe(), []string{"-P", strconv.Itoa(port), "start-server"},
-		win.StartOptions{Env: c.Env()})
+	// the server is not harmless: the emulator registers with it only once, at boot. Without a configured orphan
+	// helper (unit tests) StartOrphan is StartDetached. Output goes nowhere, like AUTO-MAS (stdout=DEVNULL).
+	client, err := host.StartOrphan(c.Root.AdbExe(), []string{"-P", strconv.Itoa(port), "start-server"},
+		host.StartOptions{Env: c.Env()})
 	if err != nil {
 		return false, errs.Wrap(errs.Internal, err, fmt.Sprintf("启动魔改 AVD %s adb server（端口 %d）失败: %s",
 			k.label, port, errs.As(err).Message))
@@ -323,7 +323,7 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 
 // waitListening polls until port listens, at most timeout (AUTO-MAS _wait_listening). It does not wait for the
 // start-server client to exit, but gives up early when that client has failed.
-func waitListening(ctx context.Context, port int, timeout time.Duration, client win.Process) (bool, error) {
+func waitListening(ctx context.Context, port int, timeout time.Duration, client host.Process) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		up, err := listening(port)
@@ -344,7 +344,7 @@ func waitListening(ctx context.Context, port int, timeout time.Duration, client 
 
 // clientFailed: the start-server client exited without success. Once it is gone its exit code may be unreadable
 // (nobody holds a handle to it); that counts as failed too, since a client that succeeded leaves the port listening.
-func clientFailed(p win.Process) bool {
+func clientFailed(p host.Process) bool {
 	if p.PID == 0 || p.Alive() {
 		return false
 	}
@@ -455,7 +455,7 @@ func (c *Client) execAdb(ctx context.Context, raw bool, out io.Writer, limit, ti
 	defer cancel()
 	cmd := exec.CommandContext(tctx, c.Root.AdbExe(), cmdArgs...)
 	cmd.Env = c.Env()
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	cmd.WaitDelay = pipeWaitDelay
 	// Cancel runs only when the deadline (or ctx) ends adb while it still runs, not when merely the pipe wait after a
 	// normal exit outlasts the deadline; that is what tells a timeout from a slow pipe.
@@ -735,25 +735,25 @@ var qemuOnAdbPort = QemuOnAdbPort
 // Somebody listening is not enough: the port may belong to another program, and registering it would hand that
 // program's port to the private server. Nor are the arguments: the same-numbered instance of another root has the
 // same ones, and registering it would put one emulator on two private servers.
-func QemuOnAdbPort(r *root.Root, console int) (win.Process, bool) {
+func QemuOnAdbPort(r *root.Root, console int) (host.Process, bool) {
 	if r == nil {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	i, ok := r.Ports().IndexOfConsole(console)
 	if !ok {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
-	pid, up, err := win.ListenerPID(console + 1)
+	pid, up, err := host.ListenerPID(console + 1)
 	if err != nil || !up || pid == 0 {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
-	p, ok := win.FindProcess(pid)
+	p, ok := host.FindProcess(pid)
 	if !ok || !isQemuProcessName(p.Name) {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	cmdline, err := p.CommandLine()
 	if err != nil || !qemuArgsMatch(cmdline, console, root.AvdName(i)) || !QemuBelongsTo(r, p, i) {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	return p, true
 }

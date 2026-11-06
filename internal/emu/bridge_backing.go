@@ -14,8 +14,8 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const bridgeBackingFile = "modavd-bridge-backings.json"
@@ -89,7 +89,7 @@ func (m *Manager) prepareBridgeBackings(ctx context.Context, in *avd.Instance) e
 		if disk.stale {
 			path = disk.target
 		}
-		base, err := win.OpenStableRead(path)
+		base, err := host.OpenStableRead(path)
 		if err != nil {
 			if disk.virtualSize == 0 && errors.Is(err, os.ErrNotExist) {
 				return errs.Newf(errs.NotReady, "首次可写开机缺少系统镜像 %s", path).WithAdvice("请先补全系统镜像组件")
@@ -188,7 +188,7 @@ func (d backingDisk) verify(ctx context.Context, base *os.File, proof backingPro
 	if !fi.Mode().IsRegular() || fi.Size() <= 0 || (d.virtualSize != 0 && fi.Size() != d.virtualSize) {
 		return proof, backingError(d.overlay, d.old, d.target, "候选镜像类型或大小不符")
 	}
-	stamp := win.FileChangeStamp(base)
+	stamp := host.FileChangeStamp(base)
 	// The stamp only saves a full read on an ordinary boot. Every rebase hashes
 	// the candidate, including a same-volume rename that preserves the file ID.
 	if !d.stale && stamp != "" && proof.Stamp == stamp && proof.Path == base.Name() && proof.Size == fi.Size() && isSHA256Hex(proof.SHA256) {
@@ -242,13 +242,13 @@ func writeBackingProofs(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return win.MoveFileReplaceThrough(tmp.Name(), path)
+	return host.MoveFileReplaceThrough(tmp.Name(), path)
 }
 
 // Rebase a private copy: a failed or killed qemu-img must never damage the only
 // copy of the installed bridge. Rename also leaves other hard links intact.
 func (m *Manager) rebaseBridgeCopy(ctx context.Context, repair backingDisk) error {
-	source, err := win.OpenStableRead(repair.overlay)
+	source, err := host.OpenStableRead(repair.overlay)
 	if err != nil {
 		return err
 	}
@@ -270,7 +270,7 @@ func (m *Manager) rebaseBridgeCopy(ctx context.Context, repair backingDisk) erro
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	free, err := win.DiskFree(filepath.Dir(repair.overlay))
+	free, err := host.DiskFree(filepath.Dir(repair.overlay))
 	if err != nil {
 		return err
 	}
@@ -310,5 +310,5 @@ func (m *Manager) rebaseBridgeCopy(ctx context.Context, repair backingDisk) erro
 		return err
 	}
 	source.Close() // Windows cannot replace an open file
-	return win.MoveFileReplaceThrough(path, repair.overlay)
+	return host.MoveFileReplaceThrough(path, repair.overlay)
 }

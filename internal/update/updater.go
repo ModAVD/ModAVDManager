@@ -23,10 +23,10 @@ import (
 
 	"modavd/internal/download"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // minFreeBytes is what an update may take at once on the root's drive: download, stage and the old version.
@@ -205,11 +205,11 @@ func (u *Updater) latest(ctx context.Context, st *Status) (*release, error) {
 }
 
 // lock is .update\modavd.lock: one modavd update step per root at a time.
-func (u *Updater) lock() (*win.FileLock, error) {
+func (u *Updater) lock() (*host.FileLock, error) {
 	if err := os.MkdirAll(u.l.dir(), 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "建不了 "+u.l.dir())
 	}
-	l, ok, err := win.TryLock(u.l.lock())
+	l, ok, err := host.TryLock(u.l.lock())
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "更新锁文件打不开: "+u.l.lock())
 	}
@@ -220,7 +220,7 @@ func (u *Updater) lock() (*win.FileLock, error) {
 }
 
 // begin takes the lock and recovers; every step that writes starts here.
-func (u *Updater) begin(st *Status) (*win.FileLock, error) {
+func (u *Updater) begin(st *Status) (*host.FileLock, error) {
 	lock, err := u.lock()
 	if err != nil {
 		return nil, err
@@ -420,7 +420,7 @@ func versionLess(a, b string) bool {
 }
 
 func (u *Updater) checkSpace() error {
-	free, err := win.DiskFree(u.Root.Dir)
+	free, err := host.DiskFree(u.Root.Dir)
 	if err != nil || free >= minFreeBytes {
 		return nil
 	}

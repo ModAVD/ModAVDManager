@@ -15,9 +15,9 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/guest"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // allowInstallSourcesScript lets every app that asks for REQUEST_INSTALL_PACKAGES install APKs while that app op is
@@ -106,7 +106,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			prog.emit("tune", fmt.Sprintf("实例 %d 开机后调优", i), progressTune)
 			// 1) host scheduling: priority, X3D pinning; what the host has left sizes the busy loops of 8b
 			if !running {
-				spare = planHost(nil, hostCPUs(win.L3Groups()), m.otherQemus(p, cores), cores).Spare
+				spare = planHost(nil, hostCPUs(host.L3Groups()), m.otherQemus(p, cores), cores).Spare
 				return
 			}
 			note, plan := m.tuneHostScheduling(p, cores)
@@ -125,7 +125,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			// 3) disk and screenshot channel state into the log (write_cache is root-only)
 			wc := m.su(ctx, i, "cat /sys/block/vd*/queue/write_cache | sort -u", 0)
 			shm := "缺失"
-			if win.SharedMemoryExists(shmName(ports, i)) {
+			if host.SharedMemoryExists(shmName(ports, i)) {
 				shm = "在"
 			}
 			m.Log.Infof("实例 %d 磁盘缓存: %s；截图共享内存 %s: %s", i, orText(joinNonEmptyLines(wc.Out, " / "), "读不到"),
@@ -246,16 +246,16 @@ func affinityLockPath() string {
 // (ModAVD#34: pinning every instance to the big group left the other CCD idle). Only p is changed; every other qemu
 // on the host, production's included, is only read. Returns the note for the log and the plan (its Spare sizes the
 // busy loops of setupIdlepoll).
-func (m *Manager) tuneHostScheduling(p win.Process, cores int) (string, hostPlan) {
+func (m *Manager) tuneHostScheduling(p host.Process, cores int) (string, hostPlan) {
 	var notes []string
-	if err := win.SetAboveNormalPriority(p); err != nil {
+	if err := host.SetAboveNormalPriority(p); err != nil {
 		notes = append(notes, fmt.Sprintf("设优先级失败（%v）", err))
 	} else {
 		notes = append(notes, "优先级高于正常")
 	}
-	groups := win.L3Groups()
+	groups := host.L3Groups()
 	if hasBigL3(groups) {
-		lock, ok, err := win.Lock(affinityLockPath(), affinityLockWait)
+		lock, ok, err := host.Lock(affinityLockPath(), affinityLockWait)
 		if err != nil || !ok {
 			notes = append(notes, "拿不到绑核锁，不绑核")
 			plan := planHost(nil, hostCPUs(groups), m.otherQemus(p, cores), cores)
@@ -272,7 +272,7 @@ func (m *Manager) tuneHostScheduling(p win.Process, cores int) (string, hostPlan
 	}
 	if plan.Group < 0 {
 		notes = append(notes, fmt.Sprintf("各组 L3 空余核数 %v 都不够 %d 个 vCPU，不绑核", plan.Free, cores))
-	} else if err := win.SetAffinity(p, plan.Mask); err != nil {
+	} else if err := host.SetAffinity(p, plan.Mask); err != nil {
 		notes = append(notes, fmt.Sprintf("绑核失败（%v）", err))
 	} else {
 		notes = append(notes, fmt.Sprintf("绑定 L3 %d MB 的核心 %s（各组空余核数 %v，本实例 %d 个 vCPU）",
@@ -282,7 +282,7 @@ func (m *Manager) tuneHostScheduling(p win.Process, cores int) (string, hostPlan
 }
 
 // hostCPUs is the logical processor count: those under an L3 group, at least runtime.NumCPU.
-func hostCPUs(groups []win.L3Group) int {
+func hostCPUs(groups []host.L3Group) int {
 	var all uint64
 	for _, g := range groups {
 		all |= g.Mask
@@ -299,8 +299,8 @@ type otherQemu struct {
 // otherQemus reads (never changes) every qemu process on the host except self: this root's, another root's,
 // production's. vCPUs: hw.cpu.ncore of this root's instance it runs, else "-cores N" on its command line, else cores
 // (the vCPU count is in the AVD config, not on a modavd or AUTO-MAS command line).
-func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
-	procs, err := win.ListProcesses()
+func (m *Manager) otherQemus(self host.Process, cores int) []otherQemu {
+	procs, err := host.ListProcesses()
 	if err != nil {
 		return nil
 	}
@@ -316,7 +316,7 @@ func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
 			continue
 		}
 		o := otherQemu{Cores: cores}
-		if mask, err := win.GetAffinity(q); err == nil {
+		if mask, err := host.GetAffinity(q); err == nil {
 			o.Mask = mask
 		}
 		if cmdline, err := q.CommandLine(); err == nil {
@@ -328,7 +328,7 @@ func (m *Manager) otherQemus(self win.Process, cores int) []otherQemu {
 }
 
 // qemuCores is the vCPU count of qemu q (see otherQemus); insts are this root's instances, plan its port plan.
-func (m *Manager) qemuCores(q win.Process, cmdline []string, insts []*avd.Instance, plan root.PortPlan, def int) int {
+func (m *Manager) qemuCores(q host.Process, cmdline []string, insts []*avd.Instance, plan root.PortPlan, def int) int {
 	for _, in := range insts {
 		if cmdlineMatches(cmdline, root.AvdName(in.Index), plan.Console(in.Index)) &&
 			adb.QemuBelongsTo(m.Root, q, in.Index) {
@@ -349,7 +349,7 @@ func (m *Manager) qemuCores(q win.Process, cmdline []string, insts []*avd.Instan
 }
 
 // hasBigL3 is true when the L3 groups differ in size (AMD X3D).
-func hasBigL3(groups []win.L3Group) bool {
+func hasBigL3(groups []host.L3Group) bool {
 	if len(groups) < 2 {
 		return false
 	}
@@ -379,7 +379,7 @@ type hostPlan struct {
 // before, also where the groups differ in processor count (Ryzen AI 300: 8 Zen5 threads with 16 MB, 16 Zen5c threads
 // with 8 MB), and on equal groups (7950X3D) the share orders like the free count. A group with fewer free processors
 // than cores is no option, and when none is left the instance is not pinned and Windows spreads it.
-func planHost(groups []win.L3Group, hostCPUs int, others []otherQemu, cores int) hostPlan {
+func planHost(groups []host.L3Group, hostCPUs int, others []otherQemu, cores int) hostPlan {
 	plan := hostPlan{Group: -1, Spare: hostCPUs - cores}
 	for _, o := range others {
 		plan.Spare -= o.Cores

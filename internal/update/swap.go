@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // swapBlocked: the swap did not start (or was undone) because something is still running or held; the prepared
@@ -581,7 +581,7 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 	scan := u.scan
 	if scan == nil {
 		scan = func(programs bool) ([]processUse, error) {
-			return u.scanProcesses(programs, win.ListProcesses, win.Process.ImagePath)
+			return u.scanProcesses(programs, host.ListProcesses, host.Process.ImagePath)
 		}
 	}
 	return scanWithProgramRetries(programs, scan, time.Sleep)
@@ -611,7 +611,7 @@ func scanWithProgramRetries(programs bool, scan func(bool) ([]processUse, error)
 	}
 }
 
-func (u *Updater) scanProcesses(programs bool, list func() ([]win.Process, error), imagePath func(win.Process) (string, error)) ([]processUse, error) {
+func (u *Updater) scanProcesses(programs bool, list func() ([]host.Process, error), imagePath func(host.Process) (string, error)) ([]processUse, error) {
 	var prefixes []string
 	dirs := []string{u.l.emulator()}
 	if phaseOf(u.l.readState()) == phaseSwapping {
@@ -697,7 +697,7 @@ func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 	if err := u.ensureNotInUse(verb); err != nil {
 		return nil, err
 	}
-	var locks []*win.FileLock
+	var locks []*host.FileLock
 	var releaseImages func()
 	release := func() {
 		if releaseImages != nil {
@@ -717,7 +717,7 @@ func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 			continue
 		}
 		path := filepath.Join(u.Root.AvdHome(), "."+root.AvdName(i)+".start.lock")
-		lock, free, err := win.TryLock(path)
+		lock, free, err := host.TryLock(path)
 		if err != nil {
 			return nil, errs.Wrap(errs.Internal, err, "更新时打不开实例启动锁: "+path)
 		}

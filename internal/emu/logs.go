@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"modavd/internal/avd"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // What in the logs dir is ours to prune: the files emulator output mas_<i>-<time>.log and guest logcat
@@ -226,17 +226,17 @@ func logcatCmdlineMatches(cmdline []string, port, serial string) bool {
 	return hasPort && hasSerial && hasLogcat
 }
 
-var logcatListProcesses = win.ListProcesses
+var logcatListProcesses = host.ListProcesses
 
 // findLogcatProcesses recognizes any matching adb capture, including AUTO-MAS watchdog clients.
 // Discovery never grants permission to terminate a process; only ownedCapture does.
-func (m *Manager) findLogcatProcesses(serial string) ([]win.Process, error) {
+func (m *Manager) findLogcatProcesses(serial string) ([]host.Process, error) {
 	procs, err := logcatListProcesses()
 	if err != nil {
 		return nil, err
 	}
 	port := strconv.Itoa(m.Root.AdbServerPort())
-	var found []win.Process
+	var found []host.Process
 	for _, p := range procs {
 		if !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
 			continue
@@ -310,8 +310,8 @@ func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 	if err != nil {
 		return ""
 	}
-	p, err := win.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i),
-		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10), token}, win.StartOptions{Env: m.ADB.Env()})
+	p, err := host.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i),
+		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10), token}, host.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
 		m.Log.Warnf("实例 %d 客体日志落盘没起来: %v", i, err)
 		return ""
@@ -386,14 +386,14 @@ func (m *Manager) logcatAfterReregister(serial string) {
 
 // privateServerProcess is the adb server listening on the private port, zero when none, when the listener table or
 // the process cannot be read, or when what listens there is not adb.exe (no server of ours to judge clients by).
-func (m *Manager) privateServerProcess() win.Process {
-	pid, ok, err := win.ListenerPID(m.Root.AdbServerPort())
+func (m *Manager) privateServerProcess() host.Process {
+	pid, ok, err := host.ListenerPID(m.Root.AdbServerPort())
 	if err != nil || !ok {
-		return win.Process{}
+		return host.Process{}
 	}
-	p, ok := win.FindProcess(pid)
+	p, ok := host.FindProcess(pid)
 	if !ok || !strings.EqualFold(p.Name, root.CurrentPlatform().ADB) {
-		return win.Process{}
+		return host.Process{}
 	}
 	return p
 }

@@ -83,8 +83,8 @@
 // Before Main returns, a command that used a manager waits up to backgroundWait for the manager's background work
 // (emu.Manager.Wait: the logcat restart after a re-registration), after its output is written.
 //
-// Hidden subcommands, routed before any flag parsing or root lookup: __spawn (win.SpawnHelperMain, the helper of
-// win.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
+// Hidden subcommands, routed before any flag parsing or root lookup: __spawn (host.SpawnHelperMain, the helper of
+// host.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
 // (emu.RunBootWatch), and __logcat (emu.RunLogcatCapture, the host logcat writer).
 package cli
 
@@ -100,10 +100,10 @@ import (
 	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // manager is the part of *emu.Manager the commands use; tests substitute a fake.
@@ -179,12 +179,12 @@ func readerIsTerminal(r io.Reader) bool {
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
-		case win.SpawnHelperArg:
+		case host.SpawnHelperArg:
 			f, ok := stdout.(*os.File)
 			if !ok {
 				f = os.Stdout
 			}
-			return win.SpawnHelperMain(args[1:], f)
+			return host.SpawnHelperMain(args[1:], f)
 		case emu.VulkanProbeArg:
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
@@ -197,7 +197,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	// StartOrphan re-runs this executable as the spawn helper.
 	if exe, err := os.Executable(); err == nil {
-		win.OrphanHelper = exe
+		host.SetOrphanHelper(exe)
 	}
 	// SIGTERM is what Go delivers for a console close / logoff on Windows.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

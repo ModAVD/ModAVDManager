@@ -29,8 +29,8 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const (
@@ -352,7 +352,7 @@ func memoryItem(memoryMB int, availableMB uint64, err error) CheckItem {
 }
 
 func memoryItemNow(memoryMB int) CheckItem {
-	avail, err := win.AvailableMemoryMB()
+	avail, err := host.AvailableMemoryMB()
 	return memoryItem(memoryMB, avail, err)
 }
 
@@ -375,7 +375,7 @@ func diskItem(drive string, free uint64, err error) CheckItem {
 func (m *Manager) diskItemNow() CheckItem {
 	target := diskExistingAncestor(m.Root.AvdHome())
 	drive := diskDrive(target)
-	free, err := win.DiskFree(target)
+	free, err := host.DiskFree(target)
 	return diskItem(drive, free, err)
 }
 
@@ -461,7 +461,7 @@ func (m *Manager) checkAcceleration(ctx context.Context, useCache bool) accelRes
 	cmd.Env = m.ADB.Env()
 	// Like the boot itself (launch.go): our working directory may be anywhere, the emulator's own is always there.
 	cmd.Dir = filepath.Dir(exe)
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out

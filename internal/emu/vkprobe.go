@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // VulkanProbeArg is the hidden subcommand the CLI routes to RunVulkanProbe.
@@ -229,7 +229,7 @@ func runVulkanProbeChild(ctx context.Context) vkProbe {
 	cctx, cancel := context.WithTimeout(ctx, vulkanProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -33,9 +33,9 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // BootWatchArg is the hidden subcommand both executables route to RunBootWatch.
@@ -123,12 +123,12 @@ type bootRecord struct {
 }
 
 // names: q is the qemu process this record was written for.
-func (r bootRecord) names(q win.Process) bool {
+func (r bootRecord) names(q host.Process) bool {
 	return r.QemuPID != 0 && r.QemuCreated != 0 && r.QemuPID == q.PID && r.QemuCreated == q.Created
 }
 
 // guestRebooted: the record names q and the guest now runs another kernel boot (bootID; "" = unknown, no reboot).
-func (r bootRecord) guestRebooted(q win.Process, bootID string) bool {
+func (r bootRecord) guestRebooted(q host.Process, bootID string) bool {
 	return r.names(q) && r.BootID != "" && bootID != "" && bootID != r.BootID
 }
 
@@ -168,7 +168,7 @@ func shortBootID(id string) string {
 }
 
 // bootWatchArgv is the watch's command line: this executable with BootWatchArg (tests replace it).
-var bootWatchArgv = func(rootDir string, i int, q win.Process) ([]string, error) {
+var bootWatchArgv = func(rootDir string, i int, q host.Process) ([]string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ var bootWatchArgv = func(rootDir string, i int, q win.Process) ([]string, error)
 // startBootWatch starts the boot watch of qemu q (RunBootWatch), detached and out of our process tree, unless one runs
 // for this instance already (its lock is held: the watch of this same qemu, since a watch ends with its qemu). A
 // failure is a warning.
-func (m *Manager) startBootWatch(i int, q win.Process) {
+func (m *Manager) startBootWatch(i int, q host.Process) {
 	if m.lockHeld(i, "watch") {
 		return
 	}
@@ -188,8 +188,8 @@ func (m *Manager) startBootWatch(i int, q win.Process) {
 	if err == nil {
 		logPath := filepath.Join(m.Root.LogsDir(), bootWatchLogName)
 		rotateLog(logPath, bootWatchLogMax)
-		var p win.Process
-		if p, err = win.StartOrphan(argv[0], argv[1:], win.StartOptions{OutputPath: logPath}); err == nil {
+		var p host.Process
+		if p, err = host.StartOrphan(argv[0], argv[1:], host.StartOptions{OutputPath: logPath}); err == nil {
 			m.Log.Debugf("实例 %d 开机守护已起（pid %d，日志 %s）", i, p.PID, logPath)
 			return
 		}
@@ -229,12 +229,12 @@ func RunBootWatch(args []string, w io.Writer) int {
 	}
 	// the emulator's re-registration and logcat capture start detached processes through this executable too
 	if exe, err := os.Executable(); err == nil {
-		win.OrphanHelper = exe
+		host.SetOrphanHelper(exe)
 	}
 	m := New(r, log)
-	q := win.Process{PID: uint32(pid), Created: created}
+	q := host.Process{PID: uint32(pid), Created: created}
 
-	l, free, err := win.TryLock(m.lockPath(i, "watch"))
+	l, free, err := host.TryLock(m.lockPath(i, "watch"))
 	if err != nil {
 		log.Errorf("实例 %d 开机守护的锁文件打不开: %v", i, err)
 		return 1
@@ -273,7 +273,7 @@ func RunBootWatch(args []string, w io.Writer) int {
 type bootWatch struct {
 	m *Manager
 	i int
-	q win.Process
+	q host.Process
 	// missingSince: since when the private server has not known the instance (zero: it did at the last look), or
 	// since the watch last registered it again (bootWatchReregisterAfter).
 	missingSince time.Time
@@ -324,9 +324,9 @@ func (m *Manager) removeBootRecord(i int) {
 
 // watchStartLock takes the start lock for the watch's start without waiting, and checks that no stop runs: errs.Busy
 // otherwise (the watch looks again later).
-func (m *Manager) watchStartLock(i int) (*win.FileLock, error) {
+func (m *Manager) watchStartLock(i int) (*host.FileLock, error) {
 	path := m.lockPath(i, "start")
-	l, free, err := win.TryLock(path)
+	l, free, err := host.TryLock(path)
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 	}

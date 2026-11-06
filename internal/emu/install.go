@@ -11,7 +11,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/apk"
 	"modavd/internal/errs"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // apkInstallTimeout: game packages are 1-3 GB; push + install on a slow disk takes minutes (AUTO-MAS
@@ -91,12 +91,12 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 // lockGuestForInstall takes the guest lock of instance i (TryLock on guestLockPath), waiting up to
 // installGuestLockWait while a start holds it to mount the guest Vulkan fix. errs.Busy after that, errs.Canceled on a
 // cancel, errs.Internal when the lock file cannot be opened.
-func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*win.FileLock, error) {
+func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*host.FileLock, error) {
 	path := m.guestLockPath(i)
 	deadline := time.Now().Add(installGuestLockWait)
 	logged := false
 	for {
-		l, ok, err := win.TryLock(path)
+		l, ok, err := host.TryLock(path)
 		if err != nil {
 			return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 		}

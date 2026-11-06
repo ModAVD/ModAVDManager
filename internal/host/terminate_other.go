@@ -1,5 +1,5 @@
 //go:build !windows
 
-package win
+package host
 
 func TerminateRefused(Process) bool { return false }

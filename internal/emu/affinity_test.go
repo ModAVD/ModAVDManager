@@ -4,26 +4,26 @@ import (
 	"slices"
 	"testing"
 
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 var (
-	x3dBig   = win.L3Group{Size: 96 << 20, Mask: 0x0000FFFF}
-	x3dSmall = win.L3Group{Size: 32 << 20, Mask: 0xFFFF0000}
-	x3d      = []win.L3Group{x3dBig, x3dSmall} // 7950X3D: two groups of 16 logical processors
+	x3dBig   = host.L3Group{Size: 96 << 20, Mask: 0x0000FFFF}
+	x3dSmall = host.L3Group{Size: 32 << 20, Mask: 0xFFFF0000}
+	x3d      = []host.L3Group{x3dBig, x3dSmall} // 7950X3D: two groups of 16 logical processors
 )
 
 func pinned(mask uint64, cores int) otherQemu { return otherQemu{Mask: mask, Cores: cores} }
 
 func TestHasBigL3(t *testing.T) {
 	cases := map[string]struct {
-		groups []win.L3Group
+		groups []host.L3Group
 		want   bool
 	}{
 		"x3d":    {x3d, true},
-		"equal":  {[]win.L3Group{{Size: 32 << 20, Mask: 0xFF}, {Size: 32 << 20, Mask: 0xFF00}}, false},
-		"single": {[]win.L3Group{{Size: 36 << 20, Mask: 0xFFFFFF}}, false},
+		"equal":  {[]host.L3Group{{Size: 32 << 20, Mask: 0xFF}, {Size: 32 << 20, Mask: 0xFF00}}, false},
+		"single": {[]host.L3Group{{Size: 36 << 20, Mask: 0xFFFFFF}}, false},
 		"none":   {nil, false},
 	}
 	for name, c := range cases {
@@ -69,7 +69,7 @@ func TestPlanHostProductionPinned(t *testing.T) {
 		t.Errorf("unreadable: %+v", p)
 	}
 	// Also when the big group comes second in the list.
-	rev := []win.L3Group{x3dSmall, x3dBig}
+	rev := []host.L3Group{x3dSmall, x3dBig}
 	if p := planHost(rev, 32, unread, 6); p.Mask != x3dSmall.Mask || !slices.Equal(p.Free, []int{16, 4}) {
 		t.Errorf("unreadable, reversed list: %+v", p)
 	}
@@ -81,7 +81,7 @@ func TestPlanHostSpreadAndTies(t *testing.T) {
 		t.Errorf("unpinned other: %+v", p)
 	}
 	// Big L3 wins a tie whichever order the list has.
-	if p := planHost([]win.L3Group{x3dSmall, x3dBig}, 32, nil, 6); p.Mask != x3dBig.Mask || p.Group != 1 {
+	if p := planHost([]host.L3Group{x3dSmall, x3dBig}, 32, nil, 6); p.Mask != x3dBig.Mask || p.Group != 1 {
 		t.Errorf("reversed list: %+v", p)
 	}
 	// A mask over parts of both groups loads them by overlap: 8 processors in the big one, 4 in the small one.
@@ -97,9 +97,9 @@ func TestPlanHostSpreadAndTies(t *testing.T) {
 // Groups of different processor counts (Ryzen AI 300: 4 Zen5 cores / 8 threads with 16 MB L3, 8 Zen5c cores / 16
 // threads with 8 MB): the first instance gets the big L3 as before the split by load, later ones go by free share.
 func TestPlanHostUnequalGroups(t *testing.T) {
-	zen5 := win.L3Group{Size: 16 << 20, Mask: 0x0000FF}
-	zen5c := win.L3Group{Size: 8 << 20, Mask: 0xFFFF00}
-	groups := []win.L3Group{zen5c, zen5}
+	zen5 := host.L3Group{Size: 16 << 20, Mask: 0x0000FF}
+	zen5c := host.L3Group{Size: 8 << 20, Mask: 0xFFFF00}
+	groups := []host.L3Group{zen5c, zen5}
 	var others []otherQemu
 	wantMask := []uint64{zen5.Mask, zen5c.Mask, zen5c.Mask}
 	wantFree := [][]int{{16, 8}, {16, 2}, {10, 2}}
@@ -180,7 +180,7 @@ func TestPlanHostFit(t *testing.T) {
 // Ordinary CPUs (one L3, or all L3 the same size) are never pinned, whatever runs; only Spare is computed, over the
 // whole host.
 func TestPlanHostOrdinary(t *testing.T) {
-	cases := map[string][]win.L3Group{
+	cases := map[string][]host.L3Group{
 		"single": {{Size: 32 << 20, Mask: 0xFFFF}},
 		"equal":  {{Size: 32 << 20, Mask: 0xFF}, {Size: 32 << 20, Mask: 0xFF00}},
 		"none":   nil,
@@ -231,7 +231,7 @@ func TestQemuCoresCommandLine(t *testing.T) {
 		{[]string{"qemu.exe", "-cores", "0"}, 6},
 		{[]string{"qemu.exe", "-cores"}, 6},
 	} {
-		if got := m.qemuCores(win.Process{}, c.cmdline, nil, root.PortPlan{}, 6); got != c.want {
+		if got := m.qemuCores(host.Process{}, c.cmdline, nil, root.PortPlan{}, 6); got != c.want {
 			t.Errorf("%v: %d, want %d", c.cmdline, got, c.want)
 		}
 	}

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/host"
 	"modavd/internal/root"
 	"modavd/internal/ui"
-	"modavd/internal/win"
 )
 
 // One manager per root: a lock file plus a state file under %LOCALAPPDATA%\ModAVD, both named after a hash of the
@@ -41,12 +41,12 @@ type state struct {
 
 type instance struct {
 	r    *root.Root
-	lock *win.FileLock
+	lock *host.FileLock
 }
 
 // lockInstance takes the root's manager lock; nil (and no error) when another manager holds it.
 func lockInstance(r *root.Root) (*instance, error) {
-	l, ok, err := win.TryLock(lockPath(r))
+	l, ok, err := host.TryLock(lockPath(r))
 	if err != nil {
 		return nil, err
 	}

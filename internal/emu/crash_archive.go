@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"modavd/internal/diagnostics"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const DiagnosticArchiveArg = "__diagnostic_crashes"
@@ -30,7 +30,7 @@ func (m *Manager) waitCrashArchiveStopped(ctx context.Context, i int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	l, free, err := win.Lock(m.lockPath(i, "crash-copy"), 5*time.Second)
+	l, free, err := host.Lock(m.lockPath(i, "crash-copy"), 5*time.Second)
 	if err != nil {
 		return err
 	}
@@ -76,9 +76,9 @@ func (m *Manager) startDiagnosticArchive(i int) {
 	if !state.Enabled {
 		return
 	}
-	_, err = win.StartOrphan(filepath.Join(m.Root.Dir, "tools", "modavd.exe"), []string{DiagnosticArchiveArg,
+	_, err = host.StartOrphan(filepath.Join(m.Root.Dir, "tools", "modavd.exe"), []string{DiagnosticArchiveArg,
 		m.Root.Dir, strconv.Itoa(i), state.Since, state.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano)},
-		win.StartOptions{Env: m.ADB.Env()})
+		host.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
 		m.Log.Warnf("实例 %d 诊断转储后台复制没起来，下次开机重试: %v", i, err)
 	}
@@ -109,7 +109,7 @@ func RunDiagnosticArchive(args []string, stderr io.Writer) int {
 }
 
 func (m *Manager) archiveDiagnosticCrashes(ctx context.Context, i int, expected diagnostics.State, through time.Time) error {
-	lock, ok, err := win.Lock(m.lockPath(i, "crash-copy"), 5*time.Second)
+	lock, ok, err := host.Lock(m.lockPath(i, "crash-copy"), 5*time.Second)
 	if err != nil {
 		return err
 	}

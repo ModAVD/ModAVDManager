@@ -3,7 +3,7 @@ package emu
 import (
 	"time"
 
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // The result types below are the machine-readable contract (CLI --json "data", MCP structuredContent). Field names
@@ -184,7 +184,7 @@ type StartOptions struct {
 
 	// watchQemu is set by the boot watch (bootwatch.go) after a guest-only reboot of that qemu process: the start adopts
 	// exactly it (never launches), waits for no other start or stop, and leaves no further watch.
-	watchQemu *win.Process
+	watchQemu *host.Process
 	// NoBridge: do not install the execution bridge on this boot even when its marker is there and the bridge is not
 	// (bridge.go), the way AUTO-MAS boots. Bridge starts with it to uninstall.
 	NoBridge bool
@@ -260,7 +260,7 @@ type StopResult struct {
 	// Process is that qemu (PID + creation time), for callers in this process that must wait until it is really gone
 	// before booting it again: a qemu that was terminated can take seconds to release its memory, and by then the
 	// root-identity checks no longer recognise it (its runtime file and run lock are gone first).
-	Process win.Process `json:"-"`
+	Process host.Process `json:"-"`
 }
 
 // CheckItem is one host check (AUTO-MAS precheck.PrecheckItem). ID: path / components / emulator / acceleration /

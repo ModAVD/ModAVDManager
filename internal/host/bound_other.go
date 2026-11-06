@@ -1,6 +1,6 @@
 //go:build !windows
 
-package win
+package host
 
 import (
 	"bytes"

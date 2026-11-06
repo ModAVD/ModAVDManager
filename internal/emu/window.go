@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"modavd/internal/errs"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // qemuWindowed: qemu p runs with the emulator window. known=false when that cannot be told (its command line is
 // unreadable).
-func qemuWindowed(p win.Process) (windowed, known bool) {
+func qemuWindowed(p host.Process) (windowed, known bool) {
 	cmdline, err := p.CommandLine()
 	return windowedFrom(p.Name, cmdline, err)
 }
@@ -45,8 +45,8 @@ func windowConflict(i int, opt StartOptions, windowed bool) error {
 	return nil
 }
 
-// setEmulatorWindowsVisible is win.SetEmulatorWindowsVisible; a test replaces it.
-var setEmulatorWindowsVisible = win.SetEmulatorWindowsVisible
+// setEmulatorWindowsVisible is host.SetEmulatorWindowsVisible; a test replaces it.
+var setEmulatorWindowsVisible = host.SetEmulatorWindowsVisible
 
 // SetWindowVisible shows / hides the window of an instance booted with one (AUTO-MAS setVisible): the main window
 // and the side toolbar get SW_SHOW / SW_HIDE. Hiding does not stop rendering or the screenshot channel (10-04: the

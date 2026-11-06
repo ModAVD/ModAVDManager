@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // LogcatCaptureArg is routed by the root's console executable before normal command parsing.
@@ -169,12 +169,12 @@ func runLogcatCapture(args []string, stderr io.Writer, limit int64) int {
 		return 1
 	}
 	m := New(r, logx.New(logx.JSONSink(stderr, logx.Info)))
-	l, free, err := win.Lock(m.lockPath(i, "logcat"), 5*time.Second)
+	l, free, err := host.Lock(m.lockPath(i, "logcat"), 5*time.Second)
 	if err != nil || !free {
 		return 1
 	}
 	defer l.Unlock()
-	q := win.Process{PID: uint32(pid), Created: created}
+	q := host.Process{PID: uint32(pid), Created: created}
 	if !q.Alive() {
 		return 0
 	}
@@ -289,7 +289,7 @@ func captureLogcatStarted(ctx context.Context, exe string, args, env []string, o
 	defer r.Close()
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = filepath.Dir(exe), env, pipe, pipe
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	if beforeStart != nil {
 		if err := beforeStart(); err != nil {
 			pipe.Close()

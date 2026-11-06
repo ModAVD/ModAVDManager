@@ -14,8 +14,8 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // adbServerStartTimeout is how long a launch waits for the private server (AUTO-MAS ensure_adb_server default).
@@ -113,7 +113,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryMB int, window bool) (*launchPlan, error) {
 	i := inst.Index
 	port := m.Root.Ports().Console(i)
-	busy, err := win.BusyPorts([]int{port, port + 1, port + 2})
+	busy, err := host.BusyPorts([]int{port, port + 1, port + 2})
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
 	}
@@ -170,11 +170,11 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 // the avd.dir of its emulator runtime file (in adb.EmulatorDiscoveryDir, where qemu writes it and adb.QemuBelongsTo
 // reads it), else its executable. found=false also when the listener table or a process cannot be read: the port
 // check after the host checks still reports busy ports.
-func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p win.Process, where string, found bool) {
+func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p host.Process, where string, found bool) {
 	console := plan.Console(i)
-	ls, err := win.Listeners()
+	ls, err := host.Listeners()
 	if err != nil {
-		return win.Process{}, "", false
+		return host.Process{}, "", false
 	}
 	seen := map[uint32]bool{}
 	for _, l := range ls {
@@ -182,7 +182,7 @@ func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p win.Process, w
 			continue
 		}
 		seen[l.PID] = true
-		q, ok := win.FindProcess(l.PID)
+		q, ok := host.FindProcess(l.PID)
 		if !ok {
 			continue
 		}
@@ -190,21 +190,21 @@ func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p win.Process, w
 		if err != nil {
 			continue
 		}
-		if otherRootQemu(q, cmdline, i, console, func(q win.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
+		if otherRootQemu(q, cmdline, i, console, func(q host.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
 			return q, qemuWhere(runtimeAvdDir(adb.EmulatorDiscoveryDir(), q), cmdline), true
 		}
 	}
-	return win.Process{}, "", false
+	return host.Process{}, "", false
 }
 
 // otherRootQemu: q (with its command line) is instance i of some root by name and console port, and ours says it is
 // not m.Root's.
-func otherRootQemu(q win.Process, cmdline []string, i, console int, ours func(win.Process) bool) bool {
+func otherRootQemu(q host.Process, cmdline []string, i, console int, ours func(host.Process) bool) bool {
 	return isQemuName(q.Name) && cmdlineMatches(cmdline, root.AvdName(i), console) && !ours(q)
 }
 
 // otherRootBusy is the error of a start whose ports the same-numbered instance of another root holds.
-func otherRootBusy(i int, p win.Process, where string) *errs.Error {
+func otherRootBusy(i int, p host.Process, where string) *errs.Error {
 	return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
 		WithAdvice("先在那个根目录把它关掉再启动"), map[string]string{errs.Reason: "port_other_root"})
 }
@@ -222,7 +222,7 @@ func qemuWhere(avdDir string, cmdline []string) string {
 
 // runtimeAvdDir is the avd.dir= of q's runtime file pid_<pid>.ini in dir; "" when there is no current one (missing,
 // unreadable, without that line, or older than q: a leftover of an earlier process with that PID).
-func runtimeAvdDir(dir string, q win.Process) string {
+func runtimeAvdDir(dir string, q host.Process) string {
 	path := filepath.Join(dir, "pid_"+strconv.FormatUint(uint64(q.PID), 10)+".ini")
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() {
@@ -248,23 +248,23 @@ func runtimeAvdDir(dir string, q win.Process) string {
 // startEmulator starts emulator.exe with StartOrphan (AUTO-MAS launch_emulator): never as our child, so whoever ends
 // modavd's process tree (an MCP client disconnecting, a job object) cannot cut the guest's power. Output goes to
 // plan.logPath, the working directory is the emulator's own.
-func (m *Manager) startEmulator(i int, plan *launchPlan) (win.Process, error) {
+func (m *Manager) startEmulator(i int, plan *launchPlan) (host.Process, error) {
 	exe := m.Root.EmulatorExe()
 	cache := m.Root.ShaderCacheDir()
 	if err := os.MkdirAll(cache, 0o755); err != nil {
-		return win.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建着色器缓存目录 %s 失败: %v", cache, err))
+		return host.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建着色器缓存目录 %s 失败: %v", cache, err))
 	}
 	if err := os.MkdirAll(filepath.Dir(plan.logPath), 0o755); err != nil {
-		return win.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建日志目录 %s 失败: %v",
+		return host.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建日志目录 %s 失败: %v",
 			filepath.Dir(plan.logPath), err))
 	}
-	p, err := win.StartOrphan(exe, plan.args, win.StartOptions{
+	p, err := host.StartOrphan(exe, plan.args, host.StartOptions{
 		Dir:        filepath.Dir(exe),
 		Env:        m.emulatorEnv(cache),
 		OutputPath: plan.logPath,
 	})
 	if err != nil {
-		return win.Process{}, errs.Wrap(errs.LaunchFailed, err,
+		return host.Process{}, errs.Wrap(errs.LaunchFailed, err,
 			fmt.Sprintf("魔改 AVD 实例 %d 启动失败（emulator.exe 没能运行）: %v", i, err))
 	}
 	return p, nil
@@ -277,7 +277,7 @@ func (m *Manager) startEmulator(i int, plan *launchPlan) (win.Process, error) {
 //     the guest as device local only. Endfield waited for write-combine drains on every vertex write there (title
 //     screen 14.6 -> 60 fps); games that never touch that memory are unaffected, emulators before mas-27 ignore it.
 //
-// Appended after the private adb environment: win.StartOrphan / StartDetached keep the last of entries with the same
+// Appended after the private adb environment: host.StartOrphan / StartDetached keep the last of entries with the same
 // name (compared case-insensitively), so these override a user's own values, as AUTO-MAS env.update does.
 func (m *Manager) emulatorEnv(shaderCache string) []string {
 	return append(m.ADB.Env(),

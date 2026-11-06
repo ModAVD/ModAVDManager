@@ -13,8 +13,8 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
-	"modavd/internal/win"
 )
 
 // Progress values: one scale for the whole call so they only ever grow (MCP requires strictly increasing progress).
@@ -175,7 +175,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// before finishing it); its one-time parts then run as on a fresh boot. nil = an ordinary adopt.
 	var marker *setupMarker
 	var mode bootSetup
-	var qemu win.Process
+	var qemu host.Process
 	// owed: errors from here on leave a boot whose setup the next start finishes
 	owed := func(err error) error {
 		if marker == nil {
@@ -183,7 +183,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		}
 		return withSetupAdvice(err, setupAdvice(marker.until(), time.Now()))
 	}
-	onQemu := func(q win.Process) {
+	onQemu := func(q host.Process) {
 		if marker != nil && marker.QemuPID == 0 && q.Created != 0 {
 			marker.QemuPID, marker.QemuCreated = q.PID, q.Created
 			// only a launched boot gets here (an owed marker has its qemu recorded already): count from qemu itself
@@ -196,8 +196,8 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// A second round only when the qemu the first one adopted exited before Android was up (errAdoptedGone).
 	for round := 1; ; round++ {
 		res, launchedAt, marker, mode = &StartResult{}, time.Time{}, nil, setupAdopted
-		var emulator, adopted *win.Process
-		var bootLock *win.FileLock
+		var emulator, adopted *host.Process
+		var bootLock *host.FileLock
 		var adoptedAt time.Time
 		stopSeen := false // a stop of this instance held its lock while this round waited for an adopted qemu
 		p, running, err := startFindQemu(m, i)
@@ -442,19 +442,19 @@ func pollUntil(ctx context.Context, limit, every time.Duration, ok func() bool) 
 // no qemu is there, or when the adopted qemu is gone. onQemu, when set, is told the qemu process each time the scan
 // finds it (the setup marker records it the first time). stopSeen, when set and a qemu was adopted, is set to true
 // once a stop of this instance is seen holding its lock (relaunchAfterAdoptedGone).
-func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, emulator, adopted *win.Process,
-	logPath string, prog *progressor, onQemu func(win.Process), stopSeen *bool) (win.Process, error) {
+func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, emulator, adopted *host.Process,
+	logPath string, prog *progressor, onQemu func(host.Process), stopSeen *bool) (host.Process, error) {
 	launched := emulator != nil
 	started := time.Now()
 	deadline := started.Add(timeout)
 	nextReport := started.Add(bootReportInterval)
 	for {
 		if err := ctxErr(ctx); err != nil {
-			return win.Process{}, err
+			return host.Process{}, err
 		}
 		p, found, err := m.findQemu(i)
 		if err != nil {
-			return win.Process{}, err
+			return host.Process{}, err
 		}
 		if found && onQemu != nil {
 			// before the getprop, which may take seconds: a cancel then must find qemu already recorded
@@ -464,10 +464,10 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			return p, nil
 		}
 		if err := ctxErr(ctx); err != nil {
-			return win.Process{}, err
+			return host.Process{}, err
 		}
 		if !time.Now().Before(deadline) {
-			return win.Process{}, errs.Newf(errs.Timeout, "魔改 AVD 实例 %d 启动超时（%.0f 秒内安卓没有启动完成），日志见 %s",
+			return host.Process{}, errs.Newf(errs.Timeout, "魔改 AVD 实例 %d 启动超时（%.0f 秒内安卓没有启动完成），日志见 %s",
 				i, timeout.Seconds(), m.Root.LogsDir())
 		}
 		if !found && emulator != nil && !emulator.Alive() {
@@ -475,7 +475,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			if c, ok := emulator.ExitCode(); ok {
 				code = strconv.FormatUint(uint64(c), 10)
 			}
-			return win.Process{}, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
+			return host.Process{}, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
 				i, code, logTail(logPath, 8))
 		}
 		if adopted != nil && stopSeen != nil && !*stopSeen && m.lockHeld(i, "stop") {
@@ -483,7 +483,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 		}
 		// both the process snapshot and the PID + creation time check must agree, so a failed snapshot is no exit
 		if !found && adopted != nil && !adopted.Alive() {
-			return win.Process{}, errs.Wrap(errs.LaunchFailed, errAdoptedGone,
+			return host.Process{}, errs.Wrap(errs.LaunchFailed, errAdoptedGone,
 				fmt.Sprintf("魔改 AVD 实例 %d 的模拟器（pid %d）在等安卓开机时退出了", i, adopted.PID))
 		}
 		if now := time.Now(); !now.Before(nextReport) {
@@ -496,7 +496,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			nextReport = now.Add(bootReportInterval)
 		}
 		if !sleepOrDone(ctx, bootPollInterval) {
-			return win.Process{}, ctxErr(ctx)
+			return host.Process{}, ctxErr(ctx)
 		}
 	}
 }
@@ -504,7 +504,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 // qemuAfterSetup is the qemu process to report once the after-boot setup is done: the one the scan finds now, else
 // the one from the boot wait while it still runs (both the snapshot and the PID + creation time check must agree, so
 // a failed snapshot is no exit, as in waitBoot). gone: it has exited (old is returned for the message then).
-func qemuAfterSetup(old, now win.Process, found bool) (win.Process, bool) {
+func qemuAfterSetup(old, now host.Process, found bool) (host.Process, bool) {
 	if found {
 		return now, false
 	}
@@ -549,14 +549,14 @@ func poweringOff(v string) bool {
 // waitShutdown waits up to shutdownExitWait for qemu p of instance i, whose guest is powering off, to exit and then
 // scans for the instance's qemu again: found when someone launched it meanwhile (the start adopts that one). Busy when
 // p is still there at the end.
-func (m *Manager) waitShutdown(ctx context.Context, i int, p win.Process, prog *progressor) (win.Process, bool, error) {
+func (m *Manager) waitShutdown(ctx context.Context, i int, p host.Process, prog *progressor) (host.Process, bool, error) {
 	m.Log.Infof("魔改 AVD 实例 %d 正在关机（模拟器 pid %d 还没退出），等它关完再开机", i, p.PID)
 	prog.emit("launch", fmt.Sprintf("实例 %d 正在关机，等它关完再开机", i), progressLaunch/2)
 	if !waitQemuExit(ctx, p, shutdownExitWait) {
 		if err := ctxErr(ctx); err != nil {
-			return win.Process{}, false, err
+			return host.Process{}, false, err
 		}
-		return win.Process{}, false, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
+		return host.Process{}, false, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
 			shutdownExitWait.Seconds(), p.PID).WithAdvice(fmt.Sprintf("稍后再开机；一直关不掉的话先 modavd stop %d", i)), map[string]string{errs.Reason: "stopping"})
 	}
 	return m.findQemu(i)
@@ -632,7 +632,7 @@ func (s setupMarker) until() time.Time {
 
 // deadline is when this marker stops being picked up for q's boot: ValidUntil, else (an older marker)
 // SetupMarkerMaxAge after q started; zero when neither is known.
-func (s setupMarker) deadline(q win.Process) time.Time {
+func (s setupMarker) deadline(q host.Process) time.Time {
 	if u := s.until(); !u.IsZero() {
 		return u
 	}
@@ -644,7 +644,7 @@ func (s setupMarker) deadline(q win.Process) time.Time {
 
 // matches: q is the qemu process of the boot this marker names. Recorded qemu: same PID and creation time. Only the
 // emulator.exe recorded: q is its child (emulator.exe waits for the qemu it starts) and not older than it.
-func (s setupMarker) matches(q win.Process) bool {
+func (s setupMarker) matches(q host.Process) bool {
 	if q.PID == 0 || q.Created == 0 {
 		return false
 	}
@@ -675,7 +675,7 @@ func setupMarkerWindow(timeout time.Duration) time.Duration {
 // q's boot and now is before its deadline (setupMarker.deadline), so the setup is finished as on a fresh boot.
 // stale: it names q's boot but the deadline has passed (or is unknown); it is deleted then, like a marker of another
 // boot.
-func setupMarkerUse(mk setupMarker, ok bool, q win.Process, now time.Time) (use, stale bool) {
+func setupMarkerUse(mk setupMarker, ok bool, q host.Process, now time.Time) (use, stale bool) {
 	if !ok || !mk.matches(q) {
 		return false, false
 	}

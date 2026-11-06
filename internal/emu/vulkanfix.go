@@ -12,9 +12,9 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/guest"
+	"modavd/internal/host"
 	"modavd/internal/root"
 	"modavd/internal/vkfix"
-	"modavd/internal/win"
 )
 
 const (
@@ -113,7 +113,7 @@ func installBlocker(err error) mountBlocker {
 // then, and an install started after it only meets a framework that is coming back (what InstallAPK's own boot check
 // and adb's errors report). Otherwise b says what is in the way and nothing is held.
 func (m *Manager) owedMountGate(i int, g guestIO) (release func(), b mountBlocker, ok bool) {
-	l, free, err := win.TryLock(m.guestLockPath(i))
+	l, free, err := host.TryLock(m.guestLockPath(i))
 	if err != nil || !free {
 		return nil, installBlocker(err), false
 	}
@@ -149,7 +149,7 @@ func (m *Manager) mountVulkanFix(ctx context.Context, i int, fx vulkanFixIO, owe
 		} else {
 			// A launched boot has no app of ours in front yet, but an install_apk of another modavd process may already
 			// run (sys.boot_completed is 1 by now): the guest lock alone decides, the same way.
-			l, free, err := win.TryLock(m.guestLockPath(i))
+			l, free, err := host.TryLock(m.guestLockPath(i))
 			if err == nil && free {
 				release, allowed = l.Unlock, true
 			} else {

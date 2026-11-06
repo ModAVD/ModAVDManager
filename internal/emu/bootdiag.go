@@ -22,8 +22,8 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const (
@@ -53,7 +53,7 @@ var bootDiagItems = []bootDiagItem{
 // bootDiagRun runs adb args for at most timeout, stdout into w (kept when adb times out or fails).
 type bootDiagRun func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result
 
-var bootDiagSelfProcess = func() (win.Process, bool) { return win.FindProcess(uint32(os.Getpid())) }
+var bootDiagSelfProcess = func() (host.Process, bool) { return host.FindProcess(uint32(os.Getpid())) }
 
 // bootFailed: err ends a boot that went wrong, not one the caller gave up on. A cancel (Ctrl+C, MCP
 // notifications/cancelled, the manager's job) is not one; create's own deadline running out is.
@@ -87,7 +87,7 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 	self, ok := bootDiagSelfProcess()
 	if !ok || self.Created == 0 {
 		m.Log.Warnf("实例 %d 读不到现场收集进程身份，继续保存客体现场", i)
-		self = win.Process{PID: uint32(os.Getpid())}
+		self = host.Process{PID: uint32(os.Getpid())}
 	}
 	prefix := fmt.Sprintf(".%s-%s-bootfail-%d-%d-", root.AvdName(i), stamp.Format("20060102-150405"), self.PID, self.Created)
 	dir, err := os.MkdirTemp(logs, prefix)

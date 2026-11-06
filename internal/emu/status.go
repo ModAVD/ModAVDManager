@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"modavd/internal/avd"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
-	"modavd/internal/win"
 )
 
 // qemuScan, when a test sets it, replaces the process scan behind List, Info, StopTargets and qemuOf (not findQemu), so
@@ -21,7 +21,7 @@ import (
 // take another root's mas_<i> for the test root's (adb.QemuBelongsTo: the runtime file in
 // %LOCALAPPDATA%\Temp\avd\running, before it exists the run lock in the instance directory), but a test should not
 // depend on what runs on the machine either.
-var qemuScan func(indexes []int) map[int]win.Process
+var qemuScan func(indexes []int) map[int]host.Process
 
 // statusBooted is the getprop of instanceInfo; a test replaces it.
 var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
@@ -29,7 +29,7 @@ var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
 }
 
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
-func (m *Manager) qemus(indexes []int) (map[int]win.Process, error) {
+func (m *Manager) qemus(indexes []int) (map[int]host.Process, error) {
 	if qemuScan != nil {
 		return qemuScan(indexes), nil
 	}
@@ -37,10 +37,10 @@ func (m *Manager) qemus(indexes []int) (map[int]win.Process, error) {
 }
 
 // qemuOf is the qemu process of instance i of m's root, through qemuScan.
-func (m *Manager) qemuOf(i int) (win.Process, bool, error) {
+func (m *Manager) qemuOf(i int) (host.Process, bool, error) {
 	procs, err := m.qemus([]int{i})
 	if err != nil {
-		return win.Process{}, false, err
+		return host.Process{}, false, err
 	}
 	p, ok := procs[i]
 	return p, ok, nil
@@ -108,7 +108,7 @@ func (m *Manager) List(ctx context.Context) (*ListResult, error) {
 	}
 	var wg sync.WaitGroup
 	for k, in := range insts {
-		var p *win.Process
+		var p *host.Process
 		if q, ok := procs[in.Index]; ok {
 			p = &q
 		}
@@ -127,7 +127,7 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	var p *win.Process
+	var p *host.Process
 	q, ok, err := m.qemuOf(i)
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
 
 // instanceInfo builds the InstanceInfo of in. p is its qemu process when running. booted, when not nil, is the
 // already known boot state (skips the getprop).
-func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Process, booted *bool) InstanceInfo {
+func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Process, booted *bool) InstanceInfo {
 	i := in.Index
 	ports := m.Root.Ports()
 	info := InstanceInfo{
@@ -176,7 +176,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *win.Pro
 		}
 		// Only for a running instance: the name is per console port, not per root, so an offline instance would
 		// report another root's mapping on the same port.
-		info.Screencap.ShmReady = win.SharedMemoryExists(info.Screencap.Shm)
+		info.Screencap.ShmReady = host.SharedMemoryExists(info.Screencap.Shm)
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
@@ -274,7 +274,7 @@ func (m *Manager) bridgeState(ctx context.Context, i int, cfg *avd.Ini, booted, 
 
 // lockHeld: some process (this one included: the lock is per handle) holds lock kind of instance i right now.
 func (m *Manager) lockHeld(i int, kind string) bool {
-	l, ok, err := win.TryLock(m.lockPath(i, kind))
+	l, ok, err := host.TryLock(m.lockPath(i, kind))
 	if err != nil {
 		return false
 	}

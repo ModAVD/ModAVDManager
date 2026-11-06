@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
 	"modavd/internal/testutil"
-	"modavd/internal/win"
 )
 
 func injectQemuSnapshotError(t *testing.T, err error) *int {
@@ -18,7 +18,7 @@ func injectQemuSnapshotError(t *testing.T, err error) *int {
 	t.Cleanup(func() { listQemuProcesses, qemuScan = snapshot, scan })
 	qemuScan = nil
 	calls := 0
-	listQemuProcesses = func() ([]win.Process, error) { calls++; return nil, err }
+	listQemuProcesses = func() ([]host.Process, error) { calls++; return nil, err }
 	return &calls
 }
 

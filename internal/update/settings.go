@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // Sources of a ModAVD update.
@@ -74,7 +74,7 @@ func LoadSettings() Settings {
 		s.Source = SourceMirrorChyan
 	}
 	if blob, err := base64.StdEncoding.DecodeString(f.CDK); err == nil && len(blob) > 0 {
-		if plain, err := win.Unprotect(blob, cdkEntropy); err == nil {
+		if plain, err := host.Unprotect(blob, cdkEntropy); err == nil {
 			s.cdk = strings.TrimSpace(string(plain))
 		}
 	}
@@ -103,7 +103,7 @@ func SaveSettings(source string, cdk *string) (Settings, error) {
 	}
 	f := settingsFile{Source: s.Source}
 	if s.cdk != "" {
-		blob, err := win.Protect([]byte(s.cdk), cdkEntropy)
+		blob, err := host.Protect([]byte(s.cdk), cdkEntropy)
 		if err != nil {
 			return s, errs.Wrap(errs.Internal, err, "加密 CDK 失败: "+err.Error())
 		}

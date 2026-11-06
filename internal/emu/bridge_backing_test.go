@@ -11,8 +11,8 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 func TestBridgeBackingProof(t *testing.T) {
@@ -133,7 +133,7 @@ func TestBridgeBaseReadProtectsAgainstWriters(t *testing.T) {
 	if err := os.WriteFile(path, []byte("raw"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	f, err := win.OpenStableRead(path)
+	f, err := host.OpenStableRead(path)
 	if err != nil {
 		t.Fatal(err)
 	}

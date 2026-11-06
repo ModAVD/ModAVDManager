@@ -15,9 +15,9 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // Create makes a new instance (validated options, free index and ports), sets it up with one headless boot
@@ -168,7 +168,7 @@ func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
 	}
 	var busyErr error
 	i, err := avd.FreeIndex(m.Root.Ports(), existing, func(ports []int) []int {
-		busy, err := win.BusyPorts(ports)
+		busy, err := host.BusyPorts(ports)
 		if err != nil {
 			busyErr = err
 			return ports
@@ -254,7 +254,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if err != nil {
 		return nil, err
 	}
-	var p *win.Process
+	var p *host.Process
 	q, ok, err := m.qemuOf(i)
 	if err != nil {
 		return nil, err
@@ -410,7 +410,7 @@ func (m *Manager) prepareDiagnosticDelete(ctx context.Context, i int) error {
 }
 
 // tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("魔改 AVD 实例 0 正在启动，无法删除").
-func (m *Manager) tryInstanceLock(i int, kind, what string) (*win.FileLock, error) {
+func (m *Manager) tryInstanceLock(i int, kind, what string) (*host.FileLock, error) {
 	l, ok, err := m.tryOperationLock(i, kind)
 	if err != nil {
 		return nil, err

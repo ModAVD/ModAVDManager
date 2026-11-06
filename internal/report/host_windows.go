@@ -27,7 +27,7 @@ import (
 	"unsafe"
 
 	"modavd/internal/errs"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // cimScript asks WMI the way the package scripts do (see cim.ps1).
@@ -152,7 +152,7 @@ func runCIM(ctx context.Context, part, letter string) (map[string]json.RawMessag
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = 3 * time.Second
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("WMI 查询（%s）%.0f 秒没有结果", part, cimTimeout.Seconds())
@@ -462,7 +462,7 @@ const (
 )
 
 func (h *winHost) Processes(match func(name string) bool) ([]Process, error) {
-	procs, err := win.ListProcesses()
+	procs, err := host.ListProcesses()
 	if err != nil {
 		return nil, err
 	}
@@ -725,7 +725,7 @@ func (h *winHost) Run(ctx context.Context, exe string, args []string, timeout ti
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	// a killed client may leave a child holding the pipes: stop waiting for them (as Invoke-Native does)
 	cmd.WaitDelay = 3 * time.Second
-	win.HideConsoleCmd(cmd)
+	host.HideConsoleCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		return RunResult{}, err
 	}

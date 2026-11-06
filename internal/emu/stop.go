@@ -54,8 +54,8 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
-	"modavd/internal/win"
 )
 
 // stopBudget is the worst case of every stop path, counted from the first look for qemu (see the shutdown constants
@@ -133,7 +133,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 		mm.Log.Infof("魔改 AVD 实例 %d 正在开机，等模拟器起来再关（最多 %.0f 秒）", i, startingQemuWait.Seconds())
 		var found, starting bool
 		p, found, starting, err = waitStartingQemu(ctx, startingQemuWait, startingQemuPoll,
-			func() (win.Process, bool, error) { return mm.qemuOf(i) }, func() bool { return mm.lockHeld(i, "start") })
+			func() (host.Process, bool, error) { return mm.qemuOf(i) }, func() bool { return mm.lockHeld(i, "start") })
 		if err != nil {
 			return nil, err
 		}
@@ -178,12 +178,12 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 // found: its qemu appeared. stillStarting: no qemu, and the start lock is still held at the end; false when the start
 // let go without one (it failed, or was canceled before launching), so the instance is simply offline. A cancel ends
 // the wait with errs.Canceled.
-func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func() (win.Process, bool, error),
-	starting func() bool) (p win.Process, found, stillStarting bool, err error) {
+func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func() (host.Process, bool, error),
+	starting func() bool) (p host.Process, found, stillStarting bool, err error) {
 	deadline := time.Now().Add(wait)
 	for {
 		if p, ok, err := find(); err != nil {
-			return win.Process{}, false, false, err
+			return host.Process{}, false, false, err
 		} else if ok {
 			return p, true, false, nil
 		}
@@ -195,11 +195,11 @@ func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func()
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
-			return win.Process{}, false, true, nil
+			return host.Process{}, false, true, nil
 		}
 		select {
 		case <-ctx.Done():
-			return win.Process{}, false, true, ctxErr(ctx)
+			return host.Process{}, false, true, ctxErr(ctx)
 		case <-time.After(min(poll, left)):
 		}
 	}
@@ -208,7 +208,7 @@ func waitStartingQemu(ctx context.Context, wait, poll time.Duration, find func()
 // justLaunched: qemu p, found while waiting for a start that began waiting at waitStarted, is that start's freshly
 // launched one. The start holds the boot lock from just before the launch until sys.boot_completed (booting), and a
 // qemu launched during the wait was created after it began (2 s of slack for the clocks of the snapshot).
-func justLaunched(p win.Process, waitStarted time.Time, booting bool) bool {
+func justLaunched(p host.Process, waitStarted time.Time, booting bool) bool {
 	if booting {
 		return true
 	}
@@ -400,7 +400,7 @@ func stopCanceled(ctx context.Context, i int) error {
 }
 
 // stopOpsFor are the real side effects on qemu process p of instance i.
-func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps {
+func (m *Manager) stopOpsFor(ctx context.Context, i int, p host.Process) stopOps {
 	ports := m.Root.Ports()
 	console, serial := ports.Console(i), ports.Serial(i)
 	closeRun := func(timeout time.Duration, args ...string) adb.Result {
@@ -457,7 +457,7 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps 
 		forceKill: func(wait time.Duration) error {
 			return qemuKill{
 				alive:    p.Alive,
-				kill:     func() error { return win.KillTree(p) },
+				kill:     func() error { return host.KillTree(p) },
 				waitExit: func(d time.Duration) bool { return waitQemuExit(ctx, p, d) },
 				refused:  func() bool { return terminateRefused(p) },
 			}.run(ctx, m.Log, i, p.PID, wait)
@@ -466,7 +466,7 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p win.Process) stopOps 
 }
 
 // qemuKill are the side effects of AUTO-MAS _force_kill on one qemu, separated for tests: alive (Process.Alive), kill
-// (win.KillTree), waitExit (waitQemuExit) and refused (terminateRefused).
+// (host.KillTree), waitExit (waitQemuExit) and refused (terminateRefused).
 type qemuKill struct {
 	alive    func() bool
 	kill     func() error
@@ -517,8 +517,8 @@ func (q qemuKill) run(ctx context.Context, log *logx.Logger, i int, pid uint32, 
 // integrity level, e.g. started by AUTO-MAS running as administrator). false when it can be opened: a kill that
 // failed anyway met a process that is already exiting (see qemuKill.run). false too when p is gone: its PID is
 // unused, or names a newer process (the creation time differs).
-func terminateRefused(p win.Process) bool {
-	return win.TerminateRefused(p)
+func terminateRefused(p host.Process) bool {
+	return host.TerminateRefused(p)
 }
 
 // qemuNotEnded is the error of a stop after which qemu pid still runs because Windows refused to terminate it
@@ -531,7 +531,7 @@ func qemuNotEnded(i int, pid uint32, killErr error) error {
 // waitQemuExit waits up to d for p to exit, in short slices so a cancel is noticed. Returns whether it is gone. Where
 // SYNCHRONIZE is denied, Process.Wait / Alive read the exit code instead, so a qemu whose exit code has become
 // readable counts as gone too.
-func waitQemuExit(ctx context.Context, p win.Process, d time.Duration) bool {
+func waitQemuExit(ctx context.Context, p host.Process, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for {
 		remaining := time.Until(deadline)

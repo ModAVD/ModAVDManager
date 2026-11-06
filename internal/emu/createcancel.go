@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // A stop requests cancellation on disk so the creator, even in another process, also stops between boots and cannot
@@ -23,7 +23,7 @@ func (m *Manager) createCancelPath(i int) string {
 func (m *Manager) createCanceled(i int) bool { return fileOrDirExists(m.createCancelPath(i)) }
 
 // lockCreation clears a dead attempt's cancellation before publishing the new attempt to Stop.
-func (m *Manager) lockCreation(ctx context.Context, i int) (*win.FileLock, error) {
+func (m *Manager) lockCreation(ctx context.Context, i int) (*host.FileLock, error) {
 	stop, err := m.lock(ctx, i, "stop", stopLockWait, "正在关机")
 	if err != nil {
 		return nil, err

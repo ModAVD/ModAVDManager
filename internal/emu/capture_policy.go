@@ -13,8 +13,8 @@ import (
 
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // captureState names both process identities. A matching adb command line alone could be collect-info's -d call.
@@ -59,7 +59,7 @@ func (m *Manager) writeCaptureState(i int, state captureState) error {
 }
 
 func (m *Manager) ownsCaptureHelper(i int, state captureState) bool {
-	helper := win.Process{PID: state.HelperPID, Created: state.HelperCreated}
+	helper := host.Process{PID: state.HelperPID, Created: state.HelperCreated}
 	if helper.PID == 0 || helper.Created == 0 || !helper.Alive() {
 		return false
 	}
@@ -91,44 +91,44 @@ func (m *Manager) ownsCaptureHelper(i int, state captureState) bool {
 	return true
 }
 
-func (m *Manager) ownedCapture(i int, state captureState) (win.Process, bool) {
-	helper := win.Process{PID: state.HelperPID, Created: state.HelperCreated}
-	client := win.Process{PID: state.ClientPID, Created: state.ClientCreated}
+func (m *Manager) ownedCapture(i int, state captureState) (host.Process, bool) {
+	helper := host.Process{PID: state.HelperPID, Created: state.HelperCreated}
+	client := host.Process{PID: state.ClientPID, Created: state.ClientCreated}
 	if !m.ownsCaptureHelper(i, state) || client.PID == 0 || client.Created == 0 || !client.Alive() {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
-	p, found := win.FindProcess(client.PID)
+	p, found := host.FindProcess(client.PID)
 	if !found || p.Created != client.Created || !captureChildOf(p, helper) {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	image, err := client.ImagePath()
 	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	args, err := client.CommandLine()
 	if err != nil || !logcatCmdlineMatches(args, strconv.Itoa(m.Root.AdbServerPort()), m.Root.Ports().Serial(i)) {
-		return win.Process{}, false
+		return host.Process{}, false
 	}
 	for _, arg := range args {
 		if arg == "-d" || arg == "--dump" {
-			return win.Process{}, false
+			return host.Process{}, false
 		}
 	}
 	return p, true
 }
 
-func captureChildOf(client, helper win.Process) bool {
+func captureChildOf(client, helper host.Process) bool {
 	return client.PPID == helper.PID && client.Created != 0 && helper.Created != 0 && client.Created >= helper.Created
 }
 
 // A new owned adb child may appear just before its state file is published. Its validated helper parent proves
 // this is a transition to wait for, not an external capture. This weaker readiness fact never permits killing it.
-func (m *Manager) pendingOwnedCapture(i int, client win.Process) bool {
+func (m *Manager) pendingOwnedCapture(i int, client host.Process) bool {
 	image, err := client.ImagePath()
 	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
 		return false
 	}
-	helper, ok := win.FindProcess(client.PPID)
+	helper, ok := host.FindProcess(client.PPID)
 	if !ok || !captureChildOf(client, helper) {
 		return false
 	}
@@ -144,7 +144,7 @@ func (m *Manager) pendingOwnedCapture(i int, client win.Process) bool {
 	return m.ownsCaptureHelper(i, captureState{HelperPID: helper.PID, HelperCreated: helper.Created, QemuPID: uint32(qpid), QemuCreated: qcreated})
 }
 
-func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error) {
+func (m *Manager) findOwnedLogcatProcesses(serial string) ([]host.Process, error) {
 	port, ok := consolePortOfSerial(serial)
 	if !ok {
 		return nil, nil
@@ -158,7 +158,7 @@ func (m *Manager) findOwnedLogcatProcesses(serial string) ([]win.Process, error)
 		return nil, nil
 	}
 	if p, ok := m.ownedCapture(i, state); ok {
-		return []win.Process{p}, nil
+		return []host.Process{p}, nil
 	}
 	return nil, nil
 }
@@ -197,7 +197,7 @@ func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeo
 				if !client.Alive() {
 					continue
 				}
-				if helperOurs && captureChildOf(client, win.Process{PID: state.HelperPID, Created: state.HelperCreated}) {
+				if helperOurs && captureChildOf(client, host.Process{PID: state.HelperPID, Created: state.HelperCreated}) {
 					image, err := client.ImagePath()
 					if err == nil && strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
 						continue
@@ -236,7 +236,7 @@ func (m *Manager) warnExternalCapture(i int, policy diagnostics.State) {
 
 // A failed observation is unknown, not a server replacement. The first successful observation establishes the
 // baseline when startup could not read it. Restart only between two known process identities.
-func captureServerChanged(observed *win.Process, next win.Process) bool {
+func captureServerChanged(observed *host.Process, next host.Process) bool {
 	if next.PID == 0 || next.Created == 0 {
 		return false
 	}
@@ -254,13 +254,13 @@ func diagnosticLogcatArgs(server int, serial string, enabled bool) []string {
 	return []string{"-P", strconv.Itoa(server), "-s", serial, "shell", "su", "0", "logcat", "-v", "threadtime", "-b", "main,system,crash,events,kernel"}
 }
 
-func (m *Manager) captureStarted(i int, q win.Process, policy diagnostics.State, server win.Process) func(int) error {
+func (m *Manager) captureStarted(i int, q host.Process, policy diagnostics.State, server host.Process) func(int) error {
 	return func(pid int) error {
-		helper, ok := win.FindProcess(uint32(os.Getpid()))
+		helper, ok := host.FindProcess(uint32(os.Getpid()))
 		if !ok || helper.Created == 0 {
 			return fmt.Errorf("读不到采集进程身份")
 		}
-		client, ok := win.FindProcess(uint32(pid))
+		client, ok := host.FindProcess(uint32(pid))
 		if !ok || client.Created == 0 {
 			return fmt.Errorf("读不到 adb 采集进程身份")
 		}

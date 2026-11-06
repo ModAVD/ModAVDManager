@@ -33,9 +33,9 @@ import (
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 const (
@@ -329,7 +329,7 @@ func (p *createProgress) send(step, msg string) {
 
 // setupNew is the setup of a new instance (or a retry of one that failed); the create lock is held by the caller and
 // released here. cfg is the instance's config.ini as the caller read it.
-func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateRequest, lock *win.FileLock) (_ *InstanceInfo, retErr error) {
+func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateRequest, lock *host.FileLock) (_ *InstanceInfo, retErr error) {
 	defer lock.Unlock()
 	defer func() {
 		if retErr != nil {

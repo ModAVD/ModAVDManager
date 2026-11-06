@@ -23,9 +23,9 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/guest"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // Timeouts, from AUTO-MAS constants.py where they exist there.
@@ -171,8 +171,8 @@ func isQemuName(name string) bool {
 // roots. The same-numbered instance of another root is not found: it is not ours to stop, re-register or adopt (a
 // start then fails on its busy ports).
 // Ordinary snapshot/command-line failures remain best effort; unsupported must reach the caller.
-func scanQemuOf(roots []*root.Root, indexes []int) (map[int]win.Process, error) {
-	found := map[int]win.Process{}
+func scanQemuOf(roots []*root.Root, indexes []int) (map[int]host.Process, error) {
+	found := map[int]host.Process{}
 	if len(indexes) == 0 || len(roots) == 0 {
 		return found, nil
 	}
@@ -182,6 +182,11 @@ func scanQemuOf(roots []*root.Root, indexes []int) (map[int]win.Process, error) 
 			return nil, err
 		}
 		return found, nil
+	}
+	// Process queries alone do not implement QemuBelongsTo's host ownership
+	// checks. Keep discovery unsupported until that identity chain is available.
+	if err := requireWindows(); err != nil {
+		return nil, err
 	}
 	plans := make([]root.PortPlan, len(roots))
 	for k, r := range roots {
@@ -211,21 +216,21 @@ func scanQemuOf(roots []*root.Root, indexes []int) (map[int]win.Process, error) 
 }
 
 // listQemuProcesses is the host snapshot API; tests inject platform failures here.
-var listQemuProcesses = win.ListProcesses
+var listQemuProcesses = host.ListProcesses
 
 // scanQemu finds the qemu processes of the given indexes of m's root with one process snapshot.
-func (m *Manager) scanQemu(indexes []int) (map[int]win.Process, error) {
+func (m *Manager) scanQemu(indexes []int) (map[int]host.Process, error) {
 	if m.Root == nil {
-		return map[int]win.Process{}, nil
+		return map[int]host.Process{}, nil
 	}
 	return scanQemuOf([]*root.Root{m.Root}, indexes)
 }
 
 // findQemu is the qemu process of instance i of m's root (always a real process scan, see qemuScan).
-func (m *Manager) findQemu(i int) (win.Process, bool, error) {
+func (m *Manager) findQemu(i int) (host.Process, bool, error) {
 	procs, err := m.scanQemu([]int{i})
 	if err != nil {
-		return win.Process{}, false, err
+		return host.Process{}, false, err
 	}
 	p, ok := procs[i]
 	return p, ok, nil
@@ -299,7 +304,7 @@ func (m *Manager) lockPath(i int, kind string) string {
 	return filepath.Join(m.Root.AvdHome(), "."+root.AvdName(i)+"."+kind+".lock")
 }
 
-func (m *Manager) lock(ctx context.Context, i int, kind string, wait time.Duration, what string) (*win.FileLock, error) {
+func (m *Manager) lock(ctx context.Context, i int, kind string, wait time.Duration, what string) (*host.FileLock, error) {
 	l, ok, err := m.tryOperationLock(i, kind)
 	if err != nil {
 		return nil, err
@@ -333,7 +338,7 @@ func (m *Manager) lock(ctx context.Context, i int, kind string, wait time.Durati
 
 // booting: some modavd process is between launch and boot completion of instance i (holds its boot lock).
 func (m *Manager) booting(i int) bool {
-	l, ok, err := win.TryLock(m.lockPath(i, "boot"))
+	l, ok, err := host.TryLock(m.lockPath(i, "boot"))
 	if err != nil || !ok {
 		return err == nil
 	}
@@ -343,7 +348,7 @@ func (m *Manager) booting(i int) bool {
 
 // stopping: some modavd process is stopping instance i.
 func (m *Manager) stopping(i int) bool {
-	l, ok, err := win.TryLock(m.lockPath(i, "stop"))
+	l, ok, err := host.TryLock(m.lockPath(i, "stop"))
 	if err != nil || !ok {
 		return err == nil
 	}
