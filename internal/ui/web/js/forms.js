@@ -6,7 +6,6 @@ import { S, update, subscribe, instance, lastJob } from './store.js';
 import { openDialog, toast } from './ui.js';
 import { quoted, label, uptime, fmtBytes } from './format.js';
 import * as A from './actions.js';
-import { openComponentFetch } from './diagnostics.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
 const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
@@ -137,6 +136,8 @@ export function openCreate() {
       if (store.checked && !(await playStoreReady())) {
         // the component first (license, source, download, as 补全组件); the create follows once that job is done
         ctl.close();
+        // loaded only here: forms.js stays free of the diagnostics module's imports
+        const { openComponentFetch } = await import('./diagnostics.js');
         openComponentFetch({ playStore: true, then: () => post().then(toast, (e) => toast({ tone: 'err', title: '没有新建实例', text: e.message, advice: e.advice })) });
         return;
       }
