@@ -318,6 +318,9 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	if err := ctx.Err(); err != nil {
 		return false, canceled(ctx)
 	}
+	if err := prepareServerRoot(c.Root); err != nil {
+		return false, err
+	}
 	c.Log.Infof("启动魔改 AVD %s adb server（端口 %d）", k.label, port)
 	// StartOrphan rather than StartDetached: an MCP client ends modavd's whole process tree when it disconnects, and
 	// while the start-server client (our child for ~2 s) is alive the server it forks is part of that tree. Losing

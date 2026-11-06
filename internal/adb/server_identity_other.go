@@ -9,6 +9,8 @@ import (
 
 const serverConflictReason = "它不是 adb"
 
+func prepareServerRoot(*root.Root) error { return nil }
+
 func serverBaseEnv(env []string) []string { return env }
 
 // Preserve the native Windows server check, including an unreadable name.

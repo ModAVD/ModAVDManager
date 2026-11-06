@@ -3,11 +3,25 @@
 package adb
 
 import (
+	"os"
+
+	"modavd/internal/errs"
 	"modavd/internal/host"
 	"modavd/internal/root"
 )
 
 const serverConflictReason = "无法确认它是这个根目录的 adb"
+
+// Ownership compares the AVD home by filesystem identity. Prepare that empty
+// directory before launching a server for a root without any instances yet.
+// Existing listeners are checked before this function, so a foreign server
+// cannot cause a directory to be created or another server to be started.
+func prepareServerRoot(r *root.Root) error {
+	if err := os.MkdirAll(r.AvdHome(), 0o755); err != nil {
+		return errs.Wrap(errs.Internal, err, "创建私有 adb 的 AVD 目录失败: "+r.AvdHome())
+	}
+	return nil
+}
 
 // An inherited socket/address can redirect an adb client away from its private
 // port despite the emulator's ANDROID_ADB_SERVER_PORT. Keep the native command
