@@ -30,24 +30,68 @@ function cancel(id) {
 }
 
 export function openComponentFetch() {
-  Promise.all([api.get('/api/components/license'), api.get('/api/components/source')])
-    .then(([v, saved]) => openLicense(v.license, v.license_source, saved)).catch(toastError);
+  api.get('/api/components/source')
+    .then((saved) => api.get(licenseURL(saved.source || 'auto', saved.mirror_urls || [])).then((v) => openLicense(v, saved)))
+    .catch(toastError);
 }
 
-function openLicense(license, source, saved = {}) {
-  const text = h('pre', { class: 'loglines diag-license', tabindex: '0', text: license || '后台没有返回许可协议全文。' });
-  const note = h('p', { class: 'f-hint', text: `取自：${source || '未知镜像'}` });
+function licenseURL(source, urls) {
+  const q = new URLSearchParams();
+  q.set('source', source || 'auto');
+  if (source === 'custom') for (const url of urls || []) q.append('mirror_urls', url);
+  return `/api/components/license?${q}`;
+}
+
+function openLicense(initial, saved = {}) {
+  let licenseHash = initial.license_sha256 || '';
+  let licenseSig = `${saved.source || 'auto'}|${(saved.mirror_urls || []).join(',')}`;
+  const text = h('pre', { class: 'loglines diag-license', tabindex: '0', text: initial.license || '后台没有返回许可协议全文。' });
+  const note = h('p', { class: 'f-hint', text: `取自：${initial.license_source || '未知镜像'}` });
+  const loadError = h('div', { class: 'form-error', role: 'alert', hidden: true });
   const choices = [['auto', '自动'], ['googledownloads_cn', 'googledownloads_cn'], ['tencent', 'tencent'], ['google', 'google'], ['custom', '自定义地址']];
   const select = h('select', { class: 'input', 'aria-label': '组件下载源' }, ...choices.map(([value, label]) => h('option', { value, text: label })));
   select.value = saved.source || 'auto';
   const custom = h('input', { class: 'input', placeholder: 'https://example/AndroidSDK/', value: (saved.mirror_urls || []).join(',') });
   const customRow = h('div', { class: 'f-ctl' }, custom);
   const updateCustom = () => { customRow.hidden = select.value !== 'custom'; };
-  select.addEventListener('change', updateCustom);
+  let agree;
+  const loadLicense = async () => {
+    const source = select.value;
+    const urls = source === 'custom' ? custom.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
+    const sig = `${source}|${urls.join(',')}`;
+    if (source === 'custom' && !urls.length) {
+      licenseHash = '';
+      licenseSig = sig;
+      loadError.replaceChildren(h('strong', { text: '需要自定义地址' }), h('div', { class: 'fe-advice', text: '请填写至少一个 HTTP(S) 下载目录。' }));
+      loadError.hidden = false;
+      if (agree) agree.disabled = true;
+      return;
+    }
+    if (sig === licenseSig) return;
+    licenseHash = '';
+    if (agree) agree.disabled = true;
+    loadError.hidden = true;
+    try {
+      const v = await api.get(licenseURL(source, urls));
+      setText(text, v.license || '后台没有返回许可协议全文。');
+      setText(note, `取自：${v.license_source || '未知镜像'}`);
+      licenseHash = v.license_sha256 || '';
+      licenseSig = sig;
+      if (!licenseHash) throw new Error('后台没有返回许可协议校验值');
+    } catch (e) {
+      showError(loadError, e);
+      loadError.hidden = false;
+    } finally {
+      if (agree) agree.disabled = !licenseHash;
+    }
+  };
+  select.addEventListener('change', () => { updateCustom(); loadLicense(); });
+  custom.addEventListener('change', loadLicense);
+  custom.addEventListener('blur', loadLicense);
   updateCustom();
   const sourceRow = h('div', { class: 'fields' }, h('label', { class: 'f-label', text: '下载源' }), h('div', { class: 'f-ctl' }, select), customRow);
-  const box = h('div', { class: 'diag-license-body' }, text, note, sourceRow);
-  const agree = btn('btn btn-primary', '同意并下载', () => {
+  const box = h('div', { class: 'diag-license-body' }, loadError, text, note, sourceRow);
+  agree = btn('btn btn-primary', '同意并下载', () => {
     agree.disabled = true;
     const selected = select.value;
     const urls = selected === 'custom' ? custom.value.split(',').map((x) => x.trim()).filter(Boolean) : [];
@@ -56,10 +100,17 @@ function openLicense(license, source, saved = {}) {
       toast({ tone: 'err', title: '需要自定义地址', text: '请填写至少一个 HTTP(S) 下载目录。' });
       return;
     }
+    const sig = `${selected}|${urls.join(',')}`;
+    if (!licenseHash || sig !== licenseSig) {
+      agree.disabled = false;
+      toast({ tone: 'err', title: '许可协议还没取好', text: '请等许可协议加载完成后再试。' });
+      return;
+    }
     const body = { source: selected, mirror_urls: urls };
-    api.put('/api/components/source', body).then(() => startJob(api.post('/api/components/fetch', { accept_license: true, ...body })))
+    api.put('/api/components/source', body).then(() => startJob(api.post('/api/components/fetch', { accept_license: true, ...body, license_sha256: licenseHash })))
       .then(() => d.close()).catch((e) => { agree.disabled = false; toastError(e); });
   });
+  agree.disabled = !licenseHash;
   const d = openDialog({ title: 'Android 软件开发套件许可协议', sub: '请完整阅读后再决定是否下载组件', cls: 'dlg-update', body: box,
     actions: { left: btn('btn btn-ghost', '不同意', () => d.close()), cancel: false, ok: agree }, light: true });
 }

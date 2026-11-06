@@ -714,7 +714,10 @@ async function handle(url, init) {
     if (db.diagMode === 'components-error') return errResp('internal', '组件状态暂不可用', '稍后重试');
     return json({ root: ROOT, components: checkResult().components });
   }
-  if (p === '/api/components/license' && method === 'GET') return json({ license: 'Android Software Development Kit License Agreement\n\n(mock)', license_source: 'mock' });
+  if (p === '/api/components/license' && method === 'GET') {
+    const source = url.searchParams.get('source') || 'auto';
+    return json({ license: `Android Software Development Kit License Agreement\n\n(mock: ${source})`, license_source: source, license_sha256: `mock-license-${source}` });
+  }
   if (p === '/api/components/source' && method === 'GET') return json({ ...db.componentSource, mirror_urls: [...db.componentSource.mirror_urls] });
   if (p === '/api/components/source' && method === 'PUT') {
     const source = String(body.source || '').toLowerCase();
