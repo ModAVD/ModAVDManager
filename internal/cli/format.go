@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -196,6 +197,9 @@ func formatList(w io.Writer, r *emu.ListResult) {
 
 func listNotes(in emu.InstanceInfo) []string {
 	var notes []string
+	if in.Diagnostics {
+		notes = append(notes, "诊断模式")
+	}
 	if b := busyText(in.Busy); b != "" {
 		notes = append(notes, b)
 	}
@@ -235,6 +239,18 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		kv("标题", in.Title)
 	}
 	kv("状态", statusDetail(in.Status, in.CreationProgress, in.PID, in.StartedAt, in.Busy))
+	diagnostics := "关"
+	if in.Diagnostics {
+		diagnostics = "开"
+		if in.DiagnosticsSince != "" {
+			since := in.DiagnosticsSince
+			if parsed, err := time.Parse(time.RFC3339Nano, since); err == nil {
+				since = parsed.Local().Format("2006-01-02 15:04:05 MST")
+			}
+			diagnostics += "，自 " + since
+		}
+	}
+	kv("诊断模式", diagnostics)
 	kv("adb 地址", in.AdbAddress)
 	kv("序列号", in.Serial+"（私有 adb server 上）")
 	kv("端口", fmt.Sprintf("控制台 %d，adb %d，gRPC %d", in.Ports.Console, in.Ports.Adb, in.Ports.Grpc))
@@ -336,6 +352,12 @@ func appliedParts(applied map[string]any) []string {
 			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
 		case "data_partition_gb":
 			parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+		case "diagnostics":
+			if enabled, _ := v.(bool); enabled {
+				parts = append(parts, "诊断模式 开")
+			} else {
+				parts = append(parts, "诊断模式 关")
+			}
 		default:
 			parts = append(parts, fmt.Sprintf("%s %v", k, v))
 		}
@@ -364,6 +386,12 @@ func formatUpdate(w io.Writer, r *emu.UpdateResult) {
 	fmt.Fprintf(w, "已修改%s：%s\n", instLabel(r.Instance.Index, r.Instance.Name, r.Instance.Title), strings.Join(parts, "，"))
 	if r.AppliesNextBoot {
 		fmt.Fprintln(w, "实例正在运行，改动下次开机生效")
+	}
+	if c := r.DiagnosticsCleanup; c != nil && !r.Instance.Diagnostics {
+		fmt.Fprintf(w, "清理日志 %d 份，释放 %d 字节\n", c.Files, c.Bytes)
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintln(w, warning)
 	}
 }
 
@@ -527,6 +555,18 @@ func componentLine(c emu.ComponentStatus) string {
 
 func formatComponents(w io.Writer, data any) {
 	switch r := data.(type) {
+	case *ComponentsSourceResult:
+		label := r.Source
+		if label == "custom" {
+			label = "自定义：" + strings.Join(r.MirrorURLs, "、")
+		} else if label == "auto" {
+			label = "自动"
+		}
+		if r.Configured {
+			fmt.Fprintf(w, "组件下载源：%s（已保存）\n", label)
+		} else {
+			fmt.Fprintf(w, "组件下载源：%s（默认）\n", label)
+		}
 	case *ComponentsStatusResult:
 		fmt.Fprintf(w, "根目录：%s\n", r.Root)
 		for _, c := range r.Components {

@@ -231,8 +231,8 @@ func (f *fakeManager) TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTes
 	return &emu.AppProxyTestResult{Index: i}, nil
 }
 
-func (f *fakeManager) Running(ctx context.Context) ([]int, error) {
-	f.record("running")
+func (f *fakeManager) StopTargets(ctx context.Context) ([]int, error) {
+	f.record("stop-targets")
 	if f.running != nil {
 		return f.running(ctx)
 	}
@@ -263,6 +263,7 @@ type harness struct {
 	resolve  func(string) (*root.Root, error)
 	fetch    func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
 	stdin    string
+	terminal bool // stdin is a console (components fetch may ask for a source); false like a pipe
 }
 
 type result struct {
@@ -288,6 +289,7 @@ func (h *harness) run(t *testing.T, ctx context.Context, args ...string) result 
 		resolveRoot:     h.resolve,
 		serveMCP:        h.mcpCall,
 		fetchComponents: h.fetch,
+		stdinTerminal:   func(io.Reader) bool { return h.terminal },
 	}
 	if d.resolveRoot == nil {
 		d.resolveRoot = func(string) (*root.Root, error) { return nil, errs.New(errs.NotFound, "没有根目录") }
@@ -535,9 +537,9 @@ func TestStopAllConcurrent(t *testing.T) {
 	if !strings.Contains(r.stdout, `"failed":[{"index":2,"error":{"code":"busy"`) {
 		t.Errorf("stdout = %s", r.stdout)
 	}
-	// The targets come from the process table: no List (private server, getprop, re-registration) before the stops.
+	// Target discovery uses no List (private server, getprop, re-registration) before the stops.
 	calls := h.fake.callList()
-	if calls[0] != "running" || len(calls) != 4 {
+	if calls[0] != "stop-targets" || len(calls) != 4 {
 		t.Errorf("calls = %q", calls)
 	}
 	for _, c := range calls {
@@ -547,7 +549,7 @@ func TestStopAllConcurrent(t *testing.T) {
 	}
 }
 
-func TestStopAllRunningError(t *testing.T) {
+func TestStopAllTargetsError(t *testing.T) {
 	h := newHarness()
 	h.fake.running = func(context.Context) ([]int, error) {
 		return nil, errs.New(errs.MetadataUnreadable, "mas-avd.json 读不了")

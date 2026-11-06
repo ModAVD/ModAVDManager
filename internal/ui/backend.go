@@ -18,6 +18,7 @@ type backend interface {
 	// FreeIndex is the index Create picks when none is given.
 	FreeIndex() (int, error)
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
+	PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)

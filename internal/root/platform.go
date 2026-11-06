@@ -1,6 +1,9 @@
 package root
 
-import "runtime"
+import (
+	"runtime"
+	"strings"
+)
 
 func platformKeyFiles() map[string][]string {
 	p := CurrentPlatform()
@@ -50,14 +53,14 @@ func CurrentPlatform() Platform {
 			Emulator: "emulator", ADB: "adb", QEMU: "qemu-system-aarch64", QEMUHeadless: "qemu-system-aarch64-headless", QemuDir: "darwin-aarch64",
 			PackageSuffix: "macos-arm64", MirrorOS: "macos", MirrorArch: "arm64",
 			GuestABI: "arm64-v8a", GuestArch: "arm64", TargetAPI: "android-35",
-			SystemImageDir: "system-images/android-35/google_apis/arm64-v8a", SystemImageName: MacOSSystemImageName,
+			SystemImageDir: MacOSSystemImageDir, SystemImageName: MacOSSystemImageName,
 		}
 	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
 		return Platform{
 			Emulator: "emulator", ADB: "adb", QEMU: "qemu-system-x86_64", QEMUHeadless: "qemu-system-x86_64",
 			PackageSuffix: "linux-x64", MirrorOS: "linux", MirrorArch: "x64",
 			GuestABI: "x86_64", GuestArch: "x86_64", TargetAPI: "android-34",
-			SystemImageDir: "system-images/android-34/google_apis/x86_64", SystemImageName: SystemImageName,
+			SystemImageDir: strings.ReplaceAll(SystemImageDir, `\`, "/"), SystemImageName: SystemImageName,
 		}
 	case runtime.GOOS == "windows" && runtime.GOARCH == "amd64":
 		return Platform{

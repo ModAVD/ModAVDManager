@@ -5,7 +5,7 @@ package emu
 // reason and advice; a boot refuses on the blocking ones that fail. Read only: nothing on the host is changed.
 //
 //   - path: no non-ASCII characters in the root (emulator and qemu are unreliable there); spaces are fine. Blocking.
-//   - components: platform tools and the system image (fetched by 补全组件.bat). Blocking.
+//   - components: platform tools and the system image (fetched by the manager's “补全组件” action or components fetch). Blocking.
 //   - emulator: only our own build from the ModAVD package, with Pkg.BuildId=mas-N >= MinModBuild. Blocking.
 //   - acceleration: emulator -accel-check (WHPX). Blocking.
 //   - memory: available host memory >= this boot's -memory + 1.5 GB. Blocking.
@@ -159,7 +159,7 @@ func firstBlockingFailure(items []CheckItem) (CheckItem, bool) {
 }
 
 // precheckError maps a failed blocking item to the error a start returns: components -> the root's NotReady error
-// (with the package / 补全组件.bat advice), emulator -> NotReady, the rest -> PrecheckFailed.
+// (with the package / manager component-fetch advice), emulator -> NotReady, the rest -> PrecheckFailed.
 func precheckError(it CheckItem, missingErr func() error) error {
 	switch it.ID {
 	case "components":
@@ -266,7 +266,7 @@ func componentsItem(comps []root.ComponentStatus, advice func(missing []string) 
 	}
 }
 
-// missingAdvice is the root's advice for missing components (package / 补全组件.bat).
+// missingAdvice is the root's advice for missing components (package / manager component-fetch action).
 func (m *Manager) missingAdvice(missing []string) string {
 	if e := m.Root.MissingError(missing); e != nil && e.Advice != "" {
 		return e.Advice

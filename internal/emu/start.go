@@ -157,6 +157,12 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		if err != nil {
 			return nil, err
 		}
+		// Stop may have canceled this creation after Start's entry check. Check
+		// under its lock; the cancellation watcher need not have run yet.
+		if opt.creating && m.createCanceled(i) {
+			stopLock.Unlock()
+			return nil, errs.New(errs.Canceled, "新建初始化已被关机打断")
+		}
 		stopLock.Unlock()
 	}
 	if err := ctxErr(ctx); err != nil {
@@ -283,6 +289,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			if bootLock, err = m.lock(ctx, i, "boot", bootLockWait, "正在开机"); err != nil {
 				return nil, err
 			}
+			m.startDiagnosticArchive(i)
 			p, err := m.startEmulator(i, plan)
 			if err != nil {
 				bootLock.Unlock()

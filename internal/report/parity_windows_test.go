@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -151,13 +152,26 @@ func compareLines(t *testing.T, what string, got, want []string) {
 	}
 }
 
+// scriptPrivacyHead is the first line of collect-info.ps1's $PrivacyNote, which PrivacyNote says differently.
+const scriptPrivacyHead = "隐私提示：问题包只保存在本机，脚本不会上传。"
+
+// modavdPrivacyHead is PrivacyNote's first line.
+func modavdPrivacyHead() string {
+	head, _, _ := strings.Cut(PrivacyNote, "\r\n")
+	return head
+}
+
 // modavdLine is what modavd writes on purpose instead of a line of collect-info.ps1's summary.txt:
 //   - the PowerShell that ran the script: modavd's version and Go version;
 //   - the adb.exe the live section runs: modavd speaks the adb host protocol itself (no adb.exe, never a server of
-//     its own), to the server that listens on the port.
+//     its own), to the server that listens on the port;
+//   - the first line of the privacy note: who does not upload is the manager or the CLI, not a script.
 func (f *fixture) modavdLine(line string) string {
 	if line == "PowerShell：{{PSVERSION}}" {
 		return "modavd：" + buildinfo.Version + "（" + runtime.Version() + "）"
+	}
+	if line == scriptPrivacyHead {
+		return modavdPrivacyHead()
 	}
 	if strings.HasPrefix(line, "adb：") && strings.Contains(line, "  -P "+strconv.Itoa(f.adbPort)+"（") {
 		var pid uint32
@@ -268,7 +282,34 @@ func TestCollectMatchesScript(t *testing.T) {
 			for _, l := range lines(wantSummary) {
 				wantLines = append(wantLines, f.modavdLine(l))
 			}
-			compareLines(t, "summary.txt", lines(strings.TrimPrefix(got, "\ufeff")), wantLines)
+			// ModAVD adds a diagnostic state line for each canonical instance.
+			var scriptLines []string
+			var stateLines []string
+			for _, line := range lines(strings.TrimPrefix(got, "\ufeff")) {
+				if strings.HasSuffix(line, "：诊断模式 关") {
+					stateLines = append(stateLines, line)
+					continue
+				}
+				scriptLines = append(scriptLines, line)
+			}
+			entries, err := os.ReadDir(filepath.Join(f.root, "avd"))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			var expectedStates []string
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".ini") {
+					continue
+				}
+				name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+				if _, ok := diagnosticIndex(name); ok {
+					expectedStates = append(expectedStates, name+"：诊断模式 关")
+				}
+			}
+			sort.Strings(stateLines)
+			sort.Strings(expectedStates)
+			compareLines(t, "diagnostic state", stateLines, expectedStates)
+			compareLines(t, "summary.txt", scriptLines, wantLines)
 			if !strings.HasSuffix(got, "\r\n") || strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\n") {
 				t.Error("summary.txt lines do not all end with CRLF")
 			}
@@ -325,13 +366,17 @@ func TestCollectMatchesScript(t *testing.T) {
 				}
 			}
 
-			// the end of the console output: zip path, the privacy note word for word
+			// the end of the console output: zip path, the privacy note word for word but for its first line
 			console, _ := f.golden(t, name, "collect-console.txt")
 			if !containsLine(lines(console), "文件："+res.ZipPath) {
 				t.Errorf("zip %s, the script printed:\n%s", res.ZipPath, console)
 			}
-			if !strings.Contains(console, PrivacyNote) || res.PrivacyNote != PrivacyNote {
-				t.Error("the privacy note is not the one collect-info.ps1 prints")
+			scriptNote := scriptPrivacyHead + strings.TrimPrefix(PrivacyNote, modavdPrivacyHead())
+			if !strings.Contains(console, scriptNote) || res.PrivacyNote != PrivacyNote {
+				t.Error("the privacy note is not the one collect-info.ps1 prints, but for its first line")
+			}
+			if strings.Contains(PrivacyNote, "脚本") || !strings.HasPrefix(PrivacyNote, "隐私提示：问题包只保存在本机，") {
+				t.Errorf("privacy note head %q", modavdPrivacyHead())
 			}
 			if exists(res.Stage) || res.StageKept {
 				t.Errorf("stage %s left behind", res.Stage)

@@ -900,7 +900,7 @@ func TestMissingError(t *testing.T) {
 	if got := r.MissingError([]string{SystemImageName}).Error(); got != "这个目录里缺少：系统镜像 Android 14 Google APIs x86_64。"+FetchComponentsAdvice {
 		t.Fatalf("image only: %s", got)
 	}
-	if !strings.Contains(FetchComponentsAdvice, "再运行一次 modavd check") || strings.Contains(FetchComponentsAdvice, "点「检查」") {
+	if !strings.Contains(FetchComponentsAdvice, "完成后再检查一次") || strings.Contains(FetchComponentsAdvice, "补全组件.bat") {
 		t.Fatal("advice wording")
 	}
 	if got := r.MissingError(nil).Error(); !strings.HasPrefix(got, "这个目录里缺少：平台工具（adb）、") {

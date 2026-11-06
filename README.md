@@ -63,7 +63,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。`--resume N` 重做新建失败的那台的初始化 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--diagnostics on\|off]` | 修改；诊断模式立即生效，其余设置下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
@@ -75,7 +75,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `check [--memory M]` | 开机前的电脑检查 |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
-| `components [status]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看或补全 Google 组件（adb 和系统镜像），做的是「补全组件.bat」做的事（见「补全 Google 组件」） |
+| `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads]` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
@@ -166,6 +166,20 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。
 
+## 诊断模式
+
+在实例设置里打开「诊断模式」，或运行 `modavd set <i> --diagnostics on`。默认关，只存本机，不自动上传。日志和现场截图可能包含账号信息。`info`、`list` 显示开关，JSON 带 `diagnostics`，开启时另带 `diagnostics_since`。设置和首次开启时间存在 `mas-avd.json` 的 `instances.<i>.diagnostics`、`diagnosticsSince`；重复打开保留原时间。
+
+- 这台的模拟器输出、logcat 和崩溃转储留近 30 天，开机失败现场留最新 20 个，共用这台单独的 4 GiB 历史日志上限；不挤普通实例共用的 1 GiB。诊断期间保留执行桥日志。正在写的文件不参与删除和历史容量计算，logcat 仍按 256 MiB 在换行处切分。
+- 所在盘剩余空间不足 20 GiB 时，清理退回普通规则并提示一次；空间恢复后重新按诊断规则保留。配置读取失败时跳过删除并告警。
+- 客体 main、system、kernel 缓冲区各为 32 MiB，其余为 16 MiB，内存最多增加 48 MiB。宿主采集增加 kernel 和 dmesg。实例开着时立即切换，关着时下次开机应用。
+- 已有 AUTO-MAS 或其它程序抓取同端口、同序列号的 logcat 时，不另起采集，也不结束外部进程；诊断设置结果会提示宿主采集未接管。诊断配置暂时读不了时，采集和客体缓冲区按普通模式继续，每次连续故障只提示一次；历史日志删除仍严格读取配置，失败不删。
+- 已运行的采集固定本次开机已验证的 SDK 和 adb 目标，配置损坏不会把它转到默认端口。首次无法确认目标时，警告并跳过相关采集或客体操作，不猜默认配置。
+- 每次开机前另起短期后台任务，把上次成功扫描以来的 ModAVD 崩溃转储复制到 `logs\mas_<i>-crashdumps\`，不等待复制再开机。共享 crashpad 库中的转储无法精确归属到某台实例，可能顺带归档别台的新转储；不改 crashpad 自己的保留规则。
+- `collect-info` 对每台诊断实例各取最新 30 份模拟器日志和 logcat，连同归档转储合用独立的 1 GiB 复制预算；失败现场另限 300 MiB。转储按内容去重，过大的二进制文件整份跳过。文本只复制所选快照长度，增长或容量截断写进 summary。开着的诊断实例另收全部 logcat 缓冲区、dmesg、meminfo 和 activity processes，summary 记录开关与开启时间。普通实例仍共享原来的 300 MiB 日志预算；普通失败现场保留原有的最新目录完整收取、达到 100 MiB 后停止后续目录的规则。
+
+用 `modavd set <i> --diagnostics off` 关闭时，立即把已关闭的模拟器日志、logcat、执行桥日志各清到最新 10 份，失败现场留 3 个，删除该台转储归档。留下的文件回到普通全根目录 1 GiB 池，超限时也可能淘汰其它普通实例的旧日志。客体缓冲区恢复为 16 MiB，采集恢复普通缓冲区。命令返回实际清理的份数和字节；失败后可再次关闭，继续未完成的清理或客体恢复。管理器在关闭前预览清理数量并确认。
+
 ## MCP
 
 ```
@@ -173,6 +187,8 @@ modavd mcp --root D:\ModAVD
 ```
 
 同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
+
+诊断字段仅在 `list_instances` 公开，不提供诊断开关参数；关闭会删日志，需在管理器或 CLI 执行。
 
 在 Claude Code 里注册（PowerShell 里 `--` 要加引号，否则会被吞掉）：
 
@@ -233,7 +249,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 补全 Google 组件
 
-ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`，规则和随包的 `fetch-components.ps1`（「补全组件.bat」）一条一条对上：
+ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`。管理器检测页的「补全组件」按钮和这个命令共用同一套逻辑；首次交互运行会询问下载源并记住选择：
 
 - 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
 - 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com，要下载时先打一行「下载源：…」说明这次用哪些、为什么（默认 / `--mirror` / `--mirror-url`）；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。

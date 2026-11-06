@@ -14,14 +14,18 @@ package components
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	"modavd/internal/buildinfo"
 	"modavd/internal/download"
@@ -50,6 +54,33 @@ var (
 	diskFree           = host.DiskFree
 )
 
+// License returns the Android SDK license text and the mirror it came from, read from the mirrors of source the
+// way a fetch with that source reads it (an empty source is the default order). It only reads the repository
+// manifest; it does not touch a ModAVD root or install any component. The manager shows this text and passes its
+// SHA-256 as Options.LicenseSHA256 to the fetch the user agreed to.
+func License(ctx context.Context, source SourceSettings) (text, from string, err error) {
+	if fetchGOOS != "windows" {
+		return "", "", errs.New(errs.Unsupported, "这个系统还没有组件清单").WithAdvice("目前只有 Windows 能补全组件")
+	}
+	o := Options{}
+	if err := o.CheckTimeouts(); err != nil {
+		return "", "", err
+	}
+	o.Log = logx.Nop()
+	mirrors, err := ChooseMirrors(source.Mirror, source.MirrorURLs)
+	if err != nil {
+		return "", "", err
+	}
+	f := &fetcher{o: o, mirrors: mirrors}
+	return f.license(ctx)
+}
+
+// LicenseSHA256 is the hex SHA-256 of a license text, as Options.LicenseSHA256 wants it.
+func LicenseSHA256(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
 // Defaults and limits of the three timeouts (the script's -ConnectTimeoutSec, -StallTimeoutSec, -ManifestTimeoutSec).
 const (
 	DefaultConnectTimeout  = download.DefaultConnectTimeout
@@ -75,6 +106,13 @@ type Options struct {
 	// built-in list, tried in order (each entry may hold several, comma-separated), and win over Mirror.
 	Mirror     string
 	MirrorURLs []string
+	// LicenseSHA256, when set, is the SHA-256 (hex) of the license text the user agreed to in the manager (with
+	// AcceptLicense): the fetch stops with errs.ComponentsRejected before saving or downloading anything when the
+	// mirror now serves another text.
+	LicenseSHA256 string
+	// SourceOrigin says where Mirror / MirrorURLs were chosen, for the 下载源 line: SourceFromSettings,
+	// SourceFromManager, or "" for the command line (an option, or the default).
+	SourceOrigin string
 	// ConnectTimeout bounds connect, TLS handshake and response headers; StallTimeout a read that brings nothing;
 	// ManifestTimeout the whole license manifest. Zero is the default (20, 30, 40 s).
 	ConnectTimeout, StallTimeout, ManifestTimeout time.Duration
@@ -167,11 +205,14 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 			if u == "" {
 				continue
 			}
-			if l := strings.ToLower(u); !strings.HasPrefix(l, "http://") && !strings.HasPrefix(l, "https://") {
-				return nil, errs.Newf(errs.InvalidArgument, "--mirror-url 要写 http:// 或 https:// 开头的目录地址，收到「%s」", u)
+			if err := validateMirrorURL(u); err != nil {
+				return nil, err
 			}
 			if !strings.HasSuffix(u, "/") {
 				u += "/"
+			}
+			if len(custom) == maxMirrorURLs {
+				return nil, errs.Newf(errs.InvalidArgument, "自定义下载地址最多 %d 个", maxMirrorURLs)
 			}
 			custom = append(custom, Mirror{ID: "custom", Name: "自定义镜像（" + u + "）", Base: u})
 		}
@@ -182,21 +223,77 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 	return custom, nil
 }
 
-// sourceLine says, before anything is downloaded, where it comes from and why: the built-in mirrors in order (the
-// default), the one --mirror named, or the --mirror-url addresses.
+// Limits of the custom addresses (--mirror-url, the saved setting, the manager's 自定义地址). The zips are checked
+// against the SHA-1 and size built into this program whichever mirror they come from; these only keep the
+// addresses plain directory URLs.
+const (
+	maxMirrorURLs      = 16
+	maxMirrorURLLength = 2048
+)
+
+// validateMirrorURL accepts an http(s) directory address with a host and nothing else: no user name or password
+// (they would end up in logs\fetch-components.log), no ?query or #fragment (the file names are appended to it), no
+// white space. A rejected address with a user name is not repeated in the message.
+func validateMirrorURL(raw string) error {
+	if len(raw) > maxMirrorURLLength {
+		return errs.Newf(errs.InvalidArgument, "自定义下载地址太长（最多 %d 个字符）", maxMirrorURLLength)
+	}
+	u, err := url.Parse(raw)
+	if err == nil && u.User != nil {
+		return errs.New(errs.InvalidArgument, "自定义下载地址里不能带用户名或密码").
+			WithAdvice("需要登录的镜像请改用不带账号的地址")
+	}
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || u.Hostname() == "" ||
+		strings.ContainsAny(raw, "?#") || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+		return errs.Newf(errs.InvalidArgument, "自定义下载地址要写 http:// 或 https:// 开头、带主机名的目录地址，不能带 ? 或 # 后面的部分，也不能有空格，收到「%s」", raw)
+	}
+	return nil
+}
+
+// Where the source of a fetch was chosen (Options.SourceOrigin). Empty is the command line: --mirror / --mirror-url
+// when one was given, else the default order.
+const (
+	SourceFromSettings = "settings" // the saved per-user setting (components source, 设置 → 组件下载源)
+	SourceFromManager  = "manager"  // picked in the manager's license dialog
+)
+
+// sourceLine says, before anything is downloaded, where it comes from and why: the built-in mirrors in order, only
+// one of them, or custom addresses; and whether that was the default, a command-line option, the saved setting or
+// the manager's choice (ModAVD#120).
 func sourceLine(o Options, mirrors []Mirror) string {
+	names := strings.Join(mirrorNames(mirrors), "、")
+	mirror := strings.TrimSpace(o.Mirror)
+	var why string
+	switch o.SourceOrigin {
+	case SourceFromSettings:
+		why = "保存的设置"
+	case SourceFromManager:
+		why = "管理器里选的"
+	default:
+		if len(o.MirrorURLs) > 0 {
+			why = "--mirror-url"
+		} else if mirror != "" {
+			why = "--mirror " + mirror
+		} else {
+			why = "默认，还没有设置过"
+		}
+	}
+	switch {
+	case len(o.MirrorURLs) > 0:
+		return "下载源：" + names + "（" + why + "），按顺序试"
+	case mirror != "":
+		return "下载源：只用" + names + "（" + why + "）"
+	default:
+		return "下载源：自动（" + why + "），依次试" + names + "，前一个不通或校验不对就换下一个；只用其中一个时加 --mirror googledownloads_cn / tencent / google"
+	}
+}
+
+func mirrorNames(mirrors []Mirror) []string {
 	names := make([]string, len(mirrors))
 	for i, m := range mirrors {
 		names[i] = m.Name
 	}
-	switch {
-	case len(o.MirrorURLs) > 0:
-		return "下载源：" + strings.Join(names, "、") + "（--mirror-url），按顺序试"
-	case strings.TrimSpace(o.Mirror) != "":
-		return "下载源：只用" + strings.Join(names, "、") + "（--mirror " + strings.TrimSpace(o.Mirror) + "）"
-	default:
-		return "下载源：自动，依次试" + strings.Join(names, "、") + "，前一个不通或校验不对就换下一个；只用其中一个时加 --mirror googledownloads_cn / tencent / google"
-	}
+	return names
 }
 
 // JSONNeedsLicense is the errs.Usage error of a fetch with JSON but without AcceptLicense: nobody can answer the
@@ -274,7 +371,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	}
 	if !isRoot {
 		return nil, errs.Newf(errs.NotReady, `这里没有 sdk\emulator\emulator.exe，不像是魔改 AVD 的文件夹：%s`, r.Dir).
-			WithAdvice("请把 Release 压缩包完整解压后，在解压出来的文件夹里双击「补全组件.bat」")
+			WithAdvice("请把 Release 压缩包完整解压后，在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch")
 	}
 	if r.LocalSDKRoot() != "" {
 		// check and components status look at that SDK; fetch only ever writes this root's sdk\.
@@ -324,6 +421,13 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	text, from, err := f.license(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if want := strings.TrimSpace(f.o.LicenseSHA256); want != "" {
+		if got := LicenseSHA256(text); !strings.EqualFold(want, got) {
+			f.note("管理器里同意的许可协议 SHA-256 " + want + "，这次取到的是 " + got)
+			return nil, errs.New(errs.ComponentsRejected, "下载源这次给的许可协议和你在管理器里同意的那份不一样，什么也没有下载").
+				WithAdvice("请重新点「补全组件」，看过新的许可协议后再决定")
+		}
 	}
 	res.License, res.LicenseSource = text, from
 	if err := f.consent(text, from, todo); err != nil {
@@ -470,7 +574,11 @@ func (f *fetcher) consent(text, from string, todo []root.SDKComponent) error {
 	f.note(shown)
 	f.note(terms)
 	if f.o.AcceptLicense {
-		f.say("已通过 --accept-license 同意许可协议。")
+		if f.o.LicenseSHA256 != "" {
+			f.say("已在管理器里同意许可协议。")
+		} else {
+			f.say("已通过 --accept-license 同意许可协议。")
+		}
 	} else {
 		f.notice("是否同意这份许可协议？输入 y 并回车表示同意，直接回车或输入其他内容则退出：")
 		in := f.o.Input

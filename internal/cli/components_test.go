@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -209,20 +210,26 @@ func licenseServer(t *testing.T) (*httptest.Server, *int32) {
 // root is looked up or any request is made, also when the root lacks nothing (the fetch itself would then succeed
 // without asking): the same command line gets the same answer whatever the root holds.
 func TestComponentsFetchJSONNeedsAcceptLicense(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	srv, n := licenseServer(t)
 	h := newHarness()
+	h.terminal = true // only --json keeps the source menu away
+	h.stdin = "4\n"
 	calls := h.useRoot(componentsRoot(t))
 	fetched := false
 	h.fetch = func(context.Context, *root.Root, components.Options) (*components.Result, error) {
 		fetched = true
 		return &components.Result{}, nil // a root that lacks nothing
 	}
-	res := h.run(t, nil, "--json", "components", "fetch", "--mirror-url", srv.URL)
+	res := h.run(t, nil, "--json", "components", "fetch")
 	e := envelope(t, res.stdout)["error"].(map[string]any)
 	if res.code != 2 || e["code"] != errs.Usage || !strings.Contains(e["message"].(string), "--accept-license") ||
 		atomic.LoadInt32(n) != 0 || *calls != 0 || fetched {
 		t.Fatalf("exit %d %v, %d requests, root looked up %d times, fetched %v", res.code, e, atomic.LoadInt32(n),
 			*calls, fetched)
+	}
+	if strings.Contains(res.stderr, "组件下载源还没有设置") || components.LoadSourceSettings().Set {
+		t.Fatalf("--json asked for a source or saved one: %q", res.stderr)
 	}
 	// without --json the question is asked instead, so nothing is refused here
 	if res := h.run(t, nil, "components", "fetch", "--mirror-url", srv.URL); res.code != 0 || !fetched {
@@ -266,5 +273,147 @@ func TestComponentsFetchQuestion(t *testing.T) {
 	}
 	if !strings.Contains(res.stderr, "CLI TEST TERMS") {
 		t.Fatal("license not shown with --json")
+	}
+}
+
+func TestComponentsSourceCommand(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	res := h.run(t, nil, "--json", "components", "source")
+	if res.code != 0 {
+		t.Fatalf("initial source: %d %s", res.code, res.stderr)
+	}
+	data := envelope(t, res.stdout)["data"].(map[string]any)
+	if urls, ok := data["mirror_urls"].([]any); data["source"] != "auto" || data["configured"] != false || !ok || len(urls) != 0 {
+		t.Fatalf("initial data: %+v", data)
+	}
+	res = h.run(t, nil, "components", "source", "tencent")
+	if res.code != 0 || !strings.Contains(res.stdout, "tencent") {
+		t.Fatalf("set source: %d %q %q", res.code, res.stdout, res.stderr)
+	}
+	res = h.run(t, nil, "--json", "components", "source")
+	data = envelope(t, res.stdout)["data"].(map[string]any)
+	if data["source"] != "tencent" || data["mirror"] != "tencent" || data["configured"] != true {
+		t.Fatalf("saved data: %+v", data)
+	}
+	res = h.run(t, nil, "components", "source", "auto")
+	if res.code != 0 {
+		t.Fatalf("set auto: %d %q", res.code, res.stderr)
+	}
+}
+
+func TestComponentsFetchUsesSavedSource(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	var got components.Options
+	h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+		got = o
+		return &components.Result{}, nil
+	}
+	h.terminal = true
+	h.stdin = "3\n"
+	if res := h.run(t, nil, "--quiet", "components", "fetch"); res.code != 0 {
+		t.Fatalf("first fetch: %d %q", res.code, res.stderr)
+	}
+	if got.Mirror != "tencent" || len(got.MirrorURLs) != 0 {
+		t.Fatalf("selected source: mirror=%q urls=%v", got.Mirror, got.MirrorURLs)
+	}
+	// The saved setting is reused without consuming another answer.
+	h.stdin = ""
+	if res := h.run(t, nil, "--quiet", "components", "fetch"); res.code != 0 {
+		t.Fatalf("saved fetch: %d %q", res.code, res.stderr)
+	}
+	if got.Mirror != "tencent" {
+		t.Fatalf("saved source: %q", got.Mirror)
+	}
+}
+
+// stdin that is not a console (a pipe, a file, NUL) never gets the source menu, also with nothing saved: a piped y
+// answers the license question as it did before the menu existed, the default order is used and nothing is saved.
+func TestComponentsFetchPipeNeverAsksForSource(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	h.stdin = "y\n"
+	var got components.Options
+	var answer string
+	h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+		got = o
+		answer, _ = bufio.NewReader(o.Input).ReadString('\n')
+		return &components.Result{}, nil
+	}
+	res := h.run(t, nil, "components", "fetch")
+	if res.code != 0 || strings.Contains(res.stderr, "组件下载源还没有设置") || answer != "y\n" {
+		t.Fatalf("piped y: exit %d, license answer %q, stderr %q", res.code, answer, res.stderr)
+	}
+	if got.Mirror != "" || len(got.MirrorURLs) != 0 || got.SourceOrigin != "" || components.LoadSourceSettings().Set {
+		t.Fatalf("pipe chose or saved a source: %+v saved=%+v", got, components.LoadSourceSettings())
+	}
+}
+
+// --accept-license (automation) never asks either, even at a console with nothing saved, and saves nothing; with
+// --json too.
+func TestComponentsFetchAutomationDoesNotAskOrSave(t *testing.T) {
+	lad := t.TempDir()
+	t.Setenv("LOCALAPPDATA", lad)
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	h.terminal = true
+	h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+		if o.Mirror != "" || len(o.MirrorURLs) != 0 {
+			t.Errorf("automation used a source: %+v", o)
+		}
+		return &components.Result{}, nil
+	}
+	for _, args := range [][]string{{"components", "fetch", "--accept-license"}, {"--json", "components", "fetch", "--accept-license"}} {
+		h.stdin = "4\n"
+		res := h.run(t, nil, args...)
+		if res.code != 0 || strings.Contains(res.stderr, "组件下载源还没有设置") {
+			t.Fatalf("%q: exit=%d stderr=%q", args, res.code, res.stderr)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(lad, "ModAVD", "components-settings.json")); err == nil {
+		t.Fatal("automation saved source")
+	}
+}
+
+// At a console: Enter takes the default and remembers it (no second question); end of input (Ctrl+Z) takes the
+// default for this run only; an unknown number is an error and saves nothing.
+func TestComponentsFetchSourceMenuAnswers(t *testing.T) {
+	for _, c := range []struct {
+		name, stdin string
+		code        int
+		saved       bool
+	}{
+		{"enter", "\n", 0, true},
+		{"eof", "", 0, false},
+		{"bad number", "9\n", 2, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("LOCALAPPDATA", t.TempDir())
+			h := newHarness()
+			h.useRoot(componentsRoot(t))
+			h.terminal = true
+			h.stdin = c.stdin
+			var got components.Options
+			h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+				got = o
+				return &components.Result{}, nil
+			}
+			res := h.run(t, nil, "components", "fetch")
+			s := components.LoadSourceSettings()
+			if res.code != c.code || !strings.Contains(res.stderr, "组件下载源还没有设置") || s.Set != c.saved || s.Mirror != "" ||
+				got.Mirror != "" {
+				t.Fatalf("exit %d (want %d), saved %+v (want set=%v), options %+v, stderr %q", res.code, c.code, s, c.saved, got, res.stderr)
+			}
+			if c.saved {
+				h.stdin = ""
+				if res := h.run(t, nil, "components", "fetch"); res.code != 0 || strings.Contains(res.stderr, "组件下载源还没有设置") ||
+					got.SourceOrigin != components.SourceFromSettings {
+					t.Fatalf("second run: exit %d, origin %q, stderr %q", res.code, got.SourceOrigin, res.stderr)
+				}
+			}
+		})
 	}
 }

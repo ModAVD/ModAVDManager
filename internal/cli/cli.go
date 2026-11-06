@@ -128,8 +128,8 @@ type manager interface {
 	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
 	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
 	TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTestResult, error)
-	// Running is the indexes whose qemu runs, from the process table only (no adb).
-	Running(ctx context.Context) ([]int, error)
+	// StopTargets is the running or actively creating indexes, without adb.
+	StopTargets(ctx context.Context) ([]int, error)
 	// Wait waits up to timeout for the manager's background work.
 	Wait(timeout time.Duration)
 }
@@ -148,6 +148,7 @@ type deps struct {
 	resolveRoot     func(flag string) (*root.Root, error)
 	serveMCP        func(ctx context.Context, in io.Reader, out io.Writer, opt mcp.Options) error
 	fetchComponents func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
+	stdinTerminal   func(io.Reader) bool
 }
 
 func defaultDeps() deps {
@@ -162,7 +163,15 @@ func defaultDeps() deps {
 		resolveRoot:     root.Resolve,
 		serveMCP:        mcp.Serve,
 		fetchComponents: components.Fetch,
+		stdinTerminal:   readerIsTerminal,
 	}
+}
+
+// readerIsTerminal: stdin is someone at a console (components fetch may ask which mirror to use), not a pipe, a
+// file or NUL. Platform part in terminal_*.go.
+func readerIsTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	return ok && f != nil && fileIsTerminal(f)
 }
 
 // Main runs one command and returns the process exit code (errs.ExitCode, see the package comment).
@@ -181,6 +190,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunBootWatch(args[1:], stderr)
 		case emu.LogcatCaptureArg:
 			return emu.RunLogcatCapture(args[1:], stderr)
+		case emu.DiagnosticArchiveArg:
+			return emu.RunDiagnosticArchive(args[1:], stderr)
 		}
 	}
 	// StartOrphan re-runs this executable as the spawn helper.
@@ -240,6 +251,9 @@ func newLogger(w io.Writer, g globals) *logx.Logger {
 
 // run is Main without the process-wide setup.
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, d deps) int {
+	if d.stdinTerminal == nil {
+		d.stdinTerminal = readerIsTerminal
+	}
 	inv, perr := parseArgs(args)
 	log := newLogger(stderr, inv.globals)
 	out := &output{stdout: stdout, stderr: stderr, json: inv.json, raw: inv.cmd != nil && inv.cmd.raw, log: log}

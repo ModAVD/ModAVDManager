@@ -31,11 +31,8 @@ var (
 	bootDiagDirPattern = regexp.MustCompile(`^mas_\d+-[0-9]{8}-[0-9]{6}` + bootDiagSuffix + `$`)
 )
 
-// pruneMu: several instances of one process booting at once prune the same directory; other processes are covered
-// by tolerating files that vanish meanwhile.
-var pruneMu sync.Mutex
-
 type logFile struct {
+	info  fs.FileInfo // identity selected for deletion; never rebind a candidate after a path replacement
 	path  string
 	name  string
 	mtime time.Time
@@ -48,108 +45,27 @@ type logFile struct {
 // (mas_<i>-*-bootfail); then while the closed files of these kinds in the whole logs dir exceed 1 GiB, delete from the
 // oldest. Files in use are skipped and not counted.
 func (m *Manager) pruneLogs(i int) {
-	pruneMu.Lock()
-	defer pruneMu.Unlock()
-	if _, _, err := pruneLogDir(m.Root.LogsDir(), i, logKeepPerInstance, logsDirMaxBytes, m.Log); err != nil {
+	removed, freed, err := m.cleanupDiagnostics(context.Background(), i)
+	if err != nil {
 		m.Log.Warnf("实例 %d 清理旧日志失败: %v", i, err)
+	}
+	if removed > 0 {
+		m.Log.Infof("实例 %d 建新日志前清理旧日志 %d 份，释放 %.1f MB（%s）", i, removed, float64(freed)/1024/1024, m.Root.LogsDir())
 	}
 }
 
-// pruneLogDir is AUTO-MAS _prune_logs_locked with the limits as parameters: returns the files removed and the bytes
-// freed. Files being written cannot be deleted on Windows; they are skipped and, for the size limit, not counted:
-// otherwise long runs of several instances whose open logs alone exceed the limit would delete every previous log
-// at each boot.
-func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (removed int, freed int64, err error) {
+// pruneLogDir is the ordinary-policy entry used by filesystem regression tests.
+func pruneLogDir(dir string, i, keep int, maxBytes int64, log *logx.Logger) (int, int64, error) {
 	files, err := managedLogFiles(dir)
 	if err != nil {
 		return 0, 0, err
 	}
-	avdName := root.AvdName(i)
-	gone := map[string]bool{}
-
-	for _, kind := range []struct {
-		prefix, suffix string
-		dir            bool
-		keep           int
-	}{
-		{avdName + "-", ".log", false, keep},
-		{"logcat-" + avdName + "-", ".txt", false, keep},
-		{"modavd-bridge-" + strconv.Itoa(i) + "-", ".log", false, keep},
-		{avdName + "-", bootDiagSuffix, true, bootDiagKeep},
-	} {
-		var mine []logFile
-		for _, f := range files {
-			if f.dir == kind.dir && strings.HasPrefix(f.name, kind.prefix) && strings.HasSuffix(f.name, kind.suffix) {
-				if !f.dir {
-					if busy, vanished := fileInUse(f.path); busy || vanished {
-						continue
-					}
-				}
-				mine = append(mine, f)
-			}
-		}
-		sortLogFiles(mine, true)
-		if len(mine) <= kind.keep {
-			continue
-		}
-		for _, f := range mine[kind.keep:] {
-			result := removeLog(f, log)
-			if result != unlinkFailed {
-				gone[f.path] = true
-			}
-			if result == unlinkRemoved {
-				removed++
-				freed += f.size
-			}
-		}
-	}
-
-	var rest []logFile
-	var total int64
-	for _, f := range files {
-		if !gone[f.path] {
-			rest = append(rest, f)
-			total += f.size
-		}
-	}
-	if total > maxBytes {
-		var closed []logFile
-		for _, f := range rest {
-			if f.dir {
-				closed = append(closed, f) // written once and closed (bootdiag.go)
-				continue
-			}
-			switch busy, vanished := fileInUse(f.path); {
-			case vanished:
-			case busy:
-				log.Debugf("旧日志 %s 正在写，不算进总量", f.name)
-			default:
-				closed = append(closed, f)
-			}
-		}
-		sortLogFiles(closed, false)
-		var closedTotal int64
-		for _, f := range closed {
-			closedTotal += f.size
-		}
-		for _, f := range closed {
-			if closedTotal <= maxBytes {
-				break
-			}
-			result := removeLog(f, log)
-			// removed, removed by someone else, or just opened for writing: none of them counts as closed any more
-			closedTotal -= f.size
-			if result == unlinkRemoved {
-				removed++
-				freed += f.size
-			}
-		}
-	}
-
+	plan := planCleanup(closedLogs(files), i, keep, maxBytes, nil, false, time.Now())
+	removed, freed, err := applyCleanup(plan, log)
 	if removed > 0 {
 		log.Infof("实例 %d 建新日志前清理旧日志 %d 份，释放 %.1f MB（%s）", i, removed, float64(freed)/1024/1024, dir)
 	}
-	return removed, freed, nil
+	return removed, freed, err
 }
 
 // managedLogFiles lists the managed regular files and the failed boots' directories (no symlinks) with mtime and
@@ -168,11 +84,14 @@ func managedLogFiles(dir string) ([]logFile, error) {
 		if !isDir && (!isManagedLog(e.Name()) || !e.Type().IsRegular()) {
 			continue
 		}
-		info, err := e.Info()
+		info, err := snapshotLog(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
 		}
-		f := logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(), size: info.Size(), dir: isDir}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() != isDir {
+			continue
+		}
+		f := logFile{path: filepath.Join(dir, e.Name()), name: e.Name(), mtime: info.ModTime(), size: info.Size(), dir: isDir, info: info}
 		if isDir {
 			f.size = dirSize(f.path)
 		}
@@ -229,6 +148,9 @@ const (
 
 // removeLog removes f: tryUnlink for a file, the whole tree for a failed boot's directory.
 func removeLog(f logFile, log *logx.Logger) unlinkResult {
+	if f.info != nil {
+		return unlinkRetained(f, log)
+	}
 	if !f.dir {
 		return tryUnlink(f.path, log)
 	}
@@ -304,10 +226,12 @@ func logcatCmdlineMatches(cmdline []string, port, serial string) bool {
 	return hasPort && hasSerial && hasLogcat
 }
 
-// findLogcatProcesses are the host's `adb -P <port> -s <serial> logcat` processes, whoever started them: a record of
-// our own would not do, a capture an earlier modavd started keeps running.
+var logcatListProcesses = host.ListProcesses
+
+// findLogcatProcesses recognizes any matching adb capture, including AUTO-MAS watchdog clients.
+// Discovery never grants permission to terminate a process; only ownedCapture does.
 func (m *Manager) findLogcatProcesses(serial string) ([]host.Process, error) {
-	procs, err := host.ListProcesses()
+	procs, err := logcatListProcesses()
 	if err != nil {
 		return nil, err
 	}
@@ -336,12 +260,18 @@ var logcatMu sync.Mutex
 // (AUTO-MAS ensure_logcat). Returns the capture file: the new one, or the newest open logcat of this instance when one
 // was already running ("" when unknown). The capture ends by itself when the emulator goes away.
 //
-// A capture client older than the private server now listening was connected to an earlier server that is gone: it
-// gets no more data but need not exit (10-04: still there 7 s after a re-registration). The re-registration hook
-// ends such clients, but it runs in the background and a short-lived CLI process may exit before it is done; so they
-// are ended here too instead of counting as a running capture (AUTO-MAS's watchdog re-checks every 30 s; modavd has
-// none, so the guest log would otherwise stay off for the rest of the boot).
+// A helper's PID and creation time, its root-local executable and its exact adb child identity establish ownership.
+// The helper observes policy and private-server changes and replaces only its own stream.
 func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
+	r, err := m.Root.SnapshotRuntime()
+	if err != nil {
+		m.Log.Warnf("实例 %d 无法确认日志采集的 SDK/adb 目标，本次不新起采集: %v", i, err)
+		return ""
+	}
+	return m.withRuntime(r).ensureLogcatRuntime(ctx, i)
+}
+
+func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 	logcatMu.Lock()
 	defer logcatMu.Unlock()
 	serial := m.Root.Ports().Serial(i)
@@ -360,15 +290,11 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 		return ""
 	}
 	if len(running) > 0 {
-		live, stale := splitLogcatClients(running, m.privateServerProcess())
-		if len(stale) > 0 && ctx.Err() == nil {
-			m.Log.Infof("实例 %d 的客体日志落盘（pid %s）连着已经不在的私有 adb server，结束掉", i, pidList(stale))
-			// ended first: openLogFile below then no longer sees their files as open
-			endProcesses(stale, 5*time.Second)
+		state, _ := m.readCaptureState(i)
+		if _, ours := m.ownedCapture(i, state); !ours {
+			m.warnExternalCapture(i, m.diagnosticPolicy(i))
 		}
-		if len(live) > 0 {
-			return openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt")
-		}
+		return openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt")
 	}
 	if ctx.Err() != nil {
 		return ""
@@ -380,8 +306,12 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	}
 	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
 	exe := filepath.Join(m.Root.Dir, "tools", "modavd.exe")
+	token, err := captureRuntimeToken(m.Root)
+	if err != nil {
+		return ""
+	}
 	p, err := host.StartOrphan(exe, []string{LogcatCaptureArg, m.Root.Dir, strconv.Itoa(i),
-		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10)}, host.StartOptions{Env: m.ADB.Env()})
+		strconv.FormatUint(uint64(q.PID), 10), strconv.FormatUint(q.Created, 10), token}, host.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
 		m.Log.Warnf("实例 %d 客体日志落盘没起来: %v", i, err)
 		return ""
@@ -389,7 +319,7 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 	// Wait for the helper to hold the output before reporting it. Its per-instance lock also covers the interval
 	// before adb appears in the process table, including starts from another manager process.
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		if clients, err := m.findOwnedLogcatProcesses(serial); err == nil && len(clients) > 0 {
 			if path := openLogFile(m.Root.LogsDir(), "logcat-"+root.AvdName(i)+"-", ".txt"); path != "" {
 				m.Log.Infof("实例 %d 客体日志 → %s", i, path)
 				return path
@@ -399,6 +329,10 @@ func (m *Manager) ensureLogcat(ctx context.Context, i int) string {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if clients, err := m.findLogcatProcesses(serial); err == nil && len(clients) > 0 {
+		m.warnExternalCapture(i, m.diagnosticPolicy(i))
+		return ""
 	}
 	m.Log.Warnf("实例 %d 客体日志采集没有就绪", i)
 	return ""
@@ -426,12 +360,8 @@ func openLogFile(dir, prefix, suffix string) string {
 	return ""
 }
 
-// logcatAfterReregister restarts the host logcat capture after serial was registered again with a new private
-// server (the old adb logcat client is connected to a server that is gone). Hooked into adb.Client.OnReregistered.
-//
-// Being re-registered means the private server was replaced: the old clients get no more data but do not
-// necessarily exit (10-04: still there 7 s after a re-registration), and would make ensureLogcat think the capture
-// runs. So they are ended first (AUTO-MAS _logcat_after_reregister).
+// logcatAfterReregister reapplies the latest guest policy and waits for the owned helper's new server connection.
+// Independent logcat -d calls and streams started by other programs are never terminated here.
 func (m *Manager) logcatAfterReregister(serial string) {
 	port, ok := consolePortOfSerial(serial)
 	if !ok {
@@ -444,12 +374,14 @@ func (m *Manager) logcatAfterReregister(serial string) {
 	if _, err := avd.Get(m.Root, i); err != nil {
 		return
 	}
-	stale, err := m.findLogcatProcesses(serial)
-	if err != nil {
-		return
+	if _, err := m.applyDiagnosticGuest(context.Background(), i); err != nil {
+		m.Log.Warnf("实例 %d 重新登记后恢复日志缓冲区失败: %v", i, err)
 	}
-	endProcesses(stale, 5*time.Second)
+	// The helper watches server identity and replaces only its own adb stream.
 	m.ensureLogcat(context.Background(), i)
+	if err := m.waitDiagnosticCapture(context.Background(), i, 10*time.Second); err != nil {
+		m.Log.Warnf("实例 %d 重新登记后日志采集尚未恢复: %v", i, err)
+	}
 }
 
 // privateServerProcess is the adb server listening on the private port, zero when none, when the listener table or
@@ -464,41 +396,4 @@ func (m *Manager) privateServerProcess() host.Process {
 		return host.Process{}
 	}
 	return p
-}
-
-// splitLogcatClients sorts capture clients by the server they can be talking to. stale: created before server, so
-// connected to an earlier server that is gone. Except the client that started this server itself (adb's
-// fork-server makes the server its child, created a moment after it). Unknown creation times, or no known server,
-// count as live: never end a capture that may be working.
-func splitLogcatClients(clients []host.Process, server host.Process) (live, stale []host.Process) {
-	for _, c := range clients {
-		if server.Created != 0 && c.Created != 0 && c.Created < server.Created && server.PPID != c.PID {
-			stale = append(stale, c)
-		} else {
-			live = append(live, c)
-		}
-	}
-	return live, stale
-}
-
-// endProcesses kills procs and waits up to timeout in all for them to be gone.
-func endProcesses(procs []host.Process, timeout time.Duration) {
-	for _, p := range procs {
-		p.Kill()
-	}
-	deadline := time.Now().Add(timeout)
-	for _, p := range procs {
-		if left := time.Until(deadline); left > 0 {
-			p.Wait(left)
-		}
-	}
-}
-
-// pidList is "12, 34" for the log.
-func pidList(procs []host.Process) string {
-	pids := make([]string, len(procs))
-	for k, p := range procs {
-		pids[k] = strconv.FormatUint(uint64(p.PID), 10)
-	}
-	return strings.Join(pids, ", ")
 }

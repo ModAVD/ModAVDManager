@@ -16,7 +16,7 @@ import (
 	"modavd/internal/jsonord"
 )
 
-// qemuScan, when a test sets it, replaces the process scan behind List, Info, Running and qemuOf (not findQemu), so
+// qemuScan, when a test sets it, replaces the process scan behind List, Info, StopTargets and qemuOf (not findQemu), so
 // a test sees exactly the qemu processes it wants. nil: the real scan of the Manager's root. The real scan does not
 // take another root's mas_<i> for the test root's (adb.QemuBelongsTo: the runtime file in
 // %LOCALAPPDATA%\Temp\avd\running, before it exists the run lock in the instance directory), but a test should not
@@ -46,10 +46,11 @@ func (m *Manager) qemuOf(i int) (host.Process, bool, error) {
 	return p, ok, nil
 }
 
-// Running is the indexes of this root's instances whose qemu runs, ascending: one process scan and no adb at all
-// (AUTO-MAS close_running_instances takes its targets from _scan_processes the same way). stop --all uses it: List
-// would first start the private server and ask every instance, up to 5 s each, out of a 30 s shutdown budget.
-func (m *Manager) Running(ctx context.Context) ([]int, error) {
+// StopTargets is a snapshot of this root's running or actively creating instances,
+// ascending. Creations also count between their boots, when no qemu exists. Like
+// the process scan, creation metadata / locks need no adb: List would start the
+// private server and ask each instance, up to 5 s out of a 30 s shutdown budget.
+func (m *Manager) StopTargets(ctx context.Context) ([]int, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
 	}
@@ -68,14 +69,17 @@ func (m *Manager) Running(ctx context.Context) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	running := make([]int, 0, len(procs))
+	targets := make([]int, 0, len(indexes))
 	for _, i := range indexes {
-		if _, ok := procs[i]; ok {
-			running = append(running, i)
+		if _, ok := procs[i]; !ok {
+			if state, _, _ := m.creation(i); state != creationCreating {
+				continue
+			}
 		}
+		targets = append(targets, i)
 	}
-	slices.Sort(running)
-	return slices.Compact(running), nil
+	slices.Sort(targets)
+	return slices.Compact(targets), nil
 }
 
 // List is every instance with its status (one process scan, getprop only for running ones).
@@ -195,6 +199,8 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	info.Config = cfg
 
 	if meta := m.Root.InstanceMeta(i); meta != nil {
+		info.Diagnostics, _ = meta.Get("diagnostics").BoolVal()
+		info.DiagnosticsSince = metaText(meta.Get("diagnosticsSince"))
 		info.Initialized = metaTruthy(meta.Get("initialized"))
 		info.Launcher = metaText(meta.Get("launcher"))
 		info.Renderer = metaText(meta.Get("renderer"))

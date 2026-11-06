@@ -343,6 +343,15 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 			m.Log.Warnf("实例 %d 没清理新建取消标记: %v", i, err)
 		}
 	}()
+	// Publish the attempt before any qemu probe / leftover shutdown, so stop --all
+	// can find a resume even with no qemu. Before this point the new attempt is
+	// not published; target discovery is a snapshot, not a barrier to future creates.
+	if req.Resume {
+		if err := m.stopCreateLeftover(ctx, i); err != nil {
+			m.recordCreationFailure(i, err, m.newestEmulatorLog(i))
+			return nil, err
+		}
+	}
 	bridge := m.bridgeWanted(i, cfg)
 	// the progress is also kept on disk, for status / list in other processes (AUTO-MAS, the manager)
 	defer m.removeCreateProgress(i)
@@ -411,9 +420,7 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 			logFile = m.newestEmulatorLog(i)
 		}
 		e := errs.As(err)
-		if serr := m.setCreation(i, creationFailed, e.Message, logFile); serr != nil {
-			m.Log.Warnf("实例 %d 没记下「新建失败」: %v", i, serr)
-		}
+		m.recordCreationFailure(i, err, logFile)
 		advice := fmt.Sprintf("用 modavd create --resume %d 重新初始化，或者 modavd delete %d --yes 删掉", i, i)
 		if logFile != "" {
 			advice += "；日志见 " + logFile
@@ -424,6 +431,35 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	prog.stage("done", fmt.Sprintf("实例 %d 新建完成，已关机；第一次开机不用再做初始化", i))
 	m.Log.Infof("实例 %d 新建完成", i)
 	return m.Info(ctx, i)
+}
+
+// stopCreateLeftover ends the failed attempt's qemu before a resume boots again.
+// The create watcher must not cancel this shutdown or trigger a second cleanup
+// try. Use the caller's context, as before, rather than the watched setup context.
+func (m *Manager) stopCreateLeftover(ctx context.Context, i int) error {
+	running, err := createRunning(m, i)
+	if err != nil {
+		e := errs.As(err)
+		return errs.Wrap(e.Code, err, e.Message).WithAdvice(e.Advice)
+	}
+	if !running {
+		return nil
+	}
+	m.Log.Infof("实例 %d 上次新建时开的模拟器还开着，先正常关机再重新初始化", i)
+	sctx, cancel := context.WithTimeout(ctx, createStopTimeout)
+	defer cancel()
+	if err := createStop(m, sctx, i); err != nil {
+		e := errs.As(err)
+		return errs.Wrap(e.Code, err, fmt.Sprintf("魔改 AVD 实例 %d 上次新建时开的模拟器没能正常关掉: %s", i, e.Message)).
+			WithAdvice(fmt.Sprintf("用 modavd stop %d 关掉它，再重试", i))
+	}
+	return nil
+}
+
+func (m *Manager) recordCreationFailure(i int, err error, logFile string) {
+	if serr := m.setCreation(i, creationFailed, errs.As(err).Message, logFile); serr != nil {
+		m.Log.Warnf("实例 %d 没记下「新建失败」: %v", i, serr)
+	}
 }
 
 // checkCreated: what the setup's boot was for is all there, read from the running guest before it shuts down.

@@ -797,6 +797,47 @@ func TestFetchJSONNeedsAcceptLicense(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsChangedLicenseHashBeforeDownload(t *testing.T) {
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	m := newMirror(t, map[string][]byte{"pt.zip": pt})
+	r := tempRoot(t)
+	o := opts(m)
+	o.LicenseSHA256 = strings.Repeat("0", 64)
+	out := fetch(t, nil, r, o)
+	wantCode(t, out.err, errs.ComponentsRejected)
+	if !strings.Contains(errs.As(out.err).Advice, "补全组件") || out.said("同意许可协议") {
+		t.Errorf("error %+v, said %q", errs.As(out.err), out.infos)
+	}
+	if len(m.zipReqs()) != 0 || exists(downloadsDir(r)) {
+		t.Fatalf("hash mismatch downloaded files: zip requests=%d downloads=%v", len(m.zipReqs()), exists(downloadsDir(r)))
+	}
+}
+
+// The manager's consent is to the text its dialog showed, read by License from the source chosen there: with that
+// text's SHA-256 the fetch goes on and says the consent was given in the manager (not --accept-license) and where
+// the source was chosen.
+func TestFetchWithManagerLicenseHash(t *testing.T) {
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	m := newMirror(t, map[string][]byte{"pt.zip": pt})
+	text, from, err := License(context.Background(), SourceSettings{MirrorURLs: []string{m.url()}})
+	if err != nil || text != testLicense || from != "自定义镜像（"+m.url()+"）" {
+		t.Fatalf("License: %q from %q, %v", text, from, err)
+	}
+	r := tempRoot(t)
+	o := opts(m)
+	o.LicenseSHA256 = strings.ToUpper(LicenseSHA256(text))
+	o.SourceOrigin = SourceFromManager
+	out := fetch(t, nil, r, o)
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	if !out.said("已在管理器里同意许可协议。") || out.said("--accept-license 同意") || !out.said("（管理器里选的），按顺序试") {
+		t.Errorf("said %q", out.infos)
+	}
+}
+
 // TestFetchUsesProxy: every request of a fetch (manifest and zip) really goes through the proxy hostproxy picks, here
 // one named by HTTP_PROXY. net/http reads the proxy variables once per process, so the fetch runs in a child
 // (TestFetchUsesProxyChild) whose first request is that fetch's.
