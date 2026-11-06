@@ -765,13 +765,14 @@ type ComponentStatus struct {
 // Component names and fixed data (AUTO-MAS constants.py).
 // SystemImageName retains the Windows name; other hosts use Platform.SystemImageName.
 const (
-	PlatformToolsName = "平台工具（adb）"
-	EmulatorName      = "Android 模拟器（emulator）"
-	SystemImageName   = "系统镜像 Android 14 Google APIs x86_64"
-	LauncherName      = "轻量桌面 µLauncher"
-	LauncherVersion   = "0.2.12"
-	LauncherAPKSize   = 4099556
-	ImeName           = "宿主输入法 org.modavd.ime"
+	PlatformToolsName    = "平台工具（adb）"
+	EmulatorName         = "Android 模拟器（emulator）"
+	SystemImageName      = "系统镜像 Android 14 Google APIs x86_64"
+	MacOSSystemImageName = "系统镜像 Android 15 Google APIs arm64-v8a"
+	LauncherName         = "轻量桌面 µLauncher"
+	LauncherVersion      = "0.2.12"
+	LauncherAPKSize      = 4099556
+	ImeName              = "宿主输入法 org.modavd.ime"
 )
 
 // Advice for missing components (AUTO-MAS FETCH_COMPONENTS_ADVICE / PACKAGE_ADVICE; "回来点「检查」" is AUTO-MAS's

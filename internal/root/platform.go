@@ -50,7 +50,7 @@ func CurrentPlatform() Platform {
 			Emulator: "emulator", ADB: "adb", QEMU: "qemu-system-aarch64", QEMUHeadless: "qemu-system-aarch64-headless", QemuDir: "darwin-aarch64",
 			PackageSuffix: "macos-arm64", MirrorOS: "macos", MirrorArch: "arm64",
 			GuestABI: "arm64-v8a", GuestArch: "arm64", TargetAPI: "android-35",
-			SystemImageDir: "system-images/android-35/google_apis/arm64-v8a", SystemImageName: "系统镜像 Android 15 Google APIs arm64-v8a",
+			SystemImageDir: "system-images/android-35/google_apis/arm64-v8a", SystemImageName: MacOSSystemImageName,
 		}
 	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
 		return Platform{
