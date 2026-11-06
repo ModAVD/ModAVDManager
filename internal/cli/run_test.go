@@ -231,8 +231,8 @@ func (f *fakeManager) TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTes
 	return &emu.AppProxyTestResult{Index: i}, nil
 }
 
-func (f *fakeManager) Running(ctx context.Context) ([]int, error) {
-	f.record("running")
+func (f *fakeManager) StopTargets(ctx context.Context) ([]int, error) {
+	f.record("stop-targets")
 	if f.running != nil {
 		return f.running(ctx)
 	}
@@ -537,9 +537,9 @@ func TestStopAllConcurrent(t *testing.T) {
 	if !strings.Contains(r.stdout, `"failed":[{"index":2,"error":{"code":"busy"`) {
 		t.Errorf("stdout = %s", r.stdout)
 	}
-	// The targets come from the process table: no List (private server, getprop, re-registration) before the stops.
+	// Target discovery uses no List (private server, getprop, re-registration) before the stops.
 	calls := h.fake.callList()
-	if calls[0] != "running" || len(calls) != 4 {
+	if calls[0] != "stop-targets" || len(calls) != 4 {
 		t.Errorf("calls = %q", calls)
 	}
 	for _, c := range calls {
@@ -549,7 +549,7 @@ func TestStopAllConcurrent(t *testing.T) {
 	}
 }
 
-func TestStopAllRunningError(t *testing.T) {
+func TestStopAllTargetsError(t *testing.T) {
 	h := newHarness()
 	h.fake.running = func(context.Context) ([]int, error) {
 		return nil, errs.New(errs.MetadataUnreadable, "mas-avd.json 读不了")

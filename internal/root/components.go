@@ -96,10 +96,11 @@ func SDKComponents() []SDKComponent {
 	if runtime.GOOS == "windows" {
 		return WindowsComponents()
 	}
+	p := CurrentPlatform()
 	return []SDKComponent{
 		{ID: "platform-tools", Name: PlatformToolsName, FetchName: PlatformToolsName, Target: "platform-tools",
-			StatusFiles: []string{CurrentPlatform().ADB}},
-		{ID: "system-image", Name: SystemImageName, FetchName: SystemImageName, Target: SystemImageDir,
+			StatusFiles: []string{p.ADB}},
+		{ID: "system-image", Name: p.SystemImageName, FetchName: p.SystemImageName, Target: p.SystemImageDir,
 			StatusFiles: systemImageFiles()},
 	}
 }

@@ -96,6 +96,96 @@ func TestCreateResumeStopsLeftover(t *testing.T) {
 	}
 }
 
+func TestResumePreBootFailureDetails(t *testing.T) {
+	for _, phase := range []string{"probe", "shutdown", "canceled shutdown"} {
+		t.Run(phase, func(t *testing.T) {
+			m, _ := opsTestManager(t)
+			i := 6
+			if _, err := m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.setCreation(i, creationFailed, "old failure", ""); err != nil {
+				t.Fatal(err)
+			}
+			h := &createHooks{running: true}
+			h.install(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cause := errors.New("leftover operation failed")
+			failure := errs.Wrap(errs.Timeout, cause, "leftover shutdown timed out")
+			running := "true"
+			if phase == "probe" {
+				failure = errs.Wrap(errs.Unsupported, cause, "qemu snapshot unavailable")
+				createRunning = func(*Manager, int) (bool, error) { return false, failure }
+				running = unknownState
+			} else if phase == "shutdown" {
+				h.stopErr = failure
+			} else {
+				failure = errs.Wrap(errs.Canceled, cause, "leftover shutdown canceled")
+				createRunning = func(*Manager, int) (bool, error) { cancel(); return true, nil }
+				createStop = func(_ *Manager, sctx context.Context, _ int) error {
+					if sctx.Err() != context.Canceled {
+						t.Fatalf("lost caller cancellation: %v", sctx.Err())
+					}
+					h.stopped++
+					return failure
+				}
+			}
+			// The cleanup did not end this qemu, or the snapshot failed; #105
+			// must preserve true / unknown rather than infer offline.
+			saved := errorRunning
+			t.Cleanup(func() { errorRunning = saved })
+			errorRunning = func(*Manager, int) string { return running }
+			_, err := m.Create(ctx, CreateRequest{Index: &i, Resume: true})
+			if !errors.Is(err, cause) || errs.CodeOf(err) != failure.Code || m.creationRecorded(i) != creationFailed ||
+				!strings.Contains(metaText(m.Root.InstanceMeta(i).Get("creationError")), failure.Message) {
+				t.Fatalf("resume failure: %v, meta %v", err, m.Root.InstanceMeta(i))
+			}
+			if len(h.opts) != 0 || h.stopped != map[string]int{"probe": 0, "shutdown": 1, "canceled shutdown": 1}[phase] {
+				t.Fatalf("resume continued after failure: starts %d, stops %d", len(h.opts), h.stopped)
+			}
+			for key, want := range map[string]string{errs.InstanceExists: "true", errs.InstanceStatus: "create_failed", errs.QemuRunning: running} {
+				if got := errs.DetailsOf(err)[key]; got != want {
+					t.Errorf("error detail %s = %q, want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeStopCancellationStillStopsLeftover(t *testing.T) {
+	m, _ := opsTestManager(t)
+	i := 6
+	if _, err := m.Create(context.Background(), CreateRequest{Index: &i, filesOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.setCreation(i, creationFailed, "old failure", ""); err != nil {
+		t.Fatal(err)
+	}
+	h := &createHooks{}
+	h.install(t)
+	createRunning = func(m *Manager, i int) (bool, error) {
+		if _, err := New(m.Root, nil).Stop(context.Background(), i, StopOptions{CancelCreate: true}); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil
+	}
+	createStop = func(_ *Manager, sctx context.Context, _ int) error {
+		if sctx.Err() != nil {
+			t.Fatalf("leftover shutdown inherited cancellation: %v", sctx.Err())
+		}
+		h.stopped++
+		return nil
+	}
+	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+		return m.Start(ctx, i, opt)
+	}
+	_, err := m.Create(context.Background(), CreateRequest{Index: &i, Resume: true})
+	if errs.CodeOf(err) != errs.Canceled || h.stopped != 2 || m.creationRecorded(i) != creationFailed {
+		t.Fatalf("canceled resume: %v, stops %d, state %s", err, h.stopped, m.creationRecorded(i))
+	}
+}
+
 // TestCreateResumeDropsOldProgress: --resume of a killed setup does not show the percentage that setup left on disk
 // while it shuts the leftover emulator down: from the moment it holds the lock, status reads creating at 0%.
 func TestCreateResumeDropsOldProgress(t *testing.T) {

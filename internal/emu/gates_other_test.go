@@ -49,7 +49,7 @@ func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
 	_, calls["delete"] = m.Delete(ctx, index)
 	_, calls["stop"] = m.Stop(ctx, index, StopOptions{})
 	_, calls["bridge"] = m.Bridge(ctx, index, "uninstall")
-	_, calls["running"] = m.Running(ctx)
+	_, calls["running"] = m.StopTargets(ctx)
 	_, calls["list"] = m.List(ctx)
 	_, calls["info"] = m.Info(ctx, index)
 	_, calls["window show"] = m.SetWindowVisible(ctx, index, true)

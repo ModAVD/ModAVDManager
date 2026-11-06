@@ -181,7 +181,7 @@ func init() {
 			name: "stop", args: "<i> [--force] [--cancel-create] | stop --all [--force]", summary: "关机",
 			details: "先让 Android 正常关机，不成再 sync 后结束 qemu；--force 跳过正常关机，先 sync 再结束。" +
 				"新建中的实例默认报 busy，--force 也不例外；确实要打断请加 --cancel-create，之后用 create --resume N 重做。" +
-				"--all 按进程表找出所有在运行的实例，同时关掉（包括新建中的），被打断的结果标记 interrupted_create: true；" +
+				"--all 同时关掉所有运行中或新建中的实例（包括两次开机之间），被打断的结果标记 interrupted_create: true；" +
 				"结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
 			flags:    []flagSpec{optForce, optAll, optCancelCreate},
 			posNames: []string{"实例编号"}, minPos: 0, maxPos: 1,
@@ -727,21 +727,21 @@ func runStop(c *cmdCtx) (any, error) {
 	return r, nil
 }
 
-// stopAll stops every running instance concurrently: the caller (AUTO-MAS before a power action) gives the whole
-// thing about 30 s, the same budget one stop has.
+// stopAll stops every running or actively creating instance concurrently: the
+// caller (AUTO-MAS before a power action) gives it about 30 s, the budget one stop has.
 //
-// The targets come from the process table only, like AUTO-MAS close_running_instances (_scan_processes). List would
+// The targets come from the process table and creation metadata / locks, without adb. List would
 // first start the private server and run a getprop with re-registration on each instance, up to 5 s for a stuck
 // adbd, before the first stop begins; and a server it started would make each Stop trust it and skip its own "start
 // the server and register" step, so an instance not registered yet would be killed without a sync.
 func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) {
 	// A power action must also stop creations, with the same sync / graceful shutdown as other instances.
 	opt.CancelCreate = true
-	running, err := m.Running(c.ctx)
+	targets, err := m.StopTargets(c.ctx)
 	if err != nil {
 		return nil, err
 	}
-	targets := slices.Clone(running)
+	targets = slices.Clone(targets)
 	slices.Sort(targets)
 	targets = slices.Compact(targets)
 	res := &StopAllResult{Results: []emu.StopResult{}, Failed: []StopFailure{}}

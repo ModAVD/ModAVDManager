@@ -12,6 +12,9 @@ import (
 	"modavd/internal/report"
 )
 
+// scriptPrivacyHead is the first line of collect-info.ps1's privacy note; report.PrivacyNote says it differently.
+const scriptPrivacyHead = "隐私提示：问题包只保存在本机，脚本不会上传。"
+
 // golden reads what a package script printed for a test scenario (internal/report/testdata/golden), LF line ends.
 func golden(t *testing.T, parts ...string) string {
 	t.Helper()
@@ -45,6 +48,12 @@ func TestHumanCollectInfoMatchesScript(t *testing.T) {
 	}{{"full", true, nil}, {"bare", false, []string{"杀毒软件：无效命名空间 "}}} {
 		console := golden(t, c.name, "collect-console.txt")
 		want := console[strings.Index(console, "\n收集完成。\n"):]
+		// but for the first line of the privacy note (report.PrivacyNote): a script no longer collects
+		head, _, _ := strings.Cut(report.PrivacyNote, "\r\n")
+		if strings.Count(want, scriptPrivacyHead+"\n") != 1 {
+			t.Fatalf("%s: the script's privacy note head not found once", c.name)
+		}
+		want = strings.Replace(want, scriptPrivacyHead+"\n", head+"\n", 1)
 		res := &report.CollectResult{
 			ZipPath: `{{BASE}}\out\魔改AVD问题信息-20260115-120000.zip`, ZipSize: "{{SIZE}}",
 			PrivacyNote: report.PrivacyNote, MasFound: c.mas, Problems: c.problems,

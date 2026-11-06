@@ -40,7 +40,8 @@ const (
 	// New instances default to 1080p. Existing instances are identified by their dimensions.
 	DefaultResolution = 1080
 	TargetAPI         = "android-34"
-	// image.sysdir.1, relative to the SDK root, with the trailing backslash AUTO-MAS writes.
+	// SystemImageSysdir is the Windows/AUTO-MAS value of image.sysdir.1.
+	// Create uses the host platform's system-image directory and path separator.
 	SystemImageSysdir = `system-images\android-34\google_apis\x86_64\`
 )
 
@@ -628,6 +629,10 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	for _, kv := range ConfigTemplate {
 		cfg.Set(kv[0], kv[1])
 	}
+	p := root.CurrentPlatform()
+	cfg.Set("abi.type", p.GuestABI)
+	cfg.Set("hw.cpu.arch", p.GuestArch)
+	cfg.Set("target", p.TargetAPI)
 	for _, kv := range [][2]string{
 		{"avd.id", name},
 		{"avd.name", name},
@@ -639,15 +644,15 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		{"hw.lcd.height", display[1][1]},
 		{"hw.lcd.density", display[2][1]},
 		{"hw.lcd.vsync", strconv.Itoa(fps)},
-		{"image.sysdir.1", SystemImageSysdir},
+		{"image.sysdir.1", p.SystemImageDir + string(filepath.Separator)},
 	} {
 		cfg.Set(kv[0], kv[1])
 	}
 	ini := NewIni()
 	ini.Set("avd.ini.encoding", "UTF-8")
 	ini.Set("path", dir)
-	ini.Set("path.rel", root.AvdDir+`\`+name+".avd")
-	ini.Set("target", TargetAPI)
+	ini.Set("path.rel", filepath.Join(root.AvdDir, name+".avd"))
+	ini.Set("target", p.TargetAPI)
 
 	if err := os.MkdirAll(r.AvdHome(), 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("建不了目录 %s：%v", r.AvdHome(), err))
