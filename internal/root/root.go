@@ -215,17 +215,18 @@ func jsonOneLine(v *jsonord.Value) string {
 
 // SystemImageDir retains the Windows/AUTO-MAS layout; other hosts use Platform.SystemImageDir.
 const (
-	SDKDir          = "sdk"
-	AvdDir          = "avd"
-	ComponentsDir   = "components"
-	MetadataFile    = "mas-avd.json"
-	LogsDir         = "logs"
-	ShaderCacheDir  = "shader-cache"
-	GuestPatchDir   = "guest-patches"
-	ManifestFile    = "modavd-manifest.json"
-	SystemImageDir  = `system-images\android-34\google_apis\x86_64`
-	LauncherAPKName = "de.jrpie.android.launcher_57.apk"
-	ImeAPKName      = "modavd-ime.apk"
+	SDKDir              = "sdk"
+	AvdDir              = "avd"
+	ComponentsDir       = "components"
+	MetadataFile        = "mas-avd.json"
+	LogsDir             = "logs"
+	ShaderCacheDir      = "shader-cache"
+	GuestPatchDir       = "guest-patches"
+	ManifestFile        = "modavd-manifest.json"
+	SystemImageDir      = `system-images\android-34\google_apis\x86_64`
+	MacOSSystemImageDir = "system-images/android-35/google_apis/arm64-v8a"
+	LauncherAPKName     = "de.jrpie.android.launcher_57.apk"
+	ImeAPKName          = "modavd-ime.apk"
 )
 
 // MinModBuild: emulators whose Pkg.BuildId is below mas-<this> refuse to boot (AUTO-MAS MIN_MOD_AVD_BUILD).
