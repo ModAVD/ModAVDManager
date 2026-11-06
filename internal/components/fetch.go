@@ -14,14 +14,18 @@ package components
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	"modavd/internal/buildinfo"
 	"modavd/internal/download"
@@ -53,7 +57,7 @@ var (
 // License returns the Android SDK license text and the mirror it came from.
 // It only reads the repository manifest; it does not touch a ModAVD root or
 // install any component.
-func License(ctx context.Context) (text, source string, err error) {
+func License(ctx context.Context, source ...SourceSettings) (text, from string, err error) {
 	if fetchGOOS != "windows" {
 		return "", "", errs.New(errs.Unsupported, "这个系统还没有组件清单").WithAdvice("目前只有 Windows 能补全组件")
 	}
@@ -62,7 +66,15 @@ func License(ctx context.Context) (text, source string, err error) {
 		return "", "", err
 	}
 	o.Log = logx.Nop()
-	f := &fetcher{o: o, mirrors: append([]Mirror(nil), defaultMirrors...)}
+	var settings SourceSettings
+	if len(source) > 0 {
+		settings = source[0]
+	}
+	mirrors, err := ChooseMirrors(settings.Mirror, settings.MirrorURLs)
+	if err != nil {
+		return "", "", err
+	}
+	f := &fetcher{o: o, mirrors: mirrors}
 	return f.license(ctx)
 }
 
@@ -91,6 +103,10 @@ type Options struct {
 	// built-in list, tried in order (each entry may hold several, comma-separated), and win over Mirror.
 	Mirror     string
 	MirrorURLs []string
+	// LicenseSHA256 binds a manager's consent to the exact license text shown to the user.
+	LicenseSHA256 string
+	// SourceOrigin describes where the selected source came from: "参数", "设置" or "默认".
+	SourceOrigin string
 	// ConnectTimeout bounds connect, TLS handshake and response headers; StallTimeout a read that brings nothing;
 	// ManifestTimeout the whole license manifest. Zero is the default (20, 30, 40 s).
 	ConnectTimeout, StallTimeout, ManifestTimeout time.Duration
@@ -178,16 +194,22 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 	}
 	var custom []Mirror
 	for _, raw := range urls {
+		if len(custom) >= 16 {
+			return nil, errs.New(errs.InvalidArgument, "--mirror-url 最多只能给 16 个地址")
+		}
 		for _, u := range strings.Split(raw, ",") {
 			u = strings.TrimSpace(u)
 			if u == "" {
 				continue
 			}
-			if l := strings.ToLower(u); !strings.HasPrefix(l, "http://") && !strings.HasPrefix(l, "https://") {
-				return nil, errs.Newf(errs.InvalidArgument, "--mirror-url 要写 http:// 或 https:// 开头的目录地址，收到「%s」", u)
+			if err := validateMirrorURL(u); err != nil {
+				return nil, err
 			}
 			if !strings.HasSuffix(u, "/") {
 				u += "/"
+			}
+			if len(custom) >= 16 {
+				return nil, errs.New(errs.InvalidArgument, "--mirror-url 最多只能给 16 个地址")
 			}
 			custom = append(custom, Mirror{ID: "custom", Name: "自定义镜像（" + u + "）", Base: u})
 		}
@@ -196,6 +218,19 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 		return nil, errs.New(errs.InvalidArgument, "--mirror-url 里没有地址")
 	}
 	return custom, nil
+}
+
+const maxMirrorURLLength = 2048
+
+func validateMirrorURL(raw string) error {
+	if len(raw) == 0 || len(raw) > maxMirrorURLLength || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+		return errs.Newf(errs.InvalidArgument, "--mirror-url 地址格式不对：%q", raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return errs.Newf(errs.InvalidArgument, "--mirror-url 要是没有用户名密码、查询参数或片段的 HTTP(S) 目录地址，收到「%s」", raw)
+	}
+	return nil
 }
 
 // sourceLine says, before anything is downloaded, where it comes from and why: the built-in mirrors in order (the
@@ -207,12 +242,25 @@ func sourceLine(o Options, mirrors []Mirror) string {
 	}
 	switch {
 	case len(o.MirrorURLs) > 0:
-		return "下载源：" + strings.Join(names, "、") + "（--mirror-url），按顺序试"
+		return "下载源：" + strings.Join(names, "、") + "（--mirror-url），按顺序试（来源：" + sourceOrigin(o) + "）"
 	case strings.TrimSpace(o.Mirror) != "":
-		return "下载源：只用" + strings.Join(names, "、") + "（--mirror " + strings.TrimSpace(o.Mirror) + "）"
+		return "下载源：只用" + strings.Join(names, "、") + "（--mirror " + strings.TrimSpace(o.Mirror) + "）（来源：" + sourceOrigin(o) + "）"
 	default:
-		return "下载源：自动，依次试" + strings.Join(names, "、") + "，前一个不通或校验不对就换下一个；只用其中一个时加 --mirror googledownloads_cn / tencent / google"
+		return "下载源：自动，依次试" + strings.Join(names, "、") + "（来源：" + sourceOrigin(o) + "），前一个不通或校验不对就换下一个；只用其中一个时加 --mirror googledownloads_cn / tencent / google"
 	}
+}
+
+func sourceOrigin(o Options) string {
+	if strings.TrimSpace(o.SourceOrigin) != "" {
+		return strings.TrimSpace(o.SourceOrigin)
+	}
+	if len(o.MirrorURLs) > 0 {
+		return "参数 --mirror-url"
+	}
+	if strings.TrimSpace(o.Mirror) != "" {
+		return "参数 --mirror"
+	}
+	return "默认"
 }
 
 // JSONNeedsLicense is the errs.Usage error of a fetch with JSON but without AcceptLicense: nobody can answer the
@@ -340,6 +388,13 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	text, from, err := f.license(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if want := strings.TrimSpace(f.o.LicenseSHA256); want != "" {
+		sum := sha256.Sum256([]byte(text))
+		got := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(want, got) {
+			return nil, errs.Newf(errs.ComponentsRejected, "许可协议内容已变化，管理器显示的协议和下载源返回的不一致（SHA-256 %s），请重新打开许可协议后再试", got)
+		}
 	}
 	res.License, res.LicenseSource = text, from
 	if err := f.consent(text, from, todo); err != nil {
@@ -486,7 +541,11 @@ func (f *fetcher) consent(text, from string, todo []root.SDKComponent) error {
 	f.note(shown)
 	f.note(terms)
 	if f.o.AcceptLicense {
-		f.say("已通过 --accept-license 同意许可协议。")
+		if strings.TrimSpace(f.o.SourceOrigin) == "管理器" {
+			f.say("已在管理器里同意许可协议。")
+		} else {
+			f.say("已通过 --accept-license 同意许可协议。")
+		}
 	} else {
 		f.notice("是否同意这份许可协议？输入 y 并回车表示同意，直接回车或输入其他内容则退出：")
 		in := f.o.Input

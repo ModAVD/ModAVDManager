@@ -320,3 +320,41 @@ func TestComponentsFetchUsesSavedSource(t *testing.T) {
 		t.Fatalf("saved source: %q", got.Mirror)
 	}
 }
+
+func TestComponentsFetchNonTerminalDoesNotAskOrSave(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	noTerminal := false
+	h.terminal = &noTerminal
+	h.stdin = "4\ny\n"
+	var got components.Options
+	h.fetch = func(_ context.Context, _ *root.Root, o components.Options) (*components.Result, error) {
+		got = o
+		return &components.Result{}, nil
+	}
+	res := h.run(t, nil, "components", "fetch")
+	if res.code != 0 || got.Mirror != "" || len(got.MirrorURLs) != 0 || strings.Contains(res.stderr, "组件下载源还没有设置") {
+		t.Fatalf("non-terminal source prompt: exit=%d options=%+v stderr=%q", res.code, got, res.stderr)
+	}
+}
+
+func TestComponentsFetchAutomationDoesNotSaveSource(t *testing.T) {
+	lad := t.TempDir()
+	t.Setenv("LOCALAPPDATA", lad)
+	h := newHarness()
+	h.useRoot(componentsRoot(t))
+	h.stdin = "4\n"
+	h.fetch = func(_ context.Context, _ *root.Root, _ components.Options) (*components.Result, error) {
+		return &components.Result{}, nil
+	}
+	for _, args := range [][]string{{"components", "fetch", "--accept-license"}, {"--json", "components", "fetch", "--accept-license"}} {
+		res := h.run(t, nil, args...)
+		if res.code != 0 || strings.Contains(res.stderr, "组件下载源还没有设置") {
+			t.Fatalf("%q: exit=%d stderr=%q", args, res.code, res.stderr)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(lad, "ModAVD", "components-settings.json")); err == nil {
+		t.Fatal("automation saved source")
+	}
+}

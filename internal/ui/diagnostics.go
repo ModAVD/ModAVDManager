@@ -24,6 +24,7 @@ type DiagComponentsResult struct {
 type DiagLicenseResult struct {
 	Text   string `json:"license"`
 	Source string `json:"license_source"`
+	SHA256 string `json:"license_sha256"`
 }
 
 type DiagProgress struct {
@@ -83,8 +84,8 @@ type DiagCollectResult struct {
 
 type diagBackend interface {
 	Components(context.Context) (*DiagComponentsResult, error)
-	License(context.Context) (*DiagLicenseResult, error)
-	Fetch(context.Context, bool, components.SourceSettings, func(DiagProgress)) (*DiagFetchResult, error)
+	License(context.Context, components.SourceSettings) (*DiagLicenseResult, error)
+	Fetch(context.Context, bool, components.SourceSettings, string, func(DiagProgress)) (*DiagFetchResult, error)
 	Collect(context.Context, DiagCollectOptions, func(DiagProgress)) (*DiagCollectResult, error)
 	ReportConfig(context.Context) (string, error)
 }

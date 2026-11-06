@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -38,15 +40,16 @@ func (b *realDiagBackend) Components(ctx context.Context) (*DiagComponentsResult
 	return &DiagComponentsResult{Root: b.r.Dir, Components: toDiagComponents(diagComponents(b.r))}, nil
 }
 
-func (b *realDiagBackend) License(ctx context.Context) (*DiagLicenseResult, error) {
-	text, source, err := diagLicense(ctx)
+func (b *realDiagBackend) License(ctx context.Context, source components.SourceSettings) (*DiagLicenseResult, error) {
+	text, from, err := diagLicense(ctx, source)
 	if err != nil {
 		return nil, err
 	}
-	return &DiagLicenseResult{Text: text, Source: source}, nil
+	sum := sha256.Sum256([]byte(text))
+	return &DiagLicenseResult{Text: text, Source: from, SHA256: hex.EncodeToString(sum[:])}, nil
 }
 
-func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source components.SourceSettings, progress func(DiagProgress)) (*DiagFetchResult, error) {
+func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source components.SourceSettings, licenseSHA256 string, progress func(DiagProgress)) (*DiagFetchResult, error) {
 	if !accept {
 		return nil, errs.New(errs.LicenseDeclined, "没有同意许可协议，已退出，什么也没有下载")
 	}
@@ -55,6 +58,8 @@ func (b *realDiagBackend) Fetch(ctx context.Context, accept bool, source compone
 		Input:         nil,
 		Mirror:        source.Mirror,
 		MirrorURLs:    append([]string(nil), source.MirrorURLs...),
+		LicenseSHA256: licenseSHA256,
+		SourceOrigin:  "管理器",
 		Log:           b.log,
 		Notice:        func(s string) { b.log.Infof("%s", s) },
 		Progress: func(p components.Progress) {

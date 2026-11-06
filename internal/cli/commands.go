@@ -940,7 +940,7 @@ func runComponents(c *cmdCtx) (any, error) {
 	)
 	// Legacy releases kept the choice in <root>\downloads\source.txt. Read it
 	// once before the first interactive fetch, then use the per-user setting.
-	if !c.inv.isSet("mirror") && !c.inv.isSet("mirror-url") && !c.inv.json && !c.inv.boolOpt("accept-license") {
+	if !c.inv.isSet("mirror") && !c.inv.isSet("mirror-url") && !c.inv.json && !c.inv.boolOpt("accept-license") && c.deps.stdinTerminal(c.stdin) {
 		r, err = c.deps.resolveRoot(c.inv.root)
 		if err != nil {
 			return nil, err
@@ -1000,7 +1000,7 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 	// order when no choice has been saved.
 	if !inv.isSet("mirror") && !inv.isSet("mirror-url") {
 		saved := components.LoadSourceSettings()
-		if !saved.Set && !o.AcceptLicense && !o.JSON {
+		if !saved.Set && !o.AcceptLicense && !o.JSON && c.deps.stdinTerminal(input) {
 			buffered := bufio.NewReader(input)
 			choice, err := askComponentSource(c, buffered)
 			if err != nil {
@@ -1013,7 +1013,12 @@ func fetchOptions(c *cmdCtx) (components.Options, error) {
 		}
 		if saved.Set {
 			o.Mirror, o.MirrorURLs = saved.Mirror, append([]string(nil), saved.MirrorURLs...)
+			o.SourceOrigin = "设置"
+		} else {
+			o.SourceOrigin = "默认"
 		}
+	} else {
+		o.SourceOrigin = "参数"
 	}
 	for _, t := range []struct {
 		name string
@@ -1074,7 +1079,12 @@ func askComponentSource(c *cmdCtx, input io.Reader) (components.SourceSettings, 
 	fmt.Fprintln(c.stderr, "  3. tencent")
 	fmt.Fprintln(c.stderr, "  4. google")
 	fmt.Fprint(c.stderr, "选择 [1]：")
-	line, _ := bufio.NewReader(input).ReadString('\n')
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err == io.EOF {
+		// EOF without an interactive answer means automatic order for this run;
+		// do not persist a choice inferred from a closed pipe.
+		return components.SourceSettings{}, nil
+	}
 	choice := strings.TrimSpace(line)
 	if choice == "" || choice == "1" {
 		return components.SaveSourceSettings("", nil)

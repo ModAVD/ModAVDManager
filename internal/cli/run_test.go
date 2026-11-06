@@ -263,6 +263,7 @@ type harness struct {
 	resolve  func(string) (*root.Root, error)
 	fetch    func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
 	stdin    string
+	terminal *bool
 }
 
 type result struct {
@@ -288,6 +289,12 @@ func (h *harness) run(t *testing.T, ctx context.Context, args ...string) result 
 		resolveRoot:     h.resolve,
 		serveMCP:        h.mcpCall,
 		fetchComponents: h.fetch,
+		stdinTerminal: func(io.Reader) bool {
+			if h.terminal != nil {
+				return *h.terminal
+			}
+			return true
+		},
 	}
 	if d.resolveRoot == nil {
 		d.resolveRoot = func(string) (*root.Root, error) { return nil, errs.New(errs.NotFound, "没有根目录") }

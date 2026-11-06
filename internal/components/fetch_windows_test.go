@@ -797,6 +797,20 @@ func TestFetchJSONNeedsAcceptLicense(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsChangedLicenseHashBeforeDownload(t *testing.T) {
+	pt := ptZip(t, adbBody)
+	setup(t, ptSpec(pt))
+	m := newMirror(t, map[string][]byte{"pt.zip": pt})
+	r := tempRoot(t)
+	o := opts(m)
+	o.LicenseSHA256 = strings.Repeat("0", 64)
+	out := fetch(t, nil, r, o)
+	wantCode(t, out.err, errs.ComponentsRejected)
+	if len(m.zipReqs()) != 0 || exists(downloadsDir(r)) {
+		t.Fatalf("hash mismatch downloaded files: zip requests=%d downloads=%v", len(m.zipReqs()), exists(downloadsDir(r)))
+	}
+}
+
 // TestFetchUsesProxy: every request of a fetch (manifest and zip) really goes through the proxy hostproxy picks, here
 // one named by HTTP_PROXY. net/http reads the proxy variables once per process, so the fetch runs in a child
 // (TestFetchUsesProxyChild) whose first request is that fetch's.

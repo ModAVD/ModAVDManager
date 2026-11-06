@@ -44,6 +44,45 @@ func TestSourceSettingsRejectBadMirror(t *testing.T) {
 	if _, err := SaveSourceSettings("", []string{"ftp://example/"}); err == nil {
 		t.Fatal("bad URL accepted")
 	}
+	for _, u := range []string{"https://", "http://", "https://user:pw@host/x", "https://host/x?q=1#f", "https://host/ x"} {
+		if _, err := SaveSourceSettings("", []string{u}); err == nil {
+			t.Fatalf("bad URL accepted: %q", u)
+		}
+	}
+}
+
+func TestTamperedSourceSettingsFallBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "components-settings.json")
+	old := sourceSettingsPath
+	sourceSettingsPath = func() string { return path }
+	t.Cleanup(func() { sourceSettingsPath = old })
+	for _, body := range []string{`{"mirror":"aliyun"}`, `{"mirror_urls":["file:///C:/Windows/"]}`, `{"mirror_urls":["ftp://x/"]}`, `{"mirror_urls":[""]}`, "not json"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := LoadSourceSettings()
+		if got.Set || got.Mirror != "" || len(got.MirrorURLs) != 0 {
+			t.Errorf("%q loaded as %+v", body, got)
+		}
+	}
+}
+
+func TestLegacyUnknownSourceIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "components-settings.json")
+	old := sourceSettingsPath
+	sourceSettingsPath = func() string { return path }
+	t.Cleanup(func() { sourceSettingsPath = old })
+	if err := os.MkdirAll(filepath.Join(dir, "root", "downloads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "root", "downloads", "source.txt"), []byte("https://x.invalid/\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, migrated, err := ImportLegacySource(filepath.Join(dir, "root"))
+	if err != nil || migrated || got.Set {
+		t.Fatalf("unknown legacy source = %+v migrated=%v err=%v", got, migrated, err)
+	}
 }
 
 func TestImportLegacySource(t *testing.T) {

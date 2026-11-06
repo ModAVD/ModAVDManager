@@ -144,6 +144,11 @@ func ImportLegacySource(rootDir string) (SourceSettings, bool, error) {
 		choice = ""
 	}
 	if _, err := SaveSourceSettings(choice, nil); err != nil {
+		// Old, unpublished builds could write arbitrary text here. Treat it as
+		// no saved choice instead of turning a fetch into a usage error.
+		if errs.CodeOf(err) == errs.InvalidArgument {
+			return current, false, nil
+		}
 		return current, false, err
 	}
 	return LoadSourceSettings(), true, nil

@@ -298,7 +298,17 @@ func (s *server) handleComponents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleComponentLicense(w http.ResponseWriter, r *http.Request) {
-	res, err := s.diag.License(r.Context())
+	source := components.LoadSourceSettings()
+	if q := r.URL.Query(); q.Get("source") != "" || q.Get("mirror") != "" || len(q["mirror_urls"]) > 0 {
+		urls := append([]string(nil), q["mirror_urls"]...)
+		var err error
+		source, err = componentSourceFromFields(q.Get("source"), q.Get("mirror"), urls)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	res, err := s.diag.License(r.Context(), source)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -378,6 +388,7 @@ func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 		Source        string   `json:"source"`
 		Mirror        string   `json:"mirror"`
 		MirrorURLs    []string `json:"mirror_urls"`
+		LicenseSHA256 string   `json:"license_sha256"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -396,7 +407,7 @@ func (s *server) handleComponentsFetch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v, err := s.startRootJob(kindComponents, func(ctx context.Context, j *job, _ backend) (any, error) {
-		return s.diag.Fetch(ctx, true, source, func(p DiagProgress) { s.setDiagProgress(j, p) })
+		return s.diag.Fetch(ctx, true, source, body.LicenseSHA256, func(p DiagProgress) { s.setDiagProgress(j, p) })
 	})
 	s.respondJob(w)(v, err)
 }
