@@ -118,8 +118,8 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
 	}
 	if len(busy) > 0 {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
-			i, joinInts(busy, ", "))
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
+			i, joinInts(busy, ", ")), map[string]string{errs.Reason: "port_in_use"})
 	}
 
 	// The emulator registers with the private server once, at the end of its boot: it has to be up first.
@@ -205,8 +205,8 @@ func otherRootQemu(q host.Process, cmdline []string, i, console int, ours func(h
 
 // otherRootBusy is the error of a start whose ports the same-numbered instance of another root holds.
 func otherRootBusy(i int, p host.Process, where string) *errs.Error {
-	return errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
-		WithAdvice("先在那个根目录把它关掉再启动")
+	return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
+		WithAdvice("先在那个根目录把它关掉再启动"), map[string]string{errs.Reason: "port_other_root"})
 }
 
 // qemuWhere names a qemu for the messages: avdDir when known, else its executable (argv[0]), else "路径读不到".

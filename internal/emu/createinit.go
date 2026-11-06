@@ -112,8 +112,8 @@ func (m *Manager) notCreated(i int, what string) error {
 	state, message, logFile := m.creation(i)
 	switch state {
 	case creationCreating:
-		return errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），%s", i, what).
-			WithAdvice("等它做完；进度用 modavd status 查看")
+		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），%s", i, what).
+			WithAdvice("等它做完；进度用 modavd status 查看"), map[string]string{errs.Reason: "locked", errs.Lock: "create"})
 	case creationFailed:
 		advice := fmt.Sprintf("用 modavd create --resume %d 重新初始化，或者 modavd delete %d --yes 删掉", i, i)
 		if logFile != "" {
@@ -320,8 +320,13 @@ func (p *createProgress) send(step, msg string) {
 
 // setupNew is the setup of a new instance (or a retry of one that failed); the create lock is held by the caller and
 // released here. cfg is the instance's config.ini as the caller read it.
-func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateRequest, lock *host.FileLock) (*InstanceInfo, error) {
+func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateRequest, lock *host.FileLock) (_ *InstanceInfo, retErr error) {
 	defer lock.Unlock()
+	defer func() {
+		if retErr != nil {
+			retErr = m.withCreateErrorState(i, retErr, true)
+		}
+	}()
 	if err := m.setCreation(i, creationCreating, "", ""); err != nil {
 		return nil, err
 	}

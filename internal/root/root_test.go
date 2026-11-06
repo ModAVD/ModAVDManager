@@ -154,7 +154,9 @@ func TestPortBase(t *testing.T) {
 		ok    bool
 	}{
 		{`20000`, 20000, true}, {`21000`, 21000, true}, {`"21000"`, 21000, true}, {`21000.0`, 21000, true},
-		{`1100`, 1100, true}, {`65400`, 65400, true}, {`19900`, 19900, true}, {`20100`, 20100, true},
+		{`1100`, 1100, true}, {`49000`, 49000, true}, {`19900`, 19900, true}, {`20100`, 20100, true},
+		{`5400`, 5400, true}, {`5600`, 5600, true}, {`5500`, 5500, false}, {`"5500"`, 5500, false},
+		{`49100`, 49100, false}, {`65400`, 65400, false}, {`49100.0`, 49100, false},
 		{`21050`, 20000, false}, {`21010`, 20000, false}, {`1000`, 20000, false}, {`65500`, 20000, false},
 		{`-21000`, 20000, false}, {`"abc"`, 20000, false}, {`null`, 20000, false}, {`true`, 20000, false},
 		{`[21000]`, 20000, false}, {`{}`, 20000, false}, {`""`, 20000, false},
@@ -169,6 +171,10 @@ func TestPortBase(t *testing.T) {
 		}
 		if err != nil && (err.Code != errs.InvalidArgument || !strings.Contains(err.Message, "portBase 不合规（"+c.value+"）")) {
 			t.Errorf("portBase %s: %s %q", c.value, err.Code, err.Message)
+		}
+		legacy := c.base == 5500 || c.base > maxPortBase
+		if adbErr := r.CheckAdbPorts(); (adbErr == nil) != (c.ok || legacy) {
+			t.Errorf("portBase %s: CheckAdbPorts %v", c.value, adbErr)
 		}
 	}
 
@@ -190,9 +196,11 @@ func TestPortBase(t *testing.T) {
 		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20050}`, "scriptAdbServerPort"},
 		{`{"portBase": 21000, "adbServerPort": 20011, "scriptAdbServerPort": 20088}`, "adbServerPort"},
 		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20092}`, "scriptAdbServerPort"},
+		{`{"portBase": 5500}`, "adbServerPort"},
+		{`{"portBase": 49100, "adbServerPort": 34050, "scriptAdbServerPort": 20049}`, "scriptAdbServerPort"},
 	} {
 		writeFile(t, r.MetadataPath(), []byte(c.meta))
-		err := r.CheckPorts()
+		err := r.CheckAdbPorts()
 		if err == nil || err.Code != errs.InvalidArgument || !strings.Contains(err.Message, c.key+" 却是") {
 			t.Errorf("%s: %v", c.meta, err)
 		}
@@ -205,6 +213,26 @@ func TestPortBase(t *testing.T) {
 	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 20000}`))
 	if err := r.CheckPorts(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPortBaseAvoidsScannedAndEphemeralPorts(t *testing.T) {
+	for base := minPortBase; base <= legacyMaxPortBase; base += 100 {
+		v, err := jsonord.Parse([]byte(fmt.Sprintf(`{"portBase":%d}`, base)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, problem := PortPlanOf(v.Obj())
+		if p.Base != base {
+			t.Fatalf("previously accepted plan %d became %d", base, p.Base)
+		}
+		unsafe := false
+		for port := range p.InstancePorts() {
+			unsafe = unsafe || port >= 5555 && port <= 5585 || port >= 49152
+		}
+		if (problem != "") != unsafe {
+			t.Errorf("plan %d unsafe=%v, problem=%q", base, unsafe, problem)
+		}
 	}
 }
 
@@ -486,6 +514,9 @@ func TestMetadataLock(t *testing.T) {
 	defer func() { metadataLockWait = old }()
 	err = r.UpdateMetadata(func(o *jsonord.Obj) error { return nil })
 	wantCode(t, err, errs.Busy)
+	if got := errs.DetailsOf(err); got[errs.Reason] != "locked" || got[errs.Lock] != "metadata" {
+		t.Errorf("details: %v", got)
+	}
 	held.unlock()
 	if err := r.UpdateMetadata(func(o *jsonord.Obj) error { return nil }); err != nil {
 		t.Fatalf("after unlock: %v", err)

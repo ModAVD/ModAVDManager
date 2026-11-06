@@ -108,8 +108,8 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	state, _, _ := mm.creation(i)
 	creating := state == creationCreating && !opt.creating
 	if creating && !opt.CancelCreate {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），不能关机", i).
-			WithAdvice(fmt.Sprintf("等新建做完；进度用 modavd status 查看；确实要打断请用 modavd stop %d --cancel-create", i))
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），不能关机", i).
+			WithAdvice(fmt.Sprintf("等新建做完；进度用 modavd status 查看；确实要打断请用 modavd stop %d --cancel-create", i)), map[string]string{errs.Reason: "locked", errs.Lock: "create"})
 	}
 	if creating {
 		if err := os.WriteFile(mm.createCancelPath(i), nil, 0o600); err != nil {
@@ -138,8 +138,8 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 			return nil, err
 		}
 		if !found && starting {
-			return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在开机，模拟器还没起来，稍后再关", i).
-				WithAdvice("开机前的检查（硬件加速、Vulkan 等）可能要一两分钟")
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在开机，模拟器还没起来，稍后再关", i).
+				WithAdvice("开机前的检查（硬件加速、Vulkan 等）可能要一两分钟"), map[string]string{errs.Reason: "starting"})
 		}
 		ok = found
 		// Only a qemu that really is that start's fresh one goes without a sync. One that was there all along (the

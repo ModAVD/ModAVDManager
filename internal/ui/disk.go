@@ -36,12 +36,12 @@ func (s *server) handleDiskTrim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondJob(w)(s.startJob(kindDiskTrim, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		s.setProgress(j, jobProgress{Step: "disk_trim", Message: fmt.Sprintf("实例 %d 正在回收磁盘空间", i)})
+		s.setProgress(j, jobProgress{Step: "disk_trim", Message: fmt.Sprintf("实例 %d 正在触发磁盘回收", i)})
 		res, err := b.DiskTrim(ctx, i)
 		if err != nil {
 			return nil, err
 		}
-		s.setProgress(j, jobProgress{Step: "done", Message: fmt.Sprintf("实例 %d 已回收磁盘空间", i), Done: progressTotal, Total: progressTotal})
+		s.setProgress(j, jobProgress{Step: "done", Message: fmt.Sprintf("实例 %d 已触发磁盘回收", i), Done: progressTotal, Total: progressTotal})
 		return res, nil
 	}))
 }

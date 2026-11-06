@@ -63,8 +63,8 @@ var instructions = fmt.Sprintf("Manages the ModAVD (patched Android Emulator) in
 	"is fixed by the server's --root; instances are numbered 0-%d except %d. Always shut instances down with "+
 	"stop_instance, which syncs the guest disk first: never kill emulator or qemu processes, that loses recently "+
 	"written game data. start_instance can take minutes and reports progress; delete_instance permanently removes "+
-	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk reclaims "+
-	"unused space of a running instance, compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
+	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk requests "+
+	"reclamation in a running instance without waiting for guest completion; compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
 
 // progressEvery throttles progress notifications that do not complete a step.
 const progressEvery = time.Second
@@ -682,12 +682,17 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 	return data, b, nil
 }
 
-// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code (and
-// where a failed boot's guest state went).
+// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code,
+// the diagnostic directory and error.details as one JSON object of string values.
 func errorText(e *errs.Error) string {
 	text := e.Error() + "\n错误码: " + e.Code
-	if dir := errs.DetailsOf(e)[errs.BootDiagDir]; dir != "" {
+	details := errs.DetailsOf(e)
+	if dir := details[errs.BootDiagDir]; dir != "" {
 		text += "\n开机失败时的客体现场: " + dir
+	}
+	if len(details) > 0 {
+		data, _ := json.Marshal(details) // map[string]string always encodes
+		text += "\nerror.details: " + string(data)
 	}
 	return text
 }

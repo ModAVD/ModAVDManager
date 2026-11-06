@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,6 +63,23 @@ func main() {
 
 const usage = "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
 
+// flagValueNames are the placeholders the usage line gives the options that take a value.
+var flagValueNames = map[string]string{"root": "根目录", "port": "端口"}
+
+// helpText is what --help shows: the usage line, then every option with what it does.
+func helpText(fs *flag.FlagSet) string {
+	var b strings.Builder
+	b.WriteString(usage + "\n")
+	fs.VisitAll(func(f *flag.Flag) {
+		name := "--" + f.Name
+		if v := flagValueNames[f.Name]; v != "" {
+			name += " " + v
+		}
+		fmt.Fprintf(&b, "\n%s：%s", name, f.Usage)
+	})
+	return b.String()
+}
+
 // versionArg is the hidden `ModAVD.exe __version`: one line on stdout, the same envelope as `modavd version --json`,
 // no window, no server, no message box (for callers such as AUTO-MAS that need the manager's version without starting
 // it). Every later version keeps it.
@@ -97,6 +115,11 @@ func run(args []string) (code int) {
 	noWindow := fs.Bool("no-window", false, "不打开窗口")
 	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
 	if err := fs.Parse(args); err != nil {
+		// --help / -h / -help ask for the usage: an information box and exit code 0, not an error (ModAVD/ModAVD#115).
+		if errors.Is(err, flag.ErrHelp) {
+			notice(helpText(fs))
+			return 0
+		}
 		fatal("命令行参数不对：" + err.Error() + "\n\n" + usage)
 		return 2
 	}

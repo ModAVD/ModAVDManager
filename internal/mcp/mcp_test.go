@@ -914,7 +914,8 @@ func TestNewManagerError(t *testing.T) {
 func TestErrorTextBootDiag(t *testing.T) {
 	e := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
 		`D:\r\logs\mas_1-20261104-100000-bootfail`), "实例 1 启动超时")
-	if got, want := errorText(e), "实例 1 启动超时\n错误码: timeout\n开机失败时的客体现场: D:\\r\\logs\\mas_1-20261104-100000-bootfail"; got != want {
+	if got, want := errorText(e), "实例 1 启动超时\n错误码: timeout\n开机失败时的客体现场: D:\\r\\logs\\mas_1-20261104-100000-bootfail\nerror.details: "+
+		`{"boot_diag_dir":"D:\\r\\logs\\mas_1-20261104-100000-bootfail"}`; got != want {
 		t.Errorf("errorText = %q, want %q", got, want)
 	}
 }
@@ -1567,6 +1568,11 @@ func TestToolDefinitions(t *testing.T) {
 		}
 	}
 	del := byName["delete_instance"]["inputSchema"].(map[string]any)
+	trimDescription := byName["trim_disk"]["description"].(string)
+	if !strings.Contains(trimDescription, "not that guest FITRIM finished or succeeded") ||
+		!strings.Contains(trimDescription, "timeout bounds only the request") {
+		t.Fatalf("trim contract must distinguish the request from guest completion: %s", trimDescription)
+	}
 	if !reflect.DeepEqual(del["required"], []any{"index", "confirm"}) {
 		t.Fatalf("delete required %v", del["required"])
 	}
@@ -1750,4 +1756,23 @@ func typeMatches(ty string, v any) bool {
 		return ok && f == math.Trunc(f)
 	}
 	return false
+}
+
+// Drive the normal tools/call error result, rather than the formatter alone.
+func TestLifecycleToolErrorDetails(t *testing.T) {
+	want := map[string]string{errs.Reason: "locked", errs.Lock: "create", errs.InstanceStatus: "create_failed", errs.QemuRunning: "false", errs.InstanceExists: "true", errs.BootDiagDir: "saved-guest-state"}
+	inner := errs.WithDetail(errs.New(errs.Timeout, "boot timeout"), errs.BootDiagDir, "saved-guest-state")
+	failure := errs.WithDetails(errs.Wrap(errs.Timeout, inner, "create failed").WithAdvice("resume or delete"), want)
+	h := newHarness(t, &fake{
+		start:  func(context.Context, int, emu.StartOptions) (*emu.StartResult, error) { return nil, failure },
+		create: func(context.Context, emu.CreateRequest) (*emu.InstanceInfo, error) { return nil, failure },
+	}, nil)
+	for id, tool := range []string{"start_instance", "create_instance"} {
+		text, isErr, _ := toolText(t, h.call(id+1, tool, map[string]any{"index": 3}, nil))
+		before, payload, found := strings.Cut(text, "\nerror.details: ")
+		var got map[string]string
+		if !isErr || !found || json.Unmarshal([]byte(payload), &got) != nil || !reflect.DeepEqual(got, want) || !strings.HasPrefix(before, "create failed。resume or delete\n错误码: timeout") {
+			t.Fatalf("%s: %q", tool, text)
+		}
+	}
 }

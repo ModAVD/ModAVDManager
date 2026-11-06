@@ -84,9 +84,12 @@ const (
 	DefaultPortBase = PortBase
 	// A portBase other than DefaultPortBase is a multiple of 100 in minPortBase-maxPortBase: each plan then has a
 	// segment of 100 ports of its own (it uses 93 of them), which never overlaps DefaultPortBase's 20000-20099, and
-	// stays above the privileged ports and below 65536.
+	// stays above the privileged ports and below Windows' default ephemeral range, 49152-65535.
+	// The 5500 segment is excluded too: adb scans emulator ports 5555-5585 by default.
 	minPortBase = 1100
-	maxPortBase = 65400
+	maxPortBase = 49000
+	// Previously accepted plans remain readable for status and shutdown, but CheckPorts blocks new starts.
+	legacyMaxPortBase = 65400
 )
 
 // PortPlan is the ports of a root's instances: console Base + PortStep*i, adb +1, gRPC +2. The emulator names its
@@ -123,10 +126,11 @@ func (p PortPlan) InstancePorts() map[int]bool {
 	return ports
 }
 
-// Ports is the root's port plan: mas-avd.json's portBase when valid, else DefaultPortBase. Read each time, like
+// Ports is the root's port plan: mas-avd.json's portBase when parseable, else DefaultPortBase. Read each time, like
 // AdbServerPort: change portBase only while none of the root's instances runs. An invalid portBase reads as
 // DefaultPortBase, so that status still finds what runs (an instance is matched by its AVD directory, never by its
-// ports alone); CheckPorts keeps anything from being started with it.
+// ports alone); CheckPorts keeps anything from being started with it. Previously accepted 5500 / 49100-65400
+// plans retain their ports for status and shutdown while CheckPorts reports how to migrate them.
 func (r *Root) Ports() PortPlan {
 	p, _ := portPlan(r.MetadataLoose().Obj())
 	return p
@@ -143,11 +147,22 @@ func PortPlanOf(o *jsonord.Obj) (plan PortPlan, problem string) { return portPla
 //     default port (20050, 20049), or on a port of the default plan's instances: those are the production root's, and
 //     the point of a plan of one's own is to share nothing with it.
 func (r *Root) CheckPorts() *errs.Error {
+	return r.checkPorts(false)
+}
+
+// CheckAdbPorts keeps private adb operations available on previously accepted plans, so existing instances can
+// still report their state and sync before shutdown. It retains all server-port isolation checks.
+func (r *Root) CheckAdbPorts() *errs.Error {
+	return r.checkPorts(true)
+}
+
+func (r *Root) checkPorts(allowLegacy bool) *errs.Error {
 	o := r.MetadataLoose().Obj()
 	p, problem := portPlan(o)
-	if problem != "" {
+	legacy := p.Base == 5500 || p.Base > maxPortBase
+	if problem != "" && !(allowLegacy && legacy) {
 		return errs.New(errs.InvalidArgument, problem).WithAdvice(fmt.Sprintf(
-			"改成 %d（和 AUTO-MAS 一样），或者 %d–%d 之间 100 的整数倍（开发和测试用的根目录用 21000），再试",
+			"先关掉这个根目录的所有实例，再把 portBase 改成 %d（和 AUTO-MAS 一样），或者 %d–%d 之间 100 的整数倍，避开 5500（开发和测试用的根目录用 21000）；原配置仍可查状态和关机",
 			DefaultPortBase, minPortBase, maxPortBase))
 	}
 	if p.Base == DefaultPortBase {
@@ -169,17 +184,23 @@ func (r *Root) CheckPorts() *errs.Error {
 	return nil
 }
 
-// portPlan is the plan o's portBase gives and, when portBase is there but not valid, why (the plan is then
-// DefaultPortBase's). Read as the adb server ports are (Python's int(): "21000" and 21000.0 count too).
+// portPlan reads portBase as Python's int() ("21000" and 21000.0 count too). Malformed plans fall back to the
+// default; previously accepted plans retain their actual ports, with a problem blocking new starts.
 func portPlan(o *jsonord.Obj) (PortPlan, string) {
 	if !o.Has(MetadataPortBase) {
 		return PortPlan{DefaultPortBase}, ""
 	}
 	v := o.Get(MetadataPortBase)
-	if b, ok := pyIntOfValue(v); ok && (b == DefaultPortBase || (b%100 == 0 && b >= minPortBase && b <= maxPortBase)) {
+	if b, ok := pyIntOfValue(v); ok && b%100 == 0 && b >= minPortBase && b <= legacyMaxPortBase {
+		if b == 5500 {
+			return PortPlan{int(b)}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：5500 段会落进 adb 默认扫描的 5555–5585，别的 adb server 可能连上本目录的实例", MetadataPortBase, jsonOneLine(v))
+		}
+		if b > maxPortBase {
+			return PortPlan{int(b)}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：这个段会落进 Windows 默认临时端口 49152–65535，可能被别的程序占用", MetadataPortBase, jsonOneLine(v))
+		}
 		return PortPlan{int(b)}, ""
 	}
-	return PortPlan{DefaultPortBase}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：要 %d，或者 %d–%d 之间 100 的整数倍",
+	return PortPlan{DefaultPortBase}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：要 %d，或者 %d–%d 之间 100 的整数倍，避开 5500",
 		MetadataPortBase, jsonOneLine(v), DefaultPortBase, minPortBase, maxPortBase)
 }
 
@@ -425,8 +446,8 @@ func (r *Root) lockMetadata() (*fileLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, "mas-avd.json 的锁文件打不开: "+path)
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
-			metadataLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
+			metadataLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "metadata"})
 	}
 	return l, nil
 }
@@ -654,8 +675,8 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %s 的锁文件打不开: %s（%v）", AvdName(i), path, err))
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
-			i, configLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
+			i, configLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "config"})
 	}
 	return &InstanceLock{l: l}, nil
 }

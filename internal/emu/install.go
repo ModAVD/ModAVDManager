@@ -105,8 +105,8 @@ func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*host.FileLoc
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
-			return nil, errs.Newf(errs.Busy, "实例 %d 正在挂驱动补丁，稍后再装", i).
-				WithAdvice("挂补丁会重启安卓框架，装到一半会失败；等它挂完（start 返回）再装")
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正在挂驱动补丁，稍后再装", i).
+				WithAdvice("挂补丁会重启安卓框架，装到一半会失败；等它挂完（start 返回）再装"), map[string]string{errs.Reason: "locked", errs.Lock: "guest"})
 		}
 		if !logged {
 			m.Log.Infof("实例 %d 正在挂驱动补丁（会重启安卓框架），等它挂完再装（最多 %.0f 秒）", i,

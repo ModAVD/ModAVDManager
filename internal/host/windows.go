@@ -78,3 +78,6 @@ func OpenStableRead(path string) (*os.File, error) { return win.OpenStableRead(p
 func FileChangeStamp(f *os.File) string            { return win.FileChangeStamp(f) }
 
 func TerminateRefused(p Process) bool { return win.TerminateRefused(p) }
+
+// InfoBox displays an informational message with the Windows backend.
+func InfoBox(message string) error { return win.InfoBox(message) }

@@ -61,7 +61,11 @@ func lifetimeChild() int {
 			return 93
 		}
 		defer syscall.CloseHandle(h)
-		if err := os.WriteFile(path+".ready", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		ready := path + ".ready"
+		if err := os.WriteFile(ready+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			return 94
+		}
+		if err := os.Rename(ready+".tmp", ready); err != nil {
 			return 94
 		}
 		deadline := time.Now().Add(time.Minute)

@@ -60,7 +60,7 @@ func TestParseQemuImgCheck(t *testing.T) {
     "total-clusters": 131072,
     "check-errors": 0,
     "allocated-clusters": 32586,
-    "filename": "E:\\private\\avd\\x.avd\\userdata-qemu.img.qcow2",
+    "filename": "C:\\avd\\x.avd\\userdata-qemu.img.qcow2",
     "format": "qcow2",
     "fragmented-clusters": 6736
 }

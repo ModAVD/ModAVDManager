@@ -56,6 +56,9 @@ func TestDiskJobs(t *testing.T) {
 	if v.State != stateDone || trim.Index != 4 || trim.DiscardMaxBytes != 2<<30 || v.Progress == nil || v.Progress.Step != "done" {
 		t.Fatalf("trim job %+v (%+v)", v, trim)
 	}
+	if v.Progress.Message != "实例 4 已触发磁盘回收" {
+		t.Fatalf("trim request must not claim guest completion: %+v", v.Progress)
+	}
 
 	var compact emu.DiskCompactResult
 	v = diskJob(t, h, 3, kindDiskCompact, &compact)

@@ -19,7 +19,16 @@ import (
 
 // Create makes a new instance (validated options, free index and ports), sets it up with one headless boot
 // (createinit.go) and returns it, stopped. req.Resume runs that setup again on an instance whose setup failed.
-func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
+func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInfo, retErr error) {
+	index := -1
+	if req.Index != nil {
+		index = *req.Index
+	}
+	defer func() {
+		if retErr != nil && errs.DetailsOf(retErr)[errs.InstanceExists] == "" {
+			retErr = m.withCreateErrorState(index, retErr, false)
+		}
+	}()
 	if err := requireWindows(); err != nil {
 		return nil, err
 	}
@@ -77,6 +86,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 	} else if i, err = m.freeIndex(existing); err != nil {
 		return nil, err
 	}
+	index = i
 
 	// Held from before the files exist until the setup is done: nobody else starts, changes or deletes the instance
 	// meanwhile, and status tells "creating" from a create that was killed (createinit.go).
@@ -297,7 +307,7 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		return nil, err
 	} else if running {
 		unlock()
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法删除", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法删除", i), map[string]string{errs.Reason: "running"})
 	}
 	if len(leftovers) > 0 {
 		m.Log.Warnf("魔改 AVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
@@ -331,7 +341,7 @@ func (m *Manager) tryInstanceLock(i int, kind, what string) (*host.FileLock, err
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法删除", i, what)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法删除", i, what), map[string]string{errs.Reason: "locked", errs.Lock: kind})
 	}
 	return l, nil
 }

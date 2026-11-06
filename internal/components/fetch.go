@@ -182,6 +182,23 @@ func ChooseMirrors(mirror string, urls []string) ([]Mirror, error) {
 	return custom, nil
 }
 
+// sourceLine says, before anything is downloaded, where it comes from and why: the built-in mirrors in order (the
+// default), the one --mirror named, or the --mirror-url addresses.
+func sourceLine(o Options, mirrors []Mirror) string {
+	names := make([]string, len(mirrors))
+	for i, m := range mirrors {
+		names[i] = m.Name
+	}
+	switch {
+	case len(o.MirrorURLs) > 0:
+		return "下载源：" + strings.Join(names, "、") + "（--mirror-url），按顺序试"
+	case strings.TrimSpace(o.Mirror) != "":
+		return "下载源：只用" + strings.Join(names, "、") + "（--mirror " + strings.TrimSpace(o.Mirror) + "）"
+	default:
+		return "下载源：自动，依次试" + strings.Join(names, "、") + "，前一个不通或校验不对就换下一个；只用其中一个时加 --mirror googledownloads_cn / tencent / google"
+	}
+}
+
 // JSONNeedsLicense is the errs.Usage error of a fetch with JSON but without AcceptLicense: nobody can answer the
 // license question then. The CLI gives it before looking for the root; Fetch gives it again before going online.
 func JSONNeedsLicense() *errs.Error {
@@ -301,6 +318,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	if err := f.checkSpace(todo); err != nil {
 		return nil, err
 	}
+	f.say(sourceLine(f.o, f.mirrors))
 
 	f.where = "获取许可协议"
 	text, from, err := f.license(ctx)

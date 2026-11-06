@@ -632,6 +632,7 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	p := root.CurrentPlatform()
 	cfg.Set("abi.type", p.GuestABI)
 	cfg.Set("hw.cpu.arch", p.GuestArch)
+	cfg.Set("target", p.TargetAPI)
 	for _, kv := range [][2]string{
 		{"avd.id", name},
 		{"avd.name", name},
@@ -651,7 +652,7 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	ini.Set("avd.ini.encoding", "UTF-8")
 	ini.Set("path", dir)
 	ini.Set("path.rel", filepath.Join(root.AvdDir, name+".avd"))
-	ini.Set("target", TargetAPI)
+	ini.Set("target", p.TargetAPI)
 
 	if err := os.MkdirAll(r.AvdHome(), 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("建不了目录 %s：%v", r.AvdHome(), err))

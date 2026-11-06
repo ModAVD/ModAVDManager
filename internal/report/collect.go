@@ -29,7 +29,7 @@ import (
 
 // The script's limits. Variables so tests can lower them.
 var (
-	logCapBytes     int64 = 300 * mb // $LogCapBytes: emulator logs and logcats together
+	logCapBytes     int64 = 300 * mb // emulator logs, logcats and bridge logs together
 	masLogTailBytes int64 = 30 * mb  // $MasLogTailBytes: only the end of a longer AUTO-MAS log
 	dumpMaxBytes    int64 = 100 * mb // $DumpMaxBytes: larger crash dumps are listed, not taken
 	// modavd's own: the failed boots' directories (bootDiagDirs); not in the script
@@ -680,11 +680,10 @@ var (
 	portsArg = regexp.MustCompile(`(?i)(?:^|\s)-ports?\s+"?([0-9]+)`)
 )
 
-// otherRootsInstance: a qemu of instance avd on console port is another root's. Only with a plan of its own
-// (portBase): then the same-named instance of another root can run at the same time, on that root's ports. Without
-// one, as the script: two such instances could not run at once (they would share ports).
+// otherRootsInstance excludes a same-named qemu on another root's console port, including from the default plan.
+// A missing -port/-ports remains inconclusive and is kept, as in the original script.
 func otherRootsInstance(plan root.PortPlan, avd string, port int) bool {
-	if plan.Base == root.DefaultPortBase {
+	if port == 0 {
 		return false
 	}
 	i, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(avd), root.AvdNamePrefix))
@@ -798,17 +797,18 @@ func hasPrefixFold(s, prefix string) bool {
 // ---- 4. 日志 ----------------------------------------------------------------------------------------------------
 
 var (
-	logName  = regexp.MustCompile(`(?i)^(?:logcat-)?(.+)-[0-9]{8}-[0-9]{6}\.(?:log|txt)$`)
-	logStamp = regexp.MustCompile(`^.*-([0-9]{8}-[0-9]{6})\..*$`)
-	hangName = regexp.MustCompile(`(?i)^startup-.*-hang-threads\.txt$`)
-	hangTime = regexp.MustCompile(`-([0-9]{8}-[0-9]{6})-`)
+	logName       = regexp.MustCompile(`(?i)^(?:logcat-)?(.+)-[0-9]{8}-[0-9]{6}\.(?:log|txt)$`)
+	bridgeLogName = regexp.MustCompile(`(?i)^modavd-bridge-([0-9]+)-[0-9]{8}-[0-9]{6}\.log$`)
+	logStamp      = regexp.MustCompile(`^.*-([0-9]{8}-[0-9]{6})\..*$`)
+	hangName      = regexp.MustCompile(`(?i)^startup-.*-hang-threads\.txt$`)
+	hangTime      = regexp.MustCompile(`-([0-9]{8}-[0-9]{6})-`)
 )
 
 // logCandidate is one emulator log or logcat that may be copied.
 type logCandidate struct {
 	file  fs.FileInfo
 	path  string
-	kind  string // emu / logcat
+	kind  string // emu / logcat / bridge
 	stamp string
 	len   int64
 }
@@ -834,6 +834,9 @@ func (c *collector) emulatorLogs() error {
 		addName(n)
 	}
 	for _, f := range all {
+		if bridgeLogName.MatchString(f.Name()) {
+			continue
+		}
 		if m := logName.FindStringSubmatch(f.Name()); m != nil {
 			addName(m[1])
 		}
@@ -861,6 +864,28 @@ func (c *collector) emulatorLogs() error {
 			}
 		}
 		c.L(fmt.Sprintf("%s：模拟器日志 %d 份，logcat %d 份（各取最新 8 份）", n, len(emuLogs), len(catLogs)))
+	}
+	// Bridge logs belong to the numbered instance, not an invented instance named modavd-bridge-<i>.
+	// Keep their original filenames in the archive and count them toward the same log budget.
+	var bridges []string
+	for _, f := range all {
+		if m := bridgeLogName.FindStringSubmatch(f.Name()); m != nil && !containsFold(bridges, m[1]) {
+			bridges = append(bridges, m[1])
+		}
+	}
+	sortCulture(bridges)
+	for _, index := range bridges {
+		re := regexp.MustCompile(`(?i)^modavd-bridge-` + regexp.QuoteMeta(index) + `-[0-9]{8}-[0-9]{6}\.log$`)
+		logs := newestByName(all, re, 10)
+		for _, f := range logs {
+			p := filepath.Join(logDir, f.Name())
+			n, err := trueLength(p)
+			if err != nil {
+				return err
+			}
+			cand = append(cand, logCandidate{file: f, path: p, kind: "bridge", stamp: logStamp.ReplaceAllString(f.Name(), "$1"), len: n})
+		}
+		c.L(fmt.Sprintf("mas_%s：执行桥日志 %d 份（取最新 10 份）", index, len(logs)))
 	}
 	var total int64
 	for _, k := range cand {

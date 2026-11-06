@@ -76,3 +76,5 @@ func FileChangeStamp(*os.File) string { return "" }
 
 // ExclusiveLockHeld requires the Windows lifecycle lock probe.
 func ExclusiveLockHeld(string) (bool, error) { return false, errUnsupported }
+
+func InfoBox(string) error { return errors.New("当前平台暂不支持消息框") }

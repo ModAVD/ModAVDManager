@@ -3,6 +3,8 @@ package report
 import (
 	"archive/zip"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -78,9 +80,10 @@ func TestScriptPort(t *testing.T) {
 		avd        string
 		want       bool
 	}{
-		{root.DefaultPortBase, 20060, "mas_6", false}, {root.DefaultPortBase, 21060, "mas_6", false},
+		{root.DefaultPortBase, 20060, "mas_6", false}, {root.DefaultPortBase, 21060, "mas_6", true},
+		{root.DefaultPortBase, 0, "mas_6", false}, {root.DefaultPortBase, 21060, "MAS_6", true},
 		{21000, 21060, "mas_6", false}, {21000, 20060, "mas_6", true}, {21000, 20060, "MAS_6", true},
-		{21000, 0, "mas_6", true}, {21000, 20060, "mas_x", false},
+		{21000, 0, "mas_6", false}, {21000, 20060, "mas_x", false},
 	} {
 		if got := otherRootsInstance(root.PortPlan{Base: c.base}, c.avd, c.port); got != c.want {
 			t.Errorf("otherRootsInstance(%d, %s, %d) = %v", c.base, c.avd, c.port, got)
@@ -130,6 +133,128 @@ func TestForbiddenEntry(t *testing.T) {
 		if forbiddenEntry(name) {
 			t.Errorf("%s was filtered", name)
 		}
+	}
+}
+
+type portProcessHost struct {
+	Host
+	processes []Process
+}
+
+func (h portProcessHost) Processes(match func(string) bool) ([]Process, error) {
+	var out []Process
+	for _, p := range h.processes {
+		if match(p.Name) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func TestCollectRunningInstancesRespectDefaultPlan(t *testing.T) {
+	for _, base := range []int{root.DefaultPortBase, 21000} {
+		t.Run(fmt.Sprint(base), func(t *testing.T) {
+			own, other := base+60, 21060
+			if base == 21000 {
+				other = 20060
+			}
+			h := portProcessHost{Host: &fakeHost{sc: &scenario{}}, processes: []Process{
+				{PID: 1, Name: "qemu-system-x86_64.exe", CommandLine: fmt.Sprintf("qemu -avd mas_6 -port %d", other)},
+				{PID: 2, Name: "qemu-system-x86_64.exe", CommandLine: fmt.Sprintf("qemu -avd mas_6 -ports %d,%d", own, own+1)},
+				{PID: 3, Name: "qemu-system-x86_64.exe", CommandLine: "qemu -avd mas_6"},
+			}}
+			c := &collector{h: h, plan: root.PortPlan{Base: base}, instances: []string{"mas_6"}}
+			if err := c.runningAndAdb(); err != nil {
+				t.Fatal(err)
+			}
+			if len(c.running) != 2 || c.running[0].pid != 2 || c.running[0].consolePort != own || c.running[1].pid != 3 {
+				t.Fatalf("running = %+v", c.running)
+			}
+			if !strings.Contains(strings.Join(c.lines, "\n"), "是别的根目录的同名实例，跳过") {
+				t.Fatal("missing skip explanation")
+			}
+		})
+	}
+}
+
+func TestCollectBridgeLogs(t *testing.T) {
+	r := testutil.TempDir(t)
+	dir := filepath.Join(r, root.LogsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{0, 1} {
+		for k := 0; k < 12; k++ {
+			name := fmt.Sprintf("modavd-bridge-%d-20261105-1200%02d.log", i, k)
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, name := range []string{"mas_0-20261105-120000.log", "logcat-mas_0-20261105-120000.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &collector{root: r, stage: testutil.TempDir(t), instances: []string{"mas_0"}}
+	if err := c.emulatorLogs(); err != nil {
+		t.Fatal(err)
+	}
+	summary := strings.Join(c.lines, "\n")
+	for _, i := range []int{0, 1} {
+		if !strings.Contains(summary, fmt.Sprintf("mas_%d：执行桥日志 10 份", i)) ||
+			strings.Contains(summary, fmt.Sprintf("modavd-bridge-%d：", i)) {
+			t.Fatalf("wrong bridge classification: %s", summary)
+		}
+	}
+	archive := filepath.Join(testutil.TempDir(t), "bridge.zip")
+	entries, err := zipStage(context.Background(), archive, c.stage)
+	if err != nil || len(entries) != 22 {
+		t.Fatalf("entries = %q, %v", entries, err)
+	}
+	z, err := zip.OpenReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer z.Close()
+	for _, f := range z.File {
+		if strings.Contains(f.Name, "modavd-bridge-") && (strings.Contains(f.Name, "120000") || strings.Contains(f.Name, "120001")) {
+			t.Fatalf("old bridge output included: %s", f.Name)
+		}
+		rd, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(rd)
+		rd.Close()
+		if err != nil || string(b) != filepath.Base(f.Name) {
+			t.Fatalf("payload %s = %q, %v", f.Name, b, err)
+		}
+	}
+}
+
+func TestCollectBridgeLogsShareBudget(t *testing.T) {
+	r := testutil.TempDir(t)
+	dir := filepath.Join(r, root.LogsDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for k := 0; k < 3; k++ {
+		name := fmt.Sprintf("modavd-bridge-0-20261105-12000%d.log", k)
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved := logCapBytes
+	t.Cleanup(func() { logCapBytes = saved })
+	logCapBytes = 15
+	c := &collector{root: r, stage: testutil.TempDir(t)}
+	if err := c.emulatorLogs(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := listFiles(filepath.Join(c.stage, root.LogsDir))
+	if err != nil || len(files) != 1 || files[0].Name() != "modavd-bridge-0-20261105-120002.log" {
+		t.Fatalf("budget retained %v, %v", files, err)
 	}
 }
 
