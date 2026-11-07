@@ -2,6 +2,9 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -147,3 +150,26 @@ jobs:
           node-version: 24
       - name: create cancellation menu tests
         run: node --experimental-vm-modules --test scripts/test_create_cancel.mjs
+
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout without persistent credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zizmor 1.32.0 (version and wheel hash pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          printf '%s\n' 'zizmor==1.32.0 --hash=sha256:84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071' > "$RUNNER_TEMP/zizmor-requirements.txt"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --disable-pip-version-check --no-deps --only-binary=:all: \
+            --require-hashes -r "$RUNNER_TEMP/zizmor-requirements.txt"
+      - name: Audit workflows and Dependabot config
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format=github --no-progress .'
