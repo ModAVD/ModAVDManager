@@ -512,7 +512,7 @@ func (m *Manager) bridgeUpdateBlocked(ctx context.Context, i int) (mountBlocker,
 		return installBlocker(err), true
 	}
 	l.Unlock()
-	if allowed, front := vulkanFixMountAllowed(m.shell(ctx, i, foregroundProbeScript, 0).Out); !allowed {
+	if allowed, front := guestFixMountAllowed(m.shell(ctx, i, foregroundProbeScript, 0).Out); !allowed {
 		return foregroundBlocker(front), true
 	}
 	return mountBlocker{}, false

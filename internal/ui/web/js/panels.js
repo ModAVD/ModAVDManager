@@ -412,5 +412,5 @@ function resultText(j) {
   if (j.kind.startsWith('gles32-')) return gles32Text(j.kind, r);
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
-    r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';
+    r.zygote_restarted && '挂了客体库补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';
 }

@@ -58,7 +58,9 @@ const (
 	CPUInfoBind  = "cpuinfo-bind.sh"
 	IdlePoll     = "mas-idlepoll.sh"
 	WifiFastpath = "mas-wifi-fastpath.sh"
-	VulkanFix    = "vulkanfix.sh"
+	// LibFix mounts the patched guest libraries, the Vulkan driver and the ARM translation layer (modavd only;
+	// AUTO-MAS keeps its own vulkanfix.sh for the Vulkan driver alone, with the same guest cache and upload names).
+	LibFix = "libfix.sh"
 	// GLES32 switches the OpenGL ES version the guest reports to 3.2 (modavd only, experimental, ModAVD/ModAVD#131).
 	GLES32 = "gles32.sh"
 	// PlayStore installs, checks and removes the Google Play Store (modavd only, not in AUTO-MAS).

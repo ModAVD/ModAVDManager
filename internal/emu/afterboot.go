@@ -49,8 +49,8 @@ type afterBootResult struct {
 	HostIME         bool
 	ZygoteRestarted bool
 	LogcatFile      string
-	// SetupPending: the Vulkan fix this boot still needs was left out (an app was in the foreground or an install was
-	// running, see ensureVulkanFix); the setup marker has to stay so that a later start mounts it.
+	// SetupPending: a guest library fix this boot still needs was left out (an app was in the foreground or an install
+	// was running, see ensureGuestFixes); the setup marker has to stay so that a later start mounts it.
 	SetupPending bool
 }
 
@@ -58,15 +58,15 @@ type afterBootResult struct {
 type bootSetup int
 
 const (
-	// setupAdopted: the instance was already running and nothing is owed: the guest Vulkan fix is only checked (the
-	// zygote restart of mounting it would end the game running there). Windows can identify the IME channel by
+	// setupAdopted: the instance was already running and nothing is owed: the guest library fixes are only checked
+	// (the zygote restart of mounting them would end the game running there). Windows can identify the IME channel by
 	// its build; other hosts cannot confirm it from an unverified old emulator log.
 	setupAdopted bootSetup = iota
 	// setupLaunched: this call launched qemu; nobody can have used the guest yet, so everything runs.
 	setupLaunched
 	// setupOwed: this call adopts the qemu of an earlier start that ended before finishing (the setup marker, see
-	// Start). Everything runs as after a launch, except that the guest may be in use meanwhile: the Vulkan fix is
-	// mounted only while no app is in the foreground and no install holds the guest lock (owedMountGate).
+	// Start). Everything runs as after a launch, except that the guest may be in use meanwhile: the guest library
+	// fixes are mounted only while no app is in the foreground and no install holds the guest lock (owedMountGate).
 	setupOwed
 )
 
@@ -75,7 +75,7 @@ const (
 // Ordinary failures are only warnings; an unsupported host API stops the boot. ctx is checked between the steps
 // (errs.Canceled then). mode
 // says what this boot is owed (bootSetup); until is the deadline of its setup marker (zero without one), which the
-// warning of a deferred Vulkan fix names.
+// warning of a deferred guest library fix names.
 //
 // Not done any more (as in AUTO-MAS): `gsm meter on|off` (each call makes the image's MeterService install a 2 GB
 // test plan, i.e. it creates the limit), and /data nobarrier (replaced by disk write-through at launch).
@@ -197,12 +197,13 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		// 10) orientation: the display stays landscape (persistent; set every boot so old instances get it)
 		func() { m.setupOrientation(ctx, i) },
 		// 10b) hand the clusters the guest freed back to the host, at most once a day (best effort, see autotrim.go);
-		//      before the Vulkan fix, whose zygote restart is deliberately the last step
+		//      before the guest library fixes, whose zygote restart is deliberately the last step
 		func() { m.autoTrim(ctx, i, mode) },
 		func() {
-			// 11) the guest Vulkan fix. Must be last: mounting it restarts zygote, system_server and every app
-			prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 客体 Vulkan 驱动补丁", i), progressVulkanFix)
-			restarted, pending := m.ensureVulkanFix(ctx, i, mode, until)
+			// 11) the guest library fixes (Vulkan driver, ARM translation layer). Must be last: mounting them restarts
+			//     zygote, system_server and every app. The progress step keeps its name vulkan_fix (API, GUI, create)
+			prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 客体库补丁（Vulkan 驱动、ARM 转译层）", i), progressVulkanFix)
+			restarted, pending := m.ensureGuestFixes(ctx, inst, mode, until)
 			r.SetupPending = pending
 			if !restarted {
 				return

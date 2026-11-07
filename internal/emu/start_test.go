@@ -318,7 +318,7 @@ func TestWithSetupAdvice(t *testing.T) {
 // no install.
 func TestSetupAdvice(t *testing.T) {
 	now := time.Date(2026, 10, 28, 18, 0, 0, 0, time.Local)
-	const rules = "这个补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂"
+	const rules = "挂这些补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂"
 	cases := []struct {
 		name  string
 		until time.Time
@@ -326,11 +326,11 @@ func TestSetupAdvice(t *testing.T) {
 		not   []string
 	}{
 		{"default timeout", now.Add(12 * time.Minute), []string{"模拟器没有关：在 18:12 前再启动一次这个实例，就会接着做完这次开机后的设置",
-			"过了这个时间客体 Vulkan 驱动补丁就等下次开机再挂", rules}, []string{"15 分钟"}},
+			"过了这个时间客体库补丁就等下次开机再挂", rules}, []string{"15 分钟"}},
 		// a start with timeout_s 1800 that timed out: qemu start + 30 + 10 min
 		{"30 min timeout", now.Add(10*time.Minute + 30*time.Second), []string{"在 18:10 前再启动一次这个实例", rules}, nil},
 		{"past midnight", time.Date(2026, 10, 29, 0, 20, 0, 0, time.Local), []string{"在 10 月 29 日 00:20 前再启动一次这个实例"}, nil},
-		{"deadline passed", now.Add(-time.Minute), []string{"模拟器没有关；这次开机接着做设置的期限（17:59）已过，客体 Vulkan 驱动补丁等下次开机再挂"},
+		{"deadline passed", now.Add(-time.Minute), []string{"模拟器没有关；这次开机接着做设置的期限（17:59）已过，客体库补丁等下次开机再挂"},
 			[]string{"前再启动一次"}},
 		{"deadline unknown", time.Time{}, []string{"再启动一次这个实例，就会接着做完这次开机后的设置", rules}, []string{"前再启动一次"}},
 	}
