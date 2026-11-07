@@ -260,6 +260,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
   - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器窗口和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
   - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
 - 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。管理器里暂时只能改设置和检查更新，「更新」按钮不可用。
+- macOS 的更新设置和组件下载源分别保存在 `~/Library/Application Support/ModAVD/update-settings.json` 和 `components-settings.json`。CDK 使用 AES-GCM 加密，随机包装密钥留在当前用户的 Keychain；钥匙串锁定或未授权时保存失败，不会降级为明文存储。复制设置文件到其他用户或设备不会同时转移密钥。
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
 - `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
 - 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。
