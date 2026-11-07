@@ -161,7 +161,8 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 `update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`install_by_cli`（现在恒为 `true`：管理器里不能安装，由 AUTO-MAS 调 `modavd update install`）。
 
 - 只有点「检查更新」才联网；没有自动检查。
-- 更新源和 CDK 是本机这个 Windows 用户的设置（`%LOCALAPPDATA%\ModAVD\update-settings.json`），命令行更新时按它来。
+- 更新源和 CDK 是当前系统用户的设置，命令行更新时按它来。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
+- macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
 
 ## 生命周期
 

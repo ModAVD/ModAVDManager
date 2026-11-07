@@ -75,7 +75,7 @@ func (l layout) downloadAt(n string) string { return filepath.Join(l.download(),
 
 // readState is state.json as an object (empty when missing, unreadable or not an object); phase defaults to idle.
 func (l layout) readState() *jsonord.Obj {
-	b, err := root.ReadFileShared(l.state())
+	b, err := readUpdateStateFile(l.state())
 	if err == nil {
 		if v, err := jsonord.Parse(trimBOM(b)); err == nil && v.Kind() == jsonord.Object {
 			return v.Obj()

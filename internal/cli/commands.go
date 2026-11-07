@@ -333,16 +333,19 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V]",
+			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V] [--package ZIP --sha256 HEX]",
 			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
 			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）。不自动联网，只做给出的那一步：" +
 				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
 				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器窗口和 MCP 客户端；" +
 				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
+				"macOS 可用 --package ZIP --sha256 HEX 准备或安装本地完整签名包；摘要需从可信来源独立取得。" +
 				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
 			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
-			flags: []flagSpec{optAutoMAS}, final: true,
+			flags: []flagSpec{optAutoMAS,
+				{name: "package", kind: kindString, arg: "ZIP", help: "macOS 本地完整更新包"},
+				{name: "sha256", kind: kindString, arg: "HEX", help: "本地更新包的独立可信 SHA-256"}}, final: true,
 			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
@@ -1384,12 +1387,16 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.pos[0]).
 			WithAdvice(findCommand("update").usageAdvice())
 	}
+	if (c.inv.strOpt("package") != "" || c.inv.strOpt("sha256") != "") && action != "prepare" && action != "install" {
+		return nil, errs.New(errs.Usage, "--package 和 --sha256 只用于 update prepare 或 install")
+	}
 	r, err := c.deps.resolveRoot(c.inv.root)
 	if err != nil {
 		return nil, err
 	}
 	var last time.Time
 	u := update.New(r, c.log, update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
+		PackagePath: c.inv.strOpt("package"), PackageSHA256: c.inv.strOpt("sha256"),
 		Progress: func(p update.Progress) {
 			if p.Stage != "downloading" || (time.Since(last) < 2*time.Second && p.Done != p.Total) {
 				return

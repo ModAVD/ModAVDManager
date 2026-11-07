@@ -47,12 +47,6 @@ func VolumeFileSystem(string) (string, error) { return "", errUnsupported }
 // MoveFileReplaceThrough calls MoveFileExW (REPLACE_EXISTING | WRITE_THROUGH).
 func MoveFileReplaceThrough(string, string) error { return errUnsupported }
 
-// Protect calls CryptProtectData (DPAPI) for the current Windows user.
-func Protect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
-
-// Unprotect calls CryptUnprotectData (DPAPI) for the current Windows user.
-func Unprotect([]byte, []byte) ([]byte, error) { return nil, errUnsupported }
-
 // SetEmulatorWindowsVisible finds the emulator window and calls ShowWindow on Windows.
 func SetEmulatorWindowsVisible(uint32, bool) (int, error) { return 0, errUnsupported }
 

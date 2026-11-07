@@ -299,11 +299,23 @@ const downloadAttempts = 3
 // programs use the same names, so neither ever keeps the other's.
 func (u *Updater) download(ctx context.Context, r *release) (string, error) {
 	l := u.l
+	if u.nativeUpdates() {
+		if err := u.checkSpace(); err != nil {
+			return "", err
+		}
+	}
 	if err := os.MkdirAll(l.download(), 0o755); err != nil {
 		return "", err
 	}
 	final := l.downloadAt(r.assetName)
 	part := final + ".part"
+	if u.nativeUpdates() {
+		for _, path := range []string{final, part} {
+			if st, err := os.Lstat(path); err == nil && !st.Mode().IsRegular() {
+				return "", packageError("更新下载缓存不是普通文件")
+			}
+		}
+	}
 	entries, _ := os.ReadDir(l.download())
 	for _, e := range entries {
 		if p := l.downloadAt(e.Name()); p != final && p != part {
@@ -329,6 +341,9 @@ func (u *Updater) download(ctx context.Context, r *release) (string, error) {
 		lastErr = u.fetch(ctx, r, part, label)
 		if lastErr == nil {
 			break
+		}
+		if u.nativeUpdates() && errs.CodeOf(lastErr) == errs.PrecheckFailed {
+			return "", lastErr
 		}
 		if ctx.Err() != nil {
 			return "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
@@ -389,8 +404,18 @@ func (u *Updater) fetch(ctx context.Context, r *release, part, label string) err
 		fresh = true
 	}
 	d := download.Client{HTTP: u.client(), StallTimeout: u.stallTimeout}
+	var beforeWrite func() error
+	if u.nativeUpdates() {
+		beforeWrite = func() error {
+			if st, err := os.Lstat(part); err == nil && !st.Mode().IsRegular() {
+				return packageError("更新下载缓存不是普通文件")
+			}
+			return u.checkSpace()
+		}
+	}
 	return d.File(ctx, download.FileOptions{URL: r.url, Path: part, Label: label, Size: r.size,
-		Fresh: fresh,
+		Fresh:       fresh,
+		BeforeWrite: beforeWrite,
 		Progress: func(done int64) {
 			if time.Since(last) >= 500*time.Millisecond || done == r.size {
 				last = time.Now()

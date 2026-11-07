@@ -59,3 +59,6 @@ func DiskFree(path string) (uint64, error)               { return macos.DiskFree
 func AvailableMemoryMB() (uint64, error)                 { return macos.AvailableMemoryMB() }
 func MetalDevices(ctx context.Context) ([]string, error) { return macos.MetalDevices(ctx) }
 func RenameNoReplace(src, dst string) error              { return macos.RenameNoReplace(src, dst) }
+
+func Protect(data, entropy []byte) ([]byte, error)   { return macos.Protect(data, entropy) }
+func Unprotect(data, entropy []byte) ([]byte, error) { return macos.Unprotect(data, entropy) }

@@ -46,6 +46,9 @@ type Options struct {
 	// AutoMASVersion is the calling AUTO-MAS's version; a release that needs a newer one is not installed. "" (a
 	// person, the manager) skips that check.
 	AutoMASVersion string
+	// PackagePath and PackageSHA256 select an explicit local macOS update ZIP.
+	// The caller must obtain the digest from a trusted source independently.
+	PackagePath, PackageSHA256 string
 	// Progress, when set, is told about each step.
 	Progress func(Progress)
 }
@@ -62,10 +65,11 @@ type Updater struct {
 	httpClient           *http.Client
 	stallTimeout         time.Duration
 	scan                 func(programs bool) ([]processUse, error)
+	localOperation       bool // offline updates do not open saved credentials
 }
 
 func unsupportedUpdatePlatform() error {
-	if !root.CurrentPlatform().Windows() {
+	if !root.CurrentPlatform().Windows() && !(nativeDarwinSettings && root.CurrentPlatform().Supported()) {
 		return errs.New(errs.Unsupported, "当前平台暂不支持更新")
 	}
 	return nil
@@ -132,7 +136,10 @@ func (u *Updater) notUpdatable() string {
 
 // status fills what needs no network.
 func (u *Updater) status() *Status {
-	set := LoadSettings()
+	set := Settings{Source: SourceGitHub}
+	if u.Opt.PackagePath == "" && !u.hasNativeTransaction() && !u.localOperation {
+		set = LoadSettings()
+	}
 	st := &Status{Root: u.Root.Dir, Source: set.Source, CDKSet: set.HasCDK(), Notices: []string{}}
 	st.NotUpdatableReason = u.notUpdatable()
 	st.Updatable = st.NotUpdatableReason == ""
@@ -206,6 +213,11 @@ func (u *Updater) latest(ctx context.Context, st *Status) (*release, error) {
 
 // lock is .update\modavd.lock: one modavd update step per root at a time.
 func (u *Updater) lock() (*host.FileLock, error) {
+	if u.nativeUpdates() {
+		if err := u.validateNativeWorkspace(); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(u.l.dir(), 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "建不了 "+u.l.dir())
 	}
@@ -263,6 +275,9 @@ func (u *Updater) Recover(ctx context.Context) (*Status, error) {
 
 // Prepare downloads, verifies and stages the latest version (instances may keep running).
 func (u *Updater) Prepare(ctx context.Context) (*Status, error) {
+	if u.nativeUpdates() || u.Opt.PackagePath != "" || u.Opt.PackageSHA256 != "" {
+		return u.nativeUpdate(ctx, false)
+	}
 	if err := unsupportedUpdatePlatform(); err != nil {
 		return u.Status(), err
 	}
@@ -420,6 +435,9 @@ func versionLess(a, b string) bool {
 }
 
 func (u *Updater) checkSpace() error {
+	if u.nativeUpdates() {
+		return u.nativeCheckSpace()
+	}
 	free, err := host.DiskFree(u.Root.Dir)
 	if err != nil || free >= minFreeBytes {
 		return nil
@@ -487,6 +505,9 @@ func (u *Updater) stage(ctx context.Context, r *release) (err error) {
 // Install brings the root to the latest version: prepares it when it is newer and not staged yet, then swaps it in
 // (every instance off, no other program of the root running). Nothing newer and nothing staged: up to date.
 func (u *Updater) Install(ctx context.Context) (*Status, error) {
+	if u.nativeUpdates() || u.Opt.PackagePath != "" || u.Opt.PackageSHA256 != "" {
+		return u.nativeUpdate(ctx, true)
+	}
 	if err := unsupportedUpdatePlatform(); err != nil {
 		return u.Status(), err
 	}
