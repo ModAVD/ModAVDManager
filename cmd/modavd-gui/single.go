@@ -16,13 +16,13 @@ import (
 	"modavd/internal/ui"
 )
 
-// One manager per root: a lock file plus a state file under %LOCALAPPDATA%\ModAVD, both named after a hash of the
+// One manager per root: a lock file plus a state file under ui.AppDataDir, both named after a hash of the
 // root path. The lock is held for the manager's whole life and dies with its process, so a crash never blocks the
 // next start; the state file tells a second launch where the running manager listens.
 
-// instanceKey is "ui-<16 hex>" for the root (case-insensitive, like Windows paths).
+// instanceKey is "ui-<16 hex>" for the root (Windows path or macOS directory identity).
 func instanceKey(r *root.Root) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(r.Dir))))
+	sum := sha256.Sum256([]byte(managerRootIdentity(r.Dir)))
 	return "ui-" + hex.EncodeToString(sum[:8])
 }
 

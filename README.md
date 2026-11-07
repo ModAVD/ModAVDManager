@@ -240,6 +240,8 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 管理器 ModAVD.exe
 
+Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目录时会自动定位根目录，也可以用 `--root` 指定。默认在系统浏览器打开页面；加 `--chrome-window` 使用独立 Chrome 应用窗口，Chrome 不可用时回到默认浏览器。状态和 Chrome 配置保存在 `~/Library/Application Support/ModAVD`，目录按钮用 Finder 打开。同一根目录再次启动只重开页面；关闭页面后按原有空闲和任务规则退出。实例功能仍受各项平台支持范围限制。
+
 双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。
 
 - 功能：实例卡片（在线时有画面缩略图）、开关机（带进度；开机一律带窗口，无头开机只走命令行；不提供重启，也不提供显示 / 隐藏窗口）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。

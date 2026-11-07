@@ -1,6 +1,7 @@
-// ModAVD.exe: the desktop manager of one ModAVD root. It runs the local server of package ui and opens it in an Edge
-// app window; closing the window ends it (after running jobs are done). Double-clicking it again while it runs only
-// reopens the window.
+// ModAVD is the desktop manager of one root. It runs ui's local server and opens
+// an Edge app window on Windows or the default browser on macOS (optionally Chrome
+// app mode). Closing the page ends it after running jobs finish. A second launch
+// on the same root reopens the page.
 //
 //	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
 //	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
@@ -61,7 +62,12 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-const usage = "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
+var usage = func() string {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return "用法：ModAVD [--root 根目录] [--port 端口] [--no-window] [--chrome-window] [--dev]"
+	}
+	return "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
+}()
 
 // flagValueNames are the placeholders the usage line gives the options that take a value.
 var flagValueNames = map[string]string{"root": "根目录", "port": "端口"}
@@ -113,6 +119,10 @@ func run(args []string) (code int) {
 	rootFlag := fs.String("root", "", "魔改 AVD 根目录")
 	port := fs.Int("port", 0, "监听端口（0 = 随机）")
 	noWindow := fs.Bool("no-window", false, "不打开窗口")
+	var chromeWindow bool
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		fs.BoolVar(&chromeWindow, "chrome-window", false, "用独立 Chrome 应用窗口打开（默认使用系统浏览器）")
+	}
 	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
 	if err := fs.Parse(args); err != nil {
 		// --help / -h / -help ask for the usage: an information box and exit code 0, not an error (ModAVD/ModAVD#115).
@@ -152,18 +162,19 @@ func run(args []string) (code int) {
 		return 1
 	}
 	if inst == nil {
-		return reopen(r, *noWindow, log)
+		return reopen(r, *noWindow, chromeWindow, log)
 	}
 	defer inst.release()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opt := ui.Options{
-		Root:       r,
-		Log:        log,
-		Addr:       fmt.Sprintf("127.0.0.1:%d", *port),
-		OpenWindow: !*noWindow,
-		Dev:        *dev,
+		Root:         r,
+		Log:          log,
+		Addr:         fmt.Sprintf("127.0.0.1:%d", *port),
+		OpenWindow:   !*noWindow,
+		ChromeWindow: chromeWindow,
+		Dev:          *dev,
 		Ready: func(baseURL, token string) {
 			if err := inst.writeState(baseURL, token); err != nil {
 				log.Warnf("写不了管理器状态文件（再次打开时找不到这个管理器）: %v", err)
@@ -185,19 +196,26 @@ func run(args []string) (code int) {
 }
 
 // reopen is the second launch on a root: the running manager gets a new window.
-func reopen(r *root.Root, noWindow bool, log *logx.Logger) int {
+func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger) int {
 	st, err := readStateWait(r, 5*time.Second)
 	if err != nil {
 		log.Errorf("已有管理器在运行，但读不到它的地址: %v", err)
-		fatal("这个根目录的 ModAVD 管理器已经在运行，但找不到它的地址。\n\n" +
-			"请关掉已经打开的管理器窗口，等十几秒后再打开；还不行就在任务管理器里结束 ModAVD.exe。\n\n根目录：" + r.Dir)
+		advice := "请关掉已经打开的管理器窗口，等十几秒后再打开；还不行就在任务管理器里结束 ModAVD.exe。"
+		if runtime.GOOS == "darwin" {
+			advice = "请关掉已经打开的管理器页面，等一分钟后再打开；还不行就在活动监视器里结束 ModAVD 管理器。"
+		}
+		fatal("这个根目录的 ModAVD 管理器已经在运行，但找不到它的地址。\n\n" + advice + "\n\n根目录：" + r.Dir)
 		return 1
 	}
 	if noWindow {
 		return 0
 	}
 	log.Infof("管理器已在运行（%s），重新打开窗口", st.URL)
-	if _, err := ui.LaunchWindow(st.URL + "?t=" + st.Token); err != nil {
+	launch := ui.LaunchWindow
+	if chromeWindow {
+		launch = ui.LaunchChromeWindow
+	}
+	if _, err := launch(st.URL + "?t=" + st.Token); err != nil {
 		log.Errorf("打不开管理器窗口: %v", err)
 		fatal("打不开管理器窗口：" + err.Error() + "\n\n可以在浏览器里打开 " + st.URL)
 		return 1

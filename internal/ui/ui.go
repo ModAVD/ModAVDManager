@@ -7,7 +7,7 @@
 // boots instances with their window only and has no restart: headless boots, and switching between the two, are not
 // its to do (the CLI boots headless; a running instance is never switched).
 //
-// Lifetime: the server exits once its window is gone (the Edge process it started exited, or no event stream has
+// Lifetime: the server exits once its window is gone (the browser app process it started exited, or no event stream has
 // been connected for IdleExit) and the running jobs are done.
 package ui
 
@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,9 +41,11 @@ type Options struct {
 	Log *logx.Logger
 	// Addr to listen on, "127.0.0.1:<port>"; "" = "127.0.0.1:0" (a free port).
 	Addr string
-	// OpenWindow opens the page in an Edge app window (the default browser when Edge is missing) once the server
-	// listens.
+	// OpenWindow opens the page after listening: Edge app mode on Windows, the
+	// default browser on macOS, or Chrome app mode when ChromeWindow is set.
 	OpenWindow bool
+	// ChromeWindow uses Chrome's app mode on macOS instead of its default browser.
+	ChromeWindow bool
 	// Dev also serves web/dev/ (the page's mock backend).
 	Dev bool
 	// Ready, when set, is called once the server listens with its address ("http://127.0.0.1:<port>/") and the login
@@ -185,6 +188,9 @@ func newServer(opt Options) (*server, error) {
 	}
 	if s.launch == nil {
 		s.launch = LaunchWindow
+		if opt.ChromeWindow {
+			s.launch = LaunchChromeWindow
+		}
 	}
 	if s.removeOld == nil {
 		s.removeOld = func(l *logx.Logger) { removeOldEdgeProfile(AppDataDir(), l) }
@@ -251,9 +257,13 @@ func Run(ctx context.Context, opt Options) error {
 		if w, err = s.launch(base + "?t=" + s.token); err != nil {
 			s.log.Errorf("打不开管理器窗口: %v", err)
 		} else if w.Edge {
-			s.log.Infof("已用 Edge 应用窗口打开管理器")
+			s.log.Infof("已用 %s 应用窗口打开管理器", appBrowserName())
 		} else {
-			s.log.Infof("没找到 Edge，已用默认浏览器打开管理器")
+			if runtime.GOOS == "darwin" {
+				s.log.Infof("已用默认浏览器打开管理器")
+			} else {
+				s.log.Infof("没找到 Edge，已用默认浏览器打开管理器")
+			}
 		}
 		// after the window is up, and never in its way: a failure is only logged
 		go s.removeOld(s.log)
@@ -298,7 +308,11 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 		case <-edgeDone:
 			edgeDone = nil
 			if time.Since(w.Started) < edgeHandoffWindow {
-				s.log.Infof("Edge 把窗口交给了已在运行的 Edge；之后按页面连接判断窗口是否关闭")
+				if runtime.GOOS == "darwin" {
+					s.log.Infof("Chrome 把窗口交给了已在运行的 Chrome；之后按页面连接判断窗口是否关闭")
+				} else {
+					s.log.Infof("Edge 把窗口交给了已在运行的 Edge；之后按页面连接判断窗口是否关闭")
+				}
 			} else {
 				s.log.Infof("管理器窗口已关闭")
 				windowClosed = true
@@ -329,11 +343,18 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 func listenError(addr string, err error) error {
 	const wsaeacces, wsaeaddrinuse = syscall.Errno(10013), syscall.Errno(10048)
 	_, port, _ := net.SplitHostPort(addr)
-	if errors.Is(err, wsaeaddrinuse) || errors.Is(err, wsaeacces) {
+	if errors.Is(err, wsaeaddrinuse) || errors.Is(err, wsaeacces) || errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, syscall.EACCES) {
 		return errs.Wrap(errs.PortConflict, err, "管理器用不了端口 "+port+"（被别的程序占用，或被系统保留）").
 			WithAdvice("换一个端口（--port），或者不带 --port 让系统挑一个空闲端口")
 	}
 	return errs.Wrap(errs.Internal, err, "管理器监听 "+addr+" 失败: "+err.Error())
+}
+
+func appBrowserName() string {
+	if runtime.GOOS == "darwin" {
+		return "Chrome"
+	}
+	return "Edge"
 }
 
 // hostOK: the Host header names us (127.0.0.1 or localhost with our port).

@@ -238,6 +238,8 @@ On 2026-11-03, Claude Code 2.1.317 (the command-line version) was connected to m
 
 ## The manager ModAVD.exe
 
+On Apple Silicon macOS, run the `ModAVD` manager. A `ModAVD.app` placed in the package root finds that root automatically; `--root` can select it explicitly. The page opens in the default browser. Pass `--chrome-window` for a separate Chrome app window, falling back to the default browser when Chrome is unavailable. State and the Chrome profile live under `~/Library/Application Support/ModAVD`; folder buttons open Finder. Launching again on the same root only reopens the page. Closing the page follows the existing idle and running-job exit rules. Instance operations remain subject to their platform support limits.
+
 Double-click `ModAVD.exe` in the package root: it starts a local server that listens on 127.0.0.1 only, then opens a window in Edge's app mode (`msedge --app`, built into Win10 / 11); if Edge is not found, it uses the default browser. The pages are HTML / CSS / JS embedded in the exe and need no network; it goes online only when you click "Check for updates" (`检查更新`) in "Settings" (`设置`).
 
 - Features: instance cards (with a screen thumbnail when the instance is online), start and shut down (with progress; it always starts with the window, headless starts are for the CLI only; there is no restart and no showing / hiding of windows), create, settings, delete, computer check, activity panel, screen viewer (a click is a tap; Back / Home / Recent tasks), logs, install APK, open folder; light / dark / follow system.

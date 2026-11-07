@@ -246,7 +246,8 @@ type Root struct {
 
 // Resolve picks the root: the --root flag when given, else env MODAVD_ROOT, else the directory this executable
 // sits in or its parent, whichever looks like a root (has sdk\ or mas-avd.json; the package puts modavd.exe in
-// <root>\tools). The directory must exist. Error code: NotFound / Usage.
+// <root>\tools). A macOS .app also checks the directory containing the bundle.
+// The directory must exist. Error code: NotFound / Usage.
 func Resolve(flag string) (*Root, error) {
 	exe, _ := os.Executable()
 	return resolve(flag, os.Getenv(EnvRoot), exe)
@@ -260,16 +261,19 @@ func resolve(flag, env, exe string) (*Root, error) {
 		return openDir(s, "环境变量 "+EnvRoot+" 指定的")
 	}
 	if exe != "" {
-		dir := filepath.Dir(exe)
-		for _, cand := range []string{dir, filepath.Dir(dir)} {
+		for _, cand := range rootCandidates(exe) {
 			if looksLikeRoot(cand) {
 				return openDir(cand, "")
 			}
 		}
 	}
-	return nil, errs.New(errs.Usage, "找不到魔改 AVD 根目录").WithAdvice(
-		"用 --root 指定根目录（里面有 sdk 文件夹和 mas-avd.json），或设置环境变量 " + EnvRoot +
-			"；modavd.exe 放在根目录或根目录的 tools 文件夹里时会自动找到")
+	advice := "用 --root 指定根目录（里面有 sdk 文件夹和 mas-avd.json），或设置环境变量 " + EnvRoot
+	if CurrentPlatform().MirrorOS == "macos" {
+		advice += "；ModAVD.app 放在根目录，或 modavd 放在根目录或 tools 文件夹里时会自动找到"
+	} else {
+		advice += "；modavd.exe 放在根目录或根目录的 tools 文件夹里时会自动找到"
+	}
+	return nil, errs.New(errs.Usage, "找不到魔改 AVD 根目录").WithAdvice(advice)
 }
 
 // cleanArg drops surrounding blanks and quotes: `--root "D:\ModAVD\"` reaches us as `D:\ModAVD"` (the backslash

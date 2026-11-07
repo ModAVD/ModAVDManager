@@ -3,7 +3,6 @@
 package host
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 
@@ -59,9 +58,6 @@ func SetEmulatorWindowsVisible(uint32, bool) (int, error) { return 0, errUnsuppo
 // GetConsoleWindow calls the Windows GetConsoleWindow API.
 func GetConsoleWindow() uintptr { return 0 }
 
-// MessageBox calls MessageBoxW from Windows user32.
-func MessageBox(string) error { return errors.New("当前平台暂不支持消息框") }
-
 // OpenStableRead requires Windows file-sharing semantics.
 func OpenStableRead(string) (*os.File, error) { return nil, errUnsupported }
 
@@ -70,5 +66,3 @@ func FileChangeStamp(*os.File) string { return "" }
 
 // ExclusiveLockHeld requires the Windows lifecycle lock probe.
 func ExclusiveLockHeld(string) (bool, error) { return false, errUnsupported }
-
-func InfoBox(string) error { return errors.New("当前平台暂不支持消息框") }

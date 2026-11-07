@@ -234,7 +234,8 @@ func (s *server) respondJob(w http.ResponseWriter) func(jobView, error) {
 }
 
 func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
-	if !root.CurrentPlatform().Windows() {
+	platform := root.CurrentPlatform()
+	if !platform.Windows() && platform.MirrorOS != "macos" {
 		writeError(w, errs.New(errs.Unsupported, "当前平台暂不支持打开目录"))
 		return
 	}
@@ -284,7 +285,11 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.openPath(dir); err != nil {
-		writeError(w, errs.Wrap(errs.Internal, err, "在资源管理器里打开 "+dir+" 失败: "+err.Error()))
+		message := "在资源管理器里打开 "
+		if platform.MirrorOS == "macos" {
+			message = "在 Finder 里打开 "
+		}
+		writeError(w, errs.Wrap(errs.Internal, err, message+dir+" 失败: "+err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, struct{}{})
