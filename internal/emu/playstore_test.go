@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,9 +23,12 @@ import (
 type playStoreHooks struct {
 	ready   *bool
 	running bool
-	results map[string][]string // action -> RESULT words, in order (the last one repeats)
+	results map[string][]string // action -> RESULT words, in order (the last one repeats); "?": ran, no RESULT
+	lines   map[string][]string // action -> the run's other lines (default: some of a status's)
 	calls   []string            // "script <action>", "start", "stop", "ready"
 	starts  []StartOptions
+	// what the starts and stops return
+	startErr, stopErr error
 }
 
 func (h *playStoreHooks) install(t *testing.T) {
@@ -50,7 +54,14 @@ func (h *playStoreHooks) install(t *testing.T) {
 		}
 		k := min(used[action], len(rs)-1)
 		used[action]++
-		return playStoreRun{Result: rs[k], Lines: []string{"play /product/priv-app/Phonesky/Phonesky.apk", "stub hidden", "other"}}, nil
+		lines := h.lines[action]
+		if lines == nil {
+			lines = []string{"play /product/priv-app/Phonesky/Phonesky.apk", "stub hidden", "other"}
+		}
+		if rs[k] == "?" {
+			return playStoreRun{Lines: lines, Ran: true}, errs.New(errs.LaunchFailed, "the script stopped without RESULT")
+		}
+		return playStoreRun{Result: rs[k], Lines: lines, Ran: true}, nil
 	}
 	playStoreFindQemu = func(*Manager, int) (host.Process, bool, error) {
 		if h.running {
@@ -61,11 +72,17 @@ func (h *playStoreHooks) install(t *testing.T) {
 	playStoreStart = func(_ *Manager, _ context.Context, _ int, opt StartOptions) (*StartResult, error) {
 		h.calls = append(h.calls, "start")
 		h.starts = append(h.starts, opt)
+		if h.startErr != nil {
+			return nil, h.startErr
+		}
 		return &StartResult{}, nil
 	}
-	playStoreStop = func(*Manager, context.Context, int) ([]string, error) {
+	playStoreStop = func(_ *Manager, ctx context.Context, _ int) ([]string, error) {
 		h.calls = append(h.calls, "stop")
-		return nil, nil
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, h.stopErr
 	}
 }
 
@@ -303,14 +320,198 @@ func TestPlayStoreArm64Guest(t *testing.T) {
 	}
 }
 
+// playStoreRecorded is instance i's InstanceInfo.PlayStore and PlayStorePartial, read the way list reads them.
+func playStoreRecorded(t *testing.T, m *Manager, i int) (bool, bool) {
+	t.Helper()
+	in, err := m.instance(i)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := m.instanceInfo(context.Background(), in, nil, nil)
+	return info.PlayStore, info.PlayStorePartial
+}
+
+// TestPlayStoreInstallFailed: an install the script took back leaves the record alone and shuts an instance that was
+// off down again (also after a cancel); one it could not take back all of, or that stopped without saying, is
+// recorded partial: InstanceInfo says so, bridge uninstall refuses, an uninstall clears it. A stop that fails after a
+// failure is a warning, the error stays the install's; a boot that found another start under way stops nothing. A
+// running instance is left running, with a warning when some of the undo waits for its next boot.
+func TestPlayStoreInstallFailed(t *testing.T) {
+	m, i := opsTestInstance(t)
+	writeBridgeMarker(m.Root, i)
+	ctx := context.Background()
+	var ps playStoreHooks
+	ps.ready = yes()
+	ps.install(t)
+
+	ps.results = map[string][]string{"install": {playStoreFailure}}
+	res, err := m.PlayStore(ctx, i, "install")
+	if errs.CodeOf(err) != errs.LaunchFailed || !strings.Contains(errs.As(err).Advice, "已经撤回") || res == nil || !res.Stopped || res.State != "" {
+		t.Fatalf("taken back: %+v %v", res, err)
+	}
+	if want := []string{"ready", "start", "script install", "stop"}; !slices.Equal(ps.calls, want) {
+		t.Errorf("calls %v, want %v", ps.calls, want)
+	}
+	if meta := m.Root.InstanceMeta(i); meta == nil || meta.Get(playStoreMetaKey) != nil {
+		t.Errorf("recorded after an install that was taken back: %v", meta)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if res, err := m.PlayStore(canceled, i, "install"); err == nil || !res.Stopped {
+		t.Errorf("canceled: %+v %v", res, err)
+	}
+
+	for _, word := range []string{playStorePartial, "?"} {
+		ps.results = map[string][]string{"install": {word}}
+		res, err := m.PlayStore(ctx, i, "install")
+		if err == nil || res.State != playStorePartial || !res.Stopped {
+			t.Fatalf("%s: %+v %v", word, res, err)
+		}
+		if word == playStorePartial && !strings.Contains(errs.As(err).Advice, "playstore "+strconv.Itoa(i)+" uninstall") {
+			t.Errorf("partial's advice: %v", err)
+		}
+		if on, partial := playStoreRecorded(t, m, i); on || !partial || !m.playStoreWanted(i) {
+			t.Errorf("%s: recorded %v %v", word, on, partial)
+		}
+		if _, err := m.Bridge(ctx, i, "uninstall"); errs.CodeOf(err) != errs.NotReady || !strings.Contains(err.Error(), "Google Play") {
+			t.Errorf("%s: bridge uninstall: %v", word, err)
+		}
+	}
+	ps.results = map[string][]string{"uninstall": {playStoreGone}, "status": {playStoreAbsent}}
+	if _, err := m.PlayStore(ctx, i, "uninstall"); err != nil {
+		t.Fatalf("uninstall after a partial install: %v", err)
+	}
+	if on, partial := playStoreRecorded(t, m, i); on || partial {
+		t.Errorf("after uninstall: %v %v", on, partial)
+	}
+
+	ps.results = map[string][]string{"install": {playStoreFailure}}
+	ps.stopErr = errs.New(errs.Internal, "关不掉")
+	res, err = m.PlayStore(ctx, i, "install")
+	if errs.CodeOf(err) != errs.LaunchFailed || res.Stopped || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "关不掉") {
+		t.Errorf("stop failed after the failure: %+v %v", res, err)
+	}
+	ps.stopErr = nil
+
+	for _, c := range []struct {
+		err  error
+		want []string
+	}{{errs.New(errs.Busy, "另一次开机"), []string{"start"}}, {errs.New(errs.Timeout, "开机超时"), []string{"start", "stop"}}} {
+		ps.startErr, ps.calls = c.err, nil
+		if _, err := m.PlayStore(ctx, i, "install"); errs.CodeOf(err) != errs.CodeOf(c.err) || !slices.Equal(ps.guestCalls(), c.want) {
+			t.Errorf("start %v: %v, calls %v", c.err, err, ps.guestCalls())
+		}
+	}
+	ps.startErr = nil
+
+	ps.running, ps.calls = true, nil
+	ps.lines = map[string][]string{"install": {"took back /product/a", playStoreUndoneAtBoot, "install failed: the store is partial after copying"}}
+	res, err = m.PlayStore(ctx, i, "install")
+	if err == nil || !strings.Contains(err.Error(), "install failed: the store is partial after copying") || res.Stopped ||
+		len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "关机再开机") {
+		t.Errorf("running: %+v %v", res, err)
+	}
+	if want := []string{"script install"}; !slices.Equal(ps.guestCalls(), want) {
+		t.Errorf("running: calls %v", ps.guestCalls())
+	}
+}
+
+// TestPlayStoreUninstallFailedStops: an uninstall that fails on an instance that was off shuts it down again and keeps
+// the record (移除 is offered again).
+func TestPlayStoreUninstallFailedStops(t *testing.T) {
+	m, i := opsTestInstance(t)
+	writeBridgeMarker(m.Root, i)
+	if err := m.setPlayStoreWanted(i, true); err != nil {
+		t.Fatal(err)
+	}
+	var ps playStoreHooks
+	ps.install(t)
+	ps.results = map[string][]string{"uninstall": {"failed"}}
+	res, err := m.PlayStore(context.Background(), i, "uninstall")
+	if errs.CodeOf(err) != errs.LaunchFailed || !res.Stopped {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if want := []string{"start", "script uninstall", "stop"}; !slices.Equal(ps.guestCalls(), want) {
+		t.Errorf("calls %v", ps.guestCalls())
+	}
+	if on, _ := playStoreRecorded(t, m, i); !on {
+		t.Error("the record went with a failed uninstall")
+	}
+}
+
+// TestPlayStoreGSFID: gsfid reads the running instance's GSF ID (decimal as the guest says, hex worked out here, two's
+// complement for a negative one) without a boot or a stop; no ID yet (the script's no-id, no decimal line, 0) is
+// not_ready with its reason and advice; an instance that is off, a held bridge lock and a script that fails are
+// refused. PlayStore itself does not take gsfid.
+func TestPlayStoreGSFID(t *testing.T) {
+	m, i := opsTestInstance(t)
+	ctx := context.Background()
+	var ps playStoreHooks
+	ps.install(t)
+	if _, err := m.PlayStoreGSFID(ctx, i); errs.CodeOf(err) != errs.Unsupported {
+		t.Errorf("off: %v", err)
+	}
+	ps.running = true
+	ps.results = map[string][]string{"gsfid": {playStoreOK}}
+	for _, c := range [][2]string{{"3881793548573364239", "35dee6aa721e500f"}, {"-1", "ffffffffffffffff"}, {"0042", "2a"}} {
+		ps.lines = map[string][]string{"gsfid": {"decimal " + c[0], "hex whatever the guest's printf said"}}
+		res, err := m.PlayStoreGSFID(ctx, i)
+		want, _ := strconv.ParseInt(c[0], 10, 64)
+		if err != nil || res.Index != i || res.Decimal != strconv.FormatInt(want, 10) || res.Hex != c[1] {
+			t.Errorf("%s: %+v %v", c[0], res, err)
+		}
+	}
+	for _, c := range []struct {
+		word  string
+		lines []string
+	}{{playStoreNoID, []string{"no GSF ID yet"}}, {playStoreNoID, []string{"decimal 5"}}, {playStoreOK, []string{"hex 1"}}, {playStoreOK, []string{"decimal 0"}}} {
+		ps.results = map[string][]string{"gsfid": {c.word}}
+		ps.lines = map[string][]string{"gsfid": c.lines}
+		_, err := m.PlayStoreGSFID(ctx, i)
+		if errs.CodeOf(err) != errs.NotReady || errs.DetailsOf(err)[errs.Reason] != PlayStoreReasonNoGSFID || !strings.Contains(errs.As(err).Advice, "等一两分钟") {
+			t.Errorf("%s %q: %v", c.word, c.lines, err)
+		}
+	}
+	for _, c := range []struct {
+		word, line, says string
+	}{{playStoreOK, "decimal 12a", "不是数字：12a"}, {"failed", "sqlite3: not found", "sqlite3: not found"}} {
+		ps.results = map[string][]string{"gsfid": {c.word}}
+		ps.lines = map[string][]string{"gsfid": {c.line}}
+		if _, err := m.PlayStoreGSFID(ctx, i); errs.CodeOf(err) != errs.LaunchFailed || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s %q: %v", c.word, c.line, err)
+		}
+	}
+	for _, c := range ps.guestCalls() {
+		if c != "script gsfid" {
+			t.Errorf("calls %v", ps.guestCalls())
+			break
+		}
+	}
+	if err := m.PlayStoreCheck(i, "gsfid"); err != nil {
+		t.Errorf("check: %v", err)
+	}
+	if _, err := m.PlayStore(ctx, i, "gsfid"); errs.CodeOf(err) != errs.Usage {
+		t.Errorf("PlayStore gsfid: %v", err)
+	}
+	l, ok, err := host.TryLock(m.lockPath(i, "bridge"))
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v %v", ok, err)
+	}
+	defer l.Unlock()
+	if _, err := m.PlayStoreGSFID(ctx, i); errs.CodeOf(err) != errs.Busy {
+		t.Errorf("bridge lock held: %v", err)
+	}
+}
+
 // TestParsePlayStoreRun: the RESULT line is the result (the last wins), the rest are lines; fileLines keeps the file
 // and placeholder lines.
 func TestParsePlayStoreRun(t *testing.T) {
-	run := parsePlayStoreRun("copied /product/a\r\nRESULT failed\n\nplay /product/a\nstub hidden\npackage /x\nRESULT installed\n")
-	if run.Result != playStoreInstalled || len(run.Lines) != 4 {
+	run := parsePlayStoreRun("copied /product/a\r\nRESULT failed\n\nplay /product/a\nstaged /product/b.new\nstub hidden\npackage /x\nRESULT installed\n")
+	if run.Result != playStoreInstalled || len(run.Lines) != 5 || run.Ran {
 		t.Fatalf("%+v", run)
 	}
-	if got := fileLines(run.Lines); !slices.Equal(got, []string{"play /product/a", "stub hidden", "package /x"}) {
+	if got := fileLines(run.Lines); !slices.Equal(got, []string{"play /product/a", "staged /product/b.new", "stub hidden", "package /x"}) {
 		t.Errorf("fileLines %q", got)
 	}
 	if parsePlayStoreRun("error: closed").Result != "" {

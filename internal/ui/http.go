@@ -39,6 +39,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/instances/{i}/resume", s.handleResumeCreate)
 	m.HandleFunc("POST /api/instances/{i}/playstore-install", s.handlePlayStore("install"))
 	m.HandleFunc("POST /api/instances/{i}/playstore-uninstall", s.handlePlayStore("uninstall"))
+	m.HandleFunc("GET /api/instances/{i}/playstore-gsfid", s.handlePlayStoreGSFID)
 	m.HandleFunc("POST /api/instances/{i}/input", s.handleInput)
 	m.HandleFunc("GET /api/instances/{i}/screenshot", s.handleScreenshot)
 	m.HandleFunc("GET /api/instances/{i}/log", s.handleLog)

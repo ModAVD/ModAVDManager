@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,8 +16,10 @@ import (
 )
 
 // psGuest is a fake guest for playstore.sh under a POSIX sh (Git's on Windows): MODAVD_PS_ROOT is a temporary
-// directory standing for /, and pm, am, remount, chcon and chown are stubs on PATH (pm logs its arguments and answers
-// `pm path` by whether the placeholder is there). The overlay's upper layer is a separate tree, as in the guest.
+// directory standing for /, and pm, am, remount, chcon, chown, mv and sqlite3 are stubs on PATH (pm logs its arguments
+// and answers `pm path` by whether the placeholder is there). The overlay's upper layer is a separate tree, as in the
+// guest. Failures to order: chcon and mv fail on a path containing what <root>/chcon.fail or mv.fail holds, and
+// `pm enable` appends to the guest path <root>/pm.tamper names (a file that is not the store's after the copy).
 type psGuest struct {
 	t        *testing.T
 	sh, root string
@@ -57,8 +61,22 @@ case "$1" in
 path) if [ -e "$MODAVD_PS_ROOT/product/app/LicenseChecker" ]; then echo package:/product/app/LicenseChecker/LicenseChecker.apk
       else echo package:/product/priv-app/Phonesky/Phonesky.apk; fi ;;
 uninstall-system-updates) echo Success ;;
+enable) if [ -f "$MODAVD_PS_ROOT/pm.tamper" ]; then echo changed >> "$MODAVD_PS_ROOT$(cat "$MODAVD_PS_ROOT/pm.tamper")"; fi ;;
 esac`)
-	for _, name := range []string{"am", "remount", "chcon", "chown"} {
+	// fails stands first in the stubs that can be told to fail: $1 is the path to look at
+	fails := func(what string) string {
+		return `f=$(cat "$MODAVD_PS_ROOT/` + what + `.fail" 2>/dev/null)
+if [ -n "$f" ]; then case "$1" in *"$f"*) echo "` + what + `: $1: No space left on device" >&2; exit 1 ;; esac; fi
+`
+	}
+	stub("chcon", `shift
+`+fails("chcon")+`exit 0`)
+	// the real mv after the check: the stubs' directory is first on PATH, so by its full path
+	stub("mv", fails("mv")+`for d in /usr/bin /bin; do [ -x "$d/mv" ] && exec "$d/mv" "$@"; done
+echo "no mv" >&2; exit 127`)
+	// GSF's database is a text file holding the ID in the fake
+	stub("sqlite3", `case "$2" in *"from main where name='android_id'"*) cat "$1" ;; *) echo "unexpected query: $2" >&2; exit 1 ;; esac`)
+	for _, name := range []string{"am", "remount", "chown"} {
 		stub(name, "exit 0")
 	}
 	// the stubs go first on PATH inside the shell (run): Git for Windows' bin\sh.exe puts its usr\bin, which has a real
@@ -219,5 +237,162 @@ func TestPlayStoreScriptNotWritable(t *testing.T) {
 	}
 	if _, ok := g.read(g.root + "/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"); ok {
 		t.Error("copied into a partition that is not writable")
+	}
+}
+
+// The test list's guest paths (files) and the placeholder's apk.
+const (
+	psStore = "/product/priv-app/Phonesky/Phonesky.apk"
+	psGms   = "/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
+	psGSF   = "/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk"
+	psStub  = "/product/app/LicenseChecker/LicenseChecker.apk"
+)
+
+func (g *psGuest) exists(p string) bool {
+	_, err := os.Lstat(filepath.FromSlash(p))
+	return err == nil
+}
+
+// outLines are the script's output lines; why is the one before RESULT (why an install failed).
+func outLines(out string) []string {
+	return strings.Split(strings.TrimSpace(strings.ReplaceAll(out, "\r", "")), "\n")
+}
+
+func why(out string) string {
+	lines := outLines(out)
+	for k := len(lines) - 1; k > 0; k-- {
+		if strings.HasPrefix(lines[k], "RESULT ") {
+			return lines[k-1]
+		}
+	}
+	return ""
+}
+
+// TestPlayStoreScriptUndoStaged: an install that cannot copy a file (the overlay is out of space) takes back what it
+// put in: the staged copies and the directories it made go, a file that was the store's copy already stays, the
+// image's file and the placeholder are untouched, and RESULT failed says nothing of it is left. Nothing of it needs a
+// boot.
+func TestPlayStoreScriptUndoStaged(t *testing.T) {
+	g := newPSGuest(t)
+	g.files(false)
+	g.write(g.root+psStore, "store") // an earlier install's copy: kept
+	g.write(g.root+"/chcon.fail", "PrebuiltGmsCore.apk.new")
+	r, out := g.run("install")
+	if r != "failed" || why(out) != "install failed: cannot copy "+psGms || !slices.Contains(outLines(out), "kept "+psStore) ||
+		slices.Contains(outLines(out), "undone from the next boot") {
+		t.Fatalf("install: %s (%q)\n%s", r, why(out), out)
+	}
+	if got, _ := g.read(g.root + psStore); got != "store" {
+		t.Errorf("the copy that was there: %q", got)
+	}
+	for _, p := range []string{psGms + ".new", "/product/priv-app/PrebuiltGmsCore", psGSF, psGSF + ".new"} {
+		if g.exists(g.root + p) {
+			t.Errorf("%s left", p)
+		}
+	}
+	if !g.exists(g.root + psStub) {
+		t.Error("the placeholder went")
+	}
+}
+
+// TestPlayStoreScriptUndoMove: a file that cannot take its place undoes the ones that did (one the image did not
+// have: through the merged view) and the staged copies; the image's own file stays.
+func TestPlayStoreScriptUndoMove(t *testing.T) {
+	g := newPSGuest(t)
+	g.files(false)
+	g.write(g.root+psGms, "the image's play services")
+	g.write(g.root+"/mv.fail", "PrebuiltGmsCore.apk.new")
+	r, out := g.run("install")
+	if r != "failed" || why(out) != "install failed: cannot move "+psGms+" into place" ||
+		!slices.Contains(outLines(out), "took back "+psStore) {
+		t.Fatalf("install: %s (%q)\n%s", r, why(out), out)
+	}
+	if got, _ := g.read(g.root + psGms); got != "the image's play services" {
+		t.Errorf("the image's file: %q", got)
+	}
+	for _, p := range []string{psStore, "/product/priv-app/Phonesky", psGms + ".new", psGSF + ".new", "/system_ext/priv-app"} {
+		if g.exists(g.root + p) {
+			t.Errorf("%s left", p)
+		}
+	}
+	if r, out := g.run("status"); r != "absent" {
+		t.Errorf("status after the undo: %s\n%s", r, out)
+	}
+}
+
+// TestPlayStoreScriptUndoMoved: an install whose files are all in place yet not the store's afterwards takes them all
+// back: the ones the image did not have through the merged view, the one that replaced the image's and the
+// placeholder's whiteout from the overlay's upper layer, which the guest sees from its next boot (it says so).
+func TestPlayStoreScriptUndoMoved(t *testing.T) {
+	g := newPSGuest(t)
+	g.files(false)
+	up := g.root + "/mnt/scratch/overlay"
+	g.write(g.root+psGms, "the image's play services")
+	// what the overlay's upper layer holds after the move and the hide (the fake has no overlay to make them)
+	g.write(up+"/product/upper/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk", "play services")
+	g.write(up+"/product/upper/app/LicenseChecker", "")
+	g.write(g.root+"/pm.tamper", psGSF)
+	r, out := g.run("install")
+	lines := outLines(out)
+	if r != "failed" || why(out) != "install failed: the store is partial after copying" ||
+		!slices.Contains(lines, "undone from the next boot") || !slices.Contains(lines, "restored /product/app/LicenseChecker") ||
+		!slices.Contains(lines, "hid /product/app/LicenseChecker") {
+		t.Fatalf("install: %s (%q)\n%s", r, why(out), out)
+	}
+	for _, p := range []string{g.root + psStore, g.root + "/product/priv-app/Phonesky", g.root + psGSF, g.root + "/system_ext/priv-app",
+		up + "/product/upper/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk", up + "/product/upper/app/LicenseChecker"} {
+		if g.exists(p) {
+			t.Errorf("%s left", p)
+		}
+	}
+}
+
+// TestPlayStoreScriptUndoPartial: what cannot be taken back makes the install partial (and status says partial too);
+// so does a staged copy left behind.
+func TestPlayStoreScriptUndoPartial(t *testing.T) {
+	g := newPSGuest(t)
+	g.files(false)
+	up := g.root + "/mnt/scratch/overlay"
+	g.write(g.root+psGms, "the image's play services")
+	// a directory where the upper copy is: rm -f cannot remove it
+	g.write(up+"/product/upper/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk/x", "")
+	g.write(g.root+"/pm.tamper", psGSF)
+	r, out := g.run("install")
+	if r != "partial" || why(out) != "install failed: the store is partial after copying" || !slices.Contains(outLines(out), "left "+psGms) {
+		t.Fatalf("install: %s (%q)\n%s", r, why(out), out)
+	}
+	if r, out := g.run("status"); r != "partial" {
+		t.Errorf("status: %s\n%s", r, out)
+	}
+
+	g = newPSGuest(t)
+	g.files(false)
+	g.write(g.root+psStore+".new", "store")
+	if r, out := g.run("status"); r != "partial" || !slices.Contains(outLines(out), "staged "+psStore+".new") {
+		t.Errorf("status with a staged copy: %s\n%s", r, out)
+	}
+}
+
+// TestPlayStoreScriptGSFID: gsfid reads GSF's android_id with the documentation's query and gives it in decimal and
+// hex; without the database, or with nothing, 0 or something else in it, it says no-id.
+func TestPlayStoreScriptGSFID(t *testing.T) {
+	g := newPSGuest(t)
+	g.files(false)
+	if r, out := g.run("gsfid"); r != "no-id" || !strings.Contains(out, "wait a minute") {
+		t.Errorf("without the database: %s\n%s", r, out)
+	}
+	db := g.root + "/data/data/com.google.android.gsf/databases/gservices.db"
+	for _, v := range []string{"", "0\n", "abc\n", "12-3\n"} {
+		g.write(db, v)
+		if r, out := g.run("gsfid"); r != "no-id" {
+			t.Errorf("%q: %s\n%s", v, r, out)
+		}
+	}
+	const id = 3881793548573364239
+	g.write(db, strconv.FormatInt(id, 10)+"\n")
+	r, out := g.run("gsfid")
+	if lines := outLines(out); r != "ok" || !slices.Contains(lines, "decimal "+strconv.FormatInt(id, 10)) ||
+		!slices.Contains(lines, "hex "+strconv.FormatInt(id, 16)) {
+		t.Errorf("an ID: %s\n%s", r, out)
 	}
 }

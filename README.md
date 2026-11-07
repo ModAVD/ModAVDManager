@@ -111,9 +111,10 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - `components status` 列出五个文件在不在、从哪来（`play_store.source`：`download` 或 `import`）。
 - 只放商店不够：镜像自带的 Play 服务和 GSF 是测试证书签的，和商店签名对不上，Google 的组件会拒绝工作，所以一起换成 Play 版镜像里同版本的。
 - 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥：没有的 `install` 报 `not_ready`（`details.reason` 为 `no_bridge`），根目录还没有五个文件的报 `not_ready`（`playstore_files_missing`），这两种都在动实例之前就拒绝。装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
-- `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
-- 设备没有通过 Play 保护机制认证。登录时提示未认证的，按[文档](https://modavd.github.io/guide/playstore)登记这台实例的 GSF ID。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
-- 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`；`info` / `list` 的 `play_store` 就是这一项。
+- `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉，没做成也关掉（关不掉只是警告）；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
+- `install` 中途失败（比如覆盖层空间不够）时，撤回这次放进去的文件（包括没放到位的 `.new`），恢复占位应用；替换了镜像自带文件的那几个和占位应用要下次冷启动后才完全恢复。撤不干净的，`status` 是 `partial`，实例记为只装了一部分，可以 `uninstall` 移除，也可以再 `install` 补全。
+- 设备没有通过 Play 保护机制认证。登录时提示未认证的，用 `playstore <i> gsfid`（管理器里实例「更多操作」的「复制 GSF ID」）取这台实例的 GSF ID，十进制和十六进制都给（`--json` 是 `decimal`、`hex`），到 <https://www.google.com/android/uncertified/> 登记。实例要开着；还没有 ID 时报 `not_ready`（`details.reason` 为 `no_gsf_id`），开着网等一两分钟再试。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
+- 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`，装到一半撤不干净时是 `"partial"`；`info` / `list` 的 `play_store`（装上了）和 `play_store_partial`（只装了一部分）按这一项。
 
 **按应用走代理**（`proxy`）：
 

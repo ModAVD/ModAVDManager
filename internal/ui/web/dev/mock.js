@@ -2,7 +2,8 @@
 // an in-memory fake that follows internal/ui/API.md. Extra params: drop=1 (the event stream drops after 1.5 s and
 // stays down), offline=1 (it never connects), shotfail=1 (every screenshot answers 500), diag=components-error|components-fail
 // (component status request or fetch fails), store=download|import (the root has the Google Play Store's five files,
-// fetched or imported), storefail=1 (an instance's 补全 Google Play 商店 fails in the guest). window.__mockShots counts
+// fetched or imported), storefail=1 (an instance's 补全 Google Play 商店 fails in the guest and leaves it partial),
+// nogsf=1 (复制 GSF ID finds no ID yet). window.__mockShots counts
 // screenshot requests per instance. Never used in production: the server does not serve /dev/.
 // Screens are drawn on a canvas: abstract shapes only, no real game content.
 
@@ -54,7 +55,7 @@ function mk(i, title, o = {}) {
     path: `${ROOT}\\avd\\mas_${i}.avd`,
     app_proxy: null,
     // the execution bridge (off | pending | installed | unknown) and the Google Play Store's record
-    bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store,
+    bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store, play_store_partial: false,
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
@@ -329,7 +330,14 @@ function runPlayStore(inst, j, action) {
   if (!was) steps.push([600, boot], [2500, up]);
   steps.push([1500, () => log('info', action === 'install' ? `实例 ${i} 推送商店的五个文件，放进系统覆盖层` : `实例 ${i} 卸掉 Google Play 装的更新，删掉商店的文件`, j.id)]);
   if (action === 'install' && db.storefail) {
-    steps.push([800, () => failJob(j, 'launch_failed', `实例 ${i} 的 Google Play 商店脚本（install）没有跑完：cp: /product/priv-app/Phonesky/Phonesky.apk.new: No space left on device（mock）`, '')]);
+    // the undo could not take everything back: recorded partial (移除 is offered too); an instance that was off goes off again
+    const failNow = () => {
+      inst.play_store_partial = true;
+      failJob(j, 'launch_failed', `实例 ${i} 没装好 Google Play 商店（partial）：install failed: cannot copy /product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk（mock）`,
+        `放进去的文件没能全部撤回：运行 modavd playstore ${i} uninstall 移除（管理器里是「移除 Google Play 商店」），或者解决问题后再补全一次`);
+    };
+    if (!was) steps.push([800, stopIt], [1400, off]);
+    steps.push([800, failNow]);
     run(j, steps);
     return;
   }
@@ -337,6 +345,7 @@ function runPlayStore(inst, j, action) {
   if (!was) steps.push([800, stopIt], [1400, off]);
   steps.push([600, () => {
     inst.play_store = action === 'install';
+    inst.play_store_partial = false;
     const state = action === 'install' ? 'installed' : 'absent';
     finishJob(j, { index: i, action, state, installed: state === 'installed', files: STORE_FILES.map(([, g]) => `${state === 'installed' ? 'play' : 'absent'} ${g}`),
       restarted: true, stopped: !was, warnings: [] });
@@ -1015,6 +1024,15 @@ async function handle(url, init) {
     runPlayStore(inst, j, install ? 'install' : 'uninstall');
     return json(j, 202);
   }
+  if (act === 'playstore-gsfid') {
+    if (inst.status !== 'online') return errResp('busy', `实例 ${i} 没有开机`, '开机后才能取 GSF ID');
+    if (busyJob) return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (db.nogsf) {
+      return fail(STATUS_OF.not_ready, 'not_ready', `实例 ${i} 还没有 GSF ID`, 'Google 服务框架联网登记后才有：开着网等一两分钟，再试一次', { reason: 'no_gsf_id' });
+    }
+    const id = 3881793548573364239n + BigInt(i);
+    return json({ index: i, decimal: id.toString(), hex: id.toString(16) });
+  }
   if (act === 'disk-info' || act === 'disk-trim' || act === 'disk-compact') {
     if (busyJob) return errResp('busy', `实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '做别的事'}（任务 ${busyJob.id}），等它做完再试`);
     const GB = 2 ** 30;
@@ -1178,6 +1196,7 @@ export function install(scenario, params) {
   db.diagMode = params.get('diag') || (scenario === 'components-fail' ? 'components-fail' : scenario === 'diag-fail' ? 'diag-fail' : '');
   if (['download', 'import'].includes(params.get('store'))) db.store = { ready: true, source: params.get('store') };
   db.storefail = params.get('storefail') === '1';
+  db.nogsf = params.get('nogsf') === '1';
   window.__mockShots = {};
   setup(scenario);
   const real = window.fetch.bind(window);

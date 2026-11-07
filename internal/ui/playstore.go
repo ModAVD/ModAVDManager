@@ -1,8 +1,9 @@
 package ui
 
 // The Google Play Store (ModAVD/ModAVD#125) in the manager: an instance's 「补全 / 移除 Google Play 商店」 (emu
-// PlayStore) and 补全组件's 「使用我自己的文件」 (components.ImportPlayStore). The store's state shows in GET
-// /api/components (play_store) and on each instance (InstanceInfo.play_store).
+// PlayStore), its 「复制 GSF ID」 (emu PlayStoreGSFID) and 补全组件's 「使用我自己的文件」 (components.ImportPlayStore).
+// The store's state shows in GET /api/components (play_store) and on each instance (InstanceInfo.play_store,
+// play_store_partial).
 
 import (
 	"context"
@@ -60,6 +61,30 @@ func (s *server) handlePlayStore(action string) http.HandlerFunc {
 			return res, nil
 		}))
 	}
+}
+
+// handlePlayStoreGSFID is GET /api/instances/{i}/playstore-gsfid: the running instance's GSF ID (emu PlayStoreGSFID,
+// a few seconds), for 复制 GSF ID. Not booted (as a recent list says) is 409 busy like the screenshot, so is a job
+// running on the instance; no ID yet is 422 not_ready with details.reason no_gsf_id.
+func (s *server) handlePlayStoreGSFID(w http.ResponseWriter, r *http.Request) {
+	i, ok := pathIndex(w, r)
+	if !ok {
+		return
+	}
+	if in, ok := s.hub.cachedInstance(i, statusMaxAge); ok && !in.Booted {
+		writeError(w, errs.Newf(errs.Busy, "实例 %d 没有开机", i).WithAdvice("开机后才能取 GSF ID"))
+		return
+	}
+	if err := s.instanceBusy(i); err != nil {
+		writeError(w, err)
+		return
+	}
+	res, err := s.mgr.PlayStoreGSFID(r.Context(), i)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleImportPlayStore is POST /api/components/import-playstore: multipart/form-data with the field "file" once per

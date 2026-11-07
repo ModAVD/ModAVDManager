@@ -86,15 +86,23 @@ const dom = {
 async function load(entry, stubs, context = {}) {
   const ctx = vm.createContext({ requestAnimationFrame: noop, setTimeout, clearTimeout, FormData, File, URLSearchParams, console, ...context });
   const cache = new Map();
+  const sources = new Map(); // name -> the file's text (a promise), read once
   async function get(name) {
     if (cache.has(name)) return cache.get(name);
     const values = typeof stubs[name] === 'function' ? stubs[name](cache) : stubs[name];
     const extra = name === 'cards.js' ? '\nexport { menuItems };' : '';
+    let text = '';
+    if (!values) {
+      if (!sources.has(name)) sources.set(name, readFile(new URL(name, base), 'utf8'));
+      text = await sources.get(name);
+      // two modules importing this one while its file was read: one instance (the page's S is shared that way)
+      if (cache.has(name)) return cache.get(name);
+    }
     const mod = values
       ? new vm.SyntheticModule(Object.keys(values), function() {
         for (const [k, v] of Object.entries(values)) this.setExport(k, v);
       }, { context: ctx })
-      : new vm.SourceTextModule(await readFile(new URL(name, base), 'utf8') + extra, { context: ctx });
+      : new vm.SourceTextModule(text + extra, { context: ctx });
     cache.set(name, mod);
     await mod.link(specifier => get(specifier.replace(/^\.\//, '')));
     return mod;
@@ -118,11 +126,12 @@ async function menuFor(inst, jobs = []) {
     'proxy.js': { openProxy: noop, markOf: noop },
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop, runCheck: noop },
-    'playstore.js': { openPlayStore: (i, action) => calls.push([i, action]) },
+    'playstore.js': { openPlayStore: (i, action) => calls.push([i, action]), openGSFID: i => calls.push([i, 'gsfid']) },
   });
   for (const j of jobs) m.S.jobs.set(j.id, j);
   const items = m.mod.menuItems({ i: 3, inst: { index: 3, status: 'offline', running: false, initialized: true, bridge: 'installed', ...inst } }).filter(Boolean);
-  return { items, calls, store: items.find(x => /Google Play 商店/.test(x.label || '')) };
+  const named = label => items.find(x => x.label === label);
+  return { items, calls, named, store: items.find(x => /Google Play 商店/.test(x.label || '')) };
 }
 
 test('an instance without the store offers 补全 Google Play 商店, which asks playstore.js to install', async () => {
@@ -150,6 +159,34 @@ test('without the execution bridge 补全 is off and says why; removing still wo
   assert.ok(!had.store.disabled);
 });
 
+test('with the store 复制 GSF ID reads it from the running instance; off it waits for a boot', async () => {
+  const on = await menuFor({ play_store: true, status: 'online', running: true });
+  const gsf = on.named('复制 GSF ID');
+  assert.ok(gsf && !gsf.disabled);
+  assert.equal(on.items.indexOf(gsf), on.items.indexOf(on.named('移除 Google Play 商店…')) + 1);
+  gsf.run();
+  assert.deepEqual(on.calls, [[3, 'gsfid']]);
+  const off = await menuFor({ play_store: true });
+  assert.ok(off.named('复制 GSF ID').disabled);
+  assert.equal(off.named('复制 GSF ID').hint, '开机后可用');
+  const busy = await menuFor({ play_store: true, status: 'online', running: true }, [{ id: 'j9', kind: 'install', index: 3, state: 'running' }]);
+  assert.ok(busy.named('复制 GSF ID').disabled);
+  const none = await menuFor({ status: 'online', running: true });
+  assert.equal(none.named('复制 GSF ID'), undefined);
+});
+
+test('after an install that failed half way (partial) both 补全 and 移除 are offered', async () => {
+  const { items, named, calls } = await menuFor({ play_store_partial: true });
+  assert.deepEqual(plain(items.filter(x => /Google Play 商店/.test(x.label || '')).map(x => x.label)), ['补全 Google Play 商店…', '移除 Google Play 商店…']);
+  assert.ok(!named('补全 Google Play 商店…').disabled && !named('移除 Google Play 商店…').disabled);
+  assert.equal(named('复制 GSF ID'), undefined);
+  named('移除 Google Play 商店…').run();
+  assert.deepEqual(calls, [[3, 'uninstall']]);
+  const noBridge = await menuFor({ play_store_partial: true, bridge: 'off' });
+  assert.ok(noBridge.named('补全 Google Play 商店…').disabled);
+  assert.ok(!noBridge.named('移除 Google Play 商店…').disabled);
+});
+
 test('the store items wait while the instance is being created, set up or busy with a job', async () => {
   for (const [inst, jobs] of [[{ status: 'creating', running: true }, []], [{ status: 'create_failed' }, []],
     [{}, [{ id: 'j9', kind: 'disk-compact', index: 3, state: 'running' }]],
@@ -161,11 +198,12 @@ test('the store items wait while the instance is being created, set up or busy w
 
 // ---- the question and the way to the files (playstore.js)
 
-async function playstore({ components, loaded } = {}) {
-  const r = { dialogs: [], toasts: [], errors: [], checks: [], posts: [], loads: 0 };
+async function playstore({ components, loaded, gsfid } = {}) {
+  const r = { dialogs: [], toasts: [], errors: [], checks: [], posts: [], gets: [], copied: [], loads: 0 };
   let S;
   const m = await load('playstore.js', {
     'dom.js': dom,
+    'api.js': { api: { get: async path => { r.gets.push(path); if (gsfid instanceof Error) throw gsfid; return gsfid; } } },
     'ui.js': {
       openDialog: o => {
         const ctl = { options: o, onClose: [], closed: false, close() { if (!this.closed) { this.closed = true; for (const fn of this.onClose) fn(); } } };
@@ -173,6 +211,7 @@ async function playstore({ components, loaded } = {}) {
         return ctl;
       },
       toast: t => r.toasts.push(t), toastError: e => r.errors.push(e),
+      copyText: async t => { r.copied.push(t); return true; },
     },
     'diagnostics.js': { loadDiagnostics: async () => { r.loads++; if (loaded) S.components = loaded; } },
     'panels.js': { openCheck: o => r.checks.push(o) },
@@ -181,7 +220,7 @@ async function playstore({ components, loaded } = {}) {
   S = m.S;
   S.list = { instances: [{ index: 3, name: 'mas_3', title: '明日方舟', status: 'online', running: true }] };
   S.components = components ?? null;
-  return Object.assign(r, { open: m.mod.openPlayStore, S });
+  return Object.assign(r, { open: m.mod.openPlayStore, gsf: m.mod.openGSFID, S });
 }
 const files = ready => ({ play_store: { ready, source: ready ? 'download' : '', files: [] } });
 
@@ -242,6 +281,43 @@ test('移除 asks with its own words and does not need the files', async () => {
   assert.equal(p.posts[0].action, 'uninstall');
 });
 
+test('复制 GSF ID copies the decimal ID and shows both spellings with where to register them', async () => {
+  const p = await playstore({ gsfid: { index: 3, decimal: '3881793548573364239', hex: '35dee6aa721e500f' } });
+  await p.gsf(3);
+  assert.deepEqual(p.gets, ['/api/instances/3/playstore-gsfid']);
+  assert.deepEqual(p.copied, ['3881793548573364239']);
+  const d = p.dialogs[0];
+  const text = d.options.body.textContent;
+  for (const want of ['已把十进制的 GSF ID 复制到剪贴板', '3881793548573364239', '35dee6aa721e500f', 'https://www.google.com/android/uncertified/', '关机再开机']) {
+    assert.ok(text.includes(want), want);
+  }
+  assert.match(d.options.sub, /「明日方舟」/);
+  // each spelling (and the page's address) has its own copy button
+  const copies = all(d.options.body).filter(x => /^复制/.test(x.getAttribute('aria-label') || ''));
+  assert.equal(copies.length, 3);
+  await copies[1].dispatch('click');
+  assert.equal(p.copied.at(-1), '35dee6aa721e500f');
+  await d.options.actions.ok.dispatch('click');
+  assert.equal(d.closed, true);
+});
+
+test('复制 GSF ID without an ID yet says to wait online; other errors are the usual toast', async () => {
+  const none = Object.assign(new Error('实例 3 还没有 GSF ID'), { code: 'not_ready', details: { reason: 'no_gsf_id' } });
+  const p = await playstore({ gsfid: none });
+  await p.gsf(3);
+  assert.equal(p.dialogs.length, 0);
+  assert.equal(p.copied.length, 0);
+  assert.equal(p.toasts[0].tone, 'info');
+  assert.match(p.toasts[0].title, /还没有 GSF ID/);
+  assert.match(p.toasts[0].text, /等一两分钟/);
+  assert.equal(p.errors.length, 0);
+  const off = Object.assign(new Error('实例 3 没有开机'), { code: 'busy', details: {} });
+  const q = await playstore({ gsfid: off });
+  await q.gsf(3);
+  assert.deepEqual(q.errors, [off]);
+  assert.equal(q.dialogs.length, 0);
+});
+
 // ---- the jobs (actions.js)
 
 async function actions(post) {
@@ -297,7 +373,10 @@ test('a finished install says the instance booted cold and what the store needs 
     result: { index: 3, action: 'install', state: 'installed', installed: true, restarted: true, stopped: false, warnings: [] } });
   assert.match(a.toasts[0].title, /已补全 Google Play 商店/);
   assert.match(a.toasts[0].text, /冷启动过一次/);
-  assert.match(a.toasts[0].text, /GSF ID/);
+  // it points at 复制 GSF ID and the page, not at the documentation's script (instances it installs have none)
+  assert.match(a.toasts[0].text, /「复制 GSF ID」/);
+  assert.match(a.toasts[0].text, /https:\/\/www\.google\.com\/android\/uncertified\//);
+  assert.doesNotMatch(a.toasts[0].text, /文档/);
 });
 
 // ---- 补全组件's option and 使用我自己的文件 (diagnostics.js)

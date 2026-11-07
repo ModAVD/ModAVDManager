@@ -28,8 +28,9 @@ import (
 // called, what the check refuses with, and the files each import got (read while the job ran).
 var psFake struct {
 	mu        sync.Mutex
-	calls     []string // "check install 3", "run install 3"
+	calls     []string // "check install 3", "run install 3", "gsfid 3"
 	checkErr  error
+	gsfidErr  error
 	imported  [][]importedFile
 	importErr error
 	gate      chan struct{} // ImportPlayStore waits here when set
@@ -41,7 +42,7 @@ func resetPSFake(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		psFake.mu.Lock()
-		psFake.calls, psFake.checkErr, psFake.imported, psFake.importErr, psFake.gate = nil, nil, nil, nil, nil
+		psFake.calls, psFake.checkErr, psFake.gsfidErr, psFake.imported, psFake.importErr, psFake.gate = nil, nil, nil, nil, nil, nil
 		psFake.mu.Unlock()
 	}
 	reset()
@@ -68,6 +69,57 @@ func (b fakeBackend) PlayStore(ctx context.Context, i int, action string) (*emu.
 	state := map[string]string{"install": "installed", "uninstall": "absent"}[action]
 	return &emu.PlayStoreResult{Index: i, Action: action, State: state, Installed: state == "installed", Restarted: true,
 		Files: []string{}, Warnings: []string{}}, nil
+}
+
+func (b fakeBackend) PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error) {
+	psFake.mu.Lock()
+	defer psFake.mu.Unlock()
+	psFake.calls = append(psFake.calls, "gsfid "+strconv.Itoa(i))
+	if psFake.gsfidErr != nil {
+		return nil, psFake.gsfidErr
+	}
+	return &emu.PlayStoreGSFIDResult{Index: i, Decimal: "3881793548573364239", Hex: "35dee6aa721e500f"}, nil
+}
+
+// TestPlayStoreGSFIDRequest: GET playstore-gsfid answers the running instance's GSF ID; not booted (per the recent
+// list) or busy with a job is 409 without asking the guest; no ID yet keeps its reason and advice.
+func TestPlayStoreGSFIDRequest(t *testing.T) {
+	resetPSFake(t)
+	h := newHarness(t, nil)
+	h.f.put(3, emu.StatusOnline)
+	expect(t, h.do("GET", "/api/instances", nil), http.StatusOK, nil) // the list a request may use
+
+	var got emu.PlayStoreGSFIDResult
+	expect(t, h.do("GET", "/api/instances/3/playstore-gsfid", nil), http.StatusOK, &got)
+	if got.Index != 3 || got.Decimal != "3881793548573364239" || got.Hex != "35dee6aa721e500f" {
+		t.Errorf("result %+v", got)
+	}
+	if e := expectError(t, h.do("GET", "/api/instances/4/playstore-gsfid", nil), http.StatusConflict, errs.Busy); !strings.Contains(e.Advice, "GSF ID") {
+		t.Errorf("off: %+v", e)
+	}
+
+	psFake.mu.Lock()
+	psFake.gsfidErr = errs.WithDetail(errs.New(errs.NotReady, "实例 3 还没有 GSF ID").WithAdvice("开着网等一两分钟"), errs.Reason, emu.PlayStoreReasonNoGSFID)
+	psFake.mu.Unlock()
+	if e := expectError(t, h.do("GET", "/api/instances/3/playstore-gsfid", nil), http.StatusUnprocessableEntity, errs.NotReady); e.Details[errs.Reason] != emu.PlayStoreReasonNoGSFID || e.Advice != "开着网等一两分钟" {
+		t.Errorf("no ID: %+v", e)
+	}
+	if want := []string{"gsfid 3", "gsfid 3"}; !slices.Equal(psCalls(), want) {
+		t.Errorf("calls %v, want %v", psCalls(), want)
+	}
+
+	// a job on the instance (a disk compact held at its gate) keeps the guest to itself
+	h.f.mu.Lock()
+	h.f.diskGate = make(chan struct{})
+	h.f.mu.Unlock()
+	var j jobView
+	expect(t, h.do("POST", "/api/instances/3/disk-compact", nil), http.StatusAccepted, &j)
+	expectError(t, h.do("GET", "/api/instances/3/playstore-gsfid", nil), http.StatusConflict, errs.Busy)
+	close(h.f.diskGate)
+	h.waitJob(j.ID, func(v jobView) bool { return v.State != stateRunning })
+	if n := len(psCalls()); n != 2 {
+		t.Errorf("asked the guest while busy: %v", psCalls())
+	}
 }
 
 func (f *fakeDiag) ImportPlayStore(ctx context.Context, files []components.ImportFile, progress func(DiagProgress)) (*components.PlayStoreImportResult, error) {
