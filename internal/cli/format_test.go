@@ -192,7 +192,7 @@ func TestFormatStart(t *testing.T) {
 	want := "实例 3（星铁）已开机：开机 31.2 秒，合计 58.0 秒\n" +
 		"adb 地址：127.0.0.1:20031（私有 adb server 上是 emulator-20030）\n" +
 		"已完成首次初始化\n" +
-		"挂上了客体 Vulkan 修复，zygote 已重启（应用都重新开始）\n" +
+		"挂上了客体库补丁（Vulkan 驱动、ARM 转译层），zygote 已重启（应用都重新开始）\n" +
 		"模拟器日志：D:\\r\\logs\\mas_3-1.log\n" +
 		"警告：idlepoll 没装上\n"
 	if buf.String() != want {
@@ -208,7 +208,7 @@ func TestFormatStart(t *testing.T) {
 	}
 	buf.Reset()
 	formatStart(&buf, &emu.StartResult{Instance: sampleInstance(2), TotalSeconds: 3, SetupPending: true})
-	if !strings.Contains(buf.String(), "\n这次开机的一次性设置（首次初始化、客体 Vulkan 修复）还没做完，再运行一次 modavd start 2 补完\n") {
+	if !strings.Contains(buf.String(), "\n这次开机的一次性设置（首次初始化、客体库补丁）还没做完，再运行一次 modavd start 2 补完\n") {
 		t.Errorf("setup pending: %q", buf.String())
 	}
 }
@@ -217,7 +217,7 @@ func TestFormatStart(t *testing.T) {
 func TestStartHelpTellsWhatCancelDoes(t *testing.T) {
 	start := entryOf(findCommand("start"))
 	for _, s := range []string{"Ctrl+C", "--timeout 到点", "模拟器不会被结束，会接着开机", "再运行一次 start 会接管它",
-		"首次初始化和客体 Vulkan 修复"} {
+		"首次初始化和客体库补丁"} {
 		if !strings.Contains(start.Details, s) {
 			t.Errorf("start details lack %q: %s", s, start.Details)
 		}

@@ -1463,7 +1463,7 @@ func TestStartDescriptionTellsWhatCancelDoes(t *testing.T) {
 		}
 		for _, s := range []string{"Cancelling or reaching timeout_s only stops waiting",
 			"the emulator keeps booting", "calling start_instance again before the deadline",
-			"finishes that boot's setup", "guest Vulkan fix", "setup_pending=true",
+			"finishes that boot's setup", "guest library fixes: Vulkan driver, ARM translation layer", "setup_pending=true",
 			"window naming the other way fails with busy (no switch while it runs: stop it first)"} {
 			if !strings.Contains(tool.Description, s) {
 				t.Errorf("description lacks %q: %s", s, tool.Description)

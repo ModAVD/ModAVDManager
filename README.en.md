@@ -47,7 +47,7 @@ Both programs share the implementation under `internal/`:
 | `emu` | Start, post-boot tuning, first-boot initialization, execution bridge, shutdown, status, computer check | `manager.py`, `precheck.py` |
 | `adb` | Private adb server, re-registration, emulator console | `host.py` |
 | `win` | Processes, command lines, ports, launching detached from the process tree, file locks | `host.py`, `windows/process.py` |
-| `vkfix`, `apk`, `guest` | Guest Vulkan driver patch, APK manifest, scripts pushed into the guest | `vulkanfix.py`, `res/avd/guest/` |
+| `vkfix`, `ndkfix`, `guestpatch`, `apk`, `guest` | Guest Vulkan driver patch, ARM translation layer patch (WFE / WFI / SEV / SEVL as NOP) and the list of both, APK manifest, scripts pushed into the guest | `vulkanfix.py`, `res/avd/guest/` |
 | `cli`, `mcp`, `ui` | The CLI, MCP, and the manager's HTTP server and pages | — |
 
 `internal/guest/scripts/*.sh` and the scripts under AUTO-MAS `res/avd/guest/` are the same files; change both together.
@@ -159,7 +159,7 @@ On Apple Silicon macOS, downloads and imports use Android 15 Google Play `arm64-
   - Shut down every instance of the root folder before you change it. Do not add a root folder that sets `portBase` to AUTO-MAS.
 - The emulator, the adb server and logcat are all launched through an intermediate process that exits immediately, so they are not in modavd's process tree: if the caller ends modavd (Ctrl+C, the MCP client disconnects), the emulator is not taken down with it.
 - A separate `tools\modavd.exe` process writes logcat to `logs\logcat-mas_<i>-<time>.txt` and continues after the start command or manager exits. When that boot's qemu exits, the capture process ends its own adb client and exits. At 256 MiB it rotates at the next newline and writes the same adb stream to a new file. Closed segments follow the existing limits of 10 per instance and 1 GiB across `logs\`; the active file is excluded.
-- After a successful start, each instance also gets a boot guardian that is likewise outside the process tree and exits when qemu exits. After the guest restarts on its own (qemu keeps running), the guardian redoes the post-boot tuning and the Vulkan patch, and never launches a new emulator.
+- After a successful start, each instance also gets a boot guardian that is likewise outside the process tree and exits when qemu exits. After the guest restarts on its own (qemu keeps running), the guardian redoes the post-boot tuning and the guest library patches (Vulkan driver, ARM translation layer), and never launches a new emulator.
 - Starts and shutdowns of the same instance queue on `<root>\avd\.mas_<i>.{start,boot,stop}.lock`: a start waits for the previous start and shutdown to finish; a shutdown can interrupt an instance that is starting.
 
 **Host scheduling in the post-boot tuning**:
@@ -311,7 +311,7 @@ Tests run on Windows only. Optional environment variables:
 | `MODAVD_TEST_LIVE` | Set to `1` to run the tests that touch the real environment: looking at the emulators currently running on this machine, and starting a real adb server. They touch instances in use on this machine, so do not set it normally. |
 
 - Some tests in `internal/avd`, `internal/root` and `internal/jsonord` run the original AUTO-MAS logic with Python 3 (such as `internal/avd/testdata/instances_ref.py`) and compare it with the Go output byte for byte, so Python 3 must be installed.
-- A few tests only read existing files under `D:\ModAVD` on this machine (`mas-avd.json`, instance configs, component APKs) and are skipped if they are absent. `MODAVD_TEST_METADATA` can point to a different `mas-avd.json`, `MODAVD_TEST_SDK` to a different SDK that has `platform-tools\adb.exe`, and `MODAVD_TEST_VKLIBS` to a folder holding the original and the patched `libvulkan_enc.so` (the byte-for-byte comparison for the Vulkan fix).
+- A few tests only read existing files under `D:\ModAVD` on this machine (`mas-avd.json`, instance configs, component APKs) and are skipped if they are absent. `MODAVD_TEST_METADATA` can point to a different `mas-avd.json`, `MODAVD_TEST_SDK` to a different SDK that has `platform-tools\adb.exe`, and `MODAVD_TEST_VKLIBS` to a folder holding the original and the patched `libvulkan_enc.so` (the byte-for-byte comparison for the Vulkan fix), and `MODAVD_TEST_NDKLIBS` to a folder holding the image's `libndk_translation.so` and the patched `libndk_translation.hintnop1.so` (the same for the ARM translation layer patch).
 - CI (`.github/workflows/ci.yml`) runs on `windows-2025`: format check, `go vet`, `go test`, `build.ps1`, the privacy scan and the author check. It runs only on PRs or when triggered manually.
 
 ## Standalone download and hashes

@@ -15,7 +15,7 @@ import (
 )
 
 func TestScriptsHaveNoCR(t *testing.T) {
-	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, VulkanFix} {
+	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, LibFix, PlayStore} {
 		b, err := Script(name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -27,8 +27,8 @@ func TestScriptsHaveNoCR(t *testing.T) {
 	if _, err := Script("missing.sh"); err == nil {
 		t.Error("a missing script was found")
 	}
-	if Remote(VulkanFix) != "/data/local/tmp/vulkanfix.sh" {
-		t.Errorf("Remote = %s", Remote(VulkanFix))
+	if Remote(LibFix) != "/data/local/tmp/libfix.sh" {
+		t.Errorf("Remote = %s", Remote(LibFix))
 	}
 }
 
@@ -91,11 +91,11 @@ func TestLocalFileContentAddressed(t *testing.T) {
 	}
 
 	// another script goes to its own address
-	other, err := LocalFile(dir, VulkanFix)
+	other, err := LocalFile(dir, LibFix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantOther, _ := contentPath(t, dir, VulkanFix); other != wantOther {
+	if wantOther, _ := contentPath(t, dir, LibFix); other != wantOther {
 		t.Errorf("other script at %s, want %s", other, wantOther)
 	}
 	noTempFiles(t, dir)

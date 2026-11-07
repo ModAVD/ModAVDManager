@@ -68,8 +68,8 @@ var startFindQemu = (*Manager).findQemu
 // for a stop of the same instance to finish first (otherwise it would take an instance that is shutting down for a
 // running one). A guest that is powering off without a stop of ours (the window's ×, AUTO-MAS's own close) is waited
 // for the same way: its qemu has to exit first, then the instance boots again (see guestShuttingDown). Already
-// running: no launch; the boot wait and the per-boot steps run again, the Vulkan fix is only checked (mounting it
-// restarts zygote and would end the apps running on it). On cancel the emulator is left running: ending qemu without
+// running: no launch; the boot wait and the per-boot steps run again, the guest library fixes are only checked
+// (mounting them restarts zygote and would end the apps running on it). On cancel the emulator is left running: ending qemu without
 // a guest shutdown is a power cut.
 //
 // Unlike AUTO-MAS (one long-running process), a start here can end before its setup is done: an MCP call cancelled,
@@ -78,13 +78,13 @@ var startFindQemu = (*Manager).findQemu
 // deadline (setupMarkerWindow after qemu started: the launching start's own boot timeout counts) does the setup as on
 // a fresh boot, and the error of the interrupted start names that deadline. The guest may be in use by then all the
 // same (AUTO-MAS adopted it and launched a game, an MCP client went on with shell / install_apk, a CLI user pressed
-// Ctrl+C on a slow start --window and started playing), so that start mounts the Vulkan fix (a zygote restart, ending
-// every app) only while no app is in the foreground and no install holds the guest lock; otherwise it leaves the
+// Ctrl+C on a slow start --window and started playing), so that start mounts the guest library fixes (a zygote
+// restart, ending every app) only while no app is in the foreground and no install holds the guest lock; otherwise it leaves the
 // marker, warns and reports SetupPending.
 //
 // A start that finishes records the guest boot it set up and leaves a boot watch on its qemu (bootwatch.go): when
 // the guest reboots on its own (qemu stays), the watch runs this start again, and so does any start that finds the
-// recorded boot_id changed. The per-boot steps then run again and the Vulkan fix is owed as above.
+// recorded boot_id changed. The per-boot steps then run again and the guest library fixes are owed as above.
 func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
 	if err := requireWindows(); err != nil {
 		return nil, err
@@ -257,7 +257,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				if d := mk.deadline(p); !d.IsZero() {
 					why = "接着做设置的期限 " + clockText(d, now) + " 已过"
 				}
-				m.Log.Infof("实例 %d 的开机设置标记已过期（%s），按已在运行的实例处理，客体 Vulkan 驱动补丁等下次开机再挂", i, why)
+				m.Log.Infof("实例 %d 的开机设置标记已过期（%s），按已在运行的实例处理，客体库补丁等下次开机再挂", i, why)
 				m.removeSetupMarker(i)
 			default:
 				// absent, unreadable or naming another process (that boot is over): an ordinary adopt
@@ -366,7 +366,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		return nil, owed(err)
 	}
 	qemu, gone := qemuAfterSetup(qemu, now, found)
-	// The setup is over (done, or its boot is gone), unless the Vulkan fix was left out because an app was in the
+	// The setup is over (done, or its boot is gone), unless a guest library fix was left out because an app was in the
 	// foreground or an install was running: the marker then stays, so a start after that (before its deadline) still
 	// mounts it.
 	if gone || !ab.SetupPending {
@@ -377,7 +377,8 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			qemu.PID, orText(logTail(res.LogFile, 8), "日志见 "+m.Root.LogsDir()))
 	}
 	// Callers write to /sdcard right after start (10-31 measurements): it is not there yet at sys.boot_completed,
-	// takes another 1–3 s to accept a new file after it is mounted, and the zygote restart of the Vulkan fix takes it
+	// takes another 1–3 s to accept a new file after it is mounted, and the zygote restart of the guest library fixes
+	// takes it
 	// away again for about 7 s. Usually ready long before the setup is done, so this costs nothing then.
 	if !m.waitSDCard(ctx, i) && ctx.Err() == nil {
 		m.Log.Warnf("实例 %d 开机后 /sdcard 在 %.0f 秒内一直写不进文件；先返回，稍后再写", i, sdcardMountWait.Seconds())
@@ -563,19 +564,19 @@ func (m *Manager) waitShutdown(ctx context.Context, i int, p host.Process, prog 
 }
 
 // setupAdvice is added to the error of a start that ended after launching qemu (or adopting an unfinished boot). It
-// names the marker's deadline (until; zero when unknown) as local time and the rules of the Vulkan fix's zygote
-// restart (owedMountGate), so nobody expects the next start to restart zygote under a running game or install, or to
+// names the marker's deadline (until; zero when unknown) as local time and the rules of the guest library fixes'
+// zygote restart (owedMountGate), so nobody expects the next start to restart zygote under a running game or install, or to
 // still finish the setup after the deadline (that start adopts the boot as an ordinary running instance).
 func setupAdvice(until, now time.Time) string {
-	const fix = "这个补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂（不然就留到之后再启动一次，或下次开机）"
+	const fix = "挂这些补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂（不然就留到之后再启动一次，或下次开机）"
 	switch {
 	case until.IsZero():
-		return "模拟器没有关：再启动一次这个实例，就会接着做完这次开机后的设置，其中包括客体 Vulkan 驱动补丁；" + fix
+		return "模拟器没有关：再启动一次这个实例，就会接着做完这次开机后的设置，其中包括客体库补丁；" + fix
 	case !now.Before(until):
-		return "模拟器没有关；这次开机接着做设置的期限（" + clockText(until, now) + "）已过，客体 Vulkan 驱动补丁等下次开机再挂"
+		return "模拟器没有关；这次开机接着做设置的期限（" + clockText(until, now) + "）已过，客体库补丁等下次开机再挂"
 	}
 	return "模拟器没有关：在 " + clockText(until, now) + " 前再启动一次这个实例，就会接着做完这次开机后的设置，" +
-		"过了这个时间客体 Vulkan 驱动补丁就等下次开机再挂；" + fix
+		"过了这个时间客体库补丁就等下次开机再挂；" + fix
 }
 
 // clockText is t as local time for the messages: "15:04" on now's day, else with the date ("10 月 29 日 00:05"; a
@@ -705,13 +706,13 @@ func (m *Manager) writeSetupMarker(i int, s setupMarker) {
 		err = writeFileReplace(m.setupMarkerPath(i), b, strconv.Itoa(os.Getpid()))
 	}
 	if err != nil {
-		m.Log.Warnf("实例 %d 记不下「这次开机后的设置还没做完」（%v）：这次启动要是被打断，再启动一次补不上客体 Vulkan 驱动补丁", i, err)
+		m.Log.Warnf("实例 %d 记不下「这次开机后的设置还没做完」（%v）：这次启动要是被打断，再启动一次补不上客体库补丁", i, err)
 	}
 }
 
 // removeSetupMarker deletes the marker of instance i. A marker left behind after a finished setup would make the
-// next start of this boot run the one-time parts again (harmless while the Vulkan fix is mounted: the script finds
-// the mount; otherwise only with no app in the foreground, no install running and before its deadline), so a failure
+// next start of this boot run the one-time parts again (harmless while the guest library fixes are mounted: the
+// script finds the mounts; otherwise only with no app in the foreground, no install running and before its deadline), so a failure
 // is a warning.
 func (m *Manager) removeSetupMarker(i int) {
 	path := m.setupMarkerPath(i)

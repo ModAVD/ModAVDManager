@@ -320,10 +320,10 @@ func toolDefs() []*toolDef {
 				"while it runs: stop it first). Sends progress notifications with a progressToken. Cancelling or "+
 				"reaching timeout_s only stops waiting: the emulator keeps booting, and calling start_instance "+
 				"again before the deadline in the error's advice (launch + max(timeout_s, %d s) + %d min) finishes "+
-				"that boot's setup, one-time steps included (first-boot setup, guest Vulkan fix). Mounting the "+
-				"Vulkan fix restarts zygote (every app ends), so it is mounted only while no app is in the "+
-				"foreground and no install_apk runs; otherwise setup_pending=true: call again before the deadline, "+
-				"or the next boot mounts it.",
+				"that boot's setup, one-time steps included (first-boot setup, guest library fixes: Vulkan driver, "+
+				"ARM translation layer). Mounting them restarts zygote (every app ends), so they are mounted only "+
+				"while no app is in the foreground and no install_apk runs; otherwise setup_pending=true: call "+
+				"again before the deadline, or the next boot mounts them.",
 				int(emu.DefaultBootTimeout/time.Second), int(emu.DefaultBootTimeout/time.Second),
 				int(emu.SetupMarkerGrace/time.Minute)),
 			mutating(false, true), reflect.TypeFor[emu.StartResult](), []prop{

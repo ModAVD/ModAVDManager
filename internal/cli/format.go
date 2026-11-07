@@ -412,10 +412,10 @@ func formatStart(w io.Writer, r *emu.StartResult) {
 		fmt.Fprintln(w, "已完成首次初始化")
 	}
 	if r.ZygoteRestarted {
-		fmt.Fprintln(w, "挂上了客体 Vulkan 修复，zygote 已重启（应用都重新开始）")
+		fmt.Fprintln(w, "挂上了客体库补丁（Vulkan 驱动、ARM 转译层），zygote 已重启（应用都重新开始）")
 	}
 	if r.SetupPending {
-		fmt.Fprintf(w, "这次开机的一次性设置（首次初始化、客体 Vulkan 修复）还没做完，再运行一次 modavd start %d 补完\n",
+		fmt.Fprintf(w, "这次开机的一次性设置（首次初始化、客体库补丁）还没做完，再运行一次 modavd start %d 补完\n",
 			in.Index)
 	}
 	if r.LogFile != "" {
