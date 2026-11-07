@@ -3,11 +3,14 @@ package report
 import (
 	"context"
 	"time"
+
+	"modavd/internal/root"
 )
 
-// Host is everything the two scripts ask Windows, one small interface per kind of source. The Windows
-// implementation is newHost (host_windows.go); tests pass fakes and compare the produced text with what the scripts
-// print for the same answers.
+// Host is the diagnostic source contract shared by the CLI and manager. Windows
+// maps the package scripts' sources directly. macOS supplies native hardware,
+// process and volume data and rejects Windows-only sources; its report layout
+// uses the platform's privacy and ownership rules.
 type Host interface {
 	WMI
 	Registry
@@ -15,6 +18,13 @@ type Host interface {
 	Runner
 	// Drive is [IO.DriveInfo] of a drive root such as `E:\`.
 	Drive(root string) (Drive, error)
+}
+
+// nativeReporter supplies a platform's report layout when its diagnostics do
+// not map to the Windows package scripts. The public Host contract stays stable.
+type nativeReporter interface {
+	configuration(context.Context, *root.Root) *ConfigResult
+	collect(context.Context, *root.Root, CollectOptions) (*CollectResult, error)
 }
 
 // WMI is what the scripts read with Get-CimInstance, Get-Partition / Get-Disk / Get-PhysicalDisk and Get-WinEvent.

@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -96,8 +95,8 @@ type ConfigInstance struct {
 // BuildConfig is report-config.ps1: prints nothing itself (the CLI prints Text and Message), copies Text to the
 // clipboard unless NoClipboard. Read-only; asks only adb servers that already listen (see the package comment).
 func BuildConfig(ctx context.Context, r *root.Root, opt ConfigOptions) (*ConfigResult, error) {
-	if runtime.GOOS != "windows" {
-		return nil, errs.New(errs.Unsupported, "复制配置信息目前只支持 Windows")
+	if !reportsAvailable {
+		return nil, errs.New(errs.Unsupported, "复制配置信息目前只支持 Windows 和 Apple Silicon macOS")
 	}
 	h := opt.Host
 	if h == nil {
@@ -106,7 +105,12 @@ func BuildConfig(ctx context.Context, r *root.Root, opt ConfigOptions) (*ConfigR
 			return nil, err
 		}
 	}
-	res := buildConfig(ctx, r.Dir, h)
+	var res *ConfigResult
+	if native, ok := h.(nativeReporter); ok {
+		res = native.configuration(ctx, r)
+	} else {
+		res = buildConfig(ctx, r.Dir, h)
+	}
 	if err := ctx.Err(); err != nil {
 		// Ctrl+C: what was read by then is incomplete, nothing is copied
 		return nil, errs.Wrap(errs.Canceled, err, "已取消")

@@ -79,6 +79,8 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 | `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | Update the whole ModAVD package in the root folder, using the update source from "Settings" (`设置`) (see "Updating ModAVD") |
 | `servers`, `version`, `mcp`, `help [command]` | |
 
+Apple Silicon macOS supports `report-config` and `collect-info`, including hardware, macOS, HVF, Metal and component versions. Game lists are queried only through an existing private ADB server and running instances with verified ownership; no service is started. The package contains an allowlist of local instance settings and at most eight emulator logs, capped at 2 MiB each and 20 MiB of text in total. Common credential fields, paths and device identifiers are filtered. macOS does not collect screenshots, system dumps or other applications' logs. Review the package before sharing it. Clipboard copying and Finder reveal can be disabled with `--no-clipboard` and `--no-explorer`.
+
 - Write `<i>` as `3` or `mas_3` (0-9, except 5). Memory is written as `6144`, `6144M` or `6G`, with only four tiers: 3 / 4 / 5 / 6 GB. Cores are 2 / 4 / 6, and the frame rate is 30 / 60.
 - Root folder: `--root`; if not given, the environment variable `MODAVD_ROOT`; otherwise the folder containing `modavd.exe`, or its parent.
 - From 0.3.0 there is no `restart`: `stop`, then `start`. An old call gets a usage error (exit code 2) that says so.

@@ -86,8 +86,8 @@ type CollectResult struct {
 // Collect is collect-info.ps1: collects into a stage directory, writes summary.txt, zips the stage into OutDir and
 // opens Explorer on the zip. Read-only apart from the stage directory (its own, removed afterwards) and the zip.
 func Collect(ctx context.Context, r *root.Root, opt CollectOptions) (*CollectResult, error) {
-	if runtime.GOOS != "windows" {
-		return nil, errs.New(errs.Unsupported, "收集问题信息目前只支持 Windows")
+	if !reportsAvailable {
+		return nil, errs.New(errs.Unsupported, "收集问题信息目前只支持 Windows 和 Apple Silicon macOS")
 	}
 	h := opt.Host
 	if h == nil {
@@ -95,6 +95,9 @@ func Collect(ctx context.Context, r *root.Root, opt CollectOptions) (*CollectRes
 		if h, err = newHost(); err != nil {
 			return nil, err
 		}
+	}
+	if native, ok := h.(nativeReporter); ok {
+		return native.collect(ctx, r, opt)
 	}
 	return collect(ctx, r.Dir, h, opt)
 }
@@ -1925,6 +1928,15 @@ func (c *collector) liveCommand(liveDir, name, serial, tag, kind string, args []
 // names relative to the stage with '/'. Disk images, snapshots, user data and AUTO-MAS config / data are never
 // staged; if one ever were, it is left out here too.
 func zipStage(ctx context.Context, dst, stage string) ([]string, error) {
+	return zipStageWithFile(ctx, dst, stage, nil)
+}
+
+// zipStageWithFile can retain an exclusively created archive handle throughout
+// publication. A supplied file is closed on every path, just like a created one.
+func zipStageWithFile(ctx context.Context, dst, stage string, opened *os.File) ([]string, error) {
+	if opened != nil {
+		defer opened.Close()
+	}
 	type item struct{ path, name string }
 	var files []item
 	queue := []item{{stage, ""}}
@@ -1959,10 +1971,15 @@ func zipStage(ctx context.Context, dst, stage string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	f, err := os.Create(dst)
-	if err != nil {
-		return nil, err
+	f := opened
+	if f == nil {
+		var err error
+		f, err = os.Create(dst)
+		if err != nil {
+			return nil, err
+		}
 	}
+	var err error
 	zw := zip.NewWriter(f)
 	var names []string
 	for _, it := range files {

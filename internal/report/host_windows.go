@@ -35,6 +35,8 @@ import (
 //go:embed cim.ps1
 var cimScript string
 
+const reportsAvailable = true
+
 // cimTimeout bounds one run of cim.ps1, i.e. one part (the scripts call Get-CimInstance without a limit; a stuck WMI
 // service must not hang the command).
 const cimTimeout = 60 * time.Second
