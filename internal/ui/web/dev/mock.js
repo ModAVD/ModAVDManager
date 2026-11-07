@@ -159,7 +159,7 @@ function setup(sc) {
     s.progress = { step: 'first_boot', message: '实例 1 首次开机初始化', done: 800, total: 1000 };
     Object.assign(one, { status: 'online', booted: true });
     one.screencap.shm_ready = true;
-    setTimeout(() => step(s, 'vulkan_fix', '实例 1 客体 Vulkan 驱动补丁', 900), 9000);
+    setTimeout(() => step(s, 'vulkan_fix', '实例 1 客体库补丁（Vulkan 驱动、ARM 转译层）', 900), 9000);
     setTimeout(() => {
       Object.assign(one, { busy: '', initialized: true, launcher: 'µLauncher', renderer: GPU });
       finishJob(s, startResult(one, 26.3, 58.1, true));
@@ -502,7 +502,7 @@ function startSeq(inst, j, window) {
     steps.push([900, () => step(j, 'first_boot', `实例 ${i} 首次开机初始化`, 800)]);
     steps.push([3200, () => {
       Object.assign(inst, { initialized: true, launcher: 'µLauncher', renderer: GPU });
-      step(j, 'vulkan_fix', `实例 ${i} 客体 Vulkan 驱动补丁`, 900);
+      step(j, 'vulkan_fix', `实例 ${i} 客体库补丁（Vulkan 驱动、ARM 转译层）`, 900);
     }]);
   }
   steps.push([800, () => {

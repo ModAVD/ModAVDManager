@@ -47,7 +47,7 @@
 | `emu` | 开机、开机后调优、首次初始化、执行桥、关机、状态、电脑检查 | `manager.py`、`precheck.py` |
 | `adb` | 私有 adb server、重新登记、模拟器控制台 | `host.py` |
 | `win` | 进程、命令行、端口、脱离进程树的启动、文件锁 | `host.py`、`windows/process.py` |
-| `vkfix`、`apk`、`guest` | 客体 Vulkan 驱动补丁、APK 清单、推进客体的脚本 | `vulkanfix.py`、`res/avd/guest/` |
+| `vkfix`、`ndkfix`、`guestpatch`、`apk`、`guest` | 客体 Vulkan 驱动补丁、ARM 转译层补丁（WFE / WFI / SEV / SEVL 当 NOP）和这两个补丁的清单、APK 清单、推进客体的脚本 | `vulkanfix.py`、`res/avd/guest/` |
 | `cli`、`mcp`、`ui` | 命令行、MCP、管理器的 HTTP 服务和页面 | — |
 
 `internal/guest/scripts/*.sh` 和 AUTO-MAS `res/avd/guest/` 下的脚本是同一份，改的时候两边要一起改。
@@ -165,7 +165,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。
 - 宿主 logcat 由 `tools\modavd.exe` 的独立采集进程写入 `logs\logcat-mas_<i>-<时间>.txt`，启动命令或管理器退出后仍继续；这次开机的 qemu 退出后，采集进程主动结束自己的 adb 并退出。每满 256 MiB 在下一处换行切分，同一条 adb 输出流接着写新文件；关闭的分段每台留最新 10 份，并计入 `logs\` 的 1 GiB 清理上限，正在写的文件不计入。
-- 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和 Vulkan 补丁，绝不拉起新的模拟器。
+- 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和客体库补丁（Vulkan 驱动、ARM 转译层），绝不拉起新的模拟器。
 - 同一实例的开机、关机按 `<根>\avd\.mas_<i>.{start,boot,stop}.lock` 排队：开机等前一次开机和关机做完；关机可以打断正在开机的实例。
 
 **开机后调优里的宿主调度**：
@@ -313,7 +313,7 @@ go test ./...
 | `MODAVD_TEST_LIVE` | 设成 `1` 才跑碰真实环境的测试：看本机正在运行的模拟器、起真的 adb server。会碰到本机正在用的实例，平时不要设。 |
 
 - `internal/avd`、`internal/root`、`internal/jsonord` 有一部分测试用 Python 3 运行 AUTO-MAS 的原始逻辑（如 `internal/avd/testdata/instances_ref.py`），和 Go 的输出逐字节对照，所以要装 Python 3。
-- 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`，`MODAVD_TEST_SDK` 另指一个带 `platform-tools\adb.exe` 的 SDK，`MODAVD_TEST_VKLIBS` 指向放着原版和打过补丁的 `libvulkan_enc.so` 的目录（Vulkan 修复的逐字节对照）。
+- 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`，`MODAVD_TEST_SDK` 另指一个带 `platform-tools\adb.exe` 的 SDK，`MODAVD_TEST_VKLIBS` 指向放着原版和打过补丁的 `libvulkan_enc.so` 的目录（Vulkan 修复的逐字节对照），`MODAVD_TEST_NDKLIBS` 指向放着镜像原版 `libndk_translation.so` 和补丁版 `libndk_translation.hintnop1.so` 的目录（ARM 转译层补丁的逐字节对照）。
 - CI（`.github/workflows/ci.yml`）在 `windows-2025` 上跑格式检查、`go vet`、`go test`、`build.ps1`、隐私扫描和作者检查；只在 PR 或手动触发时运行。
 
 ## 单独下载与哈希
