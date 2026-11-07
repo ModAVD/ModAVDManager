@@ -114,6 +114,9 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			m.Log.Infof("实例 %d 宿主调度: %s", i, note)
 		},
 		func() {
+			if !root.CurrentPlatform().Windows() {
+				return
+			}
 			// 2) screenshot shared memory: SHM_videmulator<port> only exists while streaming, and a static screen
 			//    stays black in it, so force one SurfaceFlinger repaint afterwards (1004 needs root)
 			if _, err := adb.Console(ctx, port, "screenrecord webrtc start", 10*time.Second); err != nil {
@@ -124,6 +127,10 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		func() {
 			// 3) disk and screenshot channel state into the log (write_cache is root-only)
 			wc := m.su(ctx, i, "cat /sys/block/vd*/queue/write_cache | sort -u", 0)
+			if !root.CurrentPlatform().Windows() {
+				m.Log.Infof("实例 %d 磁盘缓存: %s", i, orText(joinNonEmptyLines(wc.Out, " / "), "读不到"))
+				return
+			}
 			shm := "缺失"
 			if host.SharedMemoryExists(shmName(ports, i)) {
 				shm = "在"
@@ -495,6 +502,10 @@ func parseWriteback(out string) (expire, writeback int, ok bool) {
 }
 
 func (m *Manager) setupBalloon(ctx context.Context, i int) {
+	if root.CurrentPlatform().MirrorOS == "macos" {
+		m.Log.Infof("实例 %d 当前 macOS 模拟器未启用空闲页上报气球", i)
+		return
+	}
 	const param = "/sys/module/page_reporting/parameters/page_reporting_order"
 	res := m.su(ctx, i, fmt.Sprintf("ls /sys/bus/virtio/drivers/virtio_balloon | grep -c virtio; echo %d > %s; cat %s",
 		balloonReportingOrder, param, param), 0)

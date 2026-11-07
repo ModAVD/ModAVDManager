@@ -32,7 +32,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 			retErr = m.withCreateErrorState(index, retErr, false)
 		}
 	}()
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	if req.Resume {
@@ -197,7 +197,7 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 
 // Update changes title / memory / cpu / fps / data partition size (next boot).
 func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	if _, err := m.instance(i); err != nil {
@@ -265,7 +265,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 // without this the retry the error advises would end in "不存在". errs.NotFound only when none of mas_<i>.ini,
 // mas_<i>.avd and instances.<i> is there.
 func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	in, err := m.instance(i)

@@ -37,6 +37,12 @@ func ForRequest(req *http.Request) (*url.URL, error) {
 	if !s.enabled {
 		return nil, nil
 	}
+	if s.bypassSimpleHosts && net.ParseIP(req.URL.Hostname()) == nil && !strings.Contains(req.URL.Hostname(), ".") {
+		return nil, nil
+	}
+	if s.bypassNetworks && darwinBypassCIDR(req.URL.Hostname(), s.override) {
+		return nil, nil
+	}
 	return proxyFor(req.URL, s.server, s.override), nil
 }
 
@@ -109,9 +115,12 @@ func Advice() string {
 
 // settings are the Internet settings that matter here.
 type settings struct {
-	enabled          bool   // ProxyEnable and a ProxyServer
-	server, override string // ProxyServer, ProxyOverride
-	autoConfig       bool   // AutoConfigURL is set
+	enabled           bool   // ProxyEnable and a ProxyServer
+	server, override  string // ProxyServer, ProxyOverride
+	autoConfig        bool   // AutoConfigURL is set
+	from              string // platform description; empty retains the Windows label
+	bypassNetworks    bool   // macOS IP-network exceptions; Windows overrides keep their semantics
+	bypassSimpleHosts bool   // macOS simple hostnames exclude IP literals
 }
 
 // system reads them (a variable for the tests).
@@ -193,4 +202,28 @@ func wildcard(pattern, s string) bool {
 		i++
 	}
 	return i == len(pattern)
+}
+
+// macOS accepts short IPv4 networks such as 169.254/16 in its exception list.
+// Apply these only to the macOS dictionary, retaining Windows override semantics.
+func darwinBypassCIDR(host, exceptions string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, pattern := range strings.Split(exceptions, ";") {
+		addr, bits, ok := strings.Cut(strings.TrimSpace(pattern), "/")
+		if !ok {
+			continue
+		}
+		if !strings.Contains(addr, ":") {
+			for strings.Count(addr, ".") < 3 {
+				addr += ".0"
+			}
+		}
+		if _, subnet, err := net.ParseCIDR(addr + "/" + bits); err == nil && subnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

@@ -58,18 +58,32 @@ func (m *Manager) writeCaptureState(i int, state captureState) error {
 	return os.Rename(tmp, path)
 }
 
+// Native process paths may name the same file through /var and /private/var.
+// On non-Windows hosts only an existing file identity establishes ownership.
+func capturePathMatches(a, b string) bool {
+	if root.CurrentPlatform().Windows() {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	left, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	right, err := os.Stat(b)
+	return err == nil && os.SameFile(left, right)
+}
+
 func (m *Manager) ownsCaptureHelper(i int, state captureState) bool {
 	helper := host.Process{PID: state.HelperPID, Created: state.HelperCreated}
 	if helper.PID == 0 || helper.Created == 0 || !helper.Alive() {
 		return false
 	}
 	image, err := helper.ImagePath()
-	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Join(m.Root.Dir, "tools", "modavd.exe")) {
+	if err != nil || !capturePathMatches(image, filepath.Join(m.Root.Dir, "tools", root.CurrentPlatform().CLI())) {
 		return false
 	}
 	args, err := helper.CommandLine()
 	if err != nil || (len(args) != 6 && len(args) != 7) || args[1] != LogcatCaptureArg ||
-		!strings.EqualFold(filepath.Clean(args[2]), m.Root.Dir) || args[3] != strconv.Itoa(i) ||
+		!capturePathMatches(args[2], m.Root.Dir) || args[3] != strconv.Itoa(i) ||
 		args[4] != strconv.FormatUint(uint64(state.QemuPID), 10) || args[5] != strconv.FormatUint(state.QemuCreated, 10) {
 		return false
 	}
@@ -102,7 +116,7 @@ func (m *Manager) ownedCapture(i int, state captureState) (host.Process, bool) {
 		return host.Process{}, false
 	}
 	image, err := client.ImagePath()
-	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+	if err != nil || !capturePathMatches(image, m.Root.AdbExe()) {
 		return host.Process{}, false
 	}
 	args, err := client.CommandLine()
@@ -125,7 +139,7 @@ func captureChildOf(client, helper host.Process) bool {
 // this is a transition to wait for, not an external capture. This weaker readiness fact never permits killing it.
 func (m *Manager) pendingOwnedCapture(i int, client host.Process) bool {
 	image, err := client.ImagePath()
-	if err != nil || !strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+	if err != nil || !capturePathMatches(image, m.Root.AdbExe()) {
 		return false
 	}
 	helper, ok := host.FindProcess(client.PPID)
@@ -199,7 +213,7 @@ func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeo
 				}
 				if helperOurs && captureChildOf(client, host.Process{PID: state.HelperPID, Created: state.HelperCreated}) {
 					image, err := client.ImagePath()
-					if err == nil && strings.EqualFold(filepath.Clean(image), filepath.Clean(m.Root.AdbExe())) {
+					if err == nil && capturePathMatches(image, m.Root.AdbExe()) {
 						continue
 					}
 				}

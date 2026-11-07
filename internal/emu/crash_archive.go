@@ -67,6 +67,9 @@ func (m *Manager) crashScanPath(i int) string {
 // startDiagnosticArchive starts bounded background work which survives a short CLI. Ordinary starts do not scan
 // crashpad at all. Each helper owns only one instance and exits after this copy, rather than becoming a service.
 func (m *Manager) startDiagnosticArchive(i int) {
+	if !root.CurrentPlatform().Windows() {
+		return
+	}
 	states, err := diagnostics.Read(m.Root)
 	if err != nil {
 		m.Log.Warnf("实例 %d 读不了诊断策略，未复制崩溃转储: %v", i, err)
@@ -76,7 +79,7 @@ func (m *Manager) startDiagnosticArchive(i int) {
 	if !state.Enabled {
 		return
 	}
-	_, err = host.StartOrphan(filepath.Join(m.Root.Dir, "tools", "modavd.exe"), []string{DiagnosticArchiveArg,
+	_, err = host.StartOrphan(filepath.Join(m.Root.Dir, "tools", root.CurrentPlatform().CLI()), []string{DiagnosticArchiveArg,
 		m.Root.Dir, strconv.Itoa(i), state.Since, state.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano)},
 		host.StartOptions{Env: m.ADB.Env()})
 	if err != nil {
@@ -87,6 +90,10 @@ func (m *Manager) startDiagnosticArchive(i int) {
 func RunDiagnosticArchive(args []string, stderr io.Writer) int {
 	if len(args) != 5 {
 		return 2
+	}
+	if !root.CurrentPlatform().Windows() {
+		fmt.Fprintln(stderr, "当前平台尚不支持崩溃转储归档")
+		return 1
 	}
 	i, err := strconv.Atoi(args[1])
 	through, timeErr := time.Parse(time.RFC3339Nano, args[4])

@@ -20,6 +20,7 @@ import (
 	"modavd/internal/guest"
 	"modavd/internal/hostproxy"
 	"modavd/internal/jsonord"
+	"modavd/internal/root"
 )
 
 // Per-app proxy (ModAVD/ModAVD#81): the listed apps of an instance go through a proxy, the rest direct. The setting is
@@ -171,7 +172,7 @@ func (m *Manager) guestUp(ctx context.Context, i int) (bool, error) {
 // SetAppProxy changes instance i's per-app proxy and, while it runs, applies it at once. An address the host has to
 // find (appproxy.Auto, or one without its kind) is probed on the host first.
 func (m *Manager) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*AppProxyResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	if _, err := m.instance(i); err != nil {
@@ -209,8 +210,24 @@ func (m *Manager) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*A
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := cur.Apply(c, resolve); err != nil {
+	preview, _, err := cur.Apply(c, resolve)
+	if err != nil {
 		return nil, appProxyError(err, found.err)
+	}
+	// A source build often has no ARM64 payload. Reject enabling before persisting
+	// a setting that could otherwise appear protected while no daemon can run.
+	payloadChecked := false
+	checkPayload := func(s appproxy.Setting) error {
+		if root.CurrentPlatform().MirrorOS == "macos" && s.Active() && !payloadChecked {
+			if _, err := guest.ProxyDaemonForABI(root.CurrentPlatform().GuestABI); err != nil {
+				return errs.Wrap(errs.NotReady, err, err.Error())
+			}
+			payloadChecked = true
+		}
+		return nil
+	}
+	if err := checkPayload(preview); err != nil {
+		return nil, err
 	}
 
 	var next appproxy.Setting
@@ -222,6 +239,11 @@ func (m *Manager) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*A
 		}
 		if next, notes, err = cur.Apply(c, resolve); err != nil {
 			return appProxyError(err, found.err)
+		}
+		// Another edit can change the setting after preview; validate the final
+		// value while holding the metadata lock before making it persistent.
+		if err := checkPayload(next); err != nil {
+			return err
 		}
 		meta.Set(appproxy.MetaKey, settingValue(meta.Get(appproxy.MetaKey), next))
 		return nil
@@ -524,11 +546,12 @@ type carried struct {
 
 // daemonFile is the daemon of this modavd (a variable for the tests: a test build carries none).
 var daemonFile = func() (carried, error) {
-	b, err := guest.ProxyDaemon()
+	abi := root.CurrentPlatform().GuestABI
+	b, err := guest.ProxyDaemonForABI(abi)
 	if err != nil {
 		return carried{}, errs.Wrap(errs.NotReady, err, err.Error())
 	}
-	local, err := guest.LocalProxyDaemon(filepath.Join(os.TempDir(), "modavd-guest"))
+	local, err := guest.LocalProxyDaemonForABI(filepath.Join(os.TempDir(), "modavd-guest"), abi)
 	if err != nil {
 		return carried{}, errs.Wrap(errs.Internal, err, "写不了客体程序的本机副本: "+err.Error())
 	}

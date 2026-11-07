@@ -6,9 +6,17 @@ opens the backing chain. Corruption, a missing backing, cancellation or a failed
 check cannot become a successful skip. A leftover scratch image is still removed.
 
 The current live allocation is `allocated-clusters * cluster size`. Host usage
-comes from `GetCompressedFileSize`, so sparse or host-compressed files count their
-actual allocation. Virtual capacity comes from the qcow2 header. These measure
+comes from Windows compressed file size or macOS allocated filesystem blocks, so
+sparse holes do not count as allocated space. Virtual capacity comes from the qcow2 header. These measure
 different things. A tiny overlay can inherit data across a large virtual disk.
+
+Windows compact supports NTFS/ReFS. Apple Silicon macOS uses the SDK's native
+`qemu-img` and requires APFS. It rejects symlinked or hardlinked overlays, checks
+the original file identity again before replacement, flushes the verified copy
+with `F_FULLFSYNC`, and atomically renames it through a held parent directory
+descriptor. APFS clones may share extents, so reported file allocation savings
+are not a guarantee of the same volume-wide free-space increase. Tool cancellation
+also terminates its process group so child tools cannot continue a canceled job.
 
 The estimated saving is `max(0, host usage - live allocation)`, matching disk info.
 It omits new qcow2 metadata and does not scan live clusters for zeroes. This is a

@@ -46,6 +46,17 @@ func (p Platform) Supported() bool { return p.Emulator != "" }
 // Windows-only implementation.
 func (p Platform) Windows() bool { return p.QemuDir == "windows-x86_64" && p.MirrorOS == "win" }
 
+// CLI is the root-local console executable used by background workers.
+func (p Platform) CLI() string {
+	if !p.Supported() {
+		return ""
+	}
+	if p.Windows() {
+		return "modavd.exe"
+	}
+	return "modavd"
+}
+
 func CurrentPlatform() Platform {
 	switch {
 	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":

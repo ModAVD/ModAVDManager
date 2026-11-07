@@ -64,6 +64,8 @@ func L3Groups() []L3Group                               { return win.L3Groups() 
 func SharedMemoryExists(name string) bool               { return win.SharedMemoryExists(name) }
 func DiskFree(path string) (uint64, error)              { return win.DiskFree(path) }
 func GetCompressedFileSize(path string) (uint64, error) { return win.GetCompressedFileSize(path) }
+func AllocatedFileBytes(path string) (uint64, error)    { return win.GetCompressedFileSize(path) }
+func ReplaceFileDurable(src, dst string) error          { return win.MoveFileReplaceThrough(src, dst) }
 func VolumeFileSystem(path string) (string, error)      { return win.VolumeFileSystem(path) }
 func MoveFileReplaceThrough(src, dst string) error      { return win.MoveFileReplaceThrough(src, dst) }
 func AvailableMemoryMB() (uint64, error)                { return win.AvailableMemoryMB() }

@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && (!darwin || !arm64 || !cgo)
 
 // Copyright 2026 Ji Mao Cai
 package emu

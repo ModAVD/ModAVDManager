@@ -41,9 +41,6 @@ func SharedMemoryExists(string) bool { return false }
 // GetCompressedFileSize calls GetCompressedFileSizeW for the Windows file.
 func GetCompressedFileSize(string) (uint64, error) { return 0, errUnsupported }
 
-// VolumeFileSystem calls GetVolumePathNameW + GetVolumeInformationW on Windows.
-func VolumeFileSystem(string) (string, error) { return "", errUnsupported }
-
 // MoveFileReplaceThrough calls MoveFileExW (REPLACE_EXISTING | WRITE_THROUGH).
 func MoveFileReplaceThrough(string, string) error { return errUnsupported }
 
@@ -67,8 +64,5 @@ func OpenStableRead(string) (*os.File, error) { return nil, errUnsupported }
 
 // FileChangeStamp disables caching without a supported file identity API.
 func FileChangeStamp(*os.File) string { return "" }
-
-// ExclusiveLockHeld requires the Windows lifecycle lock probe.
-func ExclusiveLockHeld(string) (bool, error) { return false, errUnsupported }
 
 func InfoBox(string) error { return errors.New("当前平台暂不支持消息框") }

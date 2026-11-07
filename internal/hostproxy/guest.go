@@ -41,7 +41,11 @@ func GuestSuggestion() (Suggestion, bool) {
 	if !st.enabled {
 		return Suggestion{}, false
 	}
-	return fromProxyServer(st.server)
+	s, ok := fromProxyServer(st.server)
+	if ok && st.from != "" {
+		s.From = st.from
+	}
+	return s, ok
 }
 
 // fromProxyServer picks from the Internet settings' ProxyServer.

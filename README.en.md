@@ -70,7 +70,7 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 | `stop <i> [--force] [--cancel-create]`, `stop --all [--force]` | Shut down: an app in the foreground is first sent home and given 2 s to save; then sync and ask Android for a clean shutdown (the foreground app is paused and stopped first), and if that fails, sync + kill; `--force` is sync + force-kill. Creating instances are refused unless `--cancel-create` is given. `--all` also stops creating instances and marks their results with `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | Install, uninstall or check the arm64 execution bridge; it is installed automatically at start, so you normally do not run it by hand (see below) |
 | `playstore <i> install\|uninstall\|status` | Add the Google Play Store to an instance, remove it, or check it (see below) |
-| `disk <i> compact` | Compact a stopped instance's data disk, or skip rewriting when estimated savings are too small. Verify before atomically replacing the original, and report host usage before and after, including growth. Large disks have budgets of many hours and effectively do not time out in normal use; cancel to stop an operation. Requires NTFS/ReFS, no snapshots and room for the temporary image. See [budgets and result fields](internal/emu/COMPACT.md) |
+| `disk <i> compact` | Compact a stopped instance's data disk, or skip rewriting when estimated savings are too small. Verify before atomically replacing the original, and report host usage before and after, including growth. Large disks have budgets of many hours and effectively do not time out in normal use; cancel to stop an operation. Supports NTFS/ReFS on Windows and APFS on Apple Silicon macOS; linked images and snapshots are rejected, and room for the temporary image is required. See [budgets and result fields](internal/emu/COMPACT.md) |
 | `check [--memory M]` | Computer check before starting |
 | `report-config [--no-clipboard]` | Copy the computer configuration and the game info from the running instances (read-only) |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | Collect a problem report and zip it (read-only). Ctrl+C before ZIP completion returns `canceled`, deletes the unfinished ZIP and removes staging; `--keep-stage` preserves staging and includes its path in the error |
@@ -82,6 +82,8 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 - Write `<i>` as `3` or `mas_3` (0-9, except 5). Memory is written as `6144`, `6144M` or `6G`, with only four tiers: 3 / 4 / 5 / 6 GB. Cores are 2 / 4 / 6, and the frame rate is 30 / 60.
 - Root folder: `--root`; if not given, the environment variable `MODAVD_ROOT`; otherwise the folder containing `modavd.exe`, or its parent.
 - From 0.3.0 there is no `restart`: `stop`, then `start`. An old call gets a usage error (exit code 2) that says so.
+
+Apple Silicon macOS uses the SDK's native `qemu-img`. Host usage counts allocated filesystem blocks, excluding sparse holes. APFS clones can share extents, so a decrease in file allocation does not guarantee the same increase in volume free space. Ordinary log cleanup checks actual open files and preserves candidates that are active, changed, linked, or contain unexpected subdirectories. The diagnostics switch remains unavailable on macOS.
 
 **The arm64 execution bridge**:
 

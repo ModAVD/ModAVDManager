@@ -457,7 +457,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	}
 	if len(todo) == 0 {
 		if f.darwin() {
-			f.say("组件都已齐全，不需要下载。当前 macOS 版本暂未开放实例创建与启动。")
+			f.say("组件都已齐全，不需要下载。创建或启动前仍需通过 HVF、镜像与模拟器版本检查。")
 		} else {
 			f.say("组件都已齐全，不需要下载。完成，可以在 AUTO-MAS 里添加这个文件夹了。")
 		}
@@ -532,7 +532,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 		}
 	}
 	if f.darwin() {
-		f.say("组件补全完成。当前 macOS 版本暂未开放实例创建与启动。")
+		f.say("组件补全完成。创建或启动前仍需通过 HVF、镜像与模拟器版本检查。")
 	} else {
 		f.say("完成，可以在 AUTO-MAS 里添加这个文件夹了。")
 	}

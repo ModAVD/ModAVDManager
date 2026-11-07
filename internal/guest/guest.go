@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"debug/elf"
 	"embed"
 	"encoding/hex"
 	"errors"
@@ -33,21 +34,57 @@ const ProxyDaemonName = "modavd-proxyd"
 var ErrNoProxyDaemon = errors.New("这个 modavd 编的时候没带按应用走代理的客体程序（要用 build.ps1 编）")
 
 // ProxyDaemon is cmd/modavd-proxyd for linux/amd64, as build.ps1 embedded it.
-func ProxyDaemon() ([]byte, error) {
-	z, err := proxyd.ReadFile("proxyd/" + ProxyDaemonName + ".gz")
+func ProxyDaemon() ([]byte, error) { return ProxyDaemonForABI("x86_64") }
+
+// ProxyDaemonForABI selects a packaged Linux guest executable. The historical
+// filename stays reserved for x86_64; ARM64 never falls back to that executable.
+func ProxyDaemonForABI(abi string) ([]byte, error) {
+	name := ProxyDaemonName
+	machine := elf.EM_X86_64
+	switch abi {
+	case "x86_64":
+	case "arm64-v8a", "arm64", "aarch64":
+		name += "-arm64"
+		machine = elf.EM_AARCH64
+	default:
+		return nil, fmt.Errorf("不支持的客体代理 ABI：%s", abi)
+	}
+	z, err := proxyd.ReadFile("proxyd/" + name + ".gz")
 	if err != nil {
-		return nil, ErrNoProxyDaemon
+		if abi == "x86_64" {
+			return nil, ErrNoProxyDaemon
+		}
+		return nil, fmt.Errorf("此构建未附带 ARM64 客体代理程序 %s.gz", name)
 	}
 	r, err := gzip.NewReader(bytes.NewReader(z))
 	if err != nil {
 		return nil, err
 	}
-	return io.ReadAll(r)
+	defer r.Close()
+	b, err := io.ReadAll(io.LimitReader(r, 64<<20+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 64<<20 {
+		return nil, errors.New("客体代理程序过大")
+	}
+	exe, err := elf.NewFile(bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("客体代理不是 ELF：%w", err)
+	}
+	defer exe.Close()
+	if exe.Class != elf.ELFCLASS64 || exe.Data != elf.ELFDATA2LSB || exe.Machine != machine ||
+		(exe.Type != elf.ET_EXEC && exe.Type != elf.ET_DYN) {
+		return nil, fmt.Errorf("客体代理的 ELF 架构与 %s 不匹配", abi)
+	}
+	return b, nil
 }
 
 // LocalProxyDaemon is LocalFile for the daemon.
-func LocalProxyDaemon(dir string) (string, error) {
-	b, err := ProxyDaemon()
+func LocalProxyDaemon(dir string) (string, error) { return LocalProxyDaemonForABI(dir, "x86_64") }
+
+func LocalProxyDaemonForABI(dir, abi string) (string, error) {
+	b, err := ProxyDaemonForABI(abi)
 	if err != nil {
 		return "", err
 	}

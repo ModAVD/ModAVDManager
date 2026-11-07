@@ -181,21 +181,10 @@ func tryUnlink(path string, log *logx.Logger) unlinkResult {
 	return unlinkFailed
 }
 
-// fileInUse: a handle without delete sharing holds the file (the emulator's and logcat's output handles are such
-// handles), so it cannot be deleted. A rename onto itself needs delete access like a delete, so it finds those files
-// without changing them (AUTO-MAS _in_use). vanished when the file is not there.
+// fileInUse checks native open-vnode ownership on macOS. Windows retains its
+// rename-to-self delete-sharing probe (AUTO-MAS _in_use). vanished means missing.
 func fileInUse(path string) (busy, vanished bool) {
-	err := os.Rename(path, path)
-	if err == nil {
-		return false, false
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, true
-	}
-	if _, lerr := os.Lstat(path); errors.Is(lerr, fs.ErrNotExist) {
-		return false, true
-	}
-	return true, false
+	return platformFileInUse(path)
 }
 
 // ---- logcat capture ------------------------------------------------------------------------------------------------
@@ -305,7 +294,7 @@ func (m *Manager) ensureLogcatRuntime(ctx context.Context, i int) string {
 		return ""
 	}
 	// The writer must outlive this CLI, just like adb. The helper owns both the pipe and the rotating files.
-	exe := filepath.Join(m.Root.Dir, "tools", "modavd.exe")
+	exe := filepath.Join(m.Root.Dir, "tools", root.CurrentPlatform().CLI())
 	token, err := captureRuntimeToken(m.Root)
 	if err != nil {
 		return ""

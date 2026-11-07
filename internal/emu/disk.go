@@ -86,7 +86,7 @@ func (m *Manager) runIdleMaint(ctx context.Context, i int, timeout time.Duration
 // not up, or when the emulator does not advertise discard on the data disk (an
 // old build); errs.Internal when the guest command fails.
 func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	if _, err := m.instance(i); err != nil {
@@ -279,7 +279,7 @@ func reclaimable(onDisk, allocated int64) int64 {
 // back to readable header/host sizes with warnings; an unreadable size is omitted. errs.NotFound when no overlay
 // exists; errs.NotReady when qemu-img is missing and a locked offline check was attempted.
 func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	in, err := m.instance(i)
@@ -315,7 +315,7 @@ func (m *Manager) DiskInfo(ctx context.Context, i int) (*DiskInfoResult, error) 
 		res.Warnings = append(res.Warnings, "实例在运行：已分配和可回收的大小要关机后才能算")
 	}
 
-	if onDisk, err := host.GetCompressedFileSize(overlay); err != nil {
+	if onDisk, err := host.AllocatedFileBytes(overlay); err != nil {
 		res.Warnings = append(res.Warnings, "读不到数据盘的宿主占用："+err.Error())
 	} else {
 		res.OnDiskBytes = new(int64(onDisk))
@@ -392,6 +392,13 @@ func requireCompactFS(overlay string) error {
 	fs, err := volumeFileSystem(overlay)
 	if err != nil {
 		return err
+	}
+	if root.CurrentPlatform().MirrorOS == "macos" {
+		if !strings.EqualFold(fs, "APFS") {
+			return errs.Newf(errs.Unsupported, "数据盘所在卷是 %s，macOS 只能在 APFS 卷上整理磁盘", fs).
+				WithAdvice("请先备份数据，再将实例放到 APFS 卷上整理")
+		}
+		return nil
 	}
 	if !compactFileSystems[strings.ToUpper(fs)] {
 		return errs.Newf(errs.Unsupported, "数据盘所在卷是 %s，只能在 NTFS 或 ReFS 卷上整理磁盘", fs).
@@ -633,7 +640,7 @@ func (m *Manager) probeCompactAllocated(ctx context.Context, overlay string, clu
 }
 
 func compactHostBytes(path string) (int64, error) {
-	n, err := host.GetCompressedFileSize(path)
+	n, err := host.AllocatedFileBytes(path)
 	if err != nil {
 		return 0, err
 	}
@@ -680,7 +687,7 @@ func removeCompactTmp(tmp string) error {
 // errs.Busy when the instance is running or a lock is held; errs.Unsupported for a
 // linked overlay, non-journaled volume, snapshots, a missing backing or too little free space.
 func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	in, err := m.instance(i)
@@ -829,7 +836,18 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		_ = os.Remove(tmp)
 		return nil, err
 	}
-	if err := host.MoveFileReplaceThrough(tmp, overlay); err != nil {
+	if root.CurrentPlatform().MirrorOS == "macos" {
+		current, err := os.Lstat(overlay)
+		if err != nil || !os.SameFile(st, current) || current.Size() != st.Size() || !current.ModTime().Equal(st.ModTime()) {
+			_ = os.Remove(tmp)
+			return nil, errs.New(errs.Busy, "整理期间原数据盘已变化，保留原盘，未替换")
+		}
+		if err := checkCompactOverlayLinks(overlay, current); err != nil {
+			_ = os.Remove(tmp)
+			return nil, err
+		}
+	}
+	if err := host.ReplaceFileDurable(tmp, overlay); err != nil {
 		_ = os.Remove(tmp)
 		return nil, err
 	}
