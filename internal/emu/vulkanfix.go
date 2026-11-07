@@ -441,7 +441,7 @@ func vulkanFixStatus(status string) (kind, rest string) {
 	return "", ""
 }
 
-// patchedVulkanLibrary is the host cache <root>\guest-patches\libvulkan_enc.khrfix-bindlock2.so, made when missing or
+// patchedVulkanLibrary is the host cache <root>\guest-patches\<vkfix.CacheName>, made when missing or
 // bad: pull the guest's own library, check its hash, patch, check the result's hash (vkfix.Patch), write it. ""
 // when any step fails (logged, nothing mounted). Host I/O errors (disk full, a virus scanner holding the file) are
 // warnings too.

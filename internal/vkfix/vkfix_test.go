@@ -29,7 +29,55 @@ const (
 	goldenJmpKhr    = "e9ebe9ffff"
 	goldenJmpDyn    = "e9cb200200"
 	goldenExitMagic = "b83253414d5b415c415d415e415f5dc3"
+
+	// the companion's khrfix + bindlock2 library (no template rollover fix)
+	companionFixSHA256 = "d5258af6244679fd5ce50245b7dcc1f645d971a04f7e64fc9872fcfb9faa7ecb"
 )
+
+// The template rollover sites (checked by running both functions under unicorn, original and patched, 11-07):
+// same length as the original, inside .text, not overlapping each other or any other patched range.
+func TestTemplateSites(t *testing.T) {
+	golden := map[int][2]string{
+		0x1FED62: {"4a8d346d000000004c01ee4189d6", "4b8d746d00448d73ff0f1f440000"},
+		0x1FEE2C: {"468d3411", "448d72ff"},
+	}
+	if len(templateSites) != len(golden) {
+		t.Fatalf("%d template sites, want %d", len(templateSites), len(golden))
+	}
+	others := [][2]int{
+		{khrEntry, khrEntry + 5}, {khrDyn, khrDynEnd}, {exitBind, exitBind + len(exitBindOrig)},
+		{exitBind2, exitBind2 + len(exitBind2Orig)}, {fwdBind, fwdBind + 5}, {fwdBind2, fwdBind2 + 5},
+		{fwdBind2KHR, fwdBind2KHR + 5},
+	}
+	for _, s := range templateSites {
+		g, ok := golden[s.va]
+		if !ok {
+			t.Errorf("%s: unexpected site 0x%x", s.name, s.va)
+			continue
+		}
+		if hex.EncodeToString(s.orig) != g[0] || hex.EncodeToString(s.fix) != g[1] {
+			t.Errorf("%s (0x%x): %x -> %x, want %s -> %s", s.name, s.va, s.orig, s.fix, g[0], g[1])
+		}
+		if len(s.orig) != len(s.fix) {
+			t.Errorf("%s: %d bytes replaced by %d", s.name, len(s.orig), len(s.fix))
+		}
+		if s.va < 0x1fcee0 || s.va+len(s.fix) > 0x1fcee0+0x1e951b {
+			t.Errorf("%s: 0x%x outside .text", s.name, s.va)
+		}
+		for _, o := range append(others, func() (r [][2]int) {
+			for _, u := range templateSites {
+				if u.va != s.va {
+					r = append(r, [2]int{u.va, u.va + len(u.fix)})
+				}
+			}
+			return
+		}()...) {
+			if s.va < o[1] && o[0] < s.va+len(s.fix) {
+				t.Errorf("%s (0x%x) overlaps 0x%x-0x%x", s.name, s.va, o[0], o[1])
+			}
+		}
+	}
+}
 
 func readOrSkip(t *testing.T, path string) []byte {
 	t.Helper()
@@ -57,8 +105,21 @@ func TestPatchRealLibrary(t *testing.T) {
 	if SHA256Hex(got) != FixSHA256 {
 		t.Fatalf("patched sha256 %s, want %s", SHA256Hex(got), FixSHA256)
 	}
+	// the companion's library has steps 1 and 2 only: equal to ours once the template sites are applied to it
+	if SHA256Hex(want) != companionFixSHA256 {
+		t.Fatalf("%s sha256 %s, want %s", fixLib, SHA256Hex(want), companionFixSHA256)
+	}
+	for _, s := range templateSites {
+		copy(want[s.va-textDelta:], s.fix)
+	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("patched library differs from %s", fixLib)
+		t.Fatalf("patched library differs from %s plus the template sites", fixLib)
+	}
+	for _, s := range templateSites {
+		off := s.va - textDelta
+		if !bytes.Equal(keep[off:off+len(s.orig)], s.orig) || !bytes.Equal(got[off:off+len(s.fix)], s.fix) {
+			t.Errorf("%s (0x%x): original %x, patched %x", s.name, s.va, keep[off:off+len(s.orig)], got[off:off+len(s.fix)])
+		}
 	}
 	if !bytes.Equal(orig, keep) {
 		t.Fatal("Patch modified its input")

@@ -419,7 +419,7 @@ func TestMountVulkanFix(t *testing.T) {
 func TestVulkanFixConstants(t *testing.T) {
 	// what vulkanfix.sh is called with and what it expects (u= in the script)
 	if vkfix.UploadPath != "/data/local/tmp/vulkanfix-upload.so" || vkfix.GuestPath != "/vendor/lib64/libvulkan_enc.so" ||
-		vkfix.CacheName != "libvulkan_enc.khrfix-bindlock2.so" {
+		vkfix.CacheName != "libvulkan_enc.khrfix-bindlock2-dstpl1.so" {
 		t.Error("vkfix constants changed")
 	}
 }

@@ -1,7 +1,7 @@
-// Package vkfix builds the patched guest Vulkan encoder (bindlock2, includes khrfix) from the image's own
-// /vendor/lib64/libvulkan_enc.so on the user's machine; the patched file is never distributed.
+// Package vkfix builds the patched guest Vulkan encoder (bindlock2, includes khrfix, plus the template rollover fix)
+// from the image's own /vendor/lib64/libvulkan_enc.so on the user's machine; the patched file is never distributed.
 //
-// Byte-for-byte port of the companion Vulkan fix implementation: khrfix jumps for
+// Steps 1 and 2 are a byte-for-byte port of the companion Vulkan fix implementation: khrfix jumps for
 // vkUpdateDescriptorSetWithTemplateKHR, and lock wrappers around
 // ResourceTracker::on_vkBindImageMemory(2) placed in the freed dynCheck function body.
 //
@@ -15,6 +15,12 @@
 //     drop the lock and, on the marker, call the encoder with the original exit's arguments. The lock is never held
 //     across a host round trip (version 1 did, and deadlocked against VulkanQueueSubmitWithCommands' global sequence
 //     number in 3 of 10 cold boots).
+//  3. template rollover (11-07, World of Airports device lost; not in the companion implementation): with batched
+//     descriptor set updates, doEmulatedDescriptor{BufferInfo,BufferView}WriteFromTemplate index the table with
+//     dstArrayElement + i after rolling over into the next binding, instead of the rolled-over arrOffset. An entry
+//     spanning bindings leaves them unwritten and writes past their arrays (the ImageInfo variant is right); a
+//     compute dispatch then uses never-written storage buffer descriptors and the host GPU hangs (VK_ERROR_DEVICE_LOST).
+//     Two same-length edits make both use the register that holds the next arrOffset, minus one.
 package vkfix
 
 import (
@@ -31,13 +37,28 @@ import (
 const (
 	// The image's library (API 34 google_apis x86_64) and the patched one.
 	OrigSHA256 = "898c0bbc38077e4b19d112f6c66e2970f1e015fc440fae091974b8f06e40fefb"
-	FixSHA256  = "d5258af6244679fd5ce50245b7dcc1f645d971a04f7e64fc9872fcfb9faa7ecb"
+	FixSHA256  = "9e5ba7452b7d834da575704b19bfa36bb2a4cf4e302fca8737629841e3ae736a"
 	// Where the guest library lives, and the upload path vulkanfix.sh expects (u= in the script).
 	GuestPath  = "/vendor/lib64/libvulkan_enc.so"
 	UploadPath = "/data/local/tmp/vulkanfix-upload.so"
-	// File name of the cached patched library in <root>\guest-patches.
-	CacheName = "libvulkan_enc.khrfix-bindlock2.so"
+	// File name of the cached patched library in <root>\guest-patches. Not the companion's khrfix-bindlock2 name: its
+	// library (sha256 d5258af6…) lacks the template rollover fix, and the two would overwrite each other's cache.
+	CacheName = "libvulkan_enc.khrfix-bindlock2-dstpl1.so"
 )
+
+// templateSites are the template rollover fix (3. above). In both loops the register written by the rollover cmov
+// holds the next arrOffset (1 after a rollover), so it minus one is the element to write.
+var templateSites = []struct {
+	va        int
+	orig, fix []byte
+	name      string
+}{
+	// lea rsi,[r13*2+0]; add rsi,r13; mov r14d,edx  ->  lea rsi,[r13+r13*2]; lea r14d,[rbx-1]; nopw 0(rax,rax)
+	{0x1FED62, mustHex("4a8d346d00000000 4c01ee 4189d6"), mustHex("4b8d746d00 448d73ff 0f1f440000"),
+		"doEmulatedDescriptorBufferInfoWriteFromTemplate"},
+	// lea r14d,[rcx+r10]  ->  lea r14d,[rdx-1]
+	{0x1FEE2C, mustHex("468d3411"), mustHex("448d72ff"), "doEmulatedDescriptorBufferViewWriteFromTemplate"},
+}
 
 // Virtual addresses, from bindlock.py (see the meaning there).
 const (
@@ -255,6 +276,13 @@ func Patch(original []byte) ([]byte, error) {
 		{fwdBind2KHR, cave2, "ResourceTracker::on_vkBindImageMemory2KHR"},
 	} {
 		if err := put(f.va, jmp(f.va, f.target), fwdBytes, f.name); err != nil {
+			return nil, err
+		}
+	}
+
+	// 5. the template rollover fix
+	for _, s := range templateSites {
+		if err := put(s.va, s.fix, s.orig, s.name); err != nil {
 			return nil, err
 		}
 	}
