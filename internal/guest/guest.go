@@ -59,6 +59,8 @@ const (
 	IdlePoll     = "mas-idlepoll.sh"
 	WifiFastpath = "mas-wifi-fastpath.sh"
 	VulkanFix    = "vulkanfix.sh"
+	// GLES32 switches the OpenGL ES version the guest reports to 3.2 (modavd only, experimental, ModAVD/ModAVD#131).
+	GLES32 = "gles32.sh"
 	// PlayStore installs, checks and removes the Google Play Store (modavd only, not in AUTO-MAS).
 	PlayStore = "playstore.sh"
 )

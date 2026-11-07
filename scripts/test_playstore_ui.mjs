@@ -120,13 +120,14 @@ async function menuFor(inst, jobs = []) {
   const m = await load('cards.js', {
     'api.js': { api: {} },
     'dom.js': dom,
-    'format.js': Object.fromEntries(['label', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText'].map(k => [k, noop])),
+    'format.js': Object.fromEntries(['label', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
     'ui.js': { toast: noop, toastError: noop, copyText: noop, openMenu: noop },
     'forms.js': { openSettings: noop, openDelete: noop },
     'proxy.js': { openProxy: noop, markOf: noop },
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop, runCheck: noop },
     'playstore.js': { openPlayStore: (i, action) => calls.push([i, action]), openGSFID: i => calls.push([i, 'gsfid']) },
+    'gles32.js': { openGLES32: noop, GLES32_NOTE: '' },
   });
   for (const j of jobs) m.S.jobs.set(j.id, j);
   const items = m.mod.menuItems({ i: 3, inst: { index: 3, status: 'offline', running: false, initialized: true, bridge: 'installed', ...inst } }).filter(Boolean);

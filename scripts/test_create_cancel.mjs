@@ -17,13 +17,14 @@ async function harness() {
       return { id: 'j2', kind: 'stop', state: 'running', index: 3 };
     } } },
     'dom.js': Object.fromEntries(['h', 'icon', 'btn', 'ibtn', 'keyed', 'setText', 'attr'].map(k => [k, noop])),
-    'format.js': Object.fromEntries(['label', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText'].map(k => [k, noop])),
+    'format.js': Object.fromEntries(['label', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
     'ui.js': { toast: noop, toastError: e => { throw e; }, copyText: noop, openMenu: noop },
     'forms.js': { openSettings: noop, openDelete: noop },
     'proxy.js': { openProxy: noop, markOf: noop },
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop, runCheck: noop },
     'playstore.js': { openPlayStore: noop, openGSFID: noop },
+    'gles32.js': { openGLES32: noop, GLES32_NOTE: '' },
   };
   async function load(name) {
     if (cache.has(name)) return cache.get(name);
@@ -179,6 +180,7 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch 
     'viewer.js': { openViewer: noop, openLogs: noop },
     'panels.js': { openActivity: noop },
     'playstore.js': { openPlayStore: noop, openGSFID: noop },
+    'gles32.js': { openGLES32: noop, GLES32_NOTE: '' },
   };
   async function load(name) {
     if (cache.has(name)) return cache.get(name);

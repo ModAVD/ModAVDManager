@@ -123,6 +123,7 @@ type manager interface {
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
 	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
 	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
+	GLES32(ctx context.Context, i int, action string) (*emu.GLES32Result, error)
 	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
 	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
 	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)

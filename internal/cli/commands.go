@@ -285,6 +285,21 @@ func init() {
 			run:   runPlayStore, human: humanPlayStore, exit: exitPlayStore,
 		},
 		{
+			name: "gles32", args: "<i> on|off|status", summary: "实验功能：让实例报告 GLES 3.2（只改报的版本）",
+			details: "实验功能。有的游戏在清单里要求 GLES 3.2，Play 商店按实例报的版本把 ModAVD（报 3.1）判成不兼容。" +
+				"on 把 ro.opengles.version 报成 196610（3.2），让商店放行；实际渲染仍是 3.1，走 Vulkan 的游戏能用，" +
+				"真要 GLES 3.2 渲染的应用会装得上、打不开。默认关，按实例开。" +
+				"做法是在执行桥带来的可写系统镜像覆盖层里改 /vendor/build.prop，所以实例要有执行桥；" +
+				"没有的报 not_ready（details.reason 为 gles32_no_bridge）。改完会冷启动一次才生效，再核对实例报的版本，对不上就报错。" +
+				"实例原来关着的，做完再关掉（没做成也关掉）；开着的，冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"status：只读，实例要开着，on、off、pending-on、pending-off 四种（后两种是还没冷启动）。" +
+				"开着的实例不能卸执行桥，要先 off。装了 Google Play 商店的实例，商店会记着旧的设备信息：" +
+				"到 设置 → 应用 → Google Play 商店 → 存储，清除数据（账号不会退出）。list / info 里的 gles32 是开关的记录。",
+			posNames: []string{"实例编号", "on、off 或 status"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runGLES32, human: humanOf(formatGLES32), exit: exitGLES32,
+		},
+		{
 			name: "disk", args: "<i> trim|info|compact", summary: "磁盘回收：触发回收或整理把客体已删文件占的空间还给宿主；看数据盘大小",
 			details: "trim：在客体的数据盘（/data）上触发一次回收（FITRIM，经 vold 空闲维护），" +
 				"让模拟器释放已删除文件在数据盘镜像里占着的空间。实例要开着并已开机完成；" +
@@ -1212,6 +1227,38 @@ func runPlayStore(c *cmdCtx) (any, error) {
 		return m.PlayStoreGSFID(c.ctx, i)
 	}
 	return m.PlayStore(c.ctx, i, action)
+}
+
+func runGLES32(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "on", "off", "status":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 on、off 或 status，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("gles32").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	return m.GLES32(c.ctx, i, action)
+}
+
+// exitGLES32: 1 when the switch did not end up as asked (on after on, off after off). status and --json: 0, the
+// result says it.
+func exitGLES32(data any, json bool) int {
+	r, ok := data.(*emu.GLES32Result)
+	if json || !ok {
+		return 0
+	}
+	if r.Action == "on" && r.State != "on" || r.Action == "off" && r.State != "off" {
+		return 1
+	}
+	return 0
 }
 
 func humanPlayStore(w io.Writer, data any) {

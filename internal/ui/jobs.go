@@ -33,6 +33,10 @@ const (
 	kindPlayStoreUninstall = "playstore-uninstall"
 	kindPlayStoreImport    = "playstore-import"
 
+	// the reported GLES 3.2 (gles32.go): an instance's switch on and off
+	kindGLES32On  = "gles32-on"
+	kindGLES32Off = "gles32-off"
+
 	stateRunning  = "running"
 	stateDone     = "done"
 	stateFailed   = "failed"
@@ -69,6 +73,10 @@ func kindLabel(kind string) string {
 		return "移除 Google Play 商店"
 	case kindPlayStoreImport:
 		return "导入 Google Play 商店的文件"
+	case kindGLES32On:
+		return "开启报告 GLES 3.2"
+	case kindGLES32Off:
+		return "关闭报告 GLES 3.2"
 	}
 	return kind
 }
@@ -79,7 +87,7 @@ func sdkJob(kind string) bool { return kind == kindComponents || kind == kindPla
 
 func bootJob(kind string) bool {
 	switch kind {
-	case kindStart, kindCreate, "restart", kindPlayStoreInstall, kindPlayStoreUninstall:
+	case kindStart, kindCreate, "restart", kindPlayStoreInstall, kindPlayStoreUninstall, kindGLES32On, kindGLES32Off:
 		return true
 	}
 	return false

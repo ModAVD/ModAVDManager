@@ -287,6 +287,9 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		}
 		kv("渲染器", r)
 	}
+	if in.GLES32 {
+		kv("报告 GLES 3.2", "开（实验；实际渲染仍是 3.1）")
+	}
 	if p := in.AppProxy; p != nil {
 		state := "关"
 		if p.Enabled {
@@ -672,6 +675,20 @@ func formatPlayStoreGSFID(w io.Writer, r *emu.PlayStoreGSFIDResult) {
 	fmt.Fprintf(w, "  十六进制：%s\n", r.Hex)
 	fmt.Fprintf(w, "在电脑的浏览器里打开 %s ，用要在实例里登录的 Google 账号登录，填入 GSF ID（登记页要哪种写法就填哪种）提交；"+
 		"等一会儿让登记生效，把实例关机再开机，再去登录\n", emu.PlayStoreUncertifiedURL)
+}
+
+func formatGLES32(w io.Writer, r *emu.GLES32Result) {
+	state := map[string]string{"on": "开", "off": "关", "pending-on": "已写入，要关机再开机才生效", "pending-off": "已去掉，要关机再开机才生效"}[r.State]
+	fmt.Fprintf(w, "实例 %d 报告 GLES 3.2 %s：%s（ro.opengles.version=%s）\n", r.Index, r.Action, state, r.Prop)
+	if r.Restarted {
+		fmt.Fprintln(w, "为了让改动生效，关机后又开了一次")
+	}
+	if r.Stopped {
+		fmt.Fprintln(w, "实例原来是关着的，做完已经关掉")
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintln(w, n)
+	}
 }
 
 func formatDisk(w io.Writer, r *emu.DiskTrimResult) {

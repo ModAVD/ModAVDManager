@@ -67,6 +67,9 @@ type InstanceInfo struct {
 	// PlayStorePartial: an install failed and could not take back all it put in (the record is "partial"); uninstall
 	// removes what is there, another install completes it.
 	PlayStorePartial bool `json:"play_store_partial"`
+	// GLES32: the guest is told to report OpenGL ES 3.2 (instances.<i>.gles32, set by `gles32 <i> on`; gles32.go).
+	// Read from that record only; `gles32 <i> status` asks the guest.
+	GLES32 bool `json:"gles32"`
 	// Creation is "creating" while create sets the instance up (its headless first boot), "failed" when that stopped
 	// (CreationError says why, CreationLog is that boot's log); "" for a ready instance. See crud.go.
 	Creation      string `json:"creation"`

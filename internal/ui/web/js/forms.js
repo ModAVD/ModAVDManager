@@ -282,6 +282,7 @@ function infoRows(inst) {
     // the record in mas-avd.json (InstanceInfo.play_store, play_store_partial); the card's 「更多操作」 menu adds or removes it
     inst.play_store_partial ? ['Google Play 商店', '只装了一部分', '上次补全中途失败，没能全部撤回：在「更多操作」里移除，或者再补全一次']
       : ['Google Play 商店', inst.play_store ? '已补全' : '没有', inst.play_store ? '' : '要用的话在实例的「更多操作」菜单里补全'],
+    ['报告 GLES 3.2', inst.gles32 ? '开（实验）' : '关', inst.gles32 ? '只改报的版本，实际渲染仍是 3.1；在「更多操作」里关闭' : '实验功能，要用的话在实例的「更多操作」菜单里开启'],
     ['路径', inst.path, 'mono', ibtn('folder', '打开实例目录', () => A.openFolder('instance', inst.index))],
   ];
 }

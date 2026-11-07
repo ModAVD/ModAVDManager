@@ -55,7 +55,7 @@ function mk(i, title, o = {}) {
     path: `${ROOT}\\avd\\mas_${i}.avd`,
     app_proxy: null,
     // the execution bridge (off | pending | installed | unknown) and the Google Play Store's record
-    bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store, play_store_partial: false,
+    bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store, play_store_partial: false, gles32: false,
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
@@ -310,6 +310,31 @@ function runImport(j, files) {
     if (!skipped) db.store = { ready: true, source: 'import' };
     finishJob(j, { root: ROOT, from: zip ? 'zip' : 'files', used: files.map((f) => f.name), kept: [], skipped, set_aside: '', status: storeStatus() });
   }, 700);
+}
+
+// 开启 / 关闭报告 GLES 3.2 on an instance: boots it cold once (an instance that was off is booted for it and stopped again).
+function runGLES32(inst, j, action) {
+  const i = inst.index;
+  const was = inst.running;
+  const set = (o) => { Object.assign(inst, o); emit('instances', list()); };
+  const off = () => { set({ status: 'offline', running: false, booted: false, busy: '', pid: 0, started_at: '' }); inst.screencap.shm_ready = false; };
+  const boot = () => set({ status: 'starting', running: true, busy: 'starting', pid: 10000 + Math.floor(Math.random() * 9000), started_at: iso() });
+  const up = () => { set({ status: 'online', booted: true, busy: '' }); inst.screencap.shm_ready = true; };
+  const doing = action === 'on' ? '正在开启报告 GLES 3.2（会冷启动一次）' : '正在关闭报告 GLES 3.2（会冷启动一次）';
+  j.progress = { step: j.kind, message: `实例 ${i} ${doing}`, done: 0, total: 1000 };
+  emit('job', j);
+  log('info', `实例 ${i} ${doing}`, j.id);
+  const steps = [];
+  if (!was) steps.push([600, boot], [2500, up]);
+  steps.push([1200, () => log('info', `实例 ${i} ${action === 'on' ? '写入' : '去掉'} /vendor/build.prop 里的 ro.opengles.version`, j.id)],
+    [800, () => set({ busy: 'stopping' })], [1600, off], [700, boot], [2600, up]);
+  if (!was) steps.push([800, () => set({ busy: 'stopping' })], [1400, off]);
+  steps.push([600, () => {
+    inst.gles32 = action === 'on';
+    finishJob(j, { index: i, action, state: action, enabled: action === 'on', prop: action === 'on' ? '196610' : '196609', restarted: true, stopped: !was,
+      notes: inst.play_store ? ['Play 商店会记着旧的设备信息；要它按新版本重新判断兼容，到 设置 → 应用 → Google Play 商店 → 存储，清除数据（账号不会退出）'] : [], warnings: [] });
+  }]);
+  run(j, steps);
 }
 
 // 补全 / 移除 Google Play 商店 on an instance: boots it cold once (an instance that was off is booted for it and stopped
@@ -1022,6 +1047,16 @@ async function handle(url, init) {
     }
     const j = newJob(act, i);
     runPlayStore(inst, j, install ? 'install' : 'uninstall');
+    return json(j, 202);
+  }
+  if (act === 'gles32-on' || act === 'gles32-off') {
+    const on = act === 'gles32-on';
+    if (busyJob || inst.status === 'creating') return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (inst.bridge === 'off') {
+      return fail(STATUS_OF.not_ready, 'not_ready', `实例 ${i} 没有 arm64 执行桥，不按可写系统镜像开机，改不了它报的 GLES 版本`, `先运行 modavd bridge ${i} install 装上执行桥，再开这个开关`, { reason: 'gles32_no_bridge' });
+    }
+    const j = newJob(act, i);
+    runGLES32(inst, j, on ? 'on' : 'off');
     return json(j, 202);
   }
   if (act === 'playstore-gsfid') {

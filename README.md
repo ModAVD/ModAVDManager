@@ -70,6 +70,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `playstore <i> install\|uninstall\|status` | 给实例补全、移除、查看 Google Play 商店（见下） |
+| `gles32 <i> on\|off\|status` | 实验功能：让实例报告 GLES 3.2（见下） |
 | `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM；成功只表示触发请求已返回，不等待或确认客体回收完成；模拟器太旧、不支持回收时返回不支持（退出码 4） |
 | `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；关机且取得启动锁后才运行只读的 qcow2 元数据检查，给出已分配和估计可回收大小。整理中或锁不可用时，仅返回可读取的文件头、宿主占用和原因；不可读的数值省略，不修复镜像 |
 | `disk <i> compact` | 整理已关机实例的数据盘；预计收益不足时跳过重写；转换后先校验再原子替换，原盘在替换成功前不动；报告前后占用和增减；大盘预算可达数十小时，正常整理基本不会超时，停止请取消；仅支持 NTFS/ReFS，拒绝快照或重写空间不足，详见[预算与结果契约](internal/emu/COMPACT.md) |
@@ -115,6 +116,14 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
 - `install` 中途失败（比如覆盖层空间不够）时，撤回这次放进去的文件（包括没放到位的 `.new`），恢复占位应用；替换了镜像自带文件的那几个和占位应用要下次冷启动后才完全恢复。撤不干净的，`status` 是 `partial`，实例记为只装了一部分，可以 `uninstall` 移除，也可以再 `install` 补全。
 - 设备没有通过 Play 保护机制认证。登录时提示未认证的，用 `playstore <i> gsfid`（管理器里实例「更多操作」的「复制 GSF ID」）取这台实例的 GSF ID，十进制和十六进制都给（`--json` 是 `decimal`、`hex`），到 <https://www.google.com/android/uncertified/> 登记。实例要开着；还没有 ID 时报 `not_ready`（`details.reason` 为 `no_gsf_id`），开着网等一两分钟再试。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
 - 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`，装到一半撤不干净时是 `"partial"`；`info` / `list` 的 `play_store`（装上了）和 `play_store_partial`（只装了一部分）按这一项。
+
+**报告 GLES 3.2**（`gles32`，实验，ModAVD#131）：
+
+- 有的游戏在清单里要求 GLES 3.2，Play 商店按 `ro.opengles.version` 把 ModAVD（报 3.1）判成不兼容。`gles32 <i> on` 把实例报的版本改成 3.2（196610），让商店放行。**只改报的版本，实际渲染仍是 3.1**：走 Vulkan 的游戏能用，真要 GLES 3.2 渲染的应用会装得上、打不开。默认关，按实例开。
+- 要执行桥：改的是它带来的可写系统覆盖层里的 `/vendor/build.prop`，没有执行桥的报 `not_ready`（`details.reason` 为 `gles32_no_bridge`）。开着的实例不能 `bridge <i> uninstall`，要先 `gles32 <i> off`。
+- `on` / `off` 会冷启动一次，再核对实例报的版本，对不上就报错；原来关着的做完再关，开着的照原来的方式开回来。`status` 只读，实例要开着，给 `on`、`off`，或还没冷启动的 `pending-on` / `pending-off`。
+- 实例装着 Google Play 商店时，商店会记着旧的设备信息：到实例里 设置 → 应用 → Google Play 商店 → 存储，清除数据（账号不会退出），它才会按新版本重新判断兼容。
+- 记在 `instances.<i>.gles32`；`info` / `list` 的 `gles32` 按这一项。管理器里是实例「更多操作」的「开启 / 关闭报告 GLES 3.2（实验）」。
 
 **按应用走代理**（`proxy`）：
 

@@ -3,12 +3,12 @@
 import { api } from './api.js';
 import { S, update, instance } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
-import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText } from './format.js';
+import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import { openActivity, runCheck } from './panels.js';
 
 const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
   components: '补全组件', 'collect-info': '收集问题信息', 'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店',
-  'playstore-import': '导入 Google Play 商店的文件' };
+  'playstore-import': '导入 Google Play 商店的文件', 'gles32-on': '开启报告 GLES 3.2', 'gles32-off': '关闭报告 GLES 3.2' };
 // what the store needs once it is in an instance: registering its GSF ID (playstore.js openGSFID, the page is
 // playstore.js UNCERTIFIED; not imported from there, as playstore.js imports this module)
 const GSF = '登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。';
@@ -77,6 +77,10 @@ function notify(job) {
   } else if (job.kind === 'playstore-uninstall') {
     toast({ tone: r.state === 'absent' ? 'ok' : 'warn', title: r.state === 'absent' ? `${who}已移除 Google Play 商店` : `${who}的 Google Play 商店没移除干净`,
       text: playStoreText(job.kind, r), action: r.state === 'absent' ? null : activity, timeout: 6000 });
+  } else if (job.kind === 'gles32-on' || job.kind === 'gles32-off') {
+    const done = job.kind === 'gles32-on' ? r.state === 'on' : r.state === 'off';
+    toast({ tone: done ? 'ok' : 'warn', title: done ? `${who}${VERB[job.kind]}了` : `${who}的${VERB[job.kind]}没有生效`,
+      text: gles32Text(job.kind, r), action: done ? null : activity, timeout: (r.notes || []).length ? 14000 : 7000 });
   } else if (job.kind === 'playstore-import') {
     toast({ title: 'Google Play 商店的文件已就绪', text: `${playStoreText(job.kind, r)}要用的实例在「更多操作」里补全商店。`, timeout: 9000 });
   }
@@ -125,6 +129,9 @@ export async function diskCompact(i) {
 
 // 补全 / 移除 Google Play 商店 (action install | uninstall): a job that boots the instance cold once (playstore.js asks first)
 export const playStore = (i, action, onErr) => run(i, 'playstore-' + action, {}, onErr);
+
+// 开启 / 关闭报告 GLES 3.2 (action on | off): a job that boots the instance cold once (gles32.js asks first)
+export const gles32 = (i, action, onErr) => run(i, 'gles32-' + action, {}, onErr);
 
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));
 export const openFolder = safe((what, index) => api.post('/api/open', index == null ? { what } : { what, index }));

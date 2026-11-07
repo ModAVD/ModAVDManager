@@ -1,9 +1,9 @@
 // Formatting for people (zh-CN).
 
 export const KIND = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', components: '补全组件', 'collect-info': '收集问题信息', 'disk-info': '磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
-  'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店', 'playstore-import': '导入 Google Play 商店的文件' };
+  'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店', 'playstore-import': '导入 Google Play 商店的文件', 'gles32-on': '开启报告 GLES 3.2', 'gles32-off': '关闭报告 GLES 3.2' };
 export const KIND_ICON = { start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk',
-  'playstore-install': 'plus', 'playstore-uninstall': 'x', 'playstore-import': 'download' };
+  'playstore-install': 'plus', 'playstore-uninstall': 'x', 'playstore-import': 'download', 'gles32-on': 'plus', 'gles32-off': 'x' };
 export const STATE = { running: '进行中', done: '完成', failed: '失败', canceled: '已取消' };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };
 
@@ -94,6 +94,17 @@ export function playStoreText(kind, r) {
   const how = r.stopped ? '实例照原样关着' : r.restarted ? '实例冷启动过一次' : '';
   if (kind === 'playstore-install') return (done ? '商店已放进实例' : '商店只放进去了一部分，可以再补全一次') + (how ? `，${how}` : '') + '。';
   return (done ? '已移除商店，换回了系统原来的占位应用' : '没有移除干净，可以再移除一次') + (how ? `，${how}` : '') + '。';
+}
+
+// The GLES 3.2 jobs (API.md "报告 GLES 3.2"): GLES32Result of an instance's on / off (stopped: it was off and is off
+// again; restarted: it was running and booted cold; prop: what the guest reports now).
+export function gles32Text(kind, r) {
+  if (!r) return '';
+  const on = kind === 'gles32-on';
+  const done = on ? r.state === 'on' : r.state === 'off';
+  const how = r.stopped ? '实例照原样关着' : r.restarted ? '实例冷启动过一次' : '';
+  const base = on ? (done ? '实例现在报 GLES 3.2' : '还没有生效，可以再开一次') : (done ? '实例改回报 GLES 3.1' : '还没有改回来，可以再关一次');
+  return base + (r.prop ? `（ro.opengles.version=${r.prop}）` : '') + (how ? `，${how}` : '') + '。' + (done && (r.notes || []).length ? r.notes.join('') : '');
 }
 
 export function uptime(started) {

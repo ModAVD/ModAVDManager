@@ -682,6 +682,11 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			return nil, errs.Newf(errs.NotReady, "实例 %d 装着（或者装了一部分）Google Play 商店，它离不开执行桥带来的可写系统镜像", i).
 				WithAdvice(fmt.Sprintf("要卸执行桥，先运行 modavd playstore %d uninstall", i))
 		}
+		if m.gles32Wanted(i) {
+			// the line in /vendor/build.prop lives in the overlay the bridge's marker makes the emulator boot with (gles32.go)
+			return nil, errs.Newf(errs.NotReady, "实例 %d 开着「报告 GLES 3.2」，它离不开执行桥带来的可写系统镜像", i).
+				WithAdvice(fmt.Sprintf("要卸执行桥，先运行 modavd gles32 %d off", i))
+		}
 		// recorded first, so none of the starts below (nor any later one) puts it back
 		if err := m.setBridgeWanted(i, false); err != nil {
 			return nil, err

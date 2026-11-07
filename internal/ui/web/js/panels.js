@@ -5,7 +5,7 @@ import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
 import { openComponentFetch, activeJob, latestJob, progressText, loadDiagnostics, storeBox, fillStoreBox } from './diagnostics.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText } from './format.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -347,10 +347,11 @@ function updateJob(r, j) {
   if (running) {
     const p = j.progress;
     // 补全 / 移除 Google Play 商店 report no percentage while they run (done 0 of 1000)
-    const n = j.kind === 'playstore-install' || j.kind === 'playstore-uninstall' ? null : pct(p);
+    const n = j.kind === 'playstore-install' || j.kind === 'playstore-uninstall' || j.kind.startsWith('gles32-') ? null : pct(p);
     setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…'
       : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在触发磁盘回收…' : j.kind === 'disk-compact' ? '正在整理磁盘…'
       : j.kind === 'playstore-install' ? '正在补全 Google Play 商店…' : j.kind === 'playstore-uninstall' ? '正在移除 Google Play 商店…'
+      : j.kind === 'gles32-on' ? '正在开启报告 GLES 3.2…' : j.kind === 'gles32-off' ? '正在关闭报告 GLES 3.2…'
       : j.kind === 'playstore-import' ? '正在核对文件…' : '进行中…'));
     setText(r.pctEl, n == null ? '' : Math.round(n) + '%');
     r.bar.classList.toggle('indet', n == null);
@@ -408,6 +409,7 @@ function resultText(j) {
   if (j.kind === 'components') return '组件补全完成。';
   if (j.kind === 'collect-info') return r.zip_path ? `问题包：${r.zip_path}` : '问题包已生成。';
   if (j.kind.startsWith('playstore-')) return playStoreText(j.kind, r);
+  if (j.kind.startsWith('gles32-')) return gles32Text(j.kind, r);
   if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
   return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
     r.zygote_restarted && '装了 Vulkan 补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';

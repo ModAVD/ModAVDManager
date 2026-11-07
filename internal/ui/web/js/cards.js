@@ -11,6 +11,7 @@ import { openProxy, markOf } from './proxy.js';
 import { openViewer, openLogs } from './viewer.js';
 import { openActivity } from './panels.js';
 import { openPlayStore, openGSFID } from './playstore.js';
+import { openGLES32, GLES32_NOTE } from './gles32.js';
 
 const cards = new Map();
 let grid;
@@ -88,9 +89,11 @@ export function viewState(inst) {
 const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
   creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
 const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败', 'disk-info': '查看磁盘占用失败', 'disk-trim': '回收磁盘空间失败', 'disk-compact': '整理磁盘失败',
-  'playstore-install': '补全 Google Play 商店失败', 'playstore-uninstall': '移除 Google Play 商店失败' };
+  'playstore-install': '补全 Google Play 商店失败', 'playstore-uninstall': '移除 Google Play 商店失败',
+  'gles32-on': '开启报告 GLES 3.2 失败', 'gles32-off': '关闭报告 GLES 3.2 失败' };
 // 补全 / 移除 Google Play 商店: stops and boots the instance cold; the card is busy with it the whole time
-const STORE_JOB = { 'playstore-install': ['补全商店中', '正在补全 Google Play 商店…'], 'playstore-uninstall': ['移除商店中', '正在移除 Google Play 商店…'] };
+const STORE_JOB = { 'playstore-install': ['补全商店中', '正在补全 Google Play 商店…'], 'playstore-uninstall': ['移除商店中', '正在移除 Google Play 商店…'],
+  'gles32-on': ['改版本中', '正在开启报告 GLES 3.2…'], 'gles32-off': ['改版本中', '正在关闭报告 GLES 3.2…'] };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -309,6 +312,7 @@ function menuItems(c) {
     { sep: true },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     ...storeItems(inst, i, fresh || busy || !!v.kind),
+    glesItem(inst, i, fresh || busy || !!v.kind),
     // 磁盘占用 reads only (on or off); 回收 needs the guest booted; 整理 rewrites the data disk file, so the instance must be off.
     // Any job running on the instance blocks all three (the server would answer busy).
     { label: '磁盘占用', icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
@@ -337,6 +341,16 @@ function storeItems(inst, i, held) {
     return [remove, { label: '复制 GSF ID', icon: 'copy', disabled: held || !online, hint: online ? '' : '开机后可用', run: () => openGSFID(i) }];
   }
   return inst.play_store_partial ? [add, remove] : [add];
+}
+
+// 报告 GLES 3.2（实验）: InstanceInfo.gles32. Boots the instance cold once (gles32.js asks first); the line lives in the
+// execution bridge's writable system overlay, so without the bridge it cannot be turned on. Turning it off stays
+// possible whatever the bridge says. held: as for the store's items.
+function glesItem(inst, i, held) {
+  const on = !!inst.gles32;
+  const noBridge = !on && inst.bridge === 'off';
+  return { label: on ? '关闭报告 GLES 3.2（实验）…' : '开启报告 GLES 3.2（实验）…', icon: on ? 'x' : 'plus', disabled: held || noBridge,
+    hint: noBridge ? '要执行桥' : '只改报的版本，渲染仍是 3.1', title: GLES32_NOTE, run: () => openGLES32(i, on ? 'off' : 'on') };
 }
 
 // ---- thumbnails: about every 5 s, only while the card view is on screen, the window has focus and no dialog covers

@@ -36,6 +36,9 @@ type backend interface {
 	PlayStoreCheck(i int, action string) error
 	// PlayStoreGSFID is `modavd playstore <i> gsfid`: a few seconds on a running instance.
 	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
+	// GLES32 is `modavd gles32 <i> on|off|status`; GLES32Check what it refuses before touching the instance (no bridge ...).
+	GLES32(ctx context.Context, i int, action string) (*emu.GLES32Result, error)
+	GLES32Check(i int, action string) error
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
 	// Serial is instance i's adb serial in the root's port plan.
