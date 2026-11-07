@@ -51,7 +51,7 @@ func (m *Manager) qemuOf(i int) (host.Process, bool, error) {
 // the process scan, creation metadata / locks need no adb: List would start the
 // private server and ask each instance, up to 5 s out of a 30 s shutdown budget.
 func (m *Manager) StopTargets(ctx context.Context) ([]int, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	if err := ctxErr(ctx); err != nil {
@@ -84,7 +84,7 @@ func (m *Manager) StopTargets(ctx context.Context) ([]int, error) {
 
 // List is every instance with its status (one process scan, getprop only for running ones).
 func (m *Manager) List(ctx context.Context) (*ListResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	insts, err := avd.List(m.Root)
@@ -120,7 +120,7 @@ func (m *Manager) List(ctx context.Context) (*ListResult, error) {
 
 // Info is one instance. errs.NotFound when it does not exist.
 func (m *Manager) Info(ctx context.Context, i int) (*InstanceInfo, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	in, err := m.instance(i)

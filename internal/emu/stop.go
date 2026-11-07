@@ -89,7 +89,7 @@ var stopOpsOf = (*Manager).stopOpsFor
 // end qemu (see qemuNotEnded). An external stop of a creating instance is errs.Busy unless CancelCreate is explicit;
 // Force only selects the shutdown method. Internal setup shutdowns and bridge restarts use creating instead.
 func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	in, err := m.instance(i)

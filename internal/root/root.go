@@ -844,6 +844,8 @@ func (r *Root) Components() []ComponentStatus {
 		emulator.Build = r.VersionText()
 		b, ok := r.ModBuild()
 		emulator.Installed = ok && b >= MinModBuild
+	} else if r.EmulatorPresent() && OfficialEmulatorVersionSupported(emulator.Version) {
+		emulator.Installed = true
 	}
 	launcher := ComponentStatus{ID: "launcher", Name: LauncherName, Version: LauncherVersion, Optional: true}
 	if fi, err := os.Stat(r.LauncherAPK()); err == nil && fi.Size() == LauncherAPKSize {
@@ -891,6 +893,12 @@ func (r *Root) MissingError(missing []string) *errs.Error {
 
 func (r *Root) EmulatorPresent() bool {
 	return allFiles(filepath.Join(r.RuntimeSDK(), "emulator"), keyFiles["emulator"])
+}
+
+// OfficialEmulatorVersionSupported is the verified macOS SDK fallback until a
+// native ModAVD package is distributed. Windows keeps requiring the ModAVD build.
+func OfficialEmulatorVersionSupported(version string) bool {
+	return CurrentPlatform().MirrorOS == "macos" && (version == "37.2.13" || version == "37.2.13.0")
 }
 
 // EmulatorSelfBuilt: present and qemu-system-x86_64-headless.exe contains SelfBuiltMark.

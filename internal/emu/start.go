@@ -86,7 +86,7 @@ var startFindQemu = (*Manager).findQemu
 // the guest reboots on its own (qemu stays), the watch runs this start again, and so does any start that finds the
 // recorded boot_id changed. The per-boot steps then run again and the Vulkan fix is owed as above.
 func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	t0 := time.Now()
