@@ -133,9 +133,11 @@ func compactFakeManager(t *testing.T, req compactFakeRequest) (*Manager, string,
 		t.Fatal(err)
 	}
 	t.Setenv(compactFakeEnv, path)
-	saved := qemuScan
+	saved, savedFS := qemuScan, volumeFileSystem
 	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{} }
-	t.Cleanup(func() { qemuScan = saved })
+	// These tests are about the budget, not the volume: the real one is disk_integration_test's (ModAVD/ModAVD#142).
+	volumeFileSystem = func(string) (string, error) { return "NTFS", nil }
+	t.Cleanup(func() { qemuScan, volumeFileSystem = saved, savedFS })
 	return m, path, overlay
 }
 

@@ -99,21 +99,26 @@ func TestCollectBootDiag(t *testing.T) {
 }
 
 // TestCollectBootDiagTotal: once the whole limit is used up, the items left are not run; each item's limit is what is
-// left of the whole when that is shorter.
+// left of the whole when that is shorter. The clock is a fake one that only each run moves (150 ms), so a busy CI
+// runner cannot change how many items run (ModAVD/ModAVD#142).
 func TestCollectBootDiagTotal(t *testing.T) {
 	dir := testutil.TempDir(t)
+	now := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
+	saved := bootDiagNow
+	bootDiagNow = func() time.Time { return now }
+	t.Cleanup(func() { bootDiagNow = saved })
 	var limits []time.Duration
 	run := func(ctx context.Context, w io.Writer, timeout time.Duration, args ...string) adb.Result {
 		limits = append(limits, timeout)
 		io.WriteString(w, "x")
-		time.Sleep(150 * time.Millisecond)
+		now = now.Add(150 * time.Millisecond)
 		return adb.Result{}
 	}
 	if !collectBootDiag(context.Background(), dir, "h", 200*time.Millisecond, run) {
 		t.Fatal("collectBootDiag = false")
 	}
-	if len(limits) != 2 || limits[0] > 200*time.Millisecond || limits[1] > 50*time.Millisecond {
-		t.Fatalf("limits %v, want two runs within the 200 ms", limits)
+	if want := []time.Duration{200 * time.Millisecond, 50 * time.Millisecond}; !slices.Equal(limits, want) {
+		t.Fatalf("limits %v, want %v", limits, want)
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "summary.txt"))
 	if n := strings.Count(string(b), "没收（总时限到了）"); n != len(bootDiagItems)-2 {

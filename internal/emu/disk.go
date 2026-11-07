@@ -381,11 +381,15 @@ const userdataCompactTmp = "userdata-qemu.cmp"
 // there, so the final swap is atomic and a crash never leaves the overlay missing with only the temp file behind.
 var compactFileSystems = map[string]bool{"NTFS": true, "REFS": true}
 
+// volumeFileSystem reads the file system of the volume holding a path; tests that are not about the volume replace it
+// (ModAVD/ModAVD#142).
+var volumeFileSystem = host.VolumeFileSystem
+
 // requireCompactFS refuses to compact on a file system where the final rename is not atomic (exFAT, FAT32): a crash
 // mid-rename could leave only the temp file, and the emulator would then build an empty overlay over the backing,
 // so a later run would delete the one good copy (ModAVD/ModAVD#2 P2-1).
 func requireCompactFS(overlay string) error {
-	fs, err := host.VolumeFileSystem(overlay)
+	fs, err := volumeFileSystem(overlay)
 	if err != nil {
 		return err
 	}

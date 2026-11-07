@@ -55,6 +55,10 @@ type bootDiagRun func(ctx context.Context, w io.Writer, timeout time.Duration, a
 
 var bootDiagSelfProcess = func() (host.Process, bool) { return host.FindProcess(uint32(os.Getpid())) }
 
+// bootDiagNow is collectBootDiag's clock; tests replace it so the whole limit does not depend on how busy the
+// computer is (ModAVD/ModAVD#142).
+var bootDiagNow = time.Now
+
 // bootFailed: err ends a boot that went wrong, not one the caller gave up on. A cancel (Ctrl+C, MCP
 // notifications/cancelled, the manager's job) is not one; create's own deadline running out is.
 func bootFailed(ctx context.Context, err error) bool {
@@ -151,11 +155,11 @@ func (m *Manager) collectBootFailure(i int, cause error) string {
 // an empty file is removed) and summary.txt, one line per item; all of it within total. False when no item gave
 // anything.
 func collectBootDiag(ctx context.Context, dir, header string, total time.Duration, run bootDiagRun) bool {
-	deadline := time.Now().Add(total)
+	deadline := bootDiagNow().Add(total)
 	lines := []string{header, "这些文件可能带账号信息，只存在本机；要发给别人时按问题包的规矩来。", ""}
 	got := false
 	for _, it := range bootDiagItems {
-		left := time.Until(deadline)
+		left := deadline.Sub(bootDiagNow())
 		if left <= 0 || ctx.Err() != nil {
 			lines = append(lines, it.file+"：没收（总时限到了）")
 			continue

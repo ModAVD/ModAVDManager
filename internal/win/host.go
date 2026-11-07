@@ -200,7 +200,12 @@ func VolumeFileSystem(path string) (string, error) {
 		uintptr(unsafe.Pointer(&fsName[0])), uintptr(len(fsName))); r == 0 {
 		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 所在卷的文件系统: %v", path, e))
 	}
-	return syscall.UTF16ToString(fsName), nil
+	name := syscall.UTF16ToString(fsName)
+	if name == "" {
+		// seen once on a CI runner (ModAVD/ModAVD#142): success without a name would read "数据盘所在卷是 ，"
+		return "", errs.Newf(errs.Internal, "读不到 %s 所在卷的文件系统：系统没给出名字", path)
+	}
+	return name, nil
 }
 
 // GetCompressedFileSize is the bytes the file at path really occupies on the volume (GetCompressedFileSizeW): for a
