@@ -300,6 +300,7 @@ pwsh -NoProfile -File build.ps1 -Out <dir> -Go <go.exe of go1.26.5>
 
 - Which go: `-Go`; if not given, the environment variable `MODAVD_GO`; otherwise the go on PATH. If the version differs from the `toolchain` in `go.mod`, it reports an error and never quietly builds with another version.
 - It uses `-trimpath -buildvcs=false` and does not use `-X` to write the version number: the same source gives byte-identical results on any machine and in any directory.
+- It does not pass `-s -w`, so the exes keep their symbol table; both carry version information (product name, description, version) from the committed `rsrc_windows_amd64.syso` files (one in the root for `modavd.exe`, one in `cmd/modavd-gui/` for `ModAVD.exe`). Unsigned, stripped Go programs are what the machine-learning rules of antivirus programs flag most. After changing the version in `internal/buildinfo`, the icon or the manifest, run `go generate ./cmd/modavd-gui` and commit both .syso files; a unit test fails until then.
 - It uses the standard library only, with no third-party dependencies, and builds offline too (`GOPROXY=off`).
 - `.gitattributes` makes all text files in the repository LF (binary files such as icons excepted): `go:embed` embeds the bytes in the working tree, and an exe built from CRLF files would differ.
 

@@ -67,9 +67,12 @@ try {
         # The package layout: <root>\tools\modavd.exe and <root>\ModAVD.exe. Never side by side: Windows names are
         # case-insensitive, so modavd.exe and ModAVD.exe in one directory are the same file.
         New-Item -ItemType Directory -Force (Join-Path $Out 'tools') | Out-Null
-        & $Go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $Out 'tools\modavd.exe') .
+        # No -s -w: the exes keep their symbol table and DWARF. Stripped, unsigned Go binaries are what the machine-learning
+        # detections of antivirus programs flag most (0.38.2's tools\modavd.exe was quarantined as Bearfoos.A!ml); the
+        # version information in the .syso files (cmd/modavd-gui/winres) is there for the same reason.
+        & $Go build -trimpath -buildvcs=false -o (Join-Path $Out 'tools\modavd.exe') .
         if ($LASTEXITCODE) { throw "go build modavd.exe failed ($LASTEXITCODE)" }
-        & $Go build -trimpath -buildvcs=false '-ldflags=-s -w -H=windowsgui' -o (Join-Path $Out 'ModAVD.exe') ./cmd/modavd-gui
+        & $Go build -trimpath -buildvcs=false '-ldflags=-H=windowsgui' -o (Join-Path $Out 'ModAVD.exe') ./cmd/modavd-gui
         if ($LASTEXITCODE) { throw "go build ModAVD.exe failed ($LASTEXITCODE)" }
     } finally { Pop-Location }
 } finally {

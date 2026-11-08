@@ -302,6 +302,7 @@ pwsh -NoProfile -File build.ps1 -Out <目录> -Go <go1.26.5 的 go.exe>
 
 - 用哪个 go：`-Go`，没给就用环境变量 `MODAVD_GO`，再没有就用 PATH 上的 go。版本和 `go.mod` 的 `toolchain` 不一致就报错，不会悄悄换别的版本编。
 - `-trimpath -buildvcs=false`，不用 `-X` 写版本号：同一份源码在哪台机器、哪个目录编，结果都逐字节相同。
+- 不加 `-s -w`，exe 留着符号表；两个 exe 都带版本信息（产品名、说明、版本号），来自提交在仓库里的 `rsrc_windows_amd64.syso`（根目录一份给 `modavd.exe`，`cmd/modavd-gui/` 一份给 `ModAVD.exe`）。没签名、去了符号的 Go 程序最容易被杀毒软件的机器学习规则误报。改了 `internal/buildinfo` 的版本号、图标或清单，要跑 `go generate ./cmd/modavd-gui` 重新生成两份 syso 一起提交，没重新生成单测会失败。
 - 只用标准库，没有第三方依赖，离线（`GOPROXY=off`）也能编。
 - `.gitattributes` 让仓库里的文本文件一律 LF（图标等二进制文件除外）：`go:embed` 嵌的是工作区里的字节，换成 CRLF 编出来的 exe 就不一样了。
 
