@@ -29,12 +29,14 @@ async function harness() {
   async function load(name) {
     if (cache.has(name)) return cache.get(name);
     const values = stubs[name];
+    const text = values ? '' : await readFile(new URL(name, base), 'utf8');
+    // two modules importing this one while its file was read: one instance (the page's S is shared that way)
+    if (cache.has(name)) return cache.get(name);
     const mod = values
       ? new vm.SyntheticModule(Object.keys(values), function() {
         for (const [k, v] of Object.entries(values)) this.setExport(k, v);
       }, { context })
-      : new vm.SourceTextModule(await readFile(new URL(name, base), 'utf8') +
-        (name === 'cards.js' ? '\nexport { menuItems };' : ''), { context });
+      : new vm.SourceTextModule(text + (name === 'cards.js' ? '\nexport { menuItems };' : ''), { context });
     cache.set(name, mod);
     await mod.link(specifier => load(specifier.replace(/^\.\//, '')));
     return mod;
@@ -185,12 +187,14 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch 
   async function load(name) {
     if (cache.has(name)) return cache.get(name);
     const values = stubs[name];
+    const text = values ? '' : await readFile(new URL(name, base), 'utf8');
+    // two modules importing this one while its file was read: one instance (the page's S is shared that way)
+    if (cache.has(name)) return cache.get(name);
     const mod = values
       ? new vm.SyntheticModule(Object.keys(values), function() {
         for (const [key, value] of Object.entries(values)) this.setExport(key, value);
       }, { context })
-      : new vm.SourceTextModule(await readFile(new URL(name, base), 'utf8') +
-        (name === 'cards.js' ? '\nexport { updateCard };' : ''), { context });
+      : new vm.SourceTextModule(text + (name === 'cards.js' ? '\nexport { updateCard };' : ''), { context });
     cache.set(name, mod);
     await mod.link(specifier => load(specifier.replace(/^\.\//, '')));
     return mod;

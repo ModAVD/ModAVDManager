@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"modavd/internal/errs"
-	"modavd/internal/win"
 )
 
 func TestScanRetriesShortRootPrograms(t *testing.T) {
@@ -96,7 +95,7 @@ func TestInstallRetriesRootProgramAtFinalScan(t *testing.T) {
 				} else if !stays {
 					stop()
 				}
-				uses, err := u.scanProcesses(programs, win.ListProcesses, win.Process.ImagePath)
+				uses, err := ownScan(u)(programs)
 				if (scans == 2 || stays) && (len(uses) != 1 || !uses[0].RootProgram || uses[0].Unknown || uses[0].ShutdownHelper) {
 					t.Fatalf("root program was not identified: %+v, %v", uses, err)
 				}

@@ -6,6 +6,7 @@ package emu
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,13 +16,30 @@ import (
 	"time"
 
 	"modavd/internal/diagnostics"
+	"modavd/internal/logx"
+	"modavd/internal/root"
 	"modavd/internal/win"
 )
 
 func liveDiagnosticCapture(t *testing.T) (*Manager, win.Process, string) {
 	t.Helper()
 	r, log := portPlanRoot(t)
-	m := New(r, nil)
+	// The manager's warnings say why a switch was not waited for (runtime unreadable, an external capture); a failure
+	// prints them. Collected rather than t.Logf: the helper's goroutines may log after the test ends.
+	var logMu sync.Mutex
+	var managerLog strings.Builder
+	m := New(r, logx.New(func(level logx.Level, msg string) {
+		logMu.Lock()
+		fmt.Fprintf(&managerLog, "%v %s\n", level, msg)
+		logMu.Unlock()
+	}))
+	t.Cleanup(func() {
+		if t.Failed() {
+			logMu.Lock()
+			t.Logf("manager log:\n%s", managerLog.String())
+			logMu.Unlock()
+		}
+	})
 	six := 6
 	if _, err := m.Create(context.Background(), CreateRequest{Index: &six, filesOnly: true}); err != nil {
 		t.Fatal(err)
@@ -119,6 +137,38 @@ func TestDiagnosticCaptureSwitchAndReregisterPreserveOtherClients(t *testing.T) 
 		if !p.Alive() {
 			t.Fatal("diagnostic switch ended an independent logcat", p.PID)
 		}
+	}
+}
+
+// TestCaptureWaitIgnoresUnreadablePolicy: an unreadable policy reads as off, which the old off capture matches; the
+// wait for an on switch must not end there (the CI flake where SetDiagnostics(on) returned with capture still off).
+func TestCaptureWaitIgnoresUnreadablePolicy(t *testing.T) {
+	m, _, _ := liveDiagnosticCapture(t)
+	if _, err := m.persistDiagnostics(context.Background(), 6, true); err != nil {
+		t.Fatal(err)
+	}
+	saved := readOperationalDiagnostics
+	t.Cleanup(func() { readOperationalDiagnostics = saved })
+	var mu sync.Mutex
+	failures := 3
+	readOperationalDiagnostics = func(r *root.Root) (map[int]diagnostics.State, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if failures > 0 {
+			failures--
+			return nil, os.ErrPermission
+		}
+		return saved(r)
+	}
+	if err := m.waitDiagnosticCapture(context.Background(), 6, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	state, err := m.readCaptureState(6)
+	if err != nil || !state.Enabled {
+		t.Fatalf("wait ended before the capture switched on: %+v/%v", state, err)
+	}
+	if _, ok := m.ownedCapture(6, state); !ok {
+		t.Fatal("switched capture is not owned")
 	}
 }
 

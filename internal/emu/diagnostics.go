@@ -21,6 +21,13 @@ type operationalDiagnostics struct {
 var readOperationalDiagnostics = diagnostics.Read
 
 func (m *Manager) diagnosticPolicy(i int) diagnostics.State {
+	s, _ := m.readDiagnosticPolicy(i)
+	return s
+}
+
+// readDiagnosticPolicy is diagnosticPolicy that also says whether the metadata could be read: the zero (off) State it
+// falls back to is a fact for capture, not for someone waiting for a switch to finish.
+func (m *Manager) readDiagnosticPolicy(i int) (diagnostics.State, error) {
 	states, err := readOperationalDiagnostics(m.Root)
 	r := m.diagnosticReader
 	if r == nil {
@@ -33,10 +40,10 @@ func (m *Manager) diagnosticPolicy(i int) diagnostics.State {
 			m.Log.Warnf("诊断策略读不了，日志采集和客体缓冲区暂按关闭处理，历史日志不删除: %v", err)
 		}
 		r.failed = true
-		return diagnostics.State{}
+		return diagnostics.State{}, err
 	}
 	r.failed = false
-	return states[i]
+	return states[i], nil
 }
 
 // PreviewDiagnostics reports the same closed-file plan off will apply, without changing settings or deleting files.

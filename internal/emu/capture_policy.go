@@ -174,18 +174,19 @@ func (m *Manager) waitDiagnosticCapture(ctx context.Context, i int, timeout time
 
 func (m *Manager) waitDiagnosticCaptureRuntime(ctx context.Context, i int, timeout time.Duration) error {
 	for deadline := time.Now().Add(timeout); ; {
-		policy := m.diagnosticPolicy(i)
+		// An unreadable policy reads as off, which an old off capture would match: decide nothing on that round.
+		policy, policyErr := m.readDiagnosticPolicy(i)
 		state, err := m.readCaptureState(i)
 		server := captureServerProcess(m)
 		serverMatches := server.PID == 0 || server.Created == 0 || state.ServerPID == 0 || state.ServerCreated == 0 ||
 			state.ServerPID == server.PID && state.ServerCreated == server.Created
-		if err == nil && state.Enabled == policy.Enabled && state.Since == policy.Since && serverMatches {
+		if policyErr == nil && err == nil && state.Enabled == policy.Enabled && state.Since == policy.Since && serverMatches {
 			if _, ok := m.ownedCapture(i, state); ok {
 				return nil
 			}
 		}
 		clients, scanErr := m.findLogcatProcesses(m.Root.Ports().Serial(i))
-		if scanErr == nil && len(clients) > 0 {
+		if policyErr == nil && scanErr == nil && len(clients) > 0 {
 			// The helper can replace its client while the process snapshot is being read. Classify against its
 			// latest published state, not the previous generation read before the snapshot.
 			if latest, readErr := m.readCaptureState(i); readErr == nil {

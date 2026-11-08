@@ -286,7 +286,7 @@ func TestRunningSDKHardlinkOutsideRootBlocksUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := assertImageStarts(t, alias)
-	u.scan = nil
+	u.scan = ownScan(u)
 	st, err := u.Install(context.Background())
 	if errs.CodeOf(err) != errs.Busy || st.Updated || st.Phase != phaseStaged {
 		t.Fatalf("outside hardlink did not block the swap: %+v %v", st, err)

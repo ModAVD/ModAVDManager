@@ -111,7 +111,7 @@ func TestInstallRejectsStartAfterOccupancyCheck(t *testing.T) {
 	scans := 0
 	var scan func(bool) ([]processUse, error)
 	scan = func(programs bool) ([]processUse, error) {
-		u.scan = nil
+		u.scan = ownScan(u)
 		uses, err := u.processesUsing(programs)
 		u.scan = scan
 		if err != nil {
@@ -322,7 +322,7 @@ func TestRecoveryChecksPreviousSDKOccupants(t *testing.T) {
 	}
 	u.cutSwap(t, 1)
 	child := occupancyChild(t, filepath.Join(u.l.previousEmulator(), rel))
-	u.scan = nil
+	u.scan = ownScan(u)
 	if _, err := u.Recover(context.Background()); errs.CodeOf(err) != errs.Busy || phaseOf(u.l.readState()) != phaseSwapping || isDir(u.l.emulator()) {
 		t.Fatalf("recovery ignored previous SDK occupant: %v", err)
 	}
