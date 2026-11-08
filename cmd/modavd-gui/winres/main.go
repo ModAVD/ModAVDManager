@@ -7,7 +7,7 @@
 // The output is deterministic (no timestamps), so the same icon gives the same bytes and release builds stay
 // reproducible. Run it again only when modavd.ico or the manifest changes, and commit the .syso.
 //
-// modavd.ico is fan art and is not covered by the code licence.
+// modavd.ico is not covered by the code licence.
 package main
 
 import (

@@ -10,8 +10,7 @@ Copyright 2026 qiyinxi
   cmd/modavd-gui/rsrc_windows_amd64.syso（把上面的图标编进 ModAVD.exe 的资源文件）
   internal/ui/web/assets/ 下的图片（icon-16.png、icon-32.png、icon-48.png、icon-256.png、modavd.ico）
 
-  这些是 ModAVD 的程序图标，和模拟器的图标是同一张图，都是同人创作。
-  画中角色是《明日方舟》的艾雅法拉，角色及其设计的版权归上海鹰角网络所有。
+  这些是 ModAVD 自己的程序图标，和模拟器的图标是同一张图。
   这些图片不在本仓库的 AGPL-3.0 许可范围内，也不随本项目的任何其他许可证授权，
   只作为管理器的图标随程序分发。
   如有版权问题，请通过 https://github.com/ModAVD/ModAVD/issues 或邮件 qiyinxi@foxmail.com 联系，

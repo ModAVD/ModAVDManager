@@ -257,7 +257,7 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
 - 关掉窗口后，等正在跑的任务做完再退出。
 - 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
-- 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标是同人图（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)），不随代码许可授权。
+- 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标不随代码许可授权（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)）。
 
 ## 更新 ModAVD
 
@@ -349,6 +349,6 @@ go test ./...
 - 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)。Copyright 2026 qiyinxi。
 - 分发本程序（改没改都算），或者把改过的版本放到网上给别人用，都要按同样的许可证提供对应源码。别的程序只是调用 `modavd.exe`、MCP 服务或管理器的本地接口，不受影响。
 - 例外见 [NOTICE](NOTICE)：
-  - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是《明日方舟》艾雅法拉的同人图，角色版权归上海鹰角网络所有，不在本仓库的许可范围内；
+  - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是 ModAVD 自己的图标，不在本仓库的许可范围内；
   - `internal/avd/testdata/instances_ref.py` 复制自 AUTO-MAS（AGPL-3.0-or-later），只供测试、在单独的进程里运行，不编进程序。
 - 编出的 exe 含 Go 标准库和运行时（BSD-3-Clause）。

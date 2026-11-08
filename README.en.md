@@ -255,7 +255,7 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 - One root folder gets one server; double-clicking again just reopens the window. The state file is in `%LOCALAPPDATA%\ModAVD\`, and the log is at `<root>\logs\modavd-ui.log`.
 - After the window is closed, it waits for the running tasks to finish before exiting.
 - Options: `--root`, `--port`, `--no-window` (start only the server), `--dev` (exposes a fake backend under `/dev/`, for adjusting page styles).
-- The front end / back end API is in `internal/ui/API.md` (in Chinese). The pages are in `internal/ui/web/`; the icons are fan art (see `internal/ui/web/assets/README.md` and [NOTICE](NOTICE)) and are not licensed under the code license.
+- The front end / back end API is in `internal/ui/API.md` (in Chinese). The pages are in `internal/ui/web/`; the icons are not licensed under the code license (see `internal/ui/web/assets/README.md` and [NOTICE](NOTICE)).
 
 ## Updating ModAVD
 
@@ -347,6 +347,6 @@ Tests run on Windows only. Optional environment variables:
 - The code is released under the GNU Affero General Public License, version 3 or later (AGPL-3.0-or-later); see [LICENSE](LICENSE). Copyright 2026 qiyinxi.
 - If you distribute this program (modified or not), or put a modified version online for others to use, you must provide the corresponding source under the same license. Other programs that merely call `modavd.exe`, the MCP server or the manager's local interface are not affected.
 - The exceptions are in [NOTICE](NOTICE):
-  - The program icons (`cmd/modavd-gui/modavd.ico`, `cmd/modavd-gui/rsrc_windows_amd64.syso`, and the images under `internal/ui/web/assets/`) are fan art of Eyjafjalla from *Arknights*; the copyright in the character belongs to Shanghai Hypergryph, and it is outside this repository's license;
+  - The program icons (`cmd/modavd-gui/modavd.ico`, `cmd/modavd-gui/rsrc_windows_amd64.syso`, and the images under `internal/ui/web/assets/`) are ModAVD's own icon and are outside this repository's license;
   - `internal/avd/testdata/instances_ref.py` is copied from AUTO-MAS (AGPL-3.0-or-later), is used only for tests, runs in a separate process, and is not compiled into the program.
 - The built exes contain the Go standard library and runtime (BSD-3-Clause).
