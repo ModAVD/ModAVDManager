@@ -1,2 +1,3 @@
 out/
+internal/guest/proxyd/modavd-proxyd
 internal/guest/proxyd/*.gz

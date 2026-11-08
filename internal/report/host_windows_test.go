@@ -16,6 +16,31 @@ import (
 	"modavd/internal/win"
 )
 
+// TestCIMScriptForStdin: runCIM hands cim.ps1 to PowerShell on stdin, which reads it in the console code page, line by
+// line; so the script is ASCII with LF line ends, and a real run gets to the last line (the JSON) with the part's answer.
+func TestCIMScriptForStdin(t *testing.T) {
+	for i := 0; i < len(cimScript); i++ {
+		if c := cimScript[i]; c >= 0x80 || c == '\r' {
+			t.Fatalf("cim.ps1 has byte %#x at %d: it must be ASCII with LF line ends", c, i)
+		}
+	}
+	if strings.Contains(cimScript, "EncodedCommand") {
+		t.Fatal("cim.ps1 mentions EncodedCommand")
+	}
+	data, err := runCIM(context.Background(), "cs", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := data["cs"]; !ok {
+		if _, failed := data["csErr"]; !failed {
+			t.Fatalf("cim.ps1 answered %v, want cs or csErr", data)
+		}
+	}
+	if len(data) != 1 {
+		t.Fatalf("cim.ps1 answered %v, want only the part asked for", data)
+	}
+}
+
 // TestCIMPartsApart: every WMI class runs in a cim.ps1 process of its own, once, on first use: one that fails or
 // times out (here av) loses only its own rows, and a part nobody asks for never runs.
 func TestCIMPartsApart(t *testing.T) {

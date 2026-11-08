@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -134,19 +133,18 @@ func (h *winHost) part(ctx context.Context, letter, name string, v any) error {
 	return nil
 }
 
-// runCIM runs cim.ps1 for one part with Windows PowerShell 5.1 (hidden, no profile, stdin NUL) and parses its JSON
-// line.
+// runCIM runs cim.ps1 for one part with Windows PowerShell 5.1 (hidden, no profile) and parses its JSON line.
+//
+// The script goes in on stdin (-Command -), not as -EncodedCommand: a hidden PowerShell with a base64 command line is
+// what malware does, and antivirus models weigh that string in the exe. Read from stdin, a statement runs once it is
+// complete, so cim.ps1 stays ASCII (stdin is read in the console code page) and its multi-line statements are whole
+// blocks; the extra newline at the end ends the last one. TestCIMScriptForStdin checks both.
 func runCIM(ctx context.Context, part, letter string) (map[string]json.RawMessage, error) {
 	ps := filepath.Join(windowsDir(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-	u := utf16.Encode([]rune(cimScript))
-	b := make([]byte, 2*len(u))
-	for i, c := range u {
-		binary.LittleEndian.PutUint16(b[2*i:], c)
-	}
 	ctx, cancel := context.WithTimeout(ctx, cimTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ps, "-NoLogo", "-NoProfile", "-NonInteractive", "-InputFormat", "None",
-		"-EncodedCommand", base64.StdEncoding.EncodeToString(b))
+	cmd := exec.CommandContext(ctx, ps, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-")
+	cmd.Stdin = strings.NewReader(cimScript + "\n")
 	cmd.Env = append(os.Environ(), "MODAVD_CIM_PARTS="+part, "MODAVD_CIM_LETTER="+letter)
 	cmd.Dir = filepath.Dir(ps)
 	var stdout, stderr bytes.Buffer
