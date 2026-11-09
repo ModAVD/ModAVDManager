@@ -270,7 +270,13 @@ func TestCollectMatchesScript(t *testing.T) {
 			res, names, files := runCollect(t, f)
 
 			want, _ := f.golden(t, name, "collect-entries.txt")
-			compareLines(t, "zip entries", names, lines(want))
+			var scriptNames []string
+			for _, n := range names {
+				if !goOnlyEntry(n) {
+					scriptNames = append(scriptNames, n)
+				}
+			}
+			compareLines(t, "zip entries", scriptNames, lines(want))
 
 			// summary.txt: the script's lines, but for modavdLine's
 			wantSummary, bom := f.golden(t, name, "collect", "summary.txt")
@@ -285,7 +291,7 @@ func TestCollectMatchesScript(t *testing.T) {
 			// ModAVD adds a diagnostic state line for each canonical instance.
 			var scriptLines []string
 			var stateLines []string
-			for _, line := range lines(strings.TrimPrefix(got, "\ufeff")) {
+			for _, line := range withoutGoOnly(lines(strings.TrimPrefix(got, "\ufeff"))) {
 				if strings.HasSuffix(line, "：诊断模式 关") {
 					stateLines = append(stateLines, line)
 					continue
@@ -388,6 +394,34 @@ func TestCollectMatchesScript(t *testing.T) {
 			}
 		})
 	}
+}
+
+// goOnlySections are the summary sections collect-info.ps1 does not have (extra.go).
+var goOnlySections = map[string]bool{sectionManagerLogs: true, sectionAdbProcesses: true, sectionPortExcluded: true}
+
+// withoutGoOnly drops goOnlySections from summary lines: each with the empty line before its header and its lines.
+func withoutGoOnly(ls []string) []string {
+	var out []string
+	skip := false
+	for i, l := range ls {
+		if l == "" && i+1 < len(ls) && strings.HasPrefix(ls[i+1], "== ") && strings.HasSuffix(ls[i+1], " ==") {
+			skip = goOnlySections[strings.TrimSuffix(strings.TrimPrefix(ls[i+1], "== "), " ==")]
+		}
+		if !skip {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// goOnlyEntry: a file of goOnlySections (the manager's logs, the adb server log).
+func goOnlyEntry(name string) bool {
+	for _, f := range managerLogs {
+		if strings.EqualFold(name, "logs/"+f.name) {
+			return true
+		}
+	}
+	return strings.HasPrefix(name, "adb/")
 }
 
 func TestReportConfigMatchesScript(t *testing.T) {
