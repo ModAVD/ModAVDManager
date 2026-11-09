@@ -250,7 +250,7 @@ func (f *fetcher) place(c root.SDKComponent, extracted string) (setAside string,
 	}
 	moveErr := os.MkdirAll(filepath.Dir(target), 0o755)
 	if moveErr == nil {
-		moveErr = moveComponent(extracted, target)
+		moveErr = installComponent(extracted, target)
 	}
 	if moveErr != nil {
 		if setAside != "" && moveComponent(setAside, target) == nil {
