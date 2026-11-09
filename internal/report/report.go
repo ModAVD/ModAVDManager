@@ -7,6 +7,8 @@
 // Everything the scripts ask Windows goes through Host, so the tests compare the produced text line by line with
 // what the scripts print for the same answers (testdata/). Where the scripts format with .NET (-f '{0:N1}',
 // Sort-Object, Get-ChildItem order), the helpers below reproduce Windows PowerShell 5.1.
+// Apple Silicon macOS has its own native Host and a bounded, privacy-filtered
+// report layout, with existing-server and instance ownership checks before ADB.
 package report
 
 import (

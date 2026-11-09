@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"modavd/internal/errs"
-	"modavd/internal/root"
+	"modavd/internal/host"
 )
 
 // SourceSettings is the component download source selected by the user. An
@@ -31,19 +32,11 @@ type sourceSettingsFile struct {
 // settings, but a separate file so the two settings cannot overwrite one
 // another.
 var sourceSettingsPath = func() string {
-	var base string
-	if root.CurrentPlatform().Windows() {
-		base = os.Getenv("LOCALAPPDATA")
-		if base == "" {
-			base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local")
-		}
-	} else {
-		base, _ = os.UserConfigDir()
-		if base == "" {
-			return ""
-		}
+	base := host.UserSettingsDir()
+	if base == "" {
+		return ""
 	}
-	return filepath.Join(base, "ModAVD", "components-settings.json")
+	return filepath.Join(base, "components-settings.json")
 }
 
 // LoadSourceSettings reads the per-user component source. Missing, malformed,
@@ -85,7 +78,14 @@ func SaveSourceSettings(mirror string, urls []string) (SourceSettings, error) {
 		return SourceSettings{}, errs.Wrap(errs.Internal, err, "保存组件下载源失败")
 	}
 	path := sourceSettingsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if path == "" {
+		return SourceSettings{}, errs.New(errs.Internal, "找不到当前用户的配置目录，无法保存组件下载源")
+	}
+	dirMode := os.FileMode(0o755)
+	if runtime.GOOS == "darwin" {
+		dirMode = 0o700
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
 		return SourceSettings{}, errs.Wrap(errs.Internal, err, "保存组件下载源失败: "+err.Error())
 	}
 	tmp := path + ".tmp"

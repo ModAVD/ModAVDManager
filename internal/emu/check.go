@@ -69,7 +69,7 @@ func (m *Manager) Check(ctx context.Context, opt CheckOptions) (*CheckResult, er
 	items := []CheckItem{
 		pathItem(m.Root.Dir),
 		componentsItem(comps, m.missingAdvice),
-		emulatorItem(m.emulatorFacts()),
+		platformEmulatorItem(m.emulatorFacts()),
 		accel,
 		vulkan,
 		m.diskItemNow(),
@@ -107,7 +107,7 @@ func (m *Manager) precheckBeforeLaunch(ctx context.Context, memoryMB int) error 
 	items := []CheckItem{
 		pathItem(m.Root.Dir),
 		componentsItem(comps, m.missingAdvice),
-		emulatorItem(m.emulatorFacts()),
+		platformEmulatorItem(m.emulatorFacts()),
 		m.accelerationItem(ctx, true),
 		memoryItemNow(memoryMB),
 		m.diskItemNow(),
@@ -298,6 +298,23 @@ func (m *Manager) emulatorFacts() emulatorFacts {
 	}
 	f.Build, f.HasBuild = m.Root.ModBuild()
 	return f
+}
+
+// platformEmulatorItem keeps the Windows package contract unchanged. The macOS
+// lifecycle also supports the official ARM64 SDK emulator verified with API35;
+// other revisions require explicit validation before they can launch instances.
+func platformEmulatorItem(f emulatorFacts) CheckItem {
+	if root.CurrentPlatform().MirrorOS == "macos" && f.Present && !f.SelfBuilt {
+		ok := root.OfficialEmulatorVersionSupported(f.Version)
+		item := CheckItem{ID: "emulator", Title: "模拟器版本", OK: checkOK(ok), Blocking: true,
+			Reason: fmt.Sprintf("官方 ARM64 Emulator %s", f.Version)}
+		if !ok {
+			item.Reason = "当前官方 Emulator 版本尚未验证：" + f.Version
+			item.Advice = "macOS 当前支持官方 ARM64 Emulator 37.2.13 与 API35 arm64-v8a 镜像"
+		}
+		return item
+	}
+	return emulatorItem(f)
 }
 
 // emulatorItem: only the self-built emulator of the ModAVD package (user decision: Google's builds are not

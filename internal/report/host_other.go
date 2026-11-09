@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && (!darwin || !arm64 || !cgo)
 
 package report
 
@@ -8,7 +8,9 @@ import (
 	"modavd/internal/errs"
 )
 
-// Only Windows is implemented. Each function says what its Windows version (host_windows.go) does.
+// Hosts without a native diagnostics implementation remain unsupported.
+
+const reportsAvailable = false
 
 func unsupported(what string) error {
 	return errs.New(errs.Unsupported, what+"目前只支持 Windows")

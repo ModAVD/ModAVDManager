@@ -171,7 +171,7 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 `update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{at, ok, updated, version, message, error: {code, message, advice} | null}`；这个管理器不是那次重新打开的、或者结果超过 30 分钟，是 `null`）。
 
 - 只有点「检查更新」或「更新」才联网；没有自动检查。
-- 更新源和 CDK 是本机这个 Windows 用户的设置（`%LOCALAPPDATA%\ModAVD\update-settings.json`），管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。
+- 更新源和 CDK 是当前系统用户的设置，管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
 - 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
   1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。
   2. 先查会让换包失败的情况，有就一台实例都不关、任务失败：别的进程在跑这个根目录的 `ModAVD.exe` 或 `tools\modavd.exe`（比如 `modavd mcp`）；有实例正在新建；暂存的版本不比装着的新（这时算已经是最新）。然后正常关掉所有在运行的实例（同 `stop --all`，但不取消正在新建的）。
