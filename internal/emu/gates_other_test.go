@@ -34,6 +34,9 @@ func gateTree(t *testing.T, dir string) []string {
 }
 
 func TestUnsupportedOperationsLeaveRootUntouched(t *testing.T) {
+	if adb.OwnershipSupported && root.CurrentPlatform().MirrorOS == "macos" {
+		t.Skip("native instance lifecycle is implemented on this host")
+	}
 	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {

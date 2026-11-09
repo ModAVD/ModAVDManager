@@ -57,3 +57,32 @@ func (l *FileLock) Unlock() {
 	_ = l.f.Close() // closing also releases the lock when explicit unlocking fails
 	l.f = nil
 }
+
+// ExclusiveLockHeld is a read-only shared-lock probe. Missing files are free;
+// never create a file or directory just to inspect lifecycle state.
+func ExclusiveLockHeld(path string) (bool, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if !st.Mode().IsRegular() {
+		return false, fmt.Errorf("锁文件不是普通文件")
+	}
+	err = syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		return false, syscall.Flock(fd, syscall.LOCK_UN)
+	}
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return true, nil
+	}
+	return false, err
+}
