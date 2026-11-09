@@ -147,18 +147,12 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			return nil, err
 		}
 		defer startLock.Unlock()
-		if nativePlayStore() && !opt.bridgeLocked && m.lockHeld(i, "bridge") {
-			return nil, playStoreBusy(i)
-		}
 	} else {
 		startLock, err := m.lock(ctx, i, "start", startLockWait, "正由另一次启动开机或做开机后设置")
 		if err != nil {
 			return nil, err
 		}
 		defer startLock.Unlock()
-		if nativePlayStore() && !opt.bridgeLocked && m.lockHeld(i, "bridge") {
-			return nil, playStoreBusy(i)
-		}
 		stopLock, err := m.lock(ctx, i, "stop", stopLockWait, "正在关机")
 		if err != nil {
 			return nil, err
