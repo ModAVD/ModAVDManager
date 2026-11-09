@@ -1,6 +1,7 @@
 // 设置 → ModAVD 更新 (API.md "更新"): version and update state of this root, the update source and the Mirror 酱 CDK,
-// a check on request. Installing is not offered here yet (AUTO-MAS installs, through `modavd update`, with these
-// settings); the button is shown and disabled.
+// a check on request. Installing is not offered here yet: AUTO-MAS still updates with its own updater, source and
+// CDK, and the two updaters share no lock; the button is shown and disabled. These settings are used by the check
+// and by `modavd update`.
 
 import { h, icon, btn, attr, setText, showError } from './dom.js';
 import { S, update, subscribe } from './store.js';
@@ -87,12 +88,12 @@ export function openUpdate() {
     h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState),
     h('label', { class: 'f-label', for: 'upd-comp', text: '组件下载源' }), h('div', { class: 'f-ctl' }, componentSource, componentURLsRow,
       h('p', { class: 'f-hint', text: '「补全组件」和 modavd components fetch 都从这里选的源下载；选了就保存。' })));
-  const note = h('p', { class: 'f-hint', text: '更新现在由 AUTO-MAS 发起（它调用 modavd update），会按这里选的更新源和 CDK 下载；这里先不能直接更新。' });
+  const note = h('p', { class: 'f-hint', text: '这里暂时只能检查新版本。用 AUTO-MAS 的，在 AUTO-MAS 里更新（它用 AUTO-MAS 设置里的更新源和 CDK）；不用 AUTO-MAS 的，关掉所有实例和管理器，把新版整包覆盖解压到这个文件夹，avd 文件夹不会被动到。这里的更新源和 CDK 只用于「检查更新」和命令行 modavd update。' });
   const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], () => { ctl.close(); openDiagnostics(); });
   const when = h('span', { class: 'foot-note' });
   const checkBtn = btn('btn btn-secondary', null, () => run(api.post('/api/update/check')));
   const installBtn = btn('btn btn-primary', [icon('download'), '更新'], null,
-    { disabled: true, 'aria-disabled': 'true', title: '暂时由 AUTO-MAS 发起更新' });
+    { disabled: true, 'aria-disabled': 'true', title: '这里暂时不能直接更新' });
   for (const r of radios) r.addEventListener('change', () => r.checked && post({ source: r.value }, r.value === 'github' ? '改用 GitHub 更新' : '改用 Mirror 酱更新'));
 
   ctl = openDialog({
