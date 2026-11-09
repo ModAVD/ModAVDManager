@@ -260,7 +260,10 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	c.step("杀毒软件", c.antivirus)
 	c.step("实例列表与实例文件", c.instanceFiles)
 	c.step("正在运行的模拟器与 adb", c.runningAndAdb)
+	c.extra(sectionAdbProcesses, c.adbProcesses)
+	c.extra(sectionPortExcluded, c.portExclusions)
 	c.step("模拟器日志", c.emulatorLogs)
+	c.extra(sectionManagerLogs, c.managerLogFiles)
 	c.step("模拟器崩溃转储", c.crashDumps)
 	if err := c.diagnosticDumps(); err != nil {
 		msg := "诊断崩溃转储：" + errText(err)

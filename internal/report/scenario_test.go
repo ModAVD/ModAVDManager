@@ -481,6 +481,10 @@ func (h *fakeHost) Run(_ context.Context, exe string, args []string, _ time.Dura
 	h.runs = append(h.runs, exe)
 	h.mu.Unlock()
 	r, ok := h.sc.Run[strings.ToLower(filepath.Base(exe))]
+	if !ok && strings.EqualFold(filepath.Base(exe), "netsh.exe") {
+		// a computer whose only reserved range is far from ModAVD's ports (the scripts never ran netsh)
+		return RunResult{Stdout: []byte(fakeNetshOut)}, nil
+	}
 	if !ok {
 		return RunResult{}, fmt.Errorf("test: no program %s in the scenario", exe)
 	}
@@ -492,6 +496,9 @@ func (h *fakeHost) Run(_ context.Context, exe string, args []string, _ time.Dura
 	}
 	return RunResult{ExitCode: r.Exit, Stdout: []byte(r.Stdout), Stderr: []byte(r.Stderr)}, nil
 }
+
+// fakeNetshOut is `netsh interface ipv4 show excludedportrange protocol=tcp` of a Chinese Windows with one range.
+const fakeNetshOut = "\r\n协议 tcp 端口排除范围\r\n\r\n开始端口    结束端口\r\n----------    --------\r\n     50000       50059     *\r\n\r\n* - 管理的端口排除。\r\n\r\n"
 
 func (h *fakeHost) Drive(root string) (Drive, error) {
 	if err := failIf(h.sc.DriveErr); err != nil {
