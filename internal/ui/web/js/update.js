@@ -73,7 +73,10 @@ function confirmInstall(v) {
     title: `更新到 ${target}`, sub: 'ModAVD 整包：模拟器、组件、脚本和管理器', light: true,
     body: h('div', { class: 'dlg-body' },
       h('p', { text: `先下载并核对新版，这时实例照常用；然后${stops}，管理器关闭、换上新版，换好后自动重新打开管理器。` }),
-      h('p', { class: 'f-hint', text: '实例的数据（avd 文件夹）和设置都不动。正在新建的实例要先等它建完。' })),
+      // the manager installs as a person does, without the AUTO-MAS check the CLI does for AUTO-MAS
+      v.required_automas && h('div', { class: 'note-box tone-warn', role: 'status' }, icon('alert'),
+        h('span', { text: `这一版要求 AUTO-MAS ${v.required_automas} 或更新。用 AUTO-MAS 的，先把 AUTO-MAS 更新到这个版本，再更新这里。` })),
+      h('p', { class: 'f-hint', text: '实例的数据（avd 文件夹）和设置都不动。正在新建的实例要先等它建完；用 modavd mcp 的 AI 助手等程序也要先关掉。' })),
     actions: { ok: go },
   });
 }
@@ -173,6 +176,7 @@ export function openUpdate() {
     const rows = [['当前版本', ver(v.current_version) ? `${ver(v.current_version)}${v.current_build ? `（${v.current_build}）` : ''}` : '未知']];
     if (!v.updatable) rows.push(['不能更新', v.not_updatable_reason]);
     if (v.checked) rows.push(['最新版本', `${ver(v.latest_version)}（${v.latest_source === 'mirrorchyan' ? 'Mirror 酱' : 'GitHub'}）`]);
+    if (v.update_available && v.required_automas) rows.push(['要求 AUTO-MAS', `${v.required_automas} 或更新（用 AUTO-MAS 的才要）`]);
     const phase = PHASE[v.phase] || '';
     if (phase) rows.push(['状态', v.prepared_version ? `${phase}：${ver(v.prepared_version)}` : phase]);
     const lr = v.last_result;

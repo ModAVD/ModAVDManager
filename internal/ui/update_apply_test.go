@@ -32,7 +32,10 @@ type applyFakes struct {
 	prepares int
 	version  string // what tools\modavd.exe says it is
 	verErr   error
+	inUse    []string // other programs of the root running
+	inUseErr error
 	spawnErr error
+	dead     bool       // the started CLI is gone at once
 	spawns   [][]string // exe, then the args, then the log path
 }
 
@@ -71,11 +74,17 @@ func applyHarness(t *testing.T, a *applyFakes) *harness {
 			return a.prepared, a.prepErr
 		}
 		o.cliVersion = func(exe string) (string, error) { return a.version, a.verErr }
-		o.spawn = func(exe string, args []string, logPath string) error {
+		o.programsInUse = func() ([]string, error) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.inUse, a.inUseErr
+		}
+		o.spawn = func(exe string, args []string, logPath string) (func() bool, error) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			a.spawns = append(a.spawns, append(append([]string{exe}, args...), logPath))
-			return a.spawnErr
+			dead := a.dead
+			return func() bool { return !dead }, a.spawnErr
 		}
 		if err := os.MkdirAll(filepath.Join(o.Root.Dir, "tools"), 0o755); err != nil {
 			t.Fatal(err)
@@ -153,6 +162,11 @@ func TestUpdateApplyHandsOff(t *testing.T) {
 	if !slices.Equal(sp[0], want) {
 		t.Fatalf("spawn\n got  %q\n want %q", sp[0], want)
 	}
+	// from the hand-off on, nothing may start: the manager is about to exit
+	e := expectError(t, h.do("POST", "/api/instances/4/start", `{}`), 409, errs.Busy)
+	if !strings.Contains(e.Message, "交给命令行") {
+		t.Errorf("%+v", e)
+	}
 	if !h.exited(5 * time.Second) {
 		t.Fatal("the manager did not exit after the hand-off")
 	}
@@ -182,6 +196,27 @@ func TestUpdateApplyUpToDate(t *testing.T) {
 	}
 }
 
+// A staged version that is not newer than the one installed (the package was copied over by hand since): up to date,
+// nothing stopped.
+func TestUpdateApplyStagedNotNewer(t *testing.T) {
+	st := preparedStatus()
+	st.CurrentVersion = "v0.40.0"
+	a := &applyFakes{prepared: st}
+	h := applyHarness(t, a)
+	h.f.put(3, emu.StatusOnline)
+	done := h.waitJob(h.apply().ID, func(v jobView) bool { return v.State != stateRunning })
+	r, _ := done.Result.(map[string]any)
+	if done.State != stateDone || r["handoff"] != false || r["message"] != "已经是最新版本" {
+		t.Fatalf("job %+v", done)
+	}
+	h.f.mu.Lock()
+	n := len(h.f.stops)
+	h.f.mu.Unlock()
+	if n != 0 || len(a.spawned()) != 0 {
+		t.Fatalf("stops %d, spawns %v", n, a.spawned())
+	}
+}
+
 // A step that fails ends the job there: nothing after it runs, the manager stays.
 func TestUpdateApplyFailures(t *testing.T) {
 	for _, c := range []struct {
@@ -201,6 +236,19 @@ func TestUpdateApplyFailures(t *testing.T) {
 		{"spawn", func(a *applyFakes, f *fake) {
 			a.spawnErr = errors.New("拒绝访问")
 		}, errs.LaunchFailed, 1, 1, "拒绝访问"},
+		{"cli gone at once", func(a *applyFakes, f *fake) {
+			a.dead = true
+		}, errs.LaunchFailed, 1, 1, "马上退出"},
+		// checked before any instance is stopped
+		{"another program of the root", func(a *applyFakes, f *fake) {
+			a.inUse = []string{"modavd.exe（pid 9）"}
+		}, errs.Busy, 0, 0, "modavd.exe（pid 9）"},
+		{"process scan", func(a *applyFakes, f *fake) {
+			a.inUseErr = errors.New("快照失败")
+		}, errs.Internal, 0, 0, "快照失败"},
+		{"an instance being created", func(a *applyFakes, f *fake) {
+			f.put(4, emu.StatusCreating)
+		}, errs.Busy, 0, 0, "实例 4 正在新建"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := &applyFakes{prepared: preparedStatus()}
@@ -212,7 +260,7 @@ func TestUpdateApplyFailures(t *testing.T) {
 			if done.State != stateFailed || done.Error == nil || done.Error.Code != c.code || !strings.Contains(done.Error.Message, c.contains) {
 				t.Fatalf("job %+v %+v", done, done.Error)
 			}
-			if c.code != errs.UpdateUnavailable && !strings.Contains(done.Error.Advice, "不用重新下载") {
+			if c.code != errs.UpdateUnavailable && c.code != errs.Internal && !strings.Contains(done.Error.Advice, "不用重新下载") {
 				t.Errorf("advice %q", done.Error.Advice)
 			}
 			h.f.mu.Lock()

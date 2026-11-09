@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -58,7 +59,8 @@ type Options struct {
 	// Test hooks.
 	prepareUpdate  func(ctx context.Context, lg *logx.Logger, progress func(update.Progress)) (*update.Status, error)
 	cliVersion     func(exe string) (string, error)
-	spawn          func(exe string, args []string, logPath string) error
+	programsInUse  func() ([]string, error)
+	spawn          func(exe string, args []string, logPath string) (alive func() bool, err error)
 	newBackend     func(log *logx.Logger) backend
 	newDiagBackend func(log *logx.Logger) diagBackend
 	token          string
@@ -125,9 +127,12 @@ type server struct {
 	reopen        *Reopen
 	prepareUpdate func(ctx context.Context, lg *logx.Logger, progress func(update.Progress)) (*update.Status, error)
 	cliVersion    func(exe string) (string, error)
-	spawn         func(exe string, args []string, logPath string) error
+	programsInUse func() ([]string, error)
+	spawn         func(exe string, args []string, logPath string) (alive func() bool, err error)
 	exitReq       chan struct{}
 	exitOnce      sync.Once
+	// handingOff: the CLI has taken the swap; no job may start any more (startJob), the manager is about to exit
+	handingOff atomic.Bool
 }
 
 func newServer(opt Options) (*server, error) {
@@ -211,7 +216,12 @@ func newServer(opt Options) (*server, error) {
 	if h := s.upd.handoff; h != nil {
 		lg.Infof("上次在设置里点的更新：%s", h.Message)
 	}
-	s.reopen, s.prepareUpdate, s.cliVersion, s.spawn = opt.Reopen, opt.prepareUpdate, opt.cliVersion, opt.spawn
+	s.reopen, s.prepareUpdate, s.cliVersion, s.programsInUse, s.spawn =
+		opt.Reopen, opt.prepareUpdate, opt.cliVersion, opt.programsInUse, opt.spawn
+	if s.programsInUse == nil {
+		r := opt.Root
+		s.programsInUse = func() ([]string, error) { return update.New(r, nil, update.Options{}).ProgramsInUse() }
+	}
 	if s.prepareUpdate == nil {
 		r := opt.Root
 		s.prepareUpdate = func(ctx context.Context, l *logx.Logger, progress func(update.Progress)) (*update.Status, error) {
@@ -328,7 +338,13 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 			}
 			return
 		case <-s.exitReq:
-			// 设置 → 更新 handed the swap to the CLI, which waits for us to exit (its job has ended)
+			// 设置 → 更新 handed the swap to the CLI, which waits for us to exit. No job may start since (handingOff);
+			// one that slipped in before is cancelled and waited for, as when we are told to exit.
+			if n := s.jobs.running(); n > 0 {
+				s.log.Warnf("交给命令行更新后还有 %d 个任务在跑，取消", n)
+				s.jobCancel()
+				s.jobs.waitIdle(jobDrainOnCancel)
+			}
 			return
 		case <-edgeDone:
 			edgeDone = nil

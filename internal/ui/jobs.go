@@ -229,6 +229,10 @@ type jobFunc func(ctx context.Context, j *job, b backend) (any, error)
 // job (file log with the job id, log events, warnings). errs.Busy when the instance has a conflicting job.
 func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Lock()
+	if s.handingOff.Load() {
+		s.jobs.mu.Unlock()
+		return jobView{}, errs.New(errs.Busy, "正在交给命令行换上新版，管理器马上关闭，换好后会自动重新打开")
+	}
 	for _, o := range s.jobs.list {
 		if o.view.State != stateRunning {
 			continue

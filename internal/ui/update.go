@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/root"
 	"modavd/internal/update"
 )
 
@@ -64,13 +65,17 @@ func (s *server) updateView() updateView {
 		}
 		st.Message = c.Message
 	}
-	v := updateView{Status: st, Checking: p.checking, Error: p.err, InstallByCLI: s.reopen == nil, CanInstall: s.reopen != nil,
-		Handoff: p.handoff}
+	can := s.canInstall()
+	v := updateView{Status: st, Checking: p.checking, Error: p.err, InstallByCLI: !can, CanInstall: can, Handoff: p.handoff}
 	if !p.at.IsZero() {
 		v.CheckedAt = p.at.Format(time.RFC3339)
 	}
 	return v
 }
+
+// canInstall: 更新 may be tried here — the manager knows how to come back, and updating is supported on this platform
+// (Windows only for now).
+func (s *server) canInstall() bool { return s.reopen != nil && root.CurrentPlatform().Windows() }
 
 func (s *server) handleUpdateGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.updateView())

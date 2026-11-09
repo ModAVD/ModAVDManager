@@ -36,6 +36,8 @@ const (
 	// closes its window first.
 	handoffExitDelay  = 1500 * time.Millisecond
 	cliVersionTimeout = 15 * time.Second
+	// handoffAliveCheck: how long after starting the CLI we look whether it still runs.
+	handoffAliveCheck = 500 * time.Millisecond
 	// updateLogName: the CLI's output during the hand-off, under logs\ (appended).
 	updateLogName = "modavd-update.log"
 )
@@ -61,7 +63,7 @@ func (s *server) updateCLI() string { return filepath.Join(s.root.Dir, "tools", 
 // applyReady is what the 更新 refuses at once, before a job: no way to come back, no CLI of our version to hand to.
 func (s *server) applyReady() error {
 	cliAdvice := `关掉管理器后运行 tools\modavd.exe update install`
-	if s.reopen == nil {
+	if !s.canInstall() {
 		return errs.New(errs.Unsupported, "这个管理器不能自己更新").WithAdvice(cliAdvice)
 	}
 	cli := s.updateCLI()
@@ -104,26 +106,79 @@ func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	if st.PreparedVersion == "" {
+	if !stagedNewer(st) {
 		msg := st.Message
-		if msg == "" {
+		if msg == "" || st.PreparedVersion != "" {
 			msg = "已经是最新版本"
 		}
 		return &updateResult{Stopped: []int{}, Message: msg}, nil
 	}
 	shown := strings.TrimPrefix(st.PreparedVersion, "v")
+	if err := s.beforeStopping(ctx, b, shown); err != nil {
+		return nil, err
+	}
 	stopped, err := s.stopForUpdate(ctx, j, b, shown)
 	if err != nil {
 		return nil, err
 	}
 	s.setProgress(j, jobProgress{Step: "handoff", Message: "正在交给命令行换上 " + shown})
-	if err := s.handOff(lg); err != nil {
+	cliAdvice := shown + ` 已下载并核对好；关掉管理器后运行 tools\modavd.exe update install，不用重新下载`
+	alive, err := s.handOff(lg)
+	if err != nil {
 		return nil, errs.Wrap(errs.LaunchFailed, err, `启动不了 tools\modavd.exe 来换上新版：`+errs.As(err).Message).
-			WithAdvice(shown + ` 已下载并核对好；关掉管理器后运行 tools\modavd.exe update install，不用重新下载`)
+			WithAdvice(cliAdvice)
 	}
+	// It waits for us from its first step: gone already means it failed (a crash, an antivirus), and nobody would
+	// start the manager again.
+	select {
+	case <-time.After(handoffAliveCheck):
+	case <-ctx.Done():
+		// we stay: the CLI gives up after update.AfterPIDWait, swaps nothing and only brings our window back
+		return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+	}
+	if !alive() {
+		return nil, errs.New(errs.LaunchFailed, `tools\modavd.exe 启动后马上退出了，新版没有换上`).
+			WithAdvice(cliAdvice + `；原因看 logs\` + updateLogName)
+	}
+	s.handingOff.Store(true)
 	go s.handoffExit(j)
 	return &updateResult{Handoff: true, Version: st.PreparedVersion, Stopped: stopped,
 		Message: "管理器会关闭，换上 " + shown + " 后自动重新打开"}, nil
+}
+
+// stagedNewer: a version is staged and it is newer than the one installed (a staged one may be older, when the
+// package was copied over by hand since).
+func stagedNewer(st *update.Status) bool {
+	staged, ok := update.ParseVersion(st.PreparedVersion)
+	if !ok {
+		return false
+	}
+	cur, ok := update.ParseVersion(st.CurrentVersion)
+	return !ok || cur.Less(staged)
+}
+
+// beforeStopping refuses what would make the swap fail after the instances were stopped for nothing: another
+// program of the root running (an MCP server, another modavd), an instance being created (it must not be cancelled).
+func (s *server) beforeStopping(ctx context.Context, b backend, version string) error {
+	advice := version + " 已下载并核对好；处理好后再点「更新」，不用重新下载"
+	progs, err := s.programsInUse()
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "查不了有没有别的程序在用这个根目录，一台实例都没关："+err.Error())
+	}
+	if len(progs) > 0 {
+		return errs.Newf(errs.Busy, "还有程序在用这个根目录的 modavd：%s。一台实例都没关", strings.Join(progs, "、")).
+			WithAdvice("先关掉它们（比如用 modavd mcp 的 AI 助手、别的命令行窗口）；" + advice)
+	}
+	list, err := b.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, in := range list.Instances {
+		if in.Status == emu.StatusCreating {
+			return errs.Newf(errs.Busy, "实例 %d 正在新建，一台实例都没关", in.Index).WithAdvice("等它建完；" + advice)
+		}
+	}
+	return nil
 }
 
 // updateProgress is an update step as the job's progress line (a download's line has the percentage and sizes).
@@ -177,8 +232,8 @@ func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version s
 }
 
 // handOff starts the CLI that swaps once we are gone and starts us again; it is not our descendant (host.StartOrphan),
-// so nothing that ends this process can end it.
-func (s *server) handOff(lg *logx.Logger) error {
+// so nothing that ends this process can end it. alive tells whether it still runs.
+func (s *server) handOff(lg *logx.Logger) (alive func() bool, err error) {
 	args := []string{"--root", s.root.Dir, "--json", "update", "install",
 		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", s.reopen.Exe}
 	for _, a := range s.reopen.Args {
@@ -226,7 +281,10 @@ func realCLIVersion(exe string) (string, error) {
 	return env.Data.Version, nil
 }
 
-func realSpawn(exe string, args []string, logPath string) error {
-	_, err := host.StartOrphan(exe, args, host.StartOptions{Dir: filepath.Dir(exe), OutputPath: logPath})
-	return err
+func realSpawn(exe string, args []string, logPath string) (func() bool, error) {
+	p, err := host.StartOrphan(exe, args, host.StartOptions{Dir: filepath.Dir(exe), OutputPath: logPath})
+	if err != nil {
+		return nil, err
+	}
+	return p.Alive, nil
 }

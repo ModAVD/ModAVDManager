@@ -10,6 +10,7 @@ package update
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -74,6 +75,23 @@ func SaveHandoff(r *root.Root, res *HandoffResult) error {
 		return err
 	}
 	return root.ReplaceWithRetry(tmp, path)
+}
+
+// ProgramsInUse lists the other processes running this root's ModAVD.exe or tools\modavd.exe (an MCP server, another
+// CLI ...), this process and the short-lived shutdown helpers aside. An install refuses them, so the manager asks
+// before it stops any instance (the emulators themselves are what it stops, so they are not listed).
+func (u *Updater) ProgramsInUse() ([]string, error) {
+	uses, err := u.processesUsing(true)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range uses {
+		if p.RootProgram && !p.ShutdownHelper {
+			out = append(out, fmt.Sprintf("%s（pid %d）", p.Name, p.PID))
+		}
+	}
+	return out, nil
 }
 
 // TakeHandoff reads and removes the CLI's result; nil when there is none, it cannot be read, or it is older than

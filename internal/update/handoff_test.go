@@ -38,6 +38,27 @@ func TestHandoffRoundTrip(t *testing.T) {
 	}
 }
 
+// Only the root's programs count (not the emulators the manager is about to stop), and never a shutdown helper.
+func TestProgramsInUse(t *testing.T) {
+	u := New(&root.Root{Dir: t.TempDir()}, nil, Options{})
+	u.scan = func(programs bool) ([]processUse, error) {
+		if !programs {
+			t.Error("scanned without the programs")
+		}
+		return []processUse{
+			{PID: 10, Name: "qemu-system-x86_64.exe"},
+			{PID: 11, Name: "emulator.exe", ShutdownHelper: true},
+			{PID: 12, Name: "modavd.exe", RootProgram: true, ShutdownHelper: true},
+			{PID: 13, Name: "modavd.exe", RootProgram: true},
+			{PID: 14, Name: "netsimd.exe", Unknown: true},
+		}, nil
+	}
+	got, err := u.ProgramsInUse()
+	if err != nil || len(got) != 1 || got[0] != "modavd.exe（pid 13）" {
+		t.Fatalf("%q %v", got, err)
+	}
+}
+
 // Too old (a manager started long after), from the future or unreadable: not shown, and removed all the same.
 func TestHandoffStaleOrBroken(t *testing.T) {
 	r := &root.Root{Dir: t.TempDir()}
