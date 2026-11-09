@@ -7,14 +7,17 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/host"
 	"modavd/internal/logx"
+	"modavd/internal/root"
 )
 
 // Progress values: one scale for the whole call so they only ever grow (MCP requires strictly increasing progress).
@@ -449,11 +452,13 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 	started := time.Now()
 	deadline := started.Add(timeout)
 	nextReport := started.Add(bootReportInterval)
+	// booted: when the emulator was first seen to report Android booted; lastRegister: the last RegisterBooted try
+	var booted, lastRegister time.Time
 	for {
 		if err := ctxErr(ctx); err != nil {
 			return host.Process{}, err
 		}
-		p, found, err := m.findQemu(i)
+		p, found, err := waitBootFindQemu(m, i)
 		if err != nil {
 			return host.Process{}, err
 		}
@@ -467,7 +472,29 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 		if err := ctxErr(ctx); err != nil {
 			return host.Process{}, err
 		}
+		// Android is up but adb does not answer: register the instance with a private server that came up (or was
+		// restarted) after the emulator's own registration, and stop waiting once that has not helped for a while.
+		if found {
+			if booted.IsZero() && emulatorReportedBoot(m.Root, i, p) {
+				booted = time.Now()
+				m.Log.Infof("实例 %d 的模拟器已报告安卓开机完成，等私有 adb 连上", i)
+			}
+			if !booted.IsZero() {
+				if time.Since(lastRegister) >= bootRegisterEvery {
+					lastRegister = time.Now()
+					if registerBooted(ctx, m, i) {
+						continue // ask getprop again right away
+					}
+				}
+				if time.Since(booted) >= adbAfterBootWait {
+					return host.Process{}, m.adbUnusableAfterBoot(i, booted)
+				}
+			}
+		}
 		if !time.Now().Before(deadline) {
+			if !booted.IsZero() {
+				return host.Process{}, m.adbUnusableAfterBoot(i, booted)
+			}
 			return host.Process{}, errs.Newf(errs.Timeout, "魔改 AVD 实例 %d 启动超时（%.0f 秒内安卓没有启动完成），日志见 %s",
 				i, timeout.Seconds(), m.Root.LogsDir())
 		}
@@ -500,6 +527,42 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			return host.Process{}, ctxErr(ctx)
 		}
 	}
+}
+
+var (
+	// adbAfterBootWait: how long the boot wait goes on once the emulator has reported Android booted while adb still
+	// does not answer. adb normally answers before the boot completes; the rest of the timeout would only be waited
+	// out (a user's create waited 300 s for an Android that had booted after 72 s).
+	adbAfterBootWait = 60 * time.Second
+	// bootRegisterEvery: how often the boot wait tries RegisterBooted meanwhile.
+	bootRegisterEvery = 10 * time.Second
+)
+
+// emulatorReportedBoot: the emulator of qemu has reported Android booted. It deletes avd\mas_<i>.avd\bootcompleted.ini
+// when it launches and writes it when the guest reports boot completion, so a file no older than qemu is this boot's.
+var emulatorReportedBoot = func(r *root.Root, i int, qemu host.Process) bool {
+	started := qemu.StartedAt()
+	fi, err := os.Stat(filepath.Join(avd.Dir(r, i), "bootcompleted.ini"))
+	return err == nil && !started.IsZero() && !fi.ModTime().Before(started)
+}
+
+// waitBootFindQemu is the boot wait's process scan (a variable for the tests).
+var waitBootFindQemu = func(m *Manager, i int) (host.Process, bool, error) { return m.findQemu(i) }
+
+// registerBooted is adb's RegisterBooted for instance i (a variable for the tests).
+var registerBooted = func(ctx context.Context, m *Manager, i int) bool {
+	return m.ADB.RegisterBooted(ctx, m.Root.Ports().Serial(i))
+}
+
+// adbUnusableAfterBoot is the boot wait's error when Android has booted but adb never answered: says so, with the
+// last line of the adb server's own log.
+func (m *Manager) adbUnusableAfterBoot(i int, booted time.Time) error {
+	msg := fmt.Sprintf("魔改 AVD 实例 %d 的安卓已经开好了（模拟器报告开机完成），但之后 %.0f 秒里私有 adb（端口 %d）一直用不了",
+		i, time.Since(booted).Seconds(), m.Root.AdbServerPort())
+	if last := adb.ServerLogLast(m.Root); last != "" {
+		msg += "；adb 自己的日志最后一行：" + last
+	}
+	return errs.New(errs.Timeout, msg+"。日志见 "+m.Root.LogsDir())
 }
 
 // qemuAfterSetup is the qemu process to report once the after-boot setup is done: the one the scan finds now, else

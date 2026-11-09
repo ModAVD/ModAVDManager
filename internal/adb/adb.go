@@ -147,8 +147,9 @@ func (g *hookGroup) wait(timeout time.Duration) bool {
 }
 
 // Env is the environment for emulator.exe, adb servers and adb clients: ours plus ANDROID_SDK_ROOT and ANDROID_HOME =
-// RuntimeSDK, ANDROID_AVD_HOME = AvdHome, ANDROID_ADB_SERVER_PORT = AdbServerPort and root.NoLocalScanEnv. Keys are
-// replaced using the host's environment-key rules.
+// RuntimeSDK, ANDROID_AVD_HOME = AvdHome, ANDROID_ADB_SERVER_PORT = AdbServerPort, ANDROID_ADB_LOG_PATH =
+// ServerLogPath (also for a server an adb client starts by itself, such as the emulator's own adb commands at the end
+// of boot) and root.NoLocalScanEnv. Keys are replaced using the host's environment-key rules.
 func (c *Client) Env() []string {
 	sdk := c.Root.RuntimeSDK()
 	set := map[string]string{
@@ -156,6 +157,7 @@ func (c *Client) Env() []string {
 		"ANDROID_HOME":            sdk,
 		"ANDROID_AVD_HOME":        c.Root.AvdHome(),
 		"ANDROID_ADB_SERVER_PORT": strconv.Itoa(c.Root.AdbServerPort()),
+		"ANDROID_ADB_LOG_PATH":    ServerLogPath(c.Root),
 	}
 	for k, v := range root.NoLocalScanEnv {
 		set[k] = v
@@ -315,12 +317,14 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	if up {
 		return true, nil
 	}
+	c.reportGoneServer(k, port)
 	if err := ctx.Err(); err != nil {
 		return false, canceled(ctx)
 	}
 	if err := prepareServerRoot(c.Root); err != nil {
 		return false, err
 	}
+	prepareServerLog(c.Root)
 	c.Log.Infof("启动魔改 AVD %s adb server（端口 %d）", k.label, port)
 	// StartOrphan rather than StartDetached: an MCP client ends modavd's whole process tree when it disconnects, and
 	// while the start-server client (our child for ~2 s) is alive the server it forks is part of that tree. Losing
@@ -332,7 +336,15 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 		return false, errs.Wrap(errs.Internal, err, fmt.Sprintf("启动魔改 AVD %s adb server（端口 %d）失败: %s",
 			k.label, port, errs.As(err).Message))
 	}
-	return c.waitListening(ctx, k, port, timeout, client)
+	up, err = c.waitListening(ctx, k, port, timeout, client)
+	switch {
+	case err != nil:
+	case up:
+		c.rememberServer(port)
+	case ctx.Err() == nil:
+		c.reportServerLog(k, port, timeout)
+	}
+	return up, err
 }
 
 // waitListening polls until port listens, at most timeout (AUTO-MAS _wait_listening). It does not wait for the
@@ -591,11 +603,30 @@ func consolePortOf(plan root.PortPlan, serial string) (int, bool) {
 // this root) and it is at least 60 s old; then get-state, Register, and up to 5 s of get-state == "device".
 // Serialized per serial within this process. Starts OnReregistered on success.
 func (c *Client) Reregister(ctx context.Context, serial string) bool {
+	return c.reregister(ctx, serial, false)
+}
+
+// RegisterBooted is Reregister for the boot wait once the emulator has reported Android booted (its
+// bootcompleted.ini is newer than its qemu): its one registration, at the end of boot, has happened, so a private
+// server that does not know serial now came up only after it or was restarted since, and nobody else will register
+// it. The caller holds the boot lock and knows the boot is over, so neither Booting(serial) nor the qemu age apply;
+// the private server must be listening already (nothing is started here).
+func (c *Client) RegisterBooted(ctx context.Context, serial string) bool {
+	if c.Root == nil {
+		return false
+	}
+	if up, err := c.serverListening(privateServer, c.Root.AdbServerPort()); err != nil || !up {
+		return false
+	}
+	return c.reregister(ctx, serial, true)
+}
+
+func (c *Client) reregister(ctx context.Context, serial string, booted bool) bool {
 	if c.Root == nil {
 		return false // no root, no instance of its own (QemuOnAdbPort says so too)
 	}
 	console, ok := consolePortOf(c.Root.Ports(), serial)
-	if !ok || (c.Booting != nil && c.Booting(serial)) {
+	if !ok || (!booted && c.Booting != nil && c.Booting(serial)) {
 		return false
 	}
 	qemu, ok := qemuOnAdbPort(c.Root, console)
@@ -603,7 +634,7 @@ func (c *Client) Reregister(ctx context.Context, serial string) bool {
 		return false
 	}
 	startedAt := qemu.StartedAt()
-	if startedAt.IsZero() || time.Since(startedAt) < reregisterMinQemuAge {
+	if !booted && (startedAt.IsZero() || time.Since(startedAt) < reregisterMinQemuAge) {
 		return false
 	}
 	lock := serialLock(serial)

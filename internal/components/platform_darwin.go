@@ -200,3 +200,6 @@ func (f *fetcher) platformSpace(todo []root.SDKComponent) error {
 func moveComponent(src, dst string) error {
 	return host.RenameNoReplace(src, dst)
 }
+
+// installComponent moves an unpacked component from the staging directory into place.
+func installComponent(src, dst string) error { return moveComponent(src, dst) }
