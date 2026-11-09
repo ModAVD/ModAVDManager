@@ -33,6 +33,7 @@
 //	servers                                               emu.ServersResult
 //	version                                               VersionResult {"version","protocol","go"} (no root needed)
 //	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
+//	update install --after-pid P --reopen EXE [--reopen-arg A]...   the same, for the manager's 更新 (update/handoff.go)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
 //
@@ -93,6 +94,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -104,6 +106,7 @@ import (
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
+	"modavd/internal/update"
 )
 
 // manager is the part of *emu.Manager the commands use; tests substitute a fake.
@@ -152,6 +155,10 @@ type deps struct {
 	serveMCP        func(ctx context.Context, in io.Reader, out io.Writer, opt mcp.Options) error
 	fetchComponents func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
 	stdinTerminal   func(io.Reader) bool
+	// the manager's update hand-off (update install --after-pid / --reopen)
+	waitExit      func(pid int, timeout time.Duration) bool // true when pid is gone
+	updateInstall func(ctx context.Context, u *update.Updater) (*update.Status, error)
+	reopen        func(exe string, args []string) error
 }
 
 func defaultDeps() deps {
@@ -167,6 +174,15 @@ func defaultDeps() deps {
 		serveMCP:        mcp.Serve,
 		fetchComponents: components.Fetch,
 		stdinTerminal:   readerIsTerminal,
+		waitExit: func(pid int, timeout time.Duration) bool {
+			p, ok := host.FindProcess(uint32(pid))
+			return !ok || p.Wait(timeout)
+		},
+		updateInstall: func(ctx context.Context, u *update.Updater) (*update.Status, error) { return u.Install(ctx) },
+		reopen: func(exe string, args []string) error {
+			_, err := host.StartDetached(exe, args, host.StartOptions{Dir: filepath.Dir(exe)})
+			return err
+		},
 	}
 }
 

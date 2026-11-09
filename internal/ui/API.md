@@ -76,6 +76,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/update` | | `UpdateView`，见下（不联网） |
 | POST | `/api/update/check` | `{}` | `UpdateView`：按设置的更新源查最新版本（不带 CDK）；检查进行中回 409 `busy` |
 | POST | `/api/update/settings` | `{source?: "github"\|"mirrorchyan", cdk?: string}` | `UpdateView`；`cdk` 为 `""` 时清除，CDK 加密保存，从不返回 |
+| POST | `/api/update/apply` | `{}` | 202 `Job`（`kind` 是 `update`，根任务，`index` 为 `-1`）：更新这个根目录，见下「更新」；结果是 `{handoff, version, stopped, message}` |
 
 `{i}` 是实例编号（0–9，5 除外）。
 
@@ -93,7 +94,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
  "result":null,"error":null,"warnings":[]}
 ```
 
-- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact` / `playstore-install` / `playstore-uninstall` / `playstore-import` / `gles32-on` / `gles32-off`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
+- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact` / `playstore-install` / `playstore-uninstall` / `playstore-import` / `gles32-on` / `gles32-off` / `update`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
 - `state`：`running` / `done` / `failed` / `canceled`。
 - `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；磁盘任务进行中是 `disk_info` / `disk_trim` / `disk_compact`、做完是 `done`（进行中没有百分比，`total` 为 0，页面显示不定长进度条；做完 `done` = `total` = 1000）；装执行桥的每一轮是 `bridge`；商店的装、卸进行中是 `playstore-install` / `playstore-uninstall`（没有百分比）、做完是 `done`；导入时核对文件是 `verifying`、解压镜像是 `extracting`（`done` / `total` 是字节）；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
 - 安装任务的 `result.apk` 是用户上传的文件名，不是服务端的临时路径（临时文件任务结束就删了）。
@@ -117,7 +118,7 @@ event: log
 data: {"time":"…","level":"info|warn|error","msg":"…","job_id":"j12"}   不属于任务的消息 job_id 是 ""
 
 event: update
-data: <UpdateView>          检查、设置有变化时
+data: <UpdateView>          检查、设置有变化时，以及更新任务下载完以后
 
 event: proxy
 data: {"marks":[ProxyMark]} 按应用走代理的卡片标记，全量；连上时发一次（有过的话），之后有变化时
@@ -167,10 +168,15 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 
 ### 更新 `UpdateView`
 
-`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`install_by_cli`（现在恒为 `true`：管理器里不能安装，由 AUTO-MAS 调 `modavd update install`）。
+`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{at, ok, updated, version, message, error: {code, message, advice} | null}`；这个管理器不是那次重新打开的、或者结果超过 30 分钟，是 `null`）。
 
-- 只有点「检查更新」才联网；没有自动检查。
-- 更新源和 CDK 是本机这个 Windows 用户的设置（`%LOCALAPPDATA%\ModAVD\update-settings.json`），命令行更新时按它来。
+- 只有点「检查更新」或「更新」才联网；没有自动检查。
+- 更新源和 CDK 是本机这个 Windows 用户的设置（`%LOCALAPPDATA%\ModAVD\update-settings.json`），管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。
+- 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
+  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。
+  2. 正常关掉所有在运行的实例（同 `stop --all`，但不取消正在新建的：那台关不掉，任务就失败）。
+  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`），任务结束，结果 `{handoff: true, version, stopped, message}`；约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；新管理器启动时读走这份结果，放进 `handoff`。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
+- 开始前就拒绝、不开任务（422）：管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。有别的任务在跑时回 409 `busy`；更新任务在跑时，别的任务也回 409。
 
 ## 生命周期
 

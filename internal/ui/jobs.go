@@ -77,6 +77,8 @@ func kindLabel(kind string) string {
 		return "开启报告 GLES 3.2"
 	case kindGLES32Off:
 		return "关闭报告 GLES 3.2"
+	case kindUpdate:
+		return "更新 ModAVD"
 	}
 	return kind
 }
@@ -230,6 +232,14 @@ func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	for _, o := range s.jobs.list {
 		if o.view.State != stateRunning {
 			continue
+		}
+		// 设置 → 更新 stops every instance and replaces the whole package: it runs alone
+		if kind == kindUpdate || o.view.Kind == kindUpdate {
+			s.jobs.mu.Unlock()
+			if kind == kindUpdate {
+				return jobView{}, errs.Newf(errs.Busy, "%s%s还没做完（任务 %s），等它做完再更新", jobTarget(o.view.Index), kindLabel(o.view.Kind), o.view.ID)
+			}
+			return jobView{}, errs.Newf(errs.Busy, "正在更新 ModAVD（任务 %s），等它做完再试", o.view.ID)
 		}
 		if (sdkJob(kind) && o.view.Index != rootJobIndex && bootJob(o.view.Kind)) ||
 			(i != rootJobIndex && sdkJob(o.view.Kind) && bootJob(kind)) {

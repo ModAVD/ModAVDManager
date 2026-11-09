@@ -65,6 +65,7 @@ type fake struct {
 	probeErr     error
 	startGate    chan struct{} // Start waits here (after its first progress) when set
 	stopGate     chan struct{}
+	stopErr      error // Stop fails with it (after its gate)
 
 	shot        adb.Result
 	shotDelay   time.Duration
@@ -232,7 +233,7 @@ func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*e
 func (b fakeBackend) Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
 	b.f.mu.Lock()
 	b.f.stops = append(b.f.stops, opt)
-	gate := b.f.stopGate
+	gate, stopErr := b.f.stopGate, b.f.stopErr
 	b.f.mu.Unlock()
 	if gate != nil {
 		select {
@@ -241,9 +242,26 @@ func (b fakeBackend) Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu
 			return nil, canceledErr(ctx)
 		}
 	}
+	if stopErr != nil {
+		return nil, stopErr
+	}
 	b.f.put(i, emu.StatusOffline)
 	return &emu.StopResult{Index: i, Name: root.AvdName(i), Method: "graceful", Synced: true, Seconds: 1.5,
 		Warnings: []string{}}, nil
+}
+
+// StopTargets: every instance that is not offline, ascending.
+func (b fakeBackend) StopTargets(ctx context.Context) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	out := []int{}
+	for i, in := range b.f.instances {
+		if in.Status != emu.StatusOffline {
+			out = append(out, i)
+		}
+	}
+	sort.Ints(out)
+	return out, nil
 }
 
 func (b fakeBackend) Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error) {

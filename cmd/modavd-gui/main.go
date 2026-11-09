@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -174,6 +175,7 @@ func run(args []string) (code int) {
 	if *dev {
 		opt.IdleExit = -1
 	}
+	opt.Reopen = reopenArgs(r, *port, *noWindow, *dev, log)
 	if err := ui.Run(ctx, opt); err != nil {
 		log.Errorf("%v", err)
 		// let go of the root first: the message box stays up until it is clicked away, and a new launch meanwhile
@@ -183,6 +185,27 @@ func run(args []string) (code int) {
 		return errs.ExitCode(err)
 	}
 	return 0
+}
+
+// reopenArgs is how the CLI starts this manager again after 设置 → 更新: this executable on the same root, with the
+// options that change how it runs. Nil when the executable's path is unknown (更新 is then refused).
+func reopenArgs(r *root.Root, port int, noWindow, dev bool, log *logx.Logger) *ui.Reopen {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Warnf("找不到管理器自己的路径，设置里不能更新: %v", err)
+		return nil
+	}
+	args := []string{"--root", r.Dir}
+	if port != 0 {
+		args = append(args, "--port", strconv.Itoa(port))
+	}
+	if noWindow {
+		args = append(args, "--no-window")
+	}
+	if dev {
+		args = append(args, "--dev")
+	}
+	return &ui.Reopen{Exe: exe, Args: args}
 }
 
 // reopen is the second launch on a root: the running manager gets a new window.

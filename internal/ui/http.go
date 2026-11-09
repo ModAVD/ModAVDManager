@@ -67,6 +67,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/update", s.handleUpdateGet)
 	m.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
 	m.HandleFunc("POST /api/update/settings", s.handleUpdateSettings)
+	m.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
 	s.mux = m
 }
 

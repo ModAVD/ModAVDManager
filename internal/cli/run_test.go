@@ -23,6 +23,7 @@ import (
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
+	"modavd/internal/update"
 	"modavd/internal/win"
 )
 
@@ -264,6 +265,10 @@ type harness struct {
 	fetch    func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
 	stdin    string
 	terminal bool // stdin is a console (components fetch may ask for a source); false like a pipe
+	// update install --after-pid / --reopen (the manager's 更新)
+	waitExit      func(pid int, timeout time.Duration) bool
+	updateInstall func(ctx context.Context, u *update.Updater) (*update.Status, error)
+	reopen        func(exe string, args []string) error
 }
 
 type result struct {
@@ -290,6 +295,9 @@ func (h *harness) run(t *testing.T, ctx context.Context, args ...string) result 
 		serveMCP:        h.mcpCall,
 		fetchComponents: h.fetch,
 		stdinTerminal:   func(io.Reader) bool { return h.terminal },
+		waitExit:        h.waitExit,
+		updateInstall:   h.updateInstall,
+		reopen:          h.reopen,
 	}
 	if d.resolveRoot == nil {
 		d.resolveRoot = func(string) (*root.Root, error) { return nil, errs.New(errs.NotFound, "没有根目录") }

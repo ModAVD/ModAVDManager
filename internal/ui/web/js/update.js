@@ -1,17 +1,22 @@
 // 设置 → ModAVD 更新 (API.md "更新"): version and update state of this root, the update source and the Mirror 酱 CDK,
-// a check on request. Installing is not offered here yet: AUTO-MAS still updates with its own updater, source and
-// CDK, and the two updaters share no lock; the button is shown and disabled. These settings are used by the check
-// and by `modavd update`.
+// a check on request, and 更新: the server's update job downloads and verifies, stops the instances and hands the swap
+// to tools\modavd.exe; the manager then closes and is started again by it (update_apply.go), and that manager shows
+// what happened (v.handoff). These settings are also `modavd update`'s; AUTO-MAS's own updater uses its own.
 
 import { h, icon, btn, attr, setText, showError } from './dom.js';
 import { S, update, subscribe } from './store.js';
 import { api } from './api.js';
 import { openDialog, toast, toastError } from './ui.js';
-import { openDiagnostics } from './diagnostics.js';
+import { openDiagnostics, activeJob, progressText } from './diagnostics.js';
+import { onJob, notifyJob } from './actions.js';
 
 const clock = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
 const ver = (v) => (v ? v.replace(/^v/, '') : '');
 const PHASE = { idle: '', preparing: '正在准备新版', staged: '新版已下载并核对好，待安装', swapping: '正在换上新版' };
+const NOTE = '点「更新」会先下载并核对新版（这时实例照常用），再正常关掉所有实例，管理器关闭、换上新版，换好后自动重新打开。'
+  + '用 AUTO-MAS 的也可以在 AUTO-MAS 里更新，它用 AUTO-MAS 设置里的更新源和 CDK；这里的更新源和 CDK 用于这里和命令行 modavd update。';
+const NOTE_CLI = '这个管理器不能自己更新：关掉所有实例和管理器后运行 tools\\modavd.exe update install。'
+  + '用 AUTO-MAS 的也可以在 AUTO-MAS 里更新，它用 AUTO-MAS 设置里的更新源和 CDK。';
 
 export function loadUpdate() {
   return api.get('/api/update').then(onUpdate).catch(() => {});
@@ -20,7 +25,57 @@ export function loadUpdate() {
 // GET /api/update, the "update" event and every answer of the settings API.
 export function onUpdate(v) {
   S.update = v;
+  showHandoff(v.handoff);
   update();
+}
+
+// What the CLI did after the last 更新 (this manager is the one it started again): told once per page.
+let handoffShown = '';
+function showHandoff(x) {
+  if (!x || handoffShown === x.at) return;
+  handoffShown = x.at;
+  if (x.ok) toast({ title: x.updated ? `已更新到 ${ver(x.version)}` : (x.message || '已经是最新版本'), timeout: 9000 });
+  else toast({ tone: 'err', title: '新版没有换上', text: (x.error && x.error.message) || x.message, advice: x.error && x.error.advice, timeout: 15000 });
+}
+
+// 更新 may be clicked: this manager can come back after the swap, the root can be updated, a check found a newer
+// version (or one is already downloaded), and no update is running.
+const installable = (v) => !!(v && v.can_install && v.updatable && (v.update_available || v.prepared_version)
+  && !v.checking && !activeJob('update'));
+
+function installTitle(v) {
+  if (!v) return '';
+  if (activeJob('update')) return '正在更新';
+  if (!v.can_install) return '这个管理器不能自己更新';
+  if (!v.updatable) return v.not_updatable_reason;
+  if (!v.update_available && !v.prepared_version) return v.checked ? '已经是最新版本' : '先点「检查更新」';
+  return '';
+}
+
+// The confirmation, then the update job (its end: actions.js notify, which closes this window on a hand-off).
+function confirmInstall(v) {
+  const target = ver(v.prepared_version || v.latest_version);
+  const running = ((S.list && S.list.instances) || []).filter((x) => x.running).length;
+  const stops = running ? `正常关掉正在运行的 ${running} 台实例（安卓正常关机）` : '（现在没有实例在运行）';
+  const go = btn('btn btn-primary', [icon('download'), '更新'], async () => {
+    dlg.close();
+    try {
+      const j = await api.post('/api/update/apply', {});
+      const seen = S.jobs.get(j.id);
+      if (seen && seen.state !== 'running') notifyJob(seen);
+      else {
+        S.watch.add(j.id);
+        onJob(j);
+      }
+    } catch (e) { toastError(e); }
+  });
+  const dlg = openDialog({
+    title: `更新到 ${target}`, sub: 'ModAVD 整包：模拟器、组件、脚本和管理器', light: true,
+    body: h('div', { class: 'dlg-body' },
+      h('p', { text: `先下载并核对新版，这时实例照常用；然后${stops}，管理器关闭、换上新版，换好后自动重新打开管理器。` }),
+      h('p', { class: 'f-hint', text: '实例的数据（avd 文件夹）和设置都不动。正在新建的实例要先等它建完。' })),
+    actions: { ok: go },
+  });
 }
 
 // The chip: 设置, with a dot when a check found a newer ModAVD.
@@ -88,12 +143,11 @@ export function openUpdate() {
     h('div', { class: 'f-ctl' }, h('div', { class: 'upd-cdk' }, cdk, save, clear), cdkState),
     h('label', { class: 'f-label', for: 'upd-comp', text: '组件下载源' }), h('div', { class: 'f-ctl' }, componentSource, componentURLsRow,
       h('p', { class: 'f-hint', text: '「补全组件」和 modavd components fetch 都从这里选的源下载；选了就保存。' })));
-  const note = h('p', { class: 'f-hint', text: '这里暂时只能检查新版本。用 AUTO-MAS 的，在 AUTO-MAS 里更新（它用 AUTO-MAS 设置里的更新源和 CDK）；不用 AUTO-MAS 的，关掉所有实例和管理器，把新版整包覆盖解压到这个文件夹，avd 文件夹不会被动到。这里的更新源和 CDK 只用于「检查更新」和命令行 modavd update。' });
+  const note = h('p', { class: 'f-hint' });
   const diagBtn = btn('btn btn-secondary', [icon('shield'), '组件与问题反馈'], () => { ctl.close(); openDiagnostics(); });
   const when = h('span', { class: 'foot-note' });
   const checkBtn = btn('btn btn-secondary', null, () => run(api.post('/api/update/check')));
-  const installBtn = btn('btn btn-primary', [icon('download'), '更新'], null,
-    { disabled: true, 'aria-disabled': 'true', title: '这里暂时不能直接更新' });
+  const installBtn = btn('btn btn-primary', null, () => installable(S.update) && confirmInstall(S.update));
   for (const r of radios) r.addEventListener('change', () => r.checked && post({ source: r.value }, r.value === 'github' ? '改用 GitHub 更新' : '改用 Mirror 酱更新'));
 
   ctl = openDialog({
@@ -122,10 +176,14 @@ export function openUpdate() {
     const phase = PHASE[v.phase] || '';
     if (phase) rows.push(['状态', v.prepared_version ? `${phase}：${ver(v.prepared_version)}` : phase]);
     const lr = v.last_result;
-    if (lr && lr.action) rows.push(['上次', lr.ok ? `已更新到 ${ver(lr.version)}` : `没成功：${lr.error || '原因未知'}`]);
+    if (v.handoff && !v.handoff.ok) rows.push(['上次', `没换上：${v.handoff.message}`]);
+    else if (lr && lr.action) rows.push(['上次', lr.ok ? `已更新到 ${ver(lr.version)}` : `没成功：${lr.error || '原因未知'}`]);
     kv.replaceChildren(...rows.flatMap(([k, t]) => [h('dt', { text: k }), h('dd', null, h('span', { class: 'v', text: t }))]));
-    setText(msg, v.message || '');
-    msg.hidden = !v.message;
+    const job = activeJob('update');
+    const line = job ? progressText(job) : (v.message || '');
+    setText(msg, line);
+    msg.hidden = !line;
+    setText(note, v.can_install ? NOTE : NOTE_CLI);
     if (v.error && !v.checking) { showError(box, v.error); box.hidden = false; }
     for (const r of radios) r.checked = r.value === (v.source || 'github');
     setText(cdkState, v.cdk_set ? '已填（加密保存在本机，只有这个 Windows 用户能读）' : v.source === 'mirrorchyan' ? '没填：没有 CDK 时只能从 GitHub 下载' : '选 Mirror 酱时才用到');
@@ -134,8 +192,14 @@ export function openUpdate() {
     componentURLsRow.hidden = componentSource.value !== 'custom';
     setText(when, v.checked_at ? `检查于 ${clock(v.checked_at)}` : '');
     checkBtn.replaceChildren(v.checking ? h('span', { class: 'spin' }) : icon('refresh'), v.checking ? '正在检查…' : '检查更新');
-    checkBtn.disabled = !!v.checking;
+    checkBtn.disabled = !!v.checking || !!job;
     attr(checkBtn, 'aria-busy', v.checking || null);
+    installBtn.replaceChildren(job ? h('span', { class: 'spin' }) : icon('download'), job ? '正在更新…' : '更新');
+    const can = installable(v);
+    installBtn.disabled = !can;
+    attr(installBtn, 'aria-disabled', can ? null : 'true');
+    attr(installBtn, 'aria-busy', job ? 'true' : null);
+    attr(installBtn, 'title', installTitle(v) || null);
   };
   const un = subscribe(render);
   ctl.onClose.push(() => { un(); ctl = null; });

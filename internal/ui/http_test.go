@@ -317,7 +317,8 @@ func TestUpdateSettings(t *testing.T) {
 	h := newHarness(t, nil)
 	var v map[string]any
 	expect(t, h.do("GET", "/api/update", nil), http.StatusOK, &v)
-	if v["source"] != "github" || v["cdk_set"] != false || v["install_by_cli"] != true || v["checking"] != false {
+	if v["source"] != "github" || v["cdk_set"] != false || v["install_by_cli"] != true || v["can_install"] != false ||
+		v["checking"] != false || v["handoff"] != nil {
 		t.Fatalf("GET /api/update: %v", v)
 	}
 	resp := h.do("POST", "/api/update/settings", `{"source":"mirrorchyan","cdk":"cdk-xyz-1"}`)
@@ -332,7 +333,8 @@ func TestUpdateSettings(t *testing.T) {
 	}
 	expectError(t, h.do("POST", "/api/update/settings", `{}`), 400, errs.Usage)
 	expectError(t, h.do("POST", "/api/update/settings", `{"source":"ftp"}`), 400, errs.InvalidArgument)
-	expectError(t, h.do("POST", "/api/update/apply", `{}`), 404, errs.NotFound)
+	// a manager that cannot start itself again (no Options.Reopen) does not install
+	expectError(t, h.do("POST", "/api/update/apply", `{}`), 422, errs.Unsupported)
 }
 
 func readBody(t *testing.T, resp *http.Response) string {

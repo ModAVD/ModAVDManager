@@ -80,6 +80,9 @@ var (
 	optCheckMB       = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
 	optNoBridge      = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
 	optAutoMAS       = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
+	optAfterPID      = flagSpec{"after-pid", kindInt, "PID", "管理器用：先等这个进程退出（最多 60 秒）再装，只和 install 一起用"}
+	optReopen        = flagSpec{"reopen", kindString, "程序", "管理器用：装完（成不成都）把结果写进 .update\\manager-result.json，再启动这个程序（完整路径），只和 install 一起用"}
+	optReopenArg     = flagSpec{"reopen-arg", kindStrings, "参数", "管理器用：启动 --reopen 的程序时带的参数，按顺序，可以给多次"}
 	optBootNoBridge  = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
@@ -348,16 +351,18 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V]",
+			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
 			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
 			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）。不自动联网，只做给出的那一步：" +
 				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
 				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器窗口和 MCP 客户端；" +
 				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
+				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
+				"命令等它退出再换上新版，然后重新打开管理器。" +
 				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
 			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
-			flags: []flagSpec{optAutoMAS}, final: true,
+			flags: []flagSpec{optAutoMAS, optAfterPID, optReopen, optReopenArg}, final: true,
 			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
@@ -1431,6 +1436,19 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.pos[0]).
 			WithAdvice(findCommand("update").usageAdvice())
 	}
+	afterPID, reopen, reopenArgs := c.inv.intOpt("after-pid"), c.inv.strOpt("reopen"), c.inv.strsOpt("reopen-arg")
+	handoff := afterPID != 0 || reopen != "" || len(reopenArgs) > 0
+	switch {
+	case handoff && action != "install":
+		return nil, errs.New(errs.Usage, "--after-pid、--reopen、--reopen-arg 只能和 install 一起用").
+			WithAdvice(findCommand("update").usageAdvice())
+	case afterPID < 0:
+		return nil, errs.Newf(errs.Usage, "--after-pid 要给进程号，收到 %d", afterPID)
+	case len(reopenArgs) > 0 && reopen == "":
+		return nil, errs.New(errs.Usage, "--reopen-arg 要和 --reopen 一起用")
+	case reopen != "" && !filepath.IsAbs(reopen):
+		return nil, errs.Newf(errs.Usage, "--reopen 要给程序的完整路径，收到「%s」", reopen)
+	}
 	r, err := c.deps.resolveRoot(c.inv.root)
 	if err != nil {
 		return nil, err
@@ -1450,11 +1468,44 @@ func runUpdate(c *cmdCtx) (any, error) {
 	case "prepare":
 		return u.Prepare(c.ctx)
 	case "install":
-		return u.Install(c.ctx)
+		if handoff {
+			return installHandoff(c, r, u, afterPID, reopen, reopenArgs)
+		}
+		return c.deps.updateInstall(c.ctx, u)
 	case "recover":
 		return u.Recover(c.ctx)
 	}
 	return u.Status(), nil
+}
+
+// installHandoff is `update install` for the manager's 更新 (update/handoff.go): wait for the manager (afterPID) to exit,
+// install, then, with reopen, leave the result for the manager and start it again whatever happened, so the user is
+// never left without a manager.
+func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, reopen string, args []string) (*update.Status, error) {
+	var st *update.Status
+	var err error
+	if afterPID > 0 {
+		c.log.Infof("等管理器（pid %d）退出", afterPID)
+		if !c.deps.waitExit(afterPID, update.AfterPIDWait) {
+			st = u.Status()
+			err = errs.Newf(errs.Busy, "管理器（pid %d）%d 秒内没有退出，新版没有换上", afterPID, int(update.AfterPIDWait/time.Second)).
+				WithAdvice("关掉管理器窗口后再在「设置」里点「更新」；下载好的新版留着，不用重新下载")
+		}
+	}
+	if err == nil {
+		st, err = c.deps.updateInstall(c.ctx, u)
+	}
+	if reopen != "" {
+		if serr := update.SaveHandoff(r, update.NewHandoffResult(st, err, time.Now())); serr != nil {
+			c.log.Warnf("写不了给管理器的更新结果: %v", serr)
+		}
+		if rerr := c.deps.reopen(reopen, args); rerr != nil {
+			c.log.Warnf("重新打开管理器（%s）失败: %v", reopen, rerr)
+		} else {
+			c.log.Infof("已重新打开管理器")
+		}
+	}
+	return st, err
 }
 
 func formatUpdateStatus(w io.Writer, r *update.Status) {

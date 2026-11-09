@@ -8,7 +8,8 @@ import { openActivity, runCheck } from './panels.js';
 
 const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
   components: '补全组件', 'collect-info': '收集问题信息', 'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店',
-  'playstore-import': '导入 Google Play 商店的文件', 'gles32-on': '开启报告 GLES 3.2', 'gles32-off': '关闭报告 GLES 3.2' };
+  'playstore-import': '导入 Google Play 商店的文件', 'gles32-on': '开启报告 GLES 3.2', 'gles32-off': '关闭报告 GLES 3.2',
+  update: '更新 ModAVD' };
 // what the store needs once it is in an instance: registering its GSF ID (playstore.js openGSFID, the page is
 // playstore.js UNCERTIFIED; not imported from there, as playstore.js imports this module)
 const GSF = '登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。';
@@ -83,6 +84,13 @@ function notify(job) {
       text: gles32Text(job.kind, r), action: done ? null : activity, timeout: (r.notes || []).length ? 14000 : 7000 });
   } else if (job.kind === 'playstore-import') {
     toast({ title: 'Google Play 商店的文件已就绪', text: `${playStoreText(job.kind, r)}要用的实例在「更多操作」里补全商店。`, timeout: 9000 });
+  } else if (job.kind === 'update') {
+    if (!r.handoff) toast({ tone: 'info', title: r.message || '已经是最新版本' });
+    else {
+      // the manager exits now and tools\modavd.exe starts it again after the swap, in a new window
+      toast({ title: '正在换上新版', text: `${r.message || ''}。这个窗口会自己关掉。`, timeout: 15000 });
+      setTimeout(() => window.close(), 1200);
+    }
   }
 }
 

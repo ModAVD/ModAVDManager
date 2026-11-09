@@ -1,9 +1,9 @@
 package ui
 
 // The update part of the manager's settings (API.md "更新"): the root's ModAVD package version and update state, the
-// update source (GitHub / MirrorChyan) and the MirrorChyan CDK, and a check on request. Installing is not offered
-// here yet: AUTO-MAS keeps its own updater for now and will drive `modavd update` later, which uses these settings.
-// Nothing goes online unless the user clicks 检查更新.
+// update source (GitHub / MirrorChyan) and the MirrorChyan CDK, a check on request, and 更新 (update_apply.go). The
+// source and CDK are also `modavd update`'s; AUTO-MAS's own updater uses AUTO-MAS's settings. Nothing goes online
+// unless the user clicks 检查更新 or 更新.
 
 import (
 	"context"
@@ -21,9 +21,13 @@ const updateCheckTimeout = time.Minute
 type updateView struct {
 	*update.Status
 	Checking     bool       `json:"checking"`
-	CheckedAt    string     `json:"checked_at"` // RFC 3339, "" when not checked since the manager started
-	Error        *errorBody `json:"error"`      // the last check's failure
-	InstallByCLI bool       `json:"install_by_cli"`
+	CheckedAt    string     `json:"checked_at"`     // RFC 3339, "" when not checked since the manager started
+	Error        *errorBody `json:"error"`          // the last check's failure
+	InstallByCLI bool       `json:"install_by_cli"` // 更新 is not offered here (CanInstall false): only the CLI installs
+	CanInstall   bool       `json:"can_install"`    // POST /api/update/apply may be tried
+	// Handoff is what the CLI reported after the last 更新 handed to it (the swap and the manager's restart); null when
+	// this manager was not started by such a hand-off, or the report is older than update.HandoffFresh.
+	Handoff *update.HandoffResult `json:"handoff"`
 }
 
 type updatePanel struct {
@@ -32,6 +36,7 @@ type updatePanel struct {
 	checked  *update.Status // the last successful check
 	at       time.Time
 	err      *errorBody
+	handoff  *update.HandoffResult // taken from .update when the manager started
 }
 
 func (p *updatePanel) busy() bool {
@@ -59,7 +64,8 @@ func (s *server) updateView() updateView {
 		}
 		st.Message = c.Message
 	}
-	v := updateView{Status: st, Checking: p.checking, Error: p.err, InstallByCLI: true}
+	v := updateView{Status: st, Checking: p.checking, Error: p.err, InstallByCLI: s.reopen == nil, CanInstall: s.reopen != nil,
+		Handoff: p.handoff}
 	if !p.at.IsZero() {
 		v.CheckedAt = p.at.Format(time.RFC3339)
 	}

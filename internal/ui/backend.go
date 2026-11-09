@@ -22,6 +22,8 @@ type backend interface {
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
+	// StopTargets is what `stop --all` stops: the running or actively creating instances (设置 → 更新 stops them).
+	StopTargets(ctx context.Context) ([]int, error)
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)
 	Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
