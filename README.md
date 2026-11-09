@@ -106,16 +106,16 @@ Apple Silicon macOS 使用 SDK 中原生的 `qemu-img`。磁盘占用按宿主�
 
 **Google Play 商店**（`components fetch --play-store`、`components import-playstore`、`playstore`，ModAVD#125）：
 
-Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` r9：官方归档为 `arm64-v8a-35_r09.zip`（约 1.8 GB）。许可确认后下载，或导入自己的归档/五个文件，按该版本的大小和摘要校验后保存到 `sdk/playstore/`。它与下面的 Windows API34 x86_64 文件不混用。当前 macOS 仅准备组件，实例内安装与移除尚未开放，不要求安装执行桥。
+Apple Silicon macOS 支持给 Android 15 / API35 `arm64-v8a` 实例安装和移除商店。组件使用 Google Play ARM64 r9 的官方归档 `arm64-v8a-35_r09.zip`（约 1.8 GB）：许可确认后下载，或导入自己的归档/五个文件，按该版本的大小和摘要校验后保存到 `sdk/playstore/`，与 Windows API34 x86_64 文件不混用。运行 `playstore <i> install` / `uninstall`，或使用实例「更多操作」里的补全/移除菜单；macOS 使用这台实例自己的可写系统覆盖层，不需要执行桥，也不改共享的 SDK 镜像。期间可能多次冷启动，最后恢复原来的开关机状态与窗口方式。
 
-- 实例用的 Google APIs 镜像有 Play 服务、没有商店。商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）里的五个文件：商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书。根目录只留这五个文件（`sdk\playstore\`），每台实例要的时候再装进去；新建的实例不带。
+- 实例用的 Google APIs 镜像有 Play 服务、没有商店。Windows 的商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）里的五个文件：商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书。根目录只留这五个文件（`sdk\playstore\`），每台实例要的时候再装进去；新建的实例不带。
 - 根目录的五个文件有两种来法，都是可选的，`components status`、`check` 不把它们算进必需组件：
   - 下载：`components fetch --play-store`（管理器「补全组件」里勾选「补全 Google Play 商店服务」）同意许可协议后下载这个镜像（约 1.5 GB），从里面的 `system.img` 只读取出五个文件，每个都核对写死的大小和 SHA-256，然后删掉解出的 `system.img` 和下载的压缩包（`--keep-downloads` 时压缩包留着）。已经有了就跳过。
   - 用自己的文件：`components import-playstore <文件或文件夹>…`（管理器里「使用我自己的文件」）。给 Google 官方的压缩包 `x86_64-34_r14.zip`（名字不限，按 Google 仓库清单核对大小 1,510,752,654 字节和 SHA-1，再像下载的一样取出五个文件），或者那五个文件本身（名字不限，逐个核对大小和 SHA-256，值和[文档站](https://modavd.github.io/guide/playstore)的表一样；给文件夹就取里面同名的几个）。认不出的文件、对不上的哈希、缺了文件，一律拒收（退出码 9，`components_rejected`，`--json` 的 `error.details.reason` 是 `unknown_file`、`mismatch` 或 `incomplete`），什么也不改；只读你的文件，不动它们。不下载，也不问许可协议。
   - `components status` 列出五个文件在不在、从哪来（`play_store.source`：`download` 或 `import`）。
 - 只放商店不够：镜像自带的 Play 服务和 GSF 是测试证书签的，和商店签名对不上，Google 的组件会拒绝工作，所以一起换成 Play 版镜像里同版本的。
-- 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥：没有的 `install` 报 `not_ready`（`details.reason` 为 `no_bridge`），根目录还没有五个文件的报 `not_ready`（`playstore_files_missing`），这两种都在动实例之前就拒绝。装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
-- `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉，没做成也关掉（关不掉只是警告）；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
+- Windows 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥：没有的 `install` 报 `not_ready`（`details.reason` 为 `no_bridge`），装了商店的实例不能卸执行桥，要先 `playstore <i> uninstall`。两个平台在根目录还没有五个文件时都报 `not_ready`（`playstore_files_missing`），在动实例之前拒绝。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
+- `install`：放入文件后冷启动。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动后恢复并启用占位应用。期间可能冷启动多次。实例原来关着的，做完再关掉，没做成也关掉（关不掉只是警告）；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
 - `install` 中途失败（比如覆盖层空间不够）时，撤回这次放进去的文件（包括没放到位的 `.new`），恢复占位应用；替换了镜像自带文件的那几个和占位应用要下次冷启动后才完全恢复。撤不干净的，`status` 是 `partial`，实例记为只装了一部分，可以 `uninstall` 移除，也可以再 `install` 补全。
 - 设备没有通过 Play 保护机制认证。登录时提示未认证的，用 `playstore <i> gsfid`（管理器里实例「更多操作」的「复制 GSF ID」）取这台实例的 GSF ID，十进制和十六进制都给（`--json` 是 `decimal`、`hex`），到 <https://www.google.com/android/uncertified/> 登记。实例要开着；还没有 ID 时报 `not_ready`（`details.reason` 为 `no_gsf_id`），开着网等一两分钟再试。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
 - 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`，装到一半撤不干净时是 `"partial"`；`info` / `list` 的 `play_store`（装上了）和 `play_store_partial`（只装了一部分）按这一项。

@@ -1,7 +1,7 @@
 // Everything that changes something on the server, with the toasts that go with it.
 
 import { api } from './api.js';
-import { S, update, instance } from './store.js';
+import { S, update, instance, setInstances } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText } from './format.js';
 import { openActivity, runCheck } from './panels.js';
@@ -14,12 +14,15 @@ const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '
 const GSF = '登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。';
 // an import the server refused (components_rejected, details.reason) when its message has no advice of its own
 const IMPORT_ADVICE = {
-  unknown_file: '要的是 Google 官方的 Google Play 版镜像压缩包 x86_64-34_r14.zip，或者从它里面取出的五个文件。',
+  unknown_file: '要的是与当前平台匹配的 Google 官方 Google Play 版镜像压缩包，或者从它里面取出的五个文件。',
   mismatch: '这个文件和 Google 发布的那份不一样（可能没下载完整或被改过），重新下载后再试。',
   incomplete: '五个文件要一起选上，或者只选镜像压缩包。',
 };
 
 export function importAdvice(e) {
+  if (e && !e.advice && e.code === 'components_rejected' && e.details?.reason === 'unknown_file' && S.components?.play_store?.archive) {
+    return `要的是 Google 官方的 Google Play 版镜像压缩包 ${S.components.play_store.archive}，或者从它里面取出的五个文件。`;
+  }
   return (e && (e.advice || (e.code === 'components_rejected' && IMPORT_ADVICE[e.details?.reason]))) || '';
 }
 
@@ -138,7 +141,7 @@ export async function copy(text) {
 
 export async function loadInstances() {
   try {
-    S.list = await api.get('/api/instances');
+    setInstances(await api.get('/api/instances'));
     S.loadError = null;
   } catch (e) {
     if (!S.list) S.loadError = e;

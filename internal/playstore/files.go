@@ -1,5 +1,5 @@
-// Package playstore prepares pinned Google Play files and supports Windows instance installation (ModAVD/ModAVD#125).
-// Host-specific component tables live in profile.go; macOS currently only prepares API35 ARM64 files. Windows instances run
+// Package playstore prepares pinned Google Play files for Windows and native macOS instances (ModAVD/ModAVD#125).
+// Host-specific component tables live in profile.go; macOS uses API35 ARM64 files. Windows instances run
 // Google's "Google APIs" image, which has Google Play services but no store; the store comes from Google's "Google
 // Play" image of the same release (system-images;android-34;google_apis_playstore;x86_64 r14), downloaded on the
 // user's computer like the other Google components and never shipped by ModAVD.
@@ -9,7 +9,8 @@
 // signature. So the files taken are the store and the Google-signed copies of Play services, GSF and Partner Setup
 // (same versions as the image's own; Partner Setup writes GSF settings and crashes at every boot otherwise), plus the
 // store's fs-verity certificate. They go into the instance's writable system overlay, which only instances with the
-// execution bridge have; the image's own com.android.vending, a license-check placeholder, is hidden there.
+// execution bridge have on Windows, or -writable-system requests on macOS; the image's own com.android.vending,
+// a license-check placeholder, is hidden there.
 //
 // Files is the Windows table; Extract reads a profile's files from system.img (GPT, then the dynamic partitions of
 // its super partition, then ext4 or EROFS) without mounting anything.
@@ -71,9 +72,12 @@ func ExtractedBytes() int64 {
 }
 
 // Manifest is the file list the guest script reads: "<name> <guest path> <sha256>" per line, LF.
-func Manifest() string {
+func Manifest() string { return WindowsProfile().Manifest() }
+
+// Manifest binds the guest file list to exactly this profile.
+func (p Profile) Manifest() string {
 	s := ""
-	for _, f := range Files {
+	for _, f := range p.Files {
 		s += f.Name + " " + path.Clean(f.Guest()) + " " + f.SHA256 + "\n"
 	}
 	return s

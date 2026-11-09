@@ -129,7 +129,7 @@ func TestPlayStoreScriptEmbedded(t *testing.T) {
 }
 
 // run is the script's action: its RESULT word and its whole output.
-func (g *psGuest) run(action string) (string, string) {
+func (g *psGuest) run(action string, mode ...string) (string, string) {
 	g.t.Helper()
 	b, err := Script(PlayStore)
 	if err != nil {
@@ -139,7 +139,8 @@ func (g *psGuest) run(action string) (string, string) {
 	if err := os.WriteFile(script, b, 0o644); err != nil {
 		g.t.Fatal(err)
 	}
-	cmd := exec.Command(g.sh, "-c", stubbedSh, "sh", filepath.ToSlash(script), action, g.dir)
+	args := append([]string{"-c", stubbedSh, "sh", filepath.ToSlash(script), action, g.dir}, mode...)
+	cmd := exec.Command(g.sh, args...)
 	cmd.Env = g.env
 	out, _ := cmd.CombinedOutput()
 	result := ""

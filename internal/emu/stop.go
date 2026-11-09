@@ -103,6 +103,9 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 		return nil, err
 	}
 	defer l.Unlock()
+	if nativePlayStore() && !opt.playStoreLocked && mm.lockHeld(i, "bridge") {
+		return nil, playStoreBusy(i)
+	}
 
 	// Check after taking the stop lock: a creation may have begun while we waited for another stop.
 	state, _, _ := mm.creation(i)

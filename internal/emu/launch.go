@@ -94,6 +94,14 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if err := m.Root.CheckPorts(); err != nil {
 		return nil, err
 	}
+	if nativePlayStore() && m.playStoreWanted(i) {
+		if err := playStoreGuestError(inst.Config); err != nil {
+			return nil, err
+		}
+		if err := m.writePlayStoreMarker(i); err != nil {
+			return nil, err
+		}
+	}
 	if err := m.prepareBridgeBackings(ctx, inst); err != nil {
 		return nil, err
 	}
@@ -157,6 +165,10 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 
 	headless := !window
 	args := buildLaunchArgs(inst.Name, port, memoryMB, headless)
+	args, err = m.playStoreLaunchArgs(inst, args)
+	if err != nil {
+		return nil, err
+	}
 	m.pruneLogs(i)
 	logPath, err := emulatorLogPath(m.Root.LogsDir(), inst.Name)
 	if err != nil {

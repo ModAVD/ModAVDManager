@@ -209,6 +209,11 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		store := playStoreRecord(meta)
 		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 	}
+	// A native operation may have stopped before its metadata write. The boot
+	// request is durable and keeps both recovery actions available in that case.
+	if nativePlayStore() && !info.PlayStore && regularFile(m.playStoreMarker(i)) {
+		info.PlayStorePartial = true
+	}
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info
 }

@@ -32,7 +32,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
+| GET | `/api/info` | | `{"version","protocol","root":RootInfo,"play_store_install_supported":bool,"play_store_requires_bridge":bool}`；后两项是本机平台能力，菜单不必等组件列表加载。Apple Silicon macOS 支持且不需要执行桥，Windows 支持且需要执行桥 |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
@@ -46,7 +46,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：请求开着的安卓回收空间；`done` 和 100% 仅表示触发请求已返回，不等待或确认客体 FITRIM 完成，任务耗时也是请求耗时；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |
 | POST | `/api/instances/{i}/disk-compact` | `{}` | 202 `Job`（`kind` 是 `disk-compact`）：整理已关机实例的数据盘文件；预估收益不足时跳过重写；实例没关机时任务失败，code 是 `busy`；结果是 `DiskCompactResult` |
 | POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |
-| POST | `/api/instances/{i}/playstore-install` | `{}` | 202 `Job`（`kind` 是 `playstore-install`）：把根目录里的五个文件装进这台实例（同 `modavd playstore <i> install`：放进执行桥的可写覆盖层、藏起占位应用、冷启动一次；关着的做完再关上，开着的照原来的方式开回来，要几分钟）；结果是 `PlayStoreResult`。开始前先检查，不行立即回错误、不开任务：根目录还没有五个文件（或文件不全、损坏）是 422 `not_ready`，`details.reason` 为 `playstore_files_missing`（页面引导去「补全组件」勾选或导入）；实例没有执行桥是 422 `not_ready`，`details.reason` 为 `no_bridge`；arm64 客体是 422 `unsupported`（`unsupported_guest`）；新建中 409 `busy`；不存在 404。任务里客体脚本发现系统不可写也是 `not_ready` / `no_bridge`。任务中途失败时客体脚本撤回这次放进去的文件；撤不干净（或脚本没说完就断了）的，实例的 `play_store_partial` 变成 `true`，页面同时给「补全」和「移除」。实例原来关着的，失败后也关上 |
+| POST | `/api/instances/{i}/playstore-install` | `{}` | 202 `Job`（`kind` 是 `playstore-install`）：把根目录里的五个文件装进这台实例（同 `modavd playstore <i> install`：使用实例自己的可写覆盖层、藏起占位应用，期间可能多次冷启动；关着的做完再关上，开着的照原来的方式开回来，要几分钟）；结果是 `PlayStoreResult`。开始前先检查，不行立即回错误、不开任务：根目录还没有五个文件（或文件不全、损坏）是 422 `not_ready`，`details.reason` 为 `playstore_files_missing`（页面引导去「补全组件」勾选或导入）；Windows 实例没有执行桥是 422 `not_ready`，`details.reason` 为 `no_bridge`。macOS 的 API35 ARM64 实例不需要执行桥，客体 ABI/API 不匹配是 422 `unsupported`（`unsupported_guest`）；新建中 409 `busy`；不存在 404。任务里 macOS 重新挂载后系统仍不可写是 `not_ready` / `playstore_not_writable`。任务中途失败时客体脚本撤回这次放进去的文件；撤不干净（或脚本没说完就断了）的，实例的 `play_store_partial` 变成 `true`，页面同时给「补全」和「移除」。实例原来关着的，失败后也关上 |
 | POST | `/api/instances/{i}/playstore-uninstall` | `{}` | 202 `Job`（`kind` 是 `playstore-uninstall`）：从实例里移除商店（去掉 Google Play 装的更新、删掉五个文件、冷启动后恢复占位应用；同 `playstore <i> uninstall`）；结果是 `PlayStoreResult`。不要五个文件，也不检查执行桥；只装了一部分的实例也用它移除 |
 | GET | `/api/instances/{i}/playstore-gsfid` | | `{"index","decimal","hex"}`：开着的实例的 GSF ID（同 `modavd playstore <i> gsfid --json`；十进制是 GSF 记的，十六进制是同一个数，负数按补码），几秒钟。用来到 https://www.google.com/android/uncertified/ 登记。没开机（按最近的列表）或实例上有任务在跑是 409 `busy`；还没有 ID 是 422 `not_ready`，`details.reason` 为 `no_gsf_id`（开着网等一两分钟再试） |
 | POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是这台实例显示的像素（1280×720 或 1920×1080，竖屏时宽高对调））或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
@@ -140,11 +140,11 @@ data: {}                    每 15 秒
 
 ### Google Play 商店 `PlayStoreStatus`、`PlayStoreImportResult`、`PlayStoreResult`
 
-Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，归档 `arm64-v8a-35_r09.zip`；实例内装卸仍返回 `unsupported`。Windows 保持 API34 x86_64 r14。`PlayStoreStatus` 增加 `archive`（可导入的官方归档名）、`download_bytes`（归档大小）和 `install_supported`（当前宿主是否已支持实例装卸）；界面按这些字段展示大小、导入提示和能力边界。macOS 的 `ready` 同时检查 `source.properties` 的 ABI、API 和镜像类型，仍不替代导入/下载时的摘要校验。
+Apple Silicon macOS 的组件下载/导入与实例装卸使用 API35 Google Play ARM64 r9，归档 `arm64-v8a-35_r09.zip`；Windows 保持 API34 x86_64 r14。`PlayStoreStatus` 包含 `archive`（可导入的官方归档名）、`download_bytes`（归档大小）、`install_supported`（当前宿主是否已支持实例装卸）和 `requires_bridge`（是否需要执行桥，macOS 为 `false`）；界面按这些字段展示大小、导入提示和能力边界。macOS 的 `ready` 同时检查 `source.properties` 的 ABI、API 和镜像类型，仍不替代导入/下载时的摘要校验。
 
 商店是可选的：根目录里留五个文件（`sdk\playstore\`，补全组件时勾选下载，或者导入自己的文件），每台实例要的时候再装进去；新建实例不带。
 
-- `PlayStoreStatus`（`GET /api/components` 的 `play_store`，和 `modavd components status --json` 的 `data.play_store` 相同）：`{"dir","ready","source","version","archive","download_bytes","install_supported","files":[{"name","guest","size","present"}]}`。
+- `PlayStoreStatus`（`GET /api/components` 的 `play_store`，和 `modavd components status --json` 的 `data.play_store` 相同）：`{"dir","ready","source","version","archive","download_bytes","install_supported","requires_bridge","files":[{"name","guest","size","present"}]}`。
   - `ready`：五个文件都在、`source.properties` 的版本对（只看大小，SHA-256 在放进来和装进实例时核对）。实例的「补全 Google Play 商店」按钮按它决定是直接装，还是先引导去补全组件。
   - `source`：`download`（补全组件时下载的）、`import`（用自己的文件导入的），没有或来历不明是 `""`。
   - `files` 固定五项，顺序同文档站：`Phonesky.apk`、`PrebuiltGmsCore.apk`、`GoogleServicesFramework.apk`、`PartnerSetupPrebuilt.apk`、`play_store_fsi_cert.der`；`guest` 是装进实例后的路径，`present` 是这个文件在、大小对。
@@ -153,7 +153,7 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
   - `skipped`：根目录里五个文件本来就齐全，给的文件也核对过了，什么都没改。
   - `set_aside`：原来不完整的 `sdk\playstore` 改名后的位置（`sdk\playstore.incomplete-<时间>`），没有是 `""`。
 - `PlayStoreResult`（`playstore-install` / `playstore-uninstall` 任务的结果，同 `modavd playstore <i> … --json`）：`{"index","action","state","installed","files","restarted","stopped","warnings"}`；`state` 是做完后客体里的情况：`installed`、`absent` 或 `partial`（还有没放到位的 `.new` 也算 `partial`）。
-- `InstanceInfo.play_store`（bool）：这台实例装着商店（按 `mas-avd.json` 的记录，装成功后为 `true`，移除后 `false`；不问客体）。按钮据此显示「补全 Google Play 商店」或「移除 Google Play 商店」，装着时再加一项「复制 GSF ID」（开机后可用）；`bridge` 为 `off` 的实例装不了（会回 `no_bridge`）。
+- `InstanceInfo.play_store`（bool）：这台实例装着商店（按 `mas-avd.json` 的记录，装成功后为 `true`，移除后 `false`；不问客体）。按钮据此显示「补全 Google Play 商店」或「移除 Google Play 商店」，装着时再加一项「复制 GSF ID」（开机后可用）。只有 `play_store_requires_bridge` 为 `true` 的平台才因 `bridge: off` 禁用安装；macOS 不依赖执行桥。
 - `InstanceInfo.play_store_partial`（bool）：上次补全中途失败、没能全部撤回（`mas-avd.json` 记的是 `"partial"`）。这时 `play_store` 为 `false`，页面「补全」和「移除」都给；`bridge <i> uninstall` 照样拒绝。
 - 页面选文件和装 APK 一样：`<input type="file">`（可多选），每个文件追加一个 `file` 字段，用 `FormData` 发 `multipart/form-data`。
 

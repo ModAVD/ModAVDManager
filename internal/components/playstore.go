@@ -64,7 +64,18 @@ type PlayStoreStatus struct {
 	Archive          string          `json:"archive"`           // the matching Google Play image zip
 	DownloadBytes    int64           `json:"download_bytes"`    // size of that archive
 	InstallSupported bool            `json:"install_supported"` // preparing the files does not enable instance operations
+	RequiresBridge   bool            `json:"requires_bridge"`   // Windows uses the bridge's writable overlay; native ARM64 does not
 }
+
+// PlayStoreInstallSupported reports whether this build can apply the component
+// to an instance. Download/import support alone must not advertise that ability.
+func PlayStoreInstallSupported() bool {
+	return root.CurrentPlatform().Windows() || nativeDarwinComponents
+}
+
+// PlayStoreRequiresBridge is also sent with /api/info so menus work before the
+// optional component status is opened. Native ARM64 owns its writable overlay.
+func PlayStoreRequiresBridge() bool { return root.CurrentPlatform().Windows() }
 
 // PlayStoreState reads r's Google Play Store files (in the SDK the instances run on).
 func PlayStoreState(r *root.Root) PlayStoreStatus {
@@ -72,7 +83,7 @@ func PlayStoreState(r *root.Root) PlayStoreStatus {
 	dir := c.Dir(r.RuntimeSDK())
 	profile := playstore.CurrentProfile()
 	st := PlayStoreStatus{Dir: dir, Files: []PlayStoreFile{}, Archive: filepath.Base(profile.ImageURL),
-		DownloadBytes: profile.ImageSize, InstallSupported: root.CurrentPlatform().Windows()}
+		DownloadBytes: profile.ImageSize, InstallSupported: PlayStoreInstallSupported(), RequiresBridge: PlayStoreRequiresBridge()}
 	all := true
 	for _, f := range playStoreFiles {
 		fi, err := os.Stat(filepath.Join(dir, f.Name))

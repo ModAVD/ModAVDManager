@@ -2,8 +2,8 @@
 # ModAVD: the Google Play Store of an instance (ModAVD/ModAVD#125), run as root by modavd (internal/emu/playstore.go):
 #   sh playstore.sh install|status|uninstall|gsfid <dir>
 # <dir> holds files.txt ("<name> <guest path> <sha256>" per line) and, for install, the files it names. The files
-# go into the instance's writable system overlay (adb remount's, which only instances with the execution bridge boot
-# with); the image's own com.android.vending, a license-check placeholder, is hidden there. Each run ends with one
+# go into the instance's writable system overlay (adb remount's); Windows uses the execution bridge's boot marker,
+# native ARM64 passes -writable-system independently. The image's own com.android.vending placeholder is hidden. Each run ends with one
 # line "RESULT <word>" that modavd reads:
 #   install:   installed | not-writable | bad-file | failed (what this run put in is taken back) | partial (not all
 #              of it could be taken back; its last line before RESULT says why the install failed)
@@ -20,19 +20,35 @@ STUB=/product/app/LicenseChecker
 U=$R/mnt/scratch/overlay
 PKG=com.android.vending
 GSFDB=/data/data/com.google.android.gsf/databases/gservices.db
+N=$3
+# Kept outside the temporary push directory, so an interrupted native install can
+# remove its own incomplete staging files without touching a pre-existing overlay.
+OWNDIR=$R/data/local/modavd-playstore
+OWN=$OWNDIR/owned.txt
 
 result() { echo "RESULT $1"; exit "${2:-0}"; }
 
 [ -f "$LIST" ] || { echo "no $LIST"; result failed 1; }
 
 sum() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+owns() { [ "$N" = native ] && grep -Fqx "$1" "$OWN" 2>/dev/null; }
+own() {
+  [ "$N" = native ] || return 0
+  owns "$1" && return 0
+  mkdir -p "$OWNDIR" && echo "$1" >> "$OWN" && sync
+}
 
 # upper is where the overlay keeps its own copy of guest path $1 (or the whiteout that hides the image's)
 upper() { rest=${1#/}; echo "$U/${rest%%/*}/upper/${rest#*/}"; }
 
 writable() {
-  remount >/dev/null 2>&1
+  remount 2>&1
   for p in product system_ext; do
+    if [ "$N" = native ] && { [ ! -d "$U/$p/upper" ] ||
+        ! grep -F "upperdir=/mnt/scratch/overlay/$p/upper," "$R/proc/mounts" >/dev/null 2>&1; }; then
+      echo "/$p has no supported overlay upper directory"
+      result not-writable 3
+    fi
     if ! touch "$R/$p/.modavd-w" 2>/dev/null; then
       echo "/$p is not writable"
       result not-writable 3
@@ -121,12 +137,31 @@ install)
       result bad-file 4
     fi
   done < "$LIST"
+  if [ "$N" = native ]; then
+    # Never replace another tool's upper-layer files, or take ownership of its
+    # staging name. An existing ModAVD record permits interrupted retries.
+    while read -r name target want; do
+      [ -n "$name" ] || continue
+      u=$(upper "$target")
+      if { [ -e "$u" ] || [ -L "$u" ]; } && [ "$(sum "$u")" != "$want" ] && ! owns "$target"; then
+        echo "foreign overlay file $target; left unchanged"; result failed 1
+      fi
+      if { [ -e "$R$target.new" ] || [ -L "$R$target.new" ]; } && ! owns "$target"; then
+        echo "foreign staged file $target.new; left unchanged"; result failed 1
+      fi
+    done < "$LIST"
+    u=$(upper "$STUB")
+    if { [ -e "$u" ] || [ -L "$u" ]; } && ! owns stub; then
+      echo "foreign placeholder overlay $STUB; left unchanged"; result failed 1
+    fi
+  fi
   # Staged first: each file that is not the store's copy already goes in as <path>.new, and only once all of them are
   # there do they take their places, so running out of space (the overlay's) leaves nothing but .new files to remove.
   : > "$D/staged.txt"; : > "$D/moved.txt"; : > "$D/dirs.txt"; hid=0
   while read -r name target want; do
     [ -n "$name" ] || continue
     t=$R$target
+    own "$target" || undo "cannot record ownership of $target"
     rm -f "$t.new" 2>/dev/null
     if [ "$(sum "$t")" = "$want" ]; then echo "kept $target"; continue; fi
     mkdirs "${t%/*}" || undo "cannot make ${target%/*}"
@@ -143,6 +178,7 @@ install)
     echo "copied $target"
   done < "$D/staged.txt"
   if [ -e "$R$STUB" ]; then
+    own stub || undo "cannot record ownership of $STUB"
     hid=1
     rm -rf "$R$STUB" || undo "cannot hide $STUB"
     echo "hid $STUB"
@@ -172,6 +208,25 @@ gsfid)
   result ok
   ;;
 uninstall)
+  # Native remount must succeed before package-manager or file changes. Its first
+  # call may only disable verity; the host cold-boots once and retries then.
+  [ "$N" = native ] && writable
+  if [ "$N" = native ]; then
+    while read -r name target want; do
+      [ -n "$name" ] || continue
+      u=$(upper "$target")
+      if { [ -e "$u" ] || [ -L "$u" ]; } && [ "$(sum "$u")" != "$want" ] && ! owns "$target"; then
+        echo "foreign overlay file $target; left unchanged"; result failed 1
+      fi
+      if { [ -e "$R$target.new" ] || [ -L "$R$target.new" ]; } && ! owns "$target"; then
+        echo "foreign staged file $target.new; left unchanged"; result failed 1
+      fi
+    done < "$LIST"
+    u=$(upper "$STUB")
+    if { [ -e "$u" ] || [ -L "$u" ]; } && { ! owns stub || [ -d "$u" ] || [ -L "$u" ]; }; then
+      echo "foreign placeholder overlay $STUB; left unchanged"; result failed 1
+    fi
+  fi
   # disabled first, so the store cannot update itself again before the shutdown; the run after the cold boot
   # enables com.android.vending again (the placeholder by then)
   am force-stop $PKG >/dev/null 2>&1
@@ -179,11 +234,17 @@ uninstall)
   for p in $PKG com.google.android.gms com.google.android.gsf com.google.android.partnersetup; do
     case "$(pm uninstall-system-updates $p 2>&1)" in *Success*) echo "removed updates of $p" ;; esac
   done
-  writable
+  [ "$N" = native ] || writable
   [ -d "$U" ] || { echo "no $U"; result failed 1; }
   left=0
   while read -r name target want; do
     [ -n "$name" ] || continue
+    if [ "$N" = native ] && owns "$target"; then
+      if [ -e "$R$target.new" ] || [ -L "$R$target.new" ]; then
+        rm -f "$R$target.new" || { echo "cannot remove $target.new"; result failed 1; }
+        echo "removed staged $target.new"
+      fi
+    fi
     rest=${target#/}; part=${rest%%/*}; rest=${rest#*/}
     if [ -e "$U/$part/upper/$rest" ]; then rm -f "$U/$part/upper/$rest" && echo "removed $target"; left=1; fi
   done < "$LIST"
@@ -194,7 +255,10 @@ uninstall)
   sync
   [ $left = 1 ] && result reboot
   case "$(pm path $PKG 2>/dev/null | head -1)" in
-    "package:$STUB/"*) pm enable $PKG >/dev/null 2>&1; result gone ;;
+    "package:$STUB/"*)
+      pm enable $PKG >/dev/null 2>&1
+      if [ "$N" = native ]; then rm -f "$OWN"; rmdir "$OWNDIR" 2>/dev/null; fi
+      result gone ;;
   esac
   result reboot
   ;;

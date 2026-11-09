@@ -5,9 +5,9 @@ package emu
 // (root.PlayStoreComponent, sdk\playstore) come from the root, put there by `components fetch --play-store` or
 // `components import-playstore` (package components); they are pushed into the guest, where the guest script
 // (guest/scripts/playstore.sh) checks them against the pinned SHA-256 and copies them into the instance's writable
-// system overlay, hiding the image's own placeholder com.android.vending. That overlay exists only on instances with
-// the execution bridge (its boot marker makes the emulator boot writable, bridge.go), so the store needs the bridge.
-// The files take effect at the next boot: an install boots the instance cold once.
+// system overlay, hiding the image's own placeholder com.android.vending. Windows uses the execution bridge's
+// writable boot marker. Native macOS ARM64 uses an independent persistent request and the standard -writable-system
+// flag; it does not install an execution bridge. Cold boots enable the overlay and load the replacement packages.
 //
 // Uninstalling takes two runs of the script with a cold boot between: the first disables the store (so it cannot
 // update itself again), removes the updates Google Play installed for the store, Play services, GSF and Partner Setup
@@ -79,7 +79,7 @@ const PlayStoreUncertifiedURL = "https://www.google.com/android/uncertified/"
 const (
 	PlayStoreReasonFiles       = "playstore_files_missing" // errs.NotReady: the root has not got the five files (or they are damaged)
 	PlayStoreReasonNoBridge    = "no_bridge"               // errs.NotReady: the instance does not boot with a writable system
-	PlayStoreReasonUnsupported = "unsupported_guest"       // errs.Unsupported: an arm64 guest
+	PlayStoreReasonUnsupported = "unsupported_guest"       // errs.Unsupported: wrong API or ABI for this host
 	PlayStoreReasonNoGSFID     = "no_gsf_id"               // errs.NotReady: GSF has no ID yet (gsfid; it registers once online)
 )
 
@@ -118,7 +118,7 @@ var (
 	playStoreFindQemu = (*Manager).findQemu
 	playStoreStart    = (*Manager).Start
 	playStoreStop     = func(m *Manager, ctx context.Context, i int) ([]string, error) {
-		sr, err := m.Stop(ctx, i, StopOptions{})
+		sr, err := m.Stop(ctx, i, StopOptions{playStoreLocked: true})
 		if err != nil {
 			return nil, err
 		}
@@ -178,8 +178,11 @@ func (m *Manager) setPlayStoreRecord(i int, v *jsonord.Value) error {
 	})
 }
 
-// playStoreBridgeError is nil when instance i boots with a writable system (it has the bridge and its marker).
+// playStoreBridgeError checks the matching native guest, or the Windows bridge's writable boot request.
 func (m *Manager) playStoreBridgeError(i int, cfg *avd.Ini) error {
+	if nativePlayStore() {
+		return playStoreGuestError(cfg)
+	}
 	if !bridgeGuestSupported(cfg) {
 		return errs.WithDetail(errs.New(errs.Unsupported, "arm64 客体没有 Google Play 商店这一项"),
 			errs.Reason, PlayStoreReasonUnsupported)
@@ -194,7 +197,7 @@ func (m *Manager) playStoreBridgeError(i int, cfg *avd.Ini) error {
 
 // PlayStoreCheck is what PlayStore (and PlayStoreGSFID, action gsfid) checks before it touches anything, without a
 // lock or a boot: the host, the action, the instance (there, not being created) and, for install, a writable system
-// (the bridge) and the root's five files (their pinned SHA-256). The manager calls it before it starts the job, so
+// (the Windows bridge, or the supported native profile) and the root's five files (their pinned SHA-256). The manager calls it before it starts the job, so
 // the button hears at once.
 func (m *Manager) PlayStoreCheck(i int, action string) error {
 	_, err := m.playStoreCheck(i, action)
@@ -202,7 +205,7 @@ func (m *Manager) PlayStoreCheck(i int, action string) error {
 }
 
 func (m *Manager) playStoreCheck(i int, action string) (*avd.Instance, error) {
-	if err := requireWindows(); err != nil {
+	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}
 	switch action {
@@ -216,6 +219,11 @@ func (m *Manager) playStoreCheck(i int, action string) (*avd.Instance, error) {
 	}
 	if err := m.notCreated(i, "不能装卸 Google Play 商店"); err != nil {
 		return nil, err
+	}
+	if nativePlayStore() {
+		if err := playStoreGuestError(in.Config); err != nil {
+			return nil, err
+		}
 	}
 	if action == "install" {
 		// the bridge first: without it the files would not help
@@ -245,7 +253,7 @@ func (m *Manager) runPlayStoreScript(ctx context.Context, i int, action string) 
 	}
 	defer os.RemoveAll(tmp)
 	list := filepath.Join(tmp, "files.txt")
-	if err := os.WriteFile(list, []byte(playstore.Manifest()), 0o644); err != nil {
+	if err := os.WriteFile(list, []byte(playstore.CurrentProfile().Manifest()), 0o644); err != nil {
 		return playStoreRun{}, errs.Wrap(errs.Internal, err, "写不了文件清单")
 	}
 	script, err := guest.LocalFile(filepath.Join(os.TempDir(), "modavd-guest"), guest.PlayStore)
@@ -254,7 +262,7 @@ func (m *Manager) runPlayStoreScript(ctx context.Context, i int, action string) 
 	}
 	pushes := []string{script, list}
 	if action == "install" {
-		for _, f := range playstore.Files {
+		for _, f := range playstore.CurrentProfile().Files {
 			pushes = append(pushes, filepath.Join(m.playStoreDir(), f.Name))
 		}
 	}
@@ -265,7 +273,11 @@ func (m *Manager) runPlayStoreScript(ctx context.Context, i int, action string) 
 			return playStoreRun{}, errs.Newf(errs.LaunchFailed, "实例 %d 推送 %s 失败：%s", i, filepath.Base(local), tail(res.Out, 300))
 		}
 	}
-	res := sh(fmt.Sprintf("su 0 sh %s/%s %s %s", playStoreGuestDir, guest.PlayStore, action, playStoreGuestDir), playStoreScriptTimeout)
+	mode := ""
+	if nativePlayStore() {
+		mode = " native"
+	}
+	res := sh(fmt.Sprintf("su 0 sh %s/%s %s %s%s", playStoreGuestDir, guest.PlayStore, action, playStoreGuestDir, mode), playStoreScriptTimeout)
 	run := parsePlayStoreRun(res.Out)
 	run.Ran = true
 	if run.Result == "" {
@@ -314,6 +326,8 @@ func playStoreFailed(i int, action string, run playStoreRun) error {
 		msg += "：" + run.Lines[len(run.Lines)-1]
 	}
 	switch {
+	case run.Result == playStoreNotWritable && nativePlayStore():
+		return errs.WithDetail(errs.New(errs.NotReady, msg).WithAdvice("实例仍不能写入系统覆盖层，请检查模拟器是否支持 -writable-system，以及 remount 的错误后重试"), errs.Reason, "playstore_not_writable")
 	case run.Result == playStoreNotWritable:
 		e := errs.New(errs.NotReady, msg).WithAdvice(fmt.Sprintf("实例的系统镜像不可写：先运行 modavd bridge %d install，再试一次", i))
 		return errs.WithDetail(e, errs.Reason, PlayStoreReasonNoBridge)
@@ -368,10 +382,31 @@ func (m *Manager) playStoreLock(i int) (*host.FileLock, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装卸执行桥或 Google Play 商店，稍后再试", i),
-			map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
+		return nil, playStoreBusy(i)
+	}
+	if nativePlayStore() {
+		// Native Start/Stop check our bridge lock after taking their own lock.
+		// Verify both are idle while holding it: an older lifecycle operation
+		// finishes first, and a newer one sees the bridge lock and returns busy.
+		for _, kind := range []string{"start", "stop"} {
+			guard, idle, err := m.tryOperationLock(i, kind)
+			if err != nil || !idle {
+				lock.Unlock()
+				if err != nil {
+					return nil, err
+				}
+				return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正在开机或关机，稍后再装卸 Google Play 商店", i),
+					map[string]string{errs.Reason: "locked", errs.Lock: kind})
+			}
+			guard.Unlock()
+		}
 	}
 	return lock, nil
+}
+
+func playStoreBusy(i int) error {
+	return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装卸执行桥或 Google Play 商店，稍后再试", i),
+		map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
 }
 
 func playStoreNotRunning(i int) error {
@@ -405,13 +440,30 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 	}
 	windowed := false
 	if wasRunning {
-		windowed, _ = qemuWindowed(p)
+		var known bool
+		windowed, known = qemuWindowed(p)
+		if nativePlayStore() && action != "status" && !known {
+			return nil, errs.Newf(errs.PrecheckFailed, "无法确认实例 %d 原来的窗口模式，暂不冷启动", i)
+		}
 	}
 	if action == "status" {
 		if !wasRunning {
 			return nil, playStoreNotRunning(i)
 		}
 		return res, m.playStoreStatus(ctx, i, res)
+	}
+
+	// Native ARM64 has no execution bridge. A separate persistent marker requests
+	// -writable-system on every boot until removal is confirmed.
+	if nativePlayStore() {
+		if err := m.writePlayStoreMarker(i); err != nil {
+			return nil, err
+		}
+		if playStoreRecord(m.Root.InstanceMeta(i)) == "" {
+			if err := m.setPlayStoreRecord(i, jsonord.NewString(playStorePartial)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	warn := func(format string, args ...any) {
@@ -421,9 +473,13 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 	}
 	// ours: the last start was this call's (one that is busy found another start under way, not to be stopped)
 	ours := false
+	active := wasRunning
+	changed := false
 	boot := func() error {
 		sr, err := playStoreStart(m, ctx, i, StartOptions{Window: windowed, bridgeLocked: true})
 		ours = errs.CodeOf(err) != errs.Busy
+		changed = changed || ours
+		active = err == nil
 		if err != nil {
 			return err
 		}
@@ -436,13 +492,26 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 		if err != nil {
 			return err
 		}
+		active = false
+		changed = true
 		res.Restarted = true
 		return boot()
 	}
 	// fail ends a failed install or uninstall: an instance that was off is shut down again, even after a cancel (best
 	// effort; what stands in the way goes into the warnings and the log, the error stays the one that failed).
 	fail := func(err error) (*PlayStoreResult, error) {
-		if wasRunning || !ours {
+		if wasRunning {
+			if nativePlayStore() && changed && !active {
+				sr, restoreErr := playStoreStart(m, context.WithoutCancel(ctx), i, StartOptions{Window: windowed, bridgeLocked: true})
+				if restoreErr != nil {
+					warn("实例 %d 原来是开着的，没做成后也没能恢复开机：%s", i, errs.As(restoreErr).Error())
+				} else {
+					res.Warnings = append(res.Warnings, sr.Warnings...)
+				}
+			}
+			return res, err
+		}
+		if !ours {
 			return res, err
 		}
 		w, serr := playStoreStop(m, context.WithoutCancel(ctx), i)
@@ -459,11 +528,29 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 		if err := boot(); err != nil {
 			return fail(err)
 		}
+	} else if nativePlayStore() {
+		// The existing boot may have no writable flag. Always cold boot through
+		// our launch plan before changing the native system overlay.
+		if err := restart(); err != nil {
+			return fail(err)
+		}
 	}
 
+	runChange := func(action string) (playStoreRun, error) {
+		run, err := playStoreScript(m, ctx, i, action)
+		// First remount can only disable verity. One cold boot makes that change
+		// effective; a second failure is returned instead of a reboot loop.
+		if nativePlayStore() && err == nil && run.Result == playStoreNotWritable {
+			if err := restart(); err != nil {
+				return run, err
+			}
+			return playStoreScript(m, ctx, i, action)
+		}
+		return run, err
+	}
 	switch action {
 	case "install":
-		run, err := playStoreScript(m, ctx, i, "install")
+		run, err := runChange("install")
 		if err == nil && run.Result != playStoreInstalled {
 			err = playStoreFailed(i, "install", run)
 		}
@@ -488,7 +575,7 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 			return fail(err)
 		}
 	case "uninstall":
-		run, err := playStoreScript(m, ctx, i, "uninstall")
+		run, err := runChange("uninstall")
 		if err != nil {
 			return fail(err)
 		}
@@ -503,12 +590,33 @@ func (m *Manager) PlayStore(ctx context.Context, i int, action string) (*PlaySto
 		if run.Result != playStoreGone {
 			return fail(playStoreFailed(i, "uninstall", run))
 		}
-		if err := m.setPlayStoreWanted(i, false); err != nil {
-			return fail(err)
-		}
 	}
 	if err := m.playStoreStatus(ctx, i, res); err != nil {
 		return fail(err)
+	}
+	if action == "install" && res.State != playStoreInstalled {
+		if err := m.setPlayStoreRecord(i, jsonord.NewString(playStorePartial)); err != nil {
+			warn("实例 %d 记不下 Google Play 商店的未完成状态：%s", i, errs.As(err).Error())
+		}
+		return fail(playStoreFailed(i, "install", playStoreRun{Result: res.State}))
+	}
+	if action == "uninstall" {
+		if res.State != playStoreAbsent {
+			return fail(playStoreFailed(i, "uninstall", playStoreRun{Result: res.State}))
+		}
+		if err := m.setPlayStoreWanted(i, false); err != nil {
+			return fail(err)
+		}
+		if nativePlayStore() {
+			if err := m.removePlayStoreMarker(i); err != nil {
+				return fail(err)
+			}
+			if wasRunning {
+				if err := restart(); err != nil {
+					return fail(err)
+				}
+			}
+		}
 	}
 	if !wasRunning {
 		w, err := playStoreStop(m, ctx, i)

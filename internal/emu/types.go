@@ -235,6 +235,9 @@ type StartResult struct {
 }
 
 type StopOptions struct {
+	// playStoreLocked permits the native store's own shutdown while its bridge
+	// operation lock excludes unrelated Start/Stop calls.
+	playStoreLocked bool
 	// Force: skip the Android shutdown; sync, then kill qemu (AUTO-MAS ForceKillOnClose).
 	Force bool
 	// CancelCreate: allow interrupting a creation. Independent of Force: normally shut Android down first.

@@ -132,10 +132,10 @@ func init() {
 			"先从镜像取待下载组件的 Google 许可协议全文，逐份输入 y 同意才继续，否则不下载归档。" +
 			"默认依次试 googledownloads.cn、腾讯云镜像、dl.google.com，下载约 1.8 GB，中断后再次运行会接着下；" +
 			"校验归档、版本和平台后装进 sdk/，保留执行权限。已经齐全的跳过；不完整的旧目录改名为 <目录>.incomplete-<时间> 留着，不删。" +
-			"SDK 使用中会拒绝补全，请先自行关闭使用它的进程。组件补全后，当前 macOS 版本仍未开放实例创建与启动。" +
+			"SDK 使用中会拒绝补全，请先自行关闭使用它的进程。" +
 			"--play-store 可选下载 Android 15 Google Play arm64-v8a r9 镜像（约 1.8 GB），校验后只保留商店等五个文件。" +
 			"import-playstore 可导入官方 arm64-v8a-35_r09.zip 或五个文件，按固定大小和摘要检查，不下载。" +
-			"这两项仅准备文件，当前 macOS 版本尚未开放实例内安装与移除。" +
+			"文件就绪后用 playstore <实例编号> install 装进 API35 ARM64 实例；macOS 使用实例自己的可写系统覆盖层，不需要执行桥。" +
 			"source 查看或修改记住的下载源（auto、googledownloads_cn、tencent、google）；--mirror 或 --mirror-url 可覆盖本次选择。" +
 			"--json 时必须给 --accept-license（仅 fetch），表示已同意待下载组件的全部许可协议。" +
 			"退出码：未同意许可是 2（license_declined），未就绪或预检失败是 4，SDK 使用中或正在补全是 5，下载不可用或校验失败是 9。"
@@ -273,13 +273,13 @@ func init() {
 			name: "playstore", args: "<i> install|uninstall|status|gsfid", summary: "装、卸、查看 Google Play 商店，取 GSF ID",
 			details: "商店的五个文件取自 Google 官方的 Google Play 版系统镜像（和实例的镜像同一期），要先在根目录补全：" +
 				"components fetch --play-store（下载）或 components import-playstore（用自己的文件）；没有就报 not_ready（details.reason 为 playstore_files_missing）。" +
-				"装在执行桥带来的可写系统镜像覆盖层里，所以实例要有执行桥。install 放入商店和 Google 签名的 Play 服务、GSF、合作伙伴设置，" +
-				"藏起镜像自带的同名占位应用，再冷启动一次生效；uninstall 去掉 Google Play 装的更新、删掉这些文件，冷启动后恢复占位应用。" +
+				playStoreOverlayHelp() + "install 放入商店和 Google 签名的 Play 服务、GSF、合作伙伴设置，" +
+				"藏起镜像自带的同名占位应用，再冷启动生效；uninstall 去掉 Google Play 装的更新、删掉这些文件，冷启动后恢复占位应用。期间可能冷启动多次。" +
 				"实例原来关着的，做完再关掉（没做成也关掉）；开着的，冷启动后照原来的方式开回来（带窗口或无头）。" +
 				"install 中途失败时撤回这次放进去的文件；撤不干净的记为只装了一部分（list 的 play_store_partial），用 uninstall 移除或再 install 补全。" +
 				"status：只读，实例要开着。gsfid：取这台实例的 GSF ID（十进制和十六进制，--json 是 decimal、hex），" +
 				"设备未经 Play 保护机制认证时到 " + emu.PlayStoreUncertifiedURL + " 登记；实例要开着，还没有 ID 时报 not_ready（details.reason 为 no_gsf_id），开着网等一两分钟再试。" +
-				"没有执行桥的报 not_ready（details.reason 为 no_bridge）。装了商店的实例不能卸执行桥，要先卸商店。新建的实例都不带商店。",
+				playStoreBridgeHelp() + "新建的实例都不带商店。",
 			posNames: []string{"实例编号", "install、uninstall、status 或 gsfid"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runPlayStore, human: humanPlayStore, exit: exitPlayStore,

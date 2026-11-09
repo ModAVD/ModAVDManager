@@ -34,9 +34,9 @@ var (
 // PlayStore. What it refuses before touching the instance (no bridge, the root has not got the files, not there,
 // being created) is answered at once, with errs.Reason in the details, so the page can offer the way out.
 func (s *server) handlePlayStore(action string) http.HandlerFunc {
-	kind, doing, done := kindPlayStoreInstall, "正在补全 Google Play 商店（会冷启动一次）", "已补全 Google Play 商店"
+	kind, doing, done := kindPlayStoreInstall, "正在补全 Google Play 商店（期间会冷启动）", "已补全 Google Play 商店"
 	if action == "uninstall" {
-		kind, doing, done = kindPlayStoreUninstall, "正在移除 Google Play 商店（会冷启动一次）", "已移除 Google Play 商店"
+		kind, doing, done = kindPlayStoreUninstall, "正在移除 Google Play 商店（期间会冷启动）", "已移除 Google Play 商店"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		i, ok := pathIndex(w, r)

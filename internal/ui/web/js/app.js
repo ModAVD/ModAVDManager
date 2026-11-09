@@ -1,7 +1,7 @@
 // Entry: theme, the optional mock backend (?mock=…), first load, the event stream and the top-level render.
 
 import { h, icon, btn, setText, attr, hydrateIcons } from './dom.js';
-import { S, update, subscribe, runningCount } from './store.js';
+import { S, update, subscribe, runningCount, setInstances } from './store.js';
 import { api, connectEvents } from './api.js';
 import { initUI } from './ui.js';
 import { initGrid, renderGrid, viewState, setView } from './cards.js';
@@ -199,7 +199,7 @@ const events = connectEvents({
     if (closed) probe();
   },
   instances(d) {
-    S.list = d;
+    setInstances(d);
     S.loadError = null;
     update();
   },

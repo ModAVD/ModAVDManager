@@ -2,7 +2,7 @@
 
 import { h, icon, btn, ibtn, showError, attr } from './dom.js';
 import { api } from './api.js';
-import { S, update, subscribe, instance, lastJob } from './store.js';
+import { S, update, subscribe, instance, lastJob, rememberPatchedInstance } from './store.js';
 import { openDialog, toast } from './ui.js';
 import { quoted, label, uptime, fmtBytes } from './format.js';
 import * as A from './actions.js';
@@ -213,7 +213,7 @@ export function openSettings(i, field) {
     return submit(ctl, save, '正在保存…', box, async () => {
       const r = await api.patch(`/api/instances/${i}`, pending);
       const k = S.list.instances.findIndex((x) => x.index === i);
-      if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
+      if (k >= 0 && r.instance) rememberPatchedInstance(r.instance, pending);
       if ('memory_mb' in pending) S.checkIndex = i;
       if ('diagnostics' in pending) {
         let text = '诊断模式已开启，立即生效。';

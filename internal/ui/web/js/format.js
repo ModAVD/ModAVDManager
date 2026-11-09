@@ -91,7 +91,7 @@ export function playStoreText(kind, r) {
     return `${r.from === 'zip' ? '已从镜像压缩包取出五个文件' : `已导入 ${(r.used || []).length} 个文件${kept}`}，核对无误。`;
   }
   const done = kind === 'playstore-install' ? r.state === 'installed' : r.state === 'absent';
-  const how = r.stopped ? '实例照原样关着' : r.restarted ? '实例冷启动过一次' : '';
+  const how = r.stopped ? '实例照原样关着' : r.restarted ? '实例已冷启动' : '';
   if (kind === 'playstore-install') return (done ? '商店已放进实例' : '商店只放进去了一部分，可以再补全一次') + (how ? `，${how}` : '') + '。';
   return (done ? '已移除商店，换回了系统原来的占位应用' : '没有移除干净，可以再移除一次') + (how ? `，${how}` : '') + '。';
 }

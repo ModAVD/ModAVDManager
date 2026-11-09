@@ -25,10 +25,12 @@ func detached(r *http.Request) context.Context { return context.WithoutCancel(r.
 
 func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
-		Version  string       `json:"version"`
-		Protocol int          `json:"protocol"`
-		Root     emu.RootInfo `json:"root"`
-	}{buildinfo.Version, buildinfo.Protocol, s.mgr.RootInfo()})
+		Version                   string       `json:"version"`
+		Protocol                  int          `json:"protocol"`
+		Root                      emu.RootInfo `json:"root"`
+		PlayStoreInstallSupported bool         `json:"play_store_install_supported"`
+		PlayStoreRequiresBridge   bool         `json:"play_store_requires_bridge"`
+	}{buildinfo.Version, buildinfo.Protocol, s.mgr.RootInfo(), components.PlayStoreInstallSupported(), components.PlayStoreRequiresBridge()})
 }
 
 func (s *server) handleList(w http.ResponseWriter, r *http.Request) {

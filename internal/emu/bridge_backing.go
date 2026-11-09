@@ -38,7 +38,10 @@ type backingDisk struct {
 
 // prepareBridgeBackings runs under the start lock, only for a cold writable boot.
 func (m *Manager) prepareBridgeBackings(ctx context.Context, in *avd.Instance) error {
-	marker, err := os.Stat(filepath.Join(in.Dir, bridgeMarkerName))
+	marker, err := os.Lstat(filepath.Join(in.Dir, bridgeMarkerName))
+	if errors.Is(err, os.ErrNotExist) && nativePlayStore() {
+		marker, err = os.Lstat(filepath.Join(in.Dir, playStoreMarkerName))
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -46,7 +49,7 @@ func (m *Manager) prepareBridgeBackings(ctx context.Context, in *avd.Instance) e
 		return err
 	}
 	if !marker.Mode().IsRegular() {
-		return errs.Newf(errs.PrecheckFailed, "实例 %s 的执行桥开机标记不是普通文件", in.Dir)
+		return errs.Newf(errs.PrecheckFailed, "实例 %s 的可写系统开机标记不是普通文件", in.Dir)
 	}
 	if st, err := os.Lstat(in.Dir); err != nil || !st.IsDir() {
 		return errs.Newf(errs.PrecheckFailed, "无法确认执行桥覆盖层的实例目录 %s", in.Dir)
@@ -70,7 +73,10 @@ func (m *Manager) prepareBridgeBackings(ctx context.Context, in *avd.Instance) e
 	}
 
 	sysdir := filepath.Clean(in.Config.Value("image.sysdir.1"))
-	standard := strings.EqualFold(sysdir, filepath.Clean(root.SystemImageDir))
+	standard := sysdir == filepath.Clean(root.CurrentPlatform().SystemImageDir)
+	if root.CurrentPlatform().Windows() {
+		standard = strings.EqualFold(sysdir, filepath.Clean(root.SystemImageDir))
+	}
 	imageDir := filepath.Join(m.Root.RuntimeSDK(), sysdir)
 	var repairs []backingDisk
 	changed := false
@@ -89,7 +95,7 @@ func (m *Manager) prepareBridgeBackings(ctx context.Context, in *avd.Instance) e
 		if disk.stale {
 			path = disk.target
 		}
-		base, err := host.OpenStableRead(path)
+		base, err := openBackingRead(path)
 		if err != nil {
 			if disk.virtualSize == 0 && errors.Is(err, os.ErrNotExist) {
 				return errs.Newf(errs.NotReady, "首次可写开机缺少系统镜像 %s", path).WithAdvice("请先补全系统镜像组件")
@@ -170,8 +176,12 @@ func (m *Manager) inspectBridgeDisk(ctx context.Context, overlay, target string,
 		return nil, backingError(overlay, d.old, target, err.Error())
 	}
 	managed := standard && info.Format == "qcow2" && info.BackingFilenameFmt == "raw" && info.VirtualSize > 0 && filepath.IsAbs(info.BackingFilename)
-	role := filepath.Join(root.SystemImageDir, filepath.Base(target))
-	if !managed || !strings.HasSuffix(strings.ToLower(d.old), strings.ToLower(string(filepath.Separator)+role)) {
+	role := string(filepath.Separator) + filepath.Join(root.CurrentPlatform().SystemImageDir, filepath.Base(target))
+	pathRole := strings.HasSuffix(d.old, role)
+	if root.CurrentPlatform().Windows() {
+		pathRole = strings.HasSuffix(strings.ToLower(d.old), strings.ToLower(role))
+	}
+	if !managed || !pathRole {
 		if d.stale {
 			return nil, backingError(overlay, d.old, target, "无法确认覆盖层格式或原后备路径")
 		}
@@ -242,13 +252,13 @@ func writeBackingProofs(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return host.MoveFileReplaceThrough(tmp.Name(), path)
+	return replaceBackingFile(tmp.Name(), path)
 }
 
 // Rebase a private copy: a failed or killed qemu-img must never damage the only
 // copy of the installed bridge. Rename also leaves other hard links intact.
 func (m *Manager) rebaseBridgeCopy(ctx context.Context, repair backingDisk) error {
-	source, err := host.OpenStableRead(repair.overlay)
+	source, err := openBackingRead(repair.overlay)
 	if err != nil {
 		return err
 	}
@@ -310,5 +320,46 @@ func (m *Manager) rebaseBridgeCopy(ctx context.Context, repair backingDisk) erro
 		return err
 	}
 	source.Close() // Windows cannot replace an open file
-	return host.MoveFileReplaceThrough(path, repair.overlay)
+	return replaceBackingFile(path, repair.overlay)
+}
+
+// POSIX has no Windows mandatory share modes. Native operations hold the
+// instance lifecycle lock, pin the opened inode and reject links/replacements at
+// open; content hashes remain required for every changed backing identity.
+func openBackingRead(path string) (*os.File, error) {
+	if !nativePlayStore() {
+		return host.OpenStableRead(path)
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("后备镜像不是普通文件: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		f.Close()
+		return nil, fmt.Errorf("后备镜像在打开时变化: %s", path)
+	}
+	return f, nil
+}
+
+func replaceBackingFile(from, to string) error {
+	if !nativePlayStore() {
+		return host.MoveFileReplaceThrough(from, to)
+	}
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(to))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

@@ -11,6 +11,7 @@ import (
 	"modavd/internal/components"
 	"modavd/internal/errs"
 	"modavd/internal/playstore"
+	"modavd/internal/root"
 )
 
 // importPlayStore is components.ImportPlayStore (a variable for the tests).
@@ -95,16 +96,30 @@ func formatImportPlayStore(w io.Writer, r *components.PlayStoreImportResult) {
 	if r.SetAside != "" {
 		fmt.Fprintf(w, "  原来不完整的目录改名为 %s，确认没用后可以自己删掉\n", r.SetAside)
 	}
-	if runtime.GOOS == "darwin" {
-		fmt.Fprintln(w, "ARM64 商店文件已准备；当前 macOS 版本尚未开放实例内安装与移除")
-	} else {
+	if r.Status.InstallSupported {
 		fmt.Fprintln(w, "给实例装上：modavd playstore <实例编号> install")
+	} else {
+		fmt.Fprintln(w, "商店文件已准备；当前平台尚未支持实例内安装与移除")
 	}
 }
 
 func playStoreFetchHelp() string {
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		return "也准备可选的 Google Play 商店：下载 API35 ARM64 r9 镜像（约 1.8 GB），校验后只保留五个文件；实例内装卸尚未开放"
+		return "也补全可选的 Google Play 商店：下载 API35 ARM64 r9 镜像（约 1.8 GB），校验后只保留五个文件；再用 playstore <实例编号> install 装进实例"
 	}
 	return "也补全可选的 Google Play 商店：下 Google Play 版系统镜像（约 1.5 GB），只取出商店等 5 个文件（约 230 MB）"
+}
+
+func playStoreOverlayHelp() string {
+	if root.CurrentPlatform().MirrorOS == "macos" {
+		return "macOS ARM64 使用这台实例自己的可写系统覆盖层，不需要执行桥。"
+	}
+	return "装在执行桥带来的可写系统镜像覆盖层里，所以实例要有执行桥。"
+}
+
+func playStoreBridgeHelp() string {
+	if root.CurrentPlatform().Windows() {
+		return "没有执行桥的报 not_ready（details.reason 为 no_bridge）。装了商店的实例不能卸执行桥，要先卸商店。"
+	}
+	return ""
 }

@@ -1,5 +1,5 @@
 // 补全 / 移除 Google Play 商店 on one instance (API.md "Google Play 商店"): asked first, since the job boots the
-// instance cold once; then its card shows the progress and a toast the outcome. 补全 needs the root's five files:
+// instance cold, sometimes more than once; then its card shows the progress and a toast the outcome. 补全 needs the root's five files:
 // without them it goes to 电脑检查's Google Play 商店服务 (下载 or 使用我自己的文件) instead. 复制 GSF ID reads the
 // running instance's GSF ID for registering it with Google.
 
@@ -49,7 +49,7 @@ export async function openPlayStore(i, action) {
       h('p', { id: desc, class: 'store-q' }, install
         ? ['把这个目录里的 Google Play 商店（商店、Play 服务、GSF 和合作伙伴设置）装进', h('strong', { text: who }), '，藏起系统原来的占位应用。']
         : ['从', h('strong', { text: who }), '里移除 Google Play 商店：卸掉 Google Play 装的商店和 Play 服务更新，删掉商店的文件，换回系统原来的占位应用。']),
-      h('div', { class: 'note-box tone-info' }, icon('info'), h('span', { text: `要冷启动一次，几分钟，期间这台实例不能用。${how}` }))),
+      h('div', { class: 'note-box tone-info' }, icon('info'), h('span', { text: `期间会冷启动，可能不止一次，需要几分钟，这台实例暂时不能用。${how}` }))),
     actions: { ok },
     onSubmit() {
       ctl.close();
@@ -60,7 +60,7 @@ export async function openPlayStore(i, action) {
 }
 
 // The server's answer before the job (API.md: 422 not_ready with details.reason): the files are missing or damaged,
-// so go and get them; anything else (no execution bridge, arm64, busy) is a toast with its own advice.
+// so go and get them; anything else (a required execution bridge is missing, unsupported guest, busy) is a toast with its own advice.
 function installRefused(e) {
   if (e && e.details && e.details.reason === 'playstore_files_missing') {
     loadDiagnostics().catch(() => {});

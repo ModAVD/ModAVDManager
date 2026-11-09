@@ -161,7 +161,12 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch 
       patch: async (path, body) => {
         requests.push({ method: 'PATCH', path, body: JSON.parse(JSON.stringify(body)) });
         return patch ? patch(body) : {
-          instance: { ...state.list.instances[0], diagnostics: body.diagnostics ?? diagnostics },
+          instance: { ...state.list.instances[0], diagnostics: body.diagnostics ?? diagnostics,
+            config: { ...state.list.instances[0].config,
+              ...(body.memory_mb == null ? {} : { memory_mb: body.memory_mb }),
+              ...(body.cpu == null ? {} : { cpu: body.cpu }),
+              ...(body.fps == null ? {} : { fps: body.fps }),
+              ...(body.resolution == null ? {} : { resolution: body.resolution }) } },
           applies_next_boot: running,
           diagnostics_cleanup: { files: 2, bytes: 4 * 2 ** 20 },
         };
@@ -202,6 +207,7 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch 
   cache.get('forms.js').namespace.openSettings(3);
   const settings = dialogs[0];
   return { requests, dialogs, toasts, errors, settings, state, inst,
+    setInstances: cache.get('store.js').namespace.setInstances,
     control: id => settings.form.querySelector('#' + id),
     toggle(on) { this.control('s-diagnostics').checked = on; settings.form.dispatch('change'); },
     radio(name, value) {
@@ -321,6 +327,15 @@ test('ordinary settings omit diagnostics and keep the existing next-boot respons
   await h.submit();
   assert.deepEqual(h.requests, [{ method: 'PATCH', path: '/api/instances/3', body: { memory_mb: 4096 } }]);
   assert.equal(h.toasts[0].title, '已保存，下次开机生效');
+  assert.equal(h.state.list.instances[0].config.memory_mb, 4096);
+
+  // The poll that was already running when PATCH completed still reports 6 GB.
+  h.setInstances({ instances: [{ ...h.inst, config: { ...h.inst.config, memory_mb: 6144 } }] });
+  assert.equal(h.state.list.instances[0].config.memory_mb, 4096);
+
+  // Once the server publishes the saved value, the temporary override is gone.
+  h.setInstances({ instances: [{ ...h.inst, config: { ...h.inst.config, memory_mb: 4096 } }] });
+  assert.equal(h.state.list.instances[0].config.memory_mb, 4096);
 });
 
 test('closing settings while preview is pending cannot open confirmation or patch later', async () => {

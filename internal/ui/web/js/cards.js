@@ -323,15 +323,19 @@ function menuItems(c) {
   ];
 }
 
-// The Google Play Store's items (InstanceInfo.play_store, play_store_partial). 补全 and 移除 boot the instance cold once
-// (playstore.js asks first); the store lives in the execution bridge's writable system overlay, so an instance without
-// the bridge cannot get it. With the store: 移除 and 复制 GSF ID (the running guest's, to register it); after an
+// The Google Play Store's items (InstanceInfo.play_store, play_store_partial). 补全 and 移除 cold-boot the instance
+// (playstore.js asks first). Windows requires the execution bridge's writable system overlay; native ARM64 manages
+// its own overlay. With the store: 移除 and 复制 GSF ID (the running guest's, to register it); after an
 // install that failed half way (partial): 补全 to finish it and 移除 to take it out. held: setup not done, a boot or
 // stop, or a job on the instance.
 function storeItems(inst, i, held) {
-  const add = { label: '补全 Google Play 商店…', icon: 'plus', disabled: held || inst.bridge === 'off',
-    hint: inst.bridge === 'off' ? '要执行桥' : '', run: () => openPlayStore(i, 'install') };
-  const remove = { label: '移除 Google Play 商店…', icon: 'x', disabled: held, run: () => openPlayStore(i, 'uninstall') };
+  const st = S.components && S.components.play_store;
+  const supported = S.info?.play_store_install_supported ?? st?.install_supported ?? true;
+  const needsBridge = (S.info?.play_store_requires_bridge ?? st?.requires_bridge ?? true) && inst.bridge === 'off';
+  const hint = !supported ? '当前平台尚未支持' : needsBridge ? '要执行桥' : '';
+  const add = { label: '补全 Google Play 商店…', icon: 'plus', disabled: held || !supported || needsBridge,
+    hint, run: () => openPlayStore(i, 'install') };
+  const remove = { label: '移除 Google Play 商店…', icon: 'x', disabled: held || !supported, hint: !supported ? hint : '', run: () => openPlayStore(i, 'uninstall') };
   if (inst.play_store) {
     const online = inst.status === 'online';
     return [remove, { label: '复制 GSF ID', icon: 'copy', disabled: held || !online, hint: online ? '' : '开机后可用', run: () => openGSFID(i) }];

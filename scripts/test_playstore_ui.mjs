@@ -115,7 +115,7 @@ async function load(entry, stubs, context = {}) {
 
 // ---- the instance menu (cards.js)
 
-async function menuFor(inst, jobs = []) {
+async function menuFor(inst, jobs = [], info = null, components = null) {
   const calls = [];
   const m = await load('cards.js', {
     'api.js': { api: {} },
@@ -128,6 +128,8 @@ async function menuFor(inst, jobs = []) {
     'panels.js': { openActivity: noop, runCheck: noop },
     'playstore.js': { openPlayStore: (i, action) => calls.push([i, action]), openGSFID: i => calls.push([i, 'gsfid']) },
   });
+  m.S.info = info;
+  m.S.components = components;
   for (const j of jobs) m.S.jobs.set(j.id, j);
   const items = m.mod.menuItems({ i: 3, inst: { index: 3, status: 'offline', running: false, initialized: true, bridge: 'installed', ...inst } }).filter(Boolean);
   const named = label => items.find(x => x.label === label);
@@ -157,6 +159,34 @@ test('without the execution bridge 补全 is off and says why; removing still wo
   assert.equal(off.store.hint, '要执行桥');
   const had = await menuFor({ bridge: 'off', play_store: true });
   assert.ok(!had.store.disabled);
+});
+
+test('native ARM64 menus install without a bridge before the component panel is opened', async () => {
+  const info = { play_store_install_supported: true, play_store_requires_bridge: false };
+  const off = await menuFor({ bridge: 'off' }, [], info);
+  assert.equal(off.store.disabled, false);
+  assert.equal(off.store.hint, '');
+  off.store.run();
+  assert.deepEqual(off.calls, [[3, 'install']]);
+  const partial = await menuFor({ bridge: 'off', play_store_partial: true }, [], info);
+  assert.equal(partial.named('补全 Google Play 商店…').disabled, false);
+  assert.equal(partial.named('移除 Google Play 商店…').disabled, false);
+  const busy = await menuFor({ bridge: 'off', status: 'creating' }, [], info);
+  assert.equal(busy.store.disabled, true);
+});
+
+test('component capabilities keep unsupported builds disabled and allow native ARM64 without a bridge', async () => {
+  const unsupported = await menuFor({ bridge: 'off' }, [], null,
+    { play_store: { install_supported: false, requires_bridge: false } });
+  assert.equal(unsupported.store.disabled, true);
+  assert.equal(unsupported.store.hint, '当前平台尚未支持');
+  const native = await menuFor({ bridge: 'off' }, [], null,
+    { play_store: { install_supported: true, requires_bridge: false } });
+  assert.equal(native.store.disabled, false);
+  const windows = await menuFor({ bridge: 'off' }, [],
+    { play_store_install_supported: true, play_store_requires_bridge: true });
+  assert.equal(windows.store.disabled, true);
+  assert.equal(windows.store.hint, '要执行桥');
 });
 
 test('with the store 复制 GSF ID reads it from the running instance; off it waits for a boot', async () => {
@@ -245,7 +275,7 @@ test('补全 asks first, says it boots cold, and only then starts the job', asyn
   await p.open(3, 'install');
   const d = p.dialogs[0];
   assert.equal(d.options.title, '补全 Google Play 商店？');
-  assert.match(d.options.body.textContent, /冷启动一次/);
+  assert.match(d.options.body.textContent, /会冷启动，可能不止一次/);
   assert.match(d.options.body.textContent, /会先关机/); // it is running
   assert.equal(p.posts.length, 0);
   await p.open(3, 'install'); // a second click while it asks opens nothing more
@@ -353,7 +383,9 @@ test('a refusal before the job goes to the caller\'s handler, not the generic to
 test('a refused import says what to give instead; the server\'s own advice wins', async () => {
   const a = await actions();
   assert.match(a.A.importAdvice({ code: 'components_rejected', details: { reason: 'mismatch' } }), /重新下载/);
-  assert.match(a.A.importAdvice({ code: 'components_rejected', details: { reason: 'unknown_file' } }), /x86_64-34_r14\.zip/);
+  assert.match(a.A.importAdvice({ code: 'components_rejected', details: { reason: 'unknown_file' } }), /与当前平台匹配/);
+  a.S.components = { play_store: { archive: 'arm64-v8a-35_r09.zip' } };
+  assert.match(a.A.importAdvice({ code: 'components_rejected', details: { reason: 'unknown_file' } }), /arm64-v8a-35_r09\.zip/);
   assert.equal(a.A.importAdvice({ code: 'components_rejected', advice: '把五个文件一起给出', details: { reason: 'incomplete' } }), '把五个文件一起给出');
   a.S.watch.add('j7');
   a.A.onJob({ id: 'j7', kind: 'playstore-import', index: -1, state: 'running', created_at: '' });
@@ -372,7 +404,7 @@ test('a finished install says the instance booted cold and what the store needs 
   a.A.onJob({ id: 'j6', kind: 'playstore-install', index: 3, state: 'done', created_at: '',
     result: { index: 3, action: 'install', state: 'installed', installed: true, restarted: true, stopped: false, warnings: [] } });
   assert.match(a.toasts[0].title, /已补全 Google Play 商店/);
-  assert.match(a.toasts[0].text, /冷启动过一次/);
+  assert.match(a.toasts[0].text, /已冷启动/);
   // it points at 复制 GSF ID and the page, not at the documentation's script (instances it installs have none)
   assert.match(a.toasts[0].text, /「复制 GSF ID」/);
   assert.match(a.toasts[0].text, /https:\/\/www\.google\.com\/android\/uncertified\//);
@@ -436,6 +468,18 @@ test('the option is off unless asked for, and moot once the files are there', as
   assert.equal(on.wanted(), false);
   assert.equal(on.choose.hidden, true);
   assert.match(on.state.textContent, /已就绪（从 Google 官方下载，r14）/);
+});
+
+test('the component panel presents the native ARM64 archive and instance install capability', async () => {
+  const d = await diagnostics();
+  d.S.components = { play_store: { ready: true, source: 'import', version: '9', archive: 'arm64-v8a-35_r09.zip',
+    download_bytes: 1789211399, install_supported: true, requires_bridge: false } };
+  const b = d.D.storeBox('check');
+  assert.match(b.note.textContent, /arm64-v8a-35_r09\.zip/);
+  assert.match(b.note.textContent, /1\.8 GB/);
+  assert.match(b.state.textContent, /r9/);
+  assert.match(b.state.textContent, /更多操作/);
+  assert.doesNotMatch(b.state.textContent, /尚未开放|执行桥/);
 });
 
 async function agreeIn(d) {
