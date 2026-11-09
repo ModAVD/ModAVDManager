@@ -93,12 +93,12 @@ func TestReportServerLogOncePerContent(t *testing.T) {
 	c.reportServerLog(privateServer, 20391, 20*time.Second)
 	writeServerLog(t, c.Root, "--- adb starting (pid 8) ---\nfailed to bind\n")
 	c.reportServerLog(privateServer, 20391, 20*time.Second)
-	if n := logs.count("20 秒内没监听上；adb 自己的日志（logs\\adb-server.log）最后几行：\n  --- adb starting (pid 7) ---\n  failed to bind"); n != 1 {
+	if n := logs.count("20 秒内没监听上；adb 自己的日志（logs\\adb-server.log）最后几行：\n  --- adb starting (pid 7) ---\n  failed to bind"); n != 1 || logs.count("没监听上") != 1 {
 		t.Fatalf("%d reports: %q", n, logs.msgs)
 	}
 	writeServerLog(t, c.Root, "--- adb starting (pid 9) ---\nsomething else\n")
 	c.reportServerLog(privateServer, 20391, 20*time.Second)
-	if logs.count("something else") != 1 {
+	if logs.count("something else") != 1 || logs.count("没监听上") != 2 {
 		t.Fatalf("a new reason not reported: %q", logs.msgs)
 	}
 }
