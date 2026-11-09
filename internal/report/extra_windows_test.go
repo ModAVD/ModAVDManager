@@ -30,20 +30,23 @@ func TestCollectManagerLogsAdbAndPorts(t *testing.T) {
 	f := newFixture(t, "full", testTempDir(t), "")
 	guardDials(t, f.adbPort)
 	logs := filepath.Join(f.root, "logs")
-	if err := os.WriteFile(filepath.Join(logs, "modavd-ui.log.1"), []byte("older manager log\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for name, text := range map[string]string{"modavd-ui.log.1": "older manager log\n", "adb-server.log": "private adb\n"} {
+		if err := os.WriteFile(filepath.Join(logs, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	res, names, files := runCollect(t, f)
 	s := summaryOf(t, files)
 
 	wantSection := "\r\n== 管理器日志 ==\r\n管理器日志（modavd-ui.log）：12 B\r\n管理器日志（上一份）（modavd-ui.log.1）：18 B\r\n" +
-		"开机守护日志（modavd-bootwatch.log）：15 B\r\n"
+		"开机守护日志（modavd-bootwatch.log）：15 B\r\n私有 adb server 日志（adb-server.log）：12 B\r\n\r\n"
 	if !strings.Contains(s, wantSection) {
 		t.Errorf("manager logs section:\n%s", s)
 	}
 	for name, want := range map[string]string{
 		"logs/modavd-ui.log": "manager log\n", "logs/modavd-ui.log.1": "older manager log\n",
-		"logs/modavd-bootwatch.log": "boot watch log\n", "adb/adb.log": "--- adb starting (pid 4242) ---\n",
+		"logs/modavd-bootwatch.log": "boot watch log\n", "logs/adb-server.log": "private adb\n",
+		"adb/adb.log": "--- adb starting (pid 4242) ---\n",
 	} {
 		if got, ok := files[name]; !ok || string(got) != want {
 			t.Errorf("%s: %q (in zip %v), want %q", name, got, ok, want)
