@@ -351,14 +351,14 @@ func TestPortConflictMessage(t *testing.T) {
 	dir := tempDir(t)
 	c := New(&root.Root{Dir: dir}, nil)
 	e := c.portConflict(privateServer, 20050, 1234, "foo.exe")
-	want := "魔改 AVD 的私有 adb 端口 20050 被 foo.exe（PID 1234）占用，它不是 adb。请在 " + c.Root.MetadataPath() +
+	want := "ModAVD 的私有 adb 端口 20050 被 foo.exe（PID 1234）占用，它不是 adb。请在 " + c.Root.MetadataPath() +
 		" 里把 adbServerPort 改成一个没被占用的端口（不能用 5037 和各实例的控制台 / adb / gRPC 端口，也不能和 " +
 		"scriptAdbServerPort 相同），或者先关掉占用它的程序"
 	if e.Code != errs.PortConflict || e.Error() != want {
 		t.Errorf("private conflict:\n got %s %q\nwant %q", e.Code, e.Error(), want)
 	}
 	e = c.portConflict(scriptServer, 20049, 1, "x.exe")
-	if !strings.HasPrefix(e.Message, "魔改 AVD 的脚本专用 adb 端口 20049 被 x.exe（PID 1）占用") ||
+	if !strings.HasPrefix(e.Message, "ModAVD 的脚本专用 adb 端口 20049 被 x.exe（PID 1）占用") ||
 		!strings.Contains(e.Message, "里把 scriptAdbServerPort 改成") || !strings.Contains(e.Message, "也不能和 adbServerPort 相同") {
 		t.Errorf("script conflict: %q", e.Message)
 	}

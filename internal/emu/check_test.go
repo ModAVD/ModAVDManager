@@ -131,11 +131,11 @@ func TestComponentsItem(t *testing.T) {
 
 func TestEmulatorItem(t *testing.T) {
 	it := emulatorItem(emulatorFacts{})
-	if it.OK == nil || *it.OK || it.Reason != "这个目录里还没有魔改 AVD 内测包" || it.Advice != testPackageAdvice {
+	if it.OK == nil || *it.OK || it.Reason != "这个目录里还没有 ModAVD 内测包" || it.Advice != testPackageAdvice {
 		t.Fatalf("absent = %+v", it)
 	}
 	it = emulatorItem(emulatorFacts{Present: true, Version: "37.1.11"})
-	if it.OK == nil || *it.OK || it.Reason != "这里的模拟器（37.1.11）不是魔改 AVD 内测包里的版本，只支持内测包" {
+	if it.OK == nil || *it.OK || it.Reason != "这里的模拟器（37.1.11）不是 ModAVD 内测包里的版本，只支持内测包" {
 		t.Fatalf("google build = %+v", it)
 	}
 	it = emulatorItem(emulatorFacts{Present: true})
@@ -240,7 +240,7 @@ func TestPrecheckSummary(t *testing.T) {
 		{Title: "硬件虚拟化", OK: nil, Reason: "没装"},
 		{Title: "显卡 Vulkan", OK: checkOK(false), Reason: "没有"},
 	})
-	want := `魔改 AVD 开机前检查：目录路径通过（D:\r）；硬件虚拟化未查（没装）；显卡 Vulkan未通过（没有）`
+	want := `ModAVD 开机前检查：目录路径通过（D:\r）；硬件虚拟化未查（没装）；显卡 Vulkan未通过（没有）`
 	if got != want {
 		t.Fatalf("summary\n got %s\nwant %s", got, want)
 	}

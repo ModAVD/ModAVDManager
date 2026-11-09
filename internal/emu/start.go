@@ -224,7 +224,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			}
 		}
 		if running {
-			m.Log.Infof("魔改 AVD 实例 %d 已在运行（pid %d）", i, p.PID)
+			m.Log.Infof("ModAVD 实例 %d 已在运行（pid %d）", i, p.PID)
 			prog.emit("launch", fmt.Sprintf("实例 %d 已在运行（pid %d），不重新开机", i, p.PID), progressLaunch)
 			adopted, adoptedAt = &p, time.Now()
 			mk, ok := m.readSetupMarker(i)
@@ -317,7 +317,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		if relaunchAfterAdoptedGone(round, opt.watchQemu != nil, err, time.Since(adoptedAt), stopSeen) {
 			// Most likely a guest that was powering off and no longer answered adb, so guestShuttingDown could not
 			// tell: boot the instance as asked. Its setup marker, if any, names a boot that is over now.
-			m.Log.Infof("魔改 AVD 实例 %d 接管的模拟器（pid %d）没等安卓开机完成就退出了（多半是正在关机），重新开机",
+			m.Log.Infof("ModAVD 实例 %d 接管的模拟器（pid %d）没等安卓开机完成就退出了（多半是正在关机），重新开机",
 				i, adopted.PID)
 			continue
 		}
@@ -373,7 +373,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		m.removeSetupMarker(i)
 	}
 	if gone {
-		return nil, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 在开机后设置期间退出了（模拟器 pid %d）：%s", i,
+		return nil, errs.Newf(errs.LaunchFailed, "ModAVD 实例 %d 在开机后设置期间退出了（模拟器 pid %d）：%s", i,
 			qemu.PID, orText(logTail(res.LogFile, 8), "日志见 "+m.Root.LogsDir()))
 	}
 	// Callers write to /sdcard right after start (10-31 measurements): it is not there yet at sys.boot_completed,
@@ -468,7 +468,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			return host.Process{}, err
 		}
 		if !time.Now().Before(deadline) {
-			return host.Process{}, errs.Newf(errs.Timeout, "魔改 AVD 实例 %d 启动超时（%.0f 秒内安卓没有启动完成），日志见 %s",
+			return host.Process{}, errs.Newf(errs.Timeout, "ModAVD 实例 %d 启动超时（%.0f 秒内安卓没有启动完成），日志见 %s",
 				i, timeout.Seconds(), m.Root.LogsDir())
 		}
 		if !found && emulator != nil && !emulator.Alive() {
@@ -476,7 +476,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			if c, ok := emulator.ExitCode(); ok {
 				code = strconv.FormatUint(uint64(c), 10)
 			}
-			return host.Process{}, errs.Newf(errs.LaunchFailed, "魔改 AVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
+			return host.Process{}, errs.Newf(errs.LaunchFailed, "ModAVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
 				i, code, logTail(logPath, 8))
 		}
 		if adopted != nil && stopSeen != nil && !*stopSeen && m.lockHeld(i, "stop") {
@@ -485,7 +485,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 		// both the process snapshot and the PID + creation time check must agree, so a failed snapshot is no exit
 		if !found && adopted != nil && !adopted.Alive() {
 			return host.Process{}, errs.Wrap(errs.LaunchFailed, errAdoptedGone,
-				fmt.Sprintf("魔改 AVD 实例 %d 的模拟器（pid %d）在等安卓开机时退出了", i, adopted.PID))
+				fmt.Sprintf("ModAVD 实例 %d 的模拟器（pid %d）在等安卓开机时退出了", i, adopted.PID))
 		}
 		if now := time.Now(); !now.Before(nextReport) {
 			elapsed := now.Sub(started)
@@ -551,13 +551,13 @@ func poweringOff(v string) bool {
 // scans for the instance's qemu again: found when someone launched it meanwhile (the start adopts that one). Busy when
 // p is still there at the end.
 func (m *Manager) waitShutdown(ctx context.Context, i int, p host.Process, prog *progressor) (host.Process, bool, error) {
-	m.Log.Infof("魔改 AVD 实例 %d 正在关机（模拟器 pid %d 还没退出），等它关完再开机", i, p.PID)
+	m.Log.Infof("ModAVD 实例 %d 正在关机（模拟器 pid %d 还没退出），等它关完再开机", i, p.PID)
 	prog.emit("launch", fmt.Sprintf("实例 %d 正在关机，等它关完再开机", i), progressLaunch/2)
 	if !waitQemuExit(ctx, p, shutdownExitWait) {
 		if err := ctxErr(ctx); err != nil {
 			return host.Process{}, false, err
 		}
-		return host.Process{}, false, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
+		return host.Process{}, false, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在关机，等了 %.0f 秒模拟器（pid %d）还没退出", i,
 			shutdownExitWait.Seconds(), p.PID).WithAdvice(fmt.Sprintf("稍后再开机；一直关不掉的话先 modavd stop %d", i)), map[string]string{errs.Reason: "stopping"})
 	}
 	return m.findQemu(i)

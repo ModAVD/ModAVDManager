@@ -102,7 +102,7 @@ func (f *fake) List(ctx context.Context) (*emu.ListResult, error) {
 func (f *fake) Info(ctx context.Context, i int) (*emu.InstanceInfo, error) {
 	f.record("info %d", i)
 	if i == 9 {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i).WithAdvice("先用 list_instances 看有哪些实例")
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i).WithAdvice("先用 list_instances 看有哪些实例")
 	}
 	in := sampleInstance(i)
 	in.Diagnostics = f.diagnostics
@@ -877,7 +877,7 @@ func TestToolErrors(t *testing.T) {
 		{"get_instance", map[string]any{"index": 3.5}, errs.Usage, "参数 index 必须是整数"},
 		{"get_instance", map[string]any{"index": 3, "root": `D:\ModAVD`}, errs.Usage, "不认识的参数: root"},
 		{"list_instances", map[string]any{"all": true}, errs.Usage, "list_instances 不接受参数"},
-		{"get_instance", map[string]any{"index": 9}, errs.NotFound, "魔改 AVD 实例 9 不存在。先用 list_instances 看有哪些实例"},
+		{"get_instance", map[string]any{"index": 9}, errs.NotFound, "ModAVD 实例 9 不存在。先用 list_instances 看有哪些实例"},
 		{"delete_instance", map[string]any{"index": 2, "confirm": false}, errs.Usage, "confirm 设为 true"},
 		{"delete_instance", map[string]any{"index": 2}, errs.Usage, "缺少参数 confirm"},
 		{"update_instance", map[string]any{"index": 2}, errs.Usage, "至少给一项"},

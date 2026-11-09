@@ -270,7 +270,7 @@ func TestResolve(t *testing.T) {
 
 	_, err := resolve(filepath.Join(base, "missing"), "", "")
 	wantCode(t, err, errs.NotFound)
-	if !strings.Contains(err.Error(), "--root 指定的魔改 AVD 根目录不存在") {
+	if !strings.Contains(err.Error(), "--root 指定的 ModAVD 根目录不存在") {
 		t.Fatalf("message: %v", err)
 	}
 	_, err = resolve("", filepath.Join(base, "missing"), "")
@@ -389,7 +389,7 @@ func TestUpdateMetadataFormatAndAbort(t *testing.T) {
 	writeFile(t, r.MetadataPath(), []byte(sampleMetadata))
 	err := r.UpdateMetadata(func(o *jsonord.Obj) error {
 		o.Set("adbServerPort", jsonord.NewInt(20089))
-		o.Set("名称", jsonord.NewString("魔改 \"AVD\""))
+		o.Set("名称", jsonord.NewString("模拟器 \"AVD\""))
 		return nil
 	})
 	if err != nil {
@@ -397,7 +397,7 @@ func TestUpdateMetadataFormatAndAbort(t *testing.T) {
 	}
 	want := "{\r\n  \"components\": {\r\n    \"emulator\": \"37.2.10\"\r\n  },\r\n  \"zeta\": [\r\n    1000.0,\r\n    0,\r\n" +
 		"    {}\r\n  ],\r\n  \"instances\": {\r\n    \"0\": {\r\n      \"memoryMb\": 6144,\r\n      \"initialized\": true\r\n" +
-		"    }\r\n  },\r\n  \"sdkRoot\": \"\",\r\n  \"adbServerPort\": 20089,\r\n  \"名称\": \"魔改 \\\"AVD\\\"\"\r\n}"
+		"    }\r\n  },\r\n  \"sdkRoot\": \"\",\r\n  \"adbServerPort\": 20089,\r\n  \"名称\": \"模拟器 \\\"AVD\\\"\"\r\n}"
 	if got := string(readFile(t, r.MetadataPath())); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}

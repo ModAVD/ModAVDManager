@@ -117,7 +117,7 @@ type server struct {
 
 func newServer(opt Options) (*server, error) {
 	if opt.Root == nil {
-		return nil, errs.New(errs.Usage, "没有指定魔改 AVD 根目录")
+		return nil, errs.New(errs.Usage, "没有指定 ModAVD 根目录")
 	}
 	lg := opt.Log
 	if lg == nil {

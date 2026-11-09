@@ -137,7 +137,7 @@ func (b fakeBackend) Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	}
 	in, ok := b.f.instances[i]
 	if !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	return &in, nil
 }
@@ -174,7 +174,7 @@ func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (
 	b.f.mu.Unlock()
 	in, ok := b.f.get(i)
 	if !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	applied := map[string]any{}
 	if req.FPS != nil {
@@ -189,7 +189,7 @@ func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (
 
 func (b fakeBackend) PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error) {
 	if _, ok := b.f.get(i); !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	return &emu.DiagnosticsPreview{Index: i, DiagnosticsCleanup: emu.DiagnosticsCleanup{Files: 2, Bytes: 1024}}, nil
 }
@@ -198,7 +198,7 @@ func (b fakeBackend) Delete(ctx context.Context, i int) (*emu.DeleteResult, erro
 	b.f.mu.Lock()
 	defer b.f.mu.Unlock()
 	if _, ok := b.f.instances[i]; !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	delete(b.f.instances, i)
 	b.f.deleted = append(b.f.deleted, i)
@@ -211,7 +211,7 @@ func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*e
 	gate := b.f.startGate
 	b.f.mu.Unlock()
 	if _, ok := b.f.get(i); !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	opt.Progress(emu.Progress{Step: "launch", Message: "实例已拉起", Done: 50, Total: 1000})
 	b.log.Warnf("测试警告 %d", i)
@@ -267,7 +267,7 @@ func (b fakeBackend) AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, 
 	defer b.f.mu.Unlock()
 	b.f.proxyAsked = append(b.f.proxyAsked, i)
 	if _, ok := b.f.instances[i]; !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	return b.f.proxyOf(i), nil
 }

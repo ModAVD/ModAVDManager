@@ -14,7 +14,7 @@ func (m *Manager) compactBusy(i int) error {
 		return errs.Wrap(errs.Internal, err, "实例磁盘锁文件打不开: "+m.lockPath(i, "disk"))
 	}
 	if held {
-		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在整理磁盘，请等整理结束后重试", i), map[string]string{errs.Reason: "locked", errs.Lock: "disk"})
+		return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在整理磁盘，请等整理结束后重试", i), map[string]string{errs.Reason: "locked", errs.Lock: "disk"})
 	}
 	return nil
 }

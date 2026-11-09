@@ -224,7 +224,7 @@ var (
 
 func (c *Client) portConflict(k serverKind, port int, pid uint32, name string) *errs.Error {
 	return errs.Newf(errs.PortConflict,
-		"魔改 AVD 的%s adb 端口 %d 被 %s（PID %d）占用，"+serverConflictReason+"。请在 %s 里把 %s 改成一个没被占用的端口"+
+		"ModAVD 的%s adb 端口 %d 被 %s（PID %d）占用，"+serverConflictReason+"。请在 %s 里把 %s 改成一个没被占用的端口"+
 			"（不能用 5037 和各实例的控制台 / adb / gRPC 端口，也不能和 %s 相同），或者先关掉占用它的程序",
 		k.label, port, name, pid, c.Root.MetadataPath(), k.key, k.otherKey)
 }
@@ -321,7 +321,7 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	if err := prepareServerRoot(c.Root); err != nil {
 		return false, err
 	}
-	c.Log.Infof("启动魔改 AVD %s adb server（端口 %d）", k.label, port)
+	c.Log.Infof("启动 ModAVD %s adb server（端口 %d）", k.label, port)
 	// StartOrphan rather than StartDetached: an MCP client ends modavd's whole process tree when it disconnects, and
 	// while the start-server client (our child for ~2 s) is alive the server it forks is part of that tree. Losing
 	// the server is not harmless: the emulator registers with it only once, at boot. Without a configured orphan
@@ -329,7 +329,7 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	client, err := host.StartOrphan(c.Root.AdbExe(), []string{"-P", strconv.Itoa(port), "start-server"},
 		host.StartOptions{Env: c.Env()})
 	if err != nil {
-		return false, errs.Wrap(errs.Internal, err, fmt.Sprintf("启动魔改 AVD %s adb server（端口 %d）失败: %s",
+		return false, errs.Wrap(errs.Internal, err, fmt.Sprintf("启动 ModAVD %s adb server（端口 %d）失败: %s",
 			k.label, port, errs.As(err).Message))
 	}
 	return c.waitListening(ctx, k, port, timeout, client)

@@ -173,7 +173,7 @@ func TestRunStopSendsAppHome(t *testing.T) {
 	f = &stopFake{homeFailure: "返回码 1: error: closed", syncOK: true}
 	method, _, err, warns = runStopFake(t, context.Background(), false, f)
 	if err != nil || method != "graceful" || len(warns) != 1 ||
-		warns[0] != "魔改 AVD 实例 3 关机前按 HOME 失败，照常关机: 返回码 1: error: closed" ||
+		warns[0] != "ModAVD 实例 3 关机前按 HOME 失败，照常关机: 返回码 1: error: closed" ||
 		f.at["sync"].Sub(f.at["home"]) >= homeWait {
 		t.Fatalf("failed: %s %v %q", method, err, warns)
 	}
@@ -196,7 +196,7 @@ func TestRunStopSyncBeforeShutdownFails(t *testing.T) {
 	if got := strings.Join(f.calls, ","); got != "prepare,home,sync,graceful" {
 		t.Fatalf("calls = %s", got)
 	}
-	if len(warns) != 1 || warns[0] != "魔改 AVD 实例 3 发关机命令前 sync 失败，照常关机: error: closed" {
+	if len(warns) != 1 || warns[0] != "ModAVD 实例 3 发关机命令前 sync 失败，照常关机: error: closed" {
 		t.Fatalf("warnings = %q", warns)
 	}
 }
@@ -218,7 +218,7 @@ func TestRunStopFallbackSyncKill(t *testing.T) {
 	if want := stopBudget - gracefulDeadline - fallbackForceKillWait; f.killTimeout > want || f.killTimeout < want-time.Second {
 		t.Fatalf("kill timeout %v, want about %v", f.killTimeout, want)
 	}
-	if len(warns) != 1 || warns[0] != "魔改 AVD 实例 3 正常关机没成（24 秒内没有自己退出），退回 sync + 控制台 kill" {
+	if len(warns) != 1 || warns[0] != "ModAVD 实例 3 正常关机没成（24 秒内没有自己退出），退回 sync + 控制台 kill" {
 		t.Fatalf("warnings = %q", warns)
 	}
 }
@@ -260,7 +260,7 @@ func TestRunStopFallbackTerminate(t *testing.T) {
 	if len(warns) != 5 || !strings.Contains(warns[0], "发关机命令前 sync 失败，照常关机: error: closed") ||
 		!strings.Contains(warns[2], "关机前 sync 失败，照常关机: error: closed") ||
 		warns[3] != "实例 3 控制台 kill 失败，改为强制结束: 连不上控制台 20030" ||
-		warns[4] != "魔改 AVD 实例 3 未在 3 秒内退出，强制结束" {
+		warns[4] != "ModAVD 实例 3 未在 3 秒内退出，强制结束" {
 		t.Fatalf("warnings = %q", warns)
 	}
 }
@@ -400,7 +400,7 @@ func TestRunStopConsoleOnly(t *testing.T) {
 	if f.killTimeout != consoleKillTimeout+closeTimeout || f.forceKillFor != forceKillWait {
 		t.Fatalf("timeouts kill %v force %v", f.killTimeout, f.forceKillFor)
 	}
-	if !strings.HasPrefix(warns[0], "魔改 AVD 实例 3 私有 adb 用不了，不能正常关机也不能 sync，直接用控制台关: 私有 adb server") {
+	if !strings.HasPrefix(warns[0], "ModAVD 实例 3 私有 adb 用不了，不能正常关机也不能 sync，直接用控制台关: 私有 adb server") {
 		t.Fatalf("warnings = %q", warns)
 	}
 	f = &stopFake{problem: "x"}
@@ -496,7 +496,7 @@ func TestQemuNotEnded(t *testing.T) {
 	cause := errors.New("Access is denied.")
 	err := qemuNotEnded(3, 4242, cause)
 	if errs.CodeOf(err) != errs.Internal || errs.ExitCode(err) != 1 || !errors.Is(err, cause) ||
-		!strings.HasPrefix(err.Error(), "魔改 AVD 实例 3 的 qemu（pid 4242）没能结束：Access is denied.。") ||
+		!strings.HasPrefix(err.Error(), "ModAVD 实例 3 的 qemu（pid 4242）没能结束：Access is denied.。") ||
 		!strings.Contains(err.Error(), "管理员") {
 		t.Fatalf("denied: %v (%s)", err, errs.CodeOf(err))
 	}
@@ -538,7 +538,7 @@ func (k *killScript) run(t *testing.T, ctx context.Context, wait time.Duration) 
 func TestQemuKillRun(t *testing.T) {
 	ctx := context.Background()
 	denied := errors.New("结束qemu-system-x86_64.exe（PID 4242）失败: Access is denied.")
-	stillExiting := "魔改 AVD 实例 3 的 qemu（pid 4242）已强制结束，还在退出（等了 2 秒）；稍后用 modavd status 3 确认它已退出"
+	stillExiting := "ModAVD 实例 3 的 qemu（pid 4242）已强制结束，还在退出（等了 2 秒）；稍后用 modavd status 3 确认它已退出"
 	cases := []struct {
 		name   string
 		script killScript

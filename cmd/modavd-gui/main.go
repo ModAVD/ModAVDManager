@@ -111,7 +111,7 @@ func run(args []string) (code int) {
 
 	fs := flag.NewFlagSet("ModAVD", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	rootFlag := fs.String("root", "", "魔改 AVD 根目录")
+	rootFlag := fs.String("root", "", "ModAVD 根目录")
 	port := fs.Int("port", 0, "监听端口（0 = 随机）")
 	noWindow := fs.Bool("no-window", false, "不打开窗口")
 	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
@@ -134,7 +134,7 @@ func run(args []string) (code int) {
 	}
 	r, err := root.Resolve(*rootFlag)
 	if err != nil {
-		fatalErr("找不到魔改 AVD 根目录", err)
+		fatalErr("找不到 ModAVD 根目录", err)
 		return errs.ExitCode(err)
 	}
 

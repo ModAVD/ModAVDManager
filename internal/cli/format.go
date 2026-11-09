@@ -801,7 +801,7 @@ func formatHelp(w io.Writer, r *HelpResult) {
 		}
 		return
 	}
-	fmt.Fprintln(w, "modavd：魔改 AVD 实例管理（新建、删除、修改、列出、开机、关机）和 MCP 服务")
+	fmt.Fprintln(w, "modavd：ModAVD 实例管理（新建、删除、修改、列出、开机、关机）和 MCP 服务")
 	fmt.Fprintf(w, "\n用法：%s\n\n命令：\n", r.Usage)
 	// Usage and summary on separate lines: create's usage alone is ~80 columns.
 	for _, e := range r.Commands {

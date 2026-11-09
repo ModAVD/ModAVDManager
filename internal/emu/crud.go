@@ -104,7 +104,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 		lock.Unlock()
 		return nil, err
 	}
-	m.Log.Infof("已新建魔改 AVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %d GB / 帧率 %d）", i, memory, cpu, dataGB, fps)
+	m.Log.Infof("已新建 ModAVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %d GB / 帧率 %d）", i, memory, cpu, dataGB, fps)
 	if req.NoBridge {
 		// recorded, so no start installs it (bridge.go)
 		if err := m.setBridgeWanted(i, false); err != nil {
@@ -189,7 +189,7 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	// with the lock in hand, a recorded "creating" is one that was killed (creation() would see our own lock)
 	if state := m.creationRecorded(i); state != creationFailed && state != creationCreating {
 		lock.Unlock()
-		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
 			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
 	}
 	return m.setupNew(ctx, i, in.Config, req, lock)
@@ -233,7 +233,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		warnings = col.Messages()
 		applied["diagnostics"] = *req.Diagnostics
 	}
-	m.Log.Infof("已写入魔改 AVD 实例 %d 的设置: %s", i, formatApplied(applied))
+	m.Log.Infof("已写入 ModAVD 实例 %d 的设置: %s", i, formatApplied(applied))
 	in, err := m.instance(i)
 	if err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if ok {
 		p = &q
 		if nextBoot {
-			m.Log.Infof("魔改 AVD 实例 %d 正在运行，硬件改动下次开机生效", i)
+			m.Log.Infof("ModAVD 实例 %d 正在运行，硬件改动下次开机生效", i)
 		}
 	}
 	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,
@@ -312,10 +312,10 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		return nil, err
 	} else if running {
 		unlock()
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法删除", i), map[string]string{errs.Reason: "running"})
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 未关闭，无法删除", i), map[string]string{errs.Reason: "running"})
 	}
 	if len(leftovers) > 0 {
-		m.Log.Warnf("魔改 AVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
+		m.Log.Warnf("ModAVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
 			strings.Join(leftovers, "、"))
 	}
 	if err := m.prepareDiagnosticDelete(ctx, i); err != nil {
@@ -329,16 +329,16 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 	// Confirm it is gone: a later create must not find a half-deleted instance under this index.
 	if left := instanceFilesOnDisk(m.Root, i); len(left) > 0 {
 		unlock()
-		return nil, errs.Newf(errs.Internal, "魔改 AVD 实例 %d 没有删干净，还剩：%s", i, strings.Join(left, "、")).
+		return nil, errs.Newf(errs.Internal, "ModAVD 实例 %d 没有删干净，还剩：%s", i, strings.Join(left, "、")).
 			WithAdvice(fmt.Sprintf("关掉占用这些文件的程序后再运行一次 modavd delete %d --yes，会接着删", i))
 	}
 	// The lock files can only go once nobody holds them (an open file cannot be deleted).
 	unlock()
 	m.removeLockFiles(i)
 	if len(leftovers) > 0 {
-		m.Log.Infof("已清掉魔改 AVD 实例 %d 的残留", i)
+		m.Log.Infof("已清掉 ModAVD 实例 %d 的残留", i)
 	} else {
-		m.Log.Infof("已删除魔改 AVD 实例 %d", i)
+		m.Log.Infof("已删除 ModAVD 实例 %d", i)
 	}
 	return &DeleteResult{Index: i, Name: in.Name, Path: in.Dir}, nil
 }
@@ -393,14 +393,14 @@ func (m *Manager) prepareDiagnosticDelete(ctx context.Context, i int) error {
 	return err
 }
 
-// tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("魔改 AVD 实例 0 正在启动，无法删除").
+// tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("ModAVD 实例 0 正在启动，无法删除").
 func (m *Manager) tryInstanceLock(i int, kind, what string) (*host.FileLock, error) {
 	l, ok, err := m.tryOperationLock(i, kind)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法删除", i, what), map[string]string{errs.Reason: "locked", errs.Lock: kind})
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d %s，无法删除", i, what), map[string]string{errs.Reason: "locked", errs.Lock: kind})
 	}
 	return l, nil
 }

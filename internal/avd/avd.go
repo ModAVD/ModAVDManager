@@ -426,7 +426,7 @@ func Get(r *root.Root, i int) (*Instance, error) {
 	return nil, notFound(i)
 }
 
-func notFound(i int) error { return errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i) }
+func notFound(i int) error { return errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i) }
 
 // lockInstance takes root.LockInstanceConfig of i. noDir: the avd directory does not exist (no lock taken, nothing on
 // disk to guard); err is nil then.
@@ -509,10 +509,10 @@ func ValidateOptions(memoryMB, cpu, dataGB *int) (int, int, int, error) {
 		data = *dataGB
 	}
 	if !slices.Contains(MemoryChoicesMB, memory) {
-		return 0, 0, 0, errs.New(errs.InvalidArgument, "魔改 AVD 的内存只能选 "+joinInts(MemoryChoicesMB, "%d GB", 1024))
+		return 0, 0, 0, errs.New(errs.InvalidArgument, "ModAVD 的内存只能选 "+joinInts(MemoryChoicesMB, "%d GB", 1024))
 	}
 	if !slices.Contains(CPUChoices, cores) {
-		return 0, 0, 0, errs.New(errs.InvalidArgument, "魔改 AVD 的 CPU 核数只能选 "+joinInts(CPUChoices, "%d", 1))
+		return 0, 0, 0, errs.New(errs.InvalidArgument, "ModAVD 的 CPU 核数只能选 "+joinInts(CPUChoices, "%d", 1))
 	}
 	if data < MinDataPartitionGB || data > MaxDataPartitionGB {
 		return 0, 0, 0, errs.Newf(errs.InvalidArgument, "数据盘上限只能在 %d–%d GB 之间", MinDataPartitionGB,
@@ -528,7 +528,7 @@ func ValidateFPS(fps *int) (int, error) {
 		value = *fps
 	}
 	if !slices.Contains(FPSChoices, value) {
-		return 0, errs.New(errs.InvalidArgument, "魔改 AVD 的帧率只能选 "+joinInts(FPSChoices, "%d", 1))
+		return 0, errs.New(errs.InvalidArgument, "ModAVD 的帧率只能选 "+joinInts(FPSChoices, "%d", 1))
 	}
 	return value, nil
 }
@@ -714,7 +714,7 @@ func pathExists(path string) bool {
 }
 
 // FreeIndex is the smallest valid index that has no instance and whose three ports in plan busy() reports free.
-// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" (the root's plan) when there is none. A nil busy skips
+// errs.Busy "ModAVD 实例已满（端口段 20000–20100 最多 9 台）" (the root's plan) when there is none. A nil busy skips
 // the port check.
 func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int) []int) (int, error) {
 	for i := 0; i <= root.MaxIndex; i++ {
@@ -727,7 +727,7 @@ func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int)
 		}
 		return i, nil
 	}
-	return 0, errs.Newf(errs.Busy, "魔改 AVD 实例已满（端口段 %d–%d 最多 9 台）", plan.Base, plan.Base+100)
+	return 0, errs.Newf(errs.Busy, "ModAVD 实例已满（端口段 %d–%d 最多 9 台）", plan.Base, plan.Base+100)
 }
 
 type UpdateOptions struct {

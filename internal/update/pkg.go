@@ -570,7 +570,7 @@ func checkEmulator(emu string, target Version) error {
 		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %d）不一致", build, target.Display(), target.Build)
 	}
 	if !fileContains(filepath.Join(emu, "qemu", p.QemuDir, p.QEMUHeadless), []byte("free-page-reporting")) {
-		return packageError("包里的模拟器不是魔改 AVD 的自编版")
+		return packageError("包里的模拟器不是 ModAVD 的自编版")
 	}
 	return nil
 }

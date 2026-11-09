@@ -186,7 +186,7 @@ func TestRealAdb(t *testing.T) {
 			t.Fatalf("EnsureServer = %v, %v", ok, err)
 		}
 		t.Logf("EnsureServer took %v", time.Since(start))
-		if n := logs.count(fmt.Sprintf("启动魔改 AVD 私有 adb server（端口 %d）", testServerPort)); n != 1 {
+		if n := logs.count(fmt.Sprintf("启动 ModAVD 私有 adb server（端口 %d）", testServerPort)); n != 1 {
 			t.Errorf("start log lines = %d", n)
 		}
 		pid, up, err := win.ListenerPID(testServerPort)
@@ -205,7 +205,7 @@ func TestRealAdb(t *testing.T) {
 		if err != nil || !ok {
 			t.Errorf("second EnsureServer = %v, %v", ok, err)
 		}
-		if n := logs.count("启动魔改 AVD 私有 adb server"); n != 1 {
+		if n := logs.count("启动 ModAVD 私有 adb server"); n != 1 {
 			t.Errorf("second EnsureServer started again (%d log lines)", n)
 		}
 		// PrepareForClose with the server up asks it first; it does not know emulator-20080, and no qemu of this
@@ -277,7 +277,7 @@ func TestRealAdb(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("EnsureScriptServer = %v, %v", ok, err)
 		}
-		if n := logs.count(fmt.Sprintf("启动魔改 AVD 脚本专用 adb server（端口 %d）", testScriptPort)); n != 1 {
+		if n := logs.count(fmt.Sprintf("启动 ModAVD 脚本专用 adb server（端口 %d）", testScriptPort)); n != 1 {
 			t.Errorf("script start log lines = %d", n)
 		}
 		pid, _, _ := win.ListenerPID(testScriptPort)

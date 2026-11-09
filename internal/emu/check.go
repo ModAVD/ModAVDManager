@@ -39,7 +39,7 @@ const (
 		"「Windows 虚拟机监控程序平台」，然后重启"
 	vulkanAdvice = "安装或更新显卡驱动（NVIDIA / AMD / Intel 官网驱动自带 Vulkan）。没有可用的显卡时模拟器只能" +
 		"软件渲染，游戏会占满 CPU，性能会很差"
-	testPackageAdvice = `请把魔改 AVD 内测包解压到这个目录（解压后目录里应有 sdk\emulator）`
+	testPackageAdvice = `请把 ModAVD 内测包解压到这个目录（解压后目录里应有 sdk\emulator）`
 
 	// How long a result of the same check is reused within one process (MCP server): AUTO-MAS
 	// _ACCEL_CACHE_SECONDS, VULKAN_PROBE_CACHE_SECONDS, VULKAN_PROBE_TIMEOUT_CACHE_SECONDS.
@@ -132,7 +132,7 @@ func (m *Manager) precheckBeforeLaunch(ctx context.Context, memoryMB int) error 
 		return err
 	}
 	if vulkan.OK != nil && !*vulkan.OK {
-		m.Log.Warnf("魔改 AVD 开机前检查：%s", itemMessage(vulkan))
+		m.Log.Warnf("ModAVD 开机前检查：%s", itemMessage(vulkan))
 	}
 	items = append(items, vulkan)
 	m.Log.Infof("%s", precheckSummary(items))
@@ -179,7 +179,7 @@ func precheckError(it CheckItem, missingErr func() error) error {
 	}
 }
 
-// precheckSummary is AUTO-MAS's one log line: "魔改 AVD 开机前检查：目录路径通过（<根目录>）；组件通过（...）；...".
+// precheckSummary is AUTO-MAS's one log line: "ModAVD 开机前检查：目录路径通过（<根目录>）；组件通过（...）；...".
 func precheckSummary(items []CheckItem) string {
 	parts := make([]string, len(items))
 	for k, it := range items {
@@ -192,7 +192,7 @@ func precheckSummary(items []CheckItem) string {
 		}
 		parts[k] = fmt.Sprintf("%s%s（%s）", it.Title, verdict, it.Reason)
 	}
-	return "魔改 AVD 开机前检查：" + strings.Join(parts, "；")
+	return "ModAVD 开机前检查：" + strings.Join(parts, "；")
 }
 
 func pathIsASCII(s string) bool {
@@ -307,7 +307,7 @@ func emulatorItem(f emulatorFacts) CheckItem {
 	if !f.Present {
 		return CheckItem{
 			ID: "emulator", Title: title, OK: checkOK(false), Blocking: true,
-			Reason: "这个目录里还没有魔改 AVD 内测包", Advice: platformPackageAdvice(),
+			Reason: "这个目录里还没有 ModAVD 内测包", Advice: platformPackageAdvice(),
 		}
 	}
 	version := f.Version
@@ -317,7 +317,7 @@ func emulatorItem(f emulatorFacts) CheckItem {
 	if !f.SelfBuilt {
 		return CheckItem{
 			ID: "emulator", Title: title, OK: checkOK(false), Blocking: true,
-			Reason: fmt.Sprintf("这里的模拟器（%s）不是魔改 AVD 内测包里的版本，只支持内测包", version),
+			Reason: fmt.Sprintf("这里的模拟器（%s）不是 ModAVD 内测包里的版本，只支持内测包", version),
 			Advice: platformPackageAdvice(),
 		}
 	}
@@ -334,7 +334,7 @@ func emulatorItem(f emulatorFacts) CheckItem {
 	return CheckItem{
 		ID: "emulator", Title: title, OK: checkOK(false), Blocking: true,
 		Reason: fmt.Sprintf("内测包版本过旧（%s）", shown),
-		Advice: fmt.Sprintf("请把魔改 AVD 更新到 0.%d.0 或更新的版本，实例和游戏数据不受影响", root.MinModBuild),
+		Advice: fmt.Sprintf("请把 ModAVD 更新到 0.%d.0 或更新的版本，实例和游戏数据不受影响", root.MinModBuild),
 	}
 }
 
@@ -373,7 +373,7 @@ func diskItem(drive string, free uint64, err error) CheckItem {
 	return CheckItem{
 		ID: "disk", Title: "磁盘", OK: checkOK(false), Blocking: true,
 		Reason: fmt.Sprintf("%s，低于开机所需的 %d GB：数据盘随游戏写入增长，盘写满时实例数据会损坏", text, minFreeDiskGBToBoot),
-		Advice: fmt.Sprintf("清理 %s 的空间，或把魔改 AVD 根目录放到空间更大的盘", drive),
+		Advice: fmt.Sprintf("清理 %s 的空间，或把 ModAVD 根目录放到空间更大的盘", drive),
 	}
 }
 
@@ -443,11 +443,11 @@ func accelItem(res accelResult, summary string) CheckItem {
 	backend, advice := "Windows 虚拟机监控程序平台", accelAdvice
 	if runtime.GOOS == "darwin" {
 		backend = "Hypervisor.framework"
-		advice = "请在 Apple Silicon Mac 本机运行 macos-arm64 版魔改 AVD，确认模拟器带 com.apple.security.hypervisor 签名权限；用 emulator -accel-check 检查 HVF"
+		advice = "请在 Apple Silicon Mac 本机运行 macos-arm64 版 ModAVD，确认模拟器带 com.apple.security.hypervisor 签名权限；用 emulator -accel-check 检查 HVF"
 	}
 	return CheckItem{
 		ID: "acceleration", Title: "硬件虚拟化", OK: checkOK(false), Blocking: true,
-		Reason: fmt.Sprintf("硬件虚拟化（%s）不可用，魔改 AVD 无法启动（检查结果：%s）", backend, summary),
+		Reason: fmt.Sprintf("硬件虚拟化（%s）不可用，ModAVD 无法启动（检查结果：%s）", backend, summary),
 		Advice: advice,
 	}
 }
@@ -561,7 +561,7 @@ func accelOKText(summary string) string {
 
 func platformPackageAdvice() string {
 	if runtime.GOOS == "darwin" {
-		return "请把魔改 AVD 的 macos-arm64 内测包解压到这个目录（解压后应有 sdk/emulator）"
+		return "请把 ModAVD 的 macos-arm64 内测包解压到这个目录（解压后应有 sdk/emulator）"
 	}
 	return testPackageAdvice
 }

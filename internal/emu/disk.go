@@ -96,14 +96,14 @@ func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) 
 		return nil, err
 	} else if !running {
 		return nil, errs.Newf(errs.Unsupported,
-			"魔改 AVD 实例 %d 没有在运行，请先开机再回收磁盘空间", i)
+			"ModAVD 实例 %d 没有在运行，请先开机再回收磁盘空间", i)
 	}
 	if !m.bootCompleted(ctx, i, statusAdbTimeout, true) {
 		if err := ctxErr(ctx); err != nil {
 			return nil, err
 		}
 		return nil, errs.Newf(errs.Unsupported,
-			"魔改 AVD 实例 %d 还没开机完成，请开机后再回收磁盘空间", i)
+			"ModAVD 实例 %d 还没开机完成，请开机后再回收磁盘空间", i)
 	}
 
 	// Gate on the emulator actually advertising discard on /data: an old build
@@ -115,7 +115,7 @@ func (m *Manager) DiskTrim(ctx context.Context, i int) (*DiskTrimResult, error) 
 	if !ok || maxBytes <= 0 {
 		return nil, errs.Newf(errs.Unsupported,
 			"这个模拟器版本不支持回收磁盘空间（客体数据盘没有 discard）").
-			WithAdvice("请把魔改 AVD 更新到带磁盘回收的版本，实例和游戏数据不受影响")
+			WithAdvice("请把 ModAVD 更新到带磁盘回收的版本，实例和游戏数据不受影响")
 	}
 
 	// vold idle maintenance runs fstrim on the mounted file systems. (The exact
@@ -463,9 +463,9 @@ func (m *Manager) lockInstanceForCompact(i int) (func(), error) {
 				if err := m.compactBusy(i); err != nil {
 					return nil, err
 				}
-				return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的磁盘状态正在读取，请稍后再整理", i), map[string]string{errs.Reason: "locked", errs.Lock: "disk"})
+				return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 的磁盘状态正在读取，请稍后再整理", i), map[string]string{errs.Reason: "locked", errs.Lock: "disk"})
 			}
-			return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法整理磁盘", i, kw.what), map[string]string{errs.Reason: "locked", errs.Lock: kw.kind})
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d %s，无法整理磁盘", i, kw.what), map[string]string{errs.Reason: "locked", errs.Lock: kw.kind})
 		}
 		locks = append(locks, l)
 	}
@@ -714,7 +714,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 	if _, running, err := m.qemuOf(i); err != nil {
 		return nil, err
 	} else if running {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法整理磁盘", i).
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 未关闭，无法整理磁盘", i).
 			WithAdvice(fmt.Sprintf("先 modavd stop %d，关机后再整理", i)), map[string]string{errs.Reason: "running"})
 	}
 	if err := ctxErr(ctx); err != nil {
@@ -770,7 +770,7 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, err
 	}
 	if estimate != nil && *estimate < threshold {
-		m.Log.Infof("魔改 AVD 实例 %d 预计可回收 %d 字节，低于 %d 字节，跳过磁盘重写", i, *estimate, threshold)
+		m.Log.Infof("ModAVD 实例 %d 预计可回收 %d 字节，低于 %d 字节，跳过磁盘重写", i, *estimate, threshold)
 		return compactResult(i, overlay, before, before, estimate, threshold, true), nil
 	}
 	// Without an allocation count, reserve for the complete virtual image and
@@ -834,6 +834,6 @@ func (m *Manager) DiskCompact(ctx context.Context, i int) (*DiskCompactResult, e
 		return nil, err
 	}
 
-	m.Log.Infof("魔改 AVD 实例 %d 整理磁盘完成：占用 %s → %s", i, gib(before), gib(after))
+	m.Log.Infof("ModAVD 实例 %d 整理磁盘完成：占用 %s → %s", i, gib(before), gib(after))
 	return compactResult(i, overlay, before, after, estimate, threshold, false), nil
 }

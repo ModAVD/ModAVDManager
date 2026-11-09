@@ -120,10 +120,10 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	port := m.Root.Ports().Console(i)
 	busy, err := host.BusyPorts([]int{port, port + 1, port + 2})
 	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
+		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("ModAVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
 	}
 	if len(busy) > 0 {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
 			i, joinInts(busy, ", ")), map[string]string{errs.Reason: "port_in_use"})
 	}
 
@@ -166,7 +166,7 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	if n, ok := inst.CPU(); ok {
 		cpu = strconv.Itoa(n)
 	}
-	m.Log.Infof("启动魔改 AVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，气球开，不带声卡，ANDROID_EMU_VK_HIDE_REBAR=%s）: emulator %s",
+	m.Log.Infof("启动 ModAVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，气球开，不带声卡，ANDROID_EMU_VK_HIDE_REBAR=%s）: emulator %s",
 		i, mode, inst.Resolution(), inst.FPS(), memoryMB, cpu, hideRebar, strings.Join(args, " "))
 	return &launchPlan{args: args, logPath: logPath, memoryMB: memoryMB}, nil
 }
@@ -212,7 +212,7 @@ func otherRootQemu(q host.Process, cmdline []string, i, console int, ours func(h
 
 // otherRootBusy is the error of a start whose ports the same-numbered instance of another root holds.
 func otherRootBusy(i int, p host.Process, where string) *errs.Error {
-	return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
+	return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
 		WithAdvice("先在那个根目录把它关掉再启动"), map[string]string{errs.Reason: "port_other_root"})
 }
 
@@ -272,7 +272,7 @@ func (m *Manager) startEmulator(i int, plan *launchPlan) (host.Process, error) {
 	})
 	if err != nil {
 		return host.Process{}, errs.Wrap(errs.LaunchFailed, err,
-			fmt.Sprintf("魔改 AVD 实例 %d 启动失败（%s 没能运行）: %v", i, root.CurrentPlatform().Emulator, err))
+			fmt.Sprintf("ModAVD 实例 %d 启动失败（%s 没能运行）: %v", i, root.CurrentPlatform().Emulator, err))
 	}
 	return p, nil
 }

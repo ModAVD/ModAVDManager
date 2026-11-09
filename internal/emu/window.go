@@ -36,10 +36,10 @@ func windowConflict(i int, opt StartOptions, windowed bool) error {
 	const asIs = "（不指定 --window / --headless 就照原样接管）"
 	switch {
 	case opt.Window && !windowed:
-		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正以无头方式运行，运行中不能换成带窗口", i).
+		return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正以无头方式运行，运行中不能换成带窗口", i).
 			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --window%s", i, i, asIs)), map[string]string{errs.Reason: "window_mismatch"})
 	case opt.Headless && windowed:
-		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正带窗口运行，运行中不能换成无头", i).
+		return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正带窗口运行，运行中不能换成无头", i).
 			WithAdvice(fmt.Sprintf("先关机再换：modavd stop %d，再 modavd start %d --headless%s", i, i, asIs)), map[string]string{errs.Reason: "window_mismatch"})
 	}
 	return nil
@@ -79,15 +79,15 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 		if errs.CodeOf(err) == errs.Unsupported {
 			return nil, err
 		}
-		m.Log.Warnf("魔改 AVD 实例 %d %s窗口失败: %v", i, verb, err)
+		m.Log.Warnf("ModAVD 实例 %d %s窗口失败: %v", i, verb, err)
 		return res, nil
 	}
 	res.Windows = n
 	switch {
 	case n > 0:
-		m.Log.Infof("魔改 AVD 实例 %d 已%s窗口", i, verb)
+		m.Log.Infof("ModAVD 实例 %d 已%s窗口", i, verb)
 	case visible:
-		m.Log.Infof("魔改 AVD 实例 %d 是无头开机的，没有窗口可显示；要窗口请关机后带窗口重新启动", i)
+		m.Log.Infof("ModAVD 实例 %d 是无头开机的，没有窗口可显示；要窗口请关机后带窗口重新启动", i)
 	}
 	return res, nil
 }

@@ -232,7 +232,7 @@ function checkResult() {
   }
   if (db.check === 'notready' && !db.componentsReady) Object.assign(items[1], { ok: false, reason: '这个目录里缺少：平台工具（adb）、系统镜像 Android 14 Google APIs x86_64', advice: '在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次' });
   if (db.check === 'notready') {
-    Object.assign(items[3], { ok: false, reason: '硬件虚拟化（Windows 虚拟机监控程序平台）不可用，魔改 AVD 无法启动（检查结果：WHPX is not installed）', advice: '先在 BIOS/UEFI 里打开 VT-x/SVM，再在「启用或关闭 Windows 功能」里勾选「Windows 虚拟机监控程序平台」，然后重启' });
+    Object.assign(items[3], { ok: false, reason: '硬件虚拟化（Windows 虚拟机监控程序平台）不可用，ModAVD 无法启动（检查结果：WHPX is not installed）', advice: '先在 BIOS/UEFI 里打开 VT-x/SVM，再在「启用或关闭 Windows 功能」里勾选「Windows 虚拟机监控程序平台」，然后重启' });
     Object.assign(items[4], { ok: null, reason: '查不了 Vulkan：探测程序 8 秒内没有结束' });
     Object.assign(items[2], { reason: '内测包 0.35.0（37.2.10）' });
     // the host IME is optional and stays missing, also after a fetch (it is not a downloaded component)
@@ -278,7 +278,7 @@ function runImport(j, files) {
   const steps = [];
   for (const x of named) if (x.zip || x.slot >= 0) steps.push(['verifying', `校验 ${x.f.name}${x.zip ? '（SHA-1）' : `（${STORE_FILES[x.slot][0]}）`}`, x.zip ? STORE_ZIP : STORE_FILES[x.slot][2]]);
   if (zip) steps.push(['extracting', `解压 ${zip.f.name}`, 3101687808]);
-  log('info', '魔改 AVD：用自己的文件补全 Google Play 商店', j.id);
+  log('info', 'ModAVD：用自己的文件补全 Google Play 商店', j.id);
   let k = 0;
   const timer = setInterval(() => {
     if (j.state !== 'running') { clearInterval(timer); return; }
@@ -470,7 +470,7 @@ function runDiag(j, kind = j.kind, store = false) {
   // play_store: Google's Play image too, of which only the five files stay
   if (store) stages.push(['downloading', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 420, 1441, 25], ['downloading', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 1180, 1441, 27],
     ['extracting', 'Google Play 商店（取自 Android 14 Google Play x86_64 镜像 r14）', 2958, 2958, 0]);
-  if (kind === 'components') ['魔改 AVD：补全 Google 组件（adb、Android 14 系统镜像）', '已在管理器里同意许可协议。'].forEach((m) => log('info', m, j.id));
+  if (kind === 'components') ['ModAVD：补全 Google 组件（adb、Android 14 系统镜像）', '已在管理器里同意许可协议。'].forEach((m) => log('info', m, j.id));
   let n = 0;
   const timer = setInterval(() => {
     if (j.state !== 'running') { clearInterval(timer); return; }
@@ -487,7 +487,7 @@ function runDiag(j, kind = j.kind, store = false) {
         db.componentsReady = true;
         if (store) db.store = { ready: true, source: 'download' };
         finishJob(j, { root: ROOT, license: 'Android SDK License', license_source: 'Google 中国下载（mock）', components: componentList(), downloads: [] });
-      } else finishJob(j, { zip_path: `${ROOT}\\logs\\魔改AVD问题信息-mock.zip`, zip_size: '1.2 MB', problems: [], mas_found: true, entries: ['summary.txt'],
+      } else finishJob(j, { zip_path: `${ROOT}\\logs\\ModAVD-问题信息-mock.zip`, zip_size: '1.2 MB', problems: [], mas_found: true, entries: ['summary.txt'],
         privacy_note: '隐私提示（mock）：问题包只保存在本机，不会自动上传。\r\n- 可以公开：summary.txt 和日志。\r\n- 不要公开：crash 文件夹。' });
     }
   }, 500);
@@ -880,7 +880,7 @@ async function handle(url, init) {
     if (db.insts.has(i)) return errResp('already_exists', `实例 mas_${i} 已存在`);
     await sleep(500);
     const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, resolution: body.resolution || 1080, disk: body.data_partition_gb, initialized: false, scene: i });
-    log('info', `已新建魔改 AVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${inst.config.data_partition_gb} GB / 帧率 ${inst.config.fps}）`);
+    log('info', `已新建 ModAVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${inst.config.data_partition_gb} GB / 帧率 ${inst.config.fps}）`);
     emit('instances', list());
     return json(pub(inst), 201);
   }
@@ -971,7 +971,7 @@ async function handle(url, init) {
   if (!m) return errResp('not_found', '没有这个接口：' + p);
   const i = Number(m[1]);
   const inst = db.insts.get(i);
-  if (!inst) return errResp('not_found', `魔改 AVD 实例 ${i} 不存在`, '先新建这个实例');
+  if (!inst) return errResp('not_found', `ModAVD 实例 ${i} 不存在`, '先新建这个实例');
   const act = m[2];
   const busyJob = runningJobOf(i);
 
@@ -994,7 +994,7 @@ async function handle(url, init) {
     }
     if (method === 'DELETE') {
       if (url.searchParams.get('confirm') !== '1') return errResp('usage', '删除要带 confirm=1');
-      if (inst.running || busyJob) return errResp('busy', `魔改 AVD 实例 ${i} 未关闭，无法删除`, '先关机再删除');
+      if (inst.running || busyJob) return errResp('busy', `ModAVD 实例 ${i} 未关闭，无法删除`, '先关机再删除');
       await sleep(700);
       db.insts.delete(i);
       emit('instances', list());
@@ -1002,9 +1002,9 @@ async function handle(url, init) {
     }
   }
   if (act === 'start') {
-    if (busyJob) return errResp('busy', `魔改 AVD 实例 ${i} ${busyJob.kind === 'stop' ? '正在关机' : '正在开机或做开机后设置'}`, '等它做完再试');
+    if (busyJob) return errResp('busy', `ModAVD 实例 ${i} ${busyJob.kind === 'stop' ? '正在关机' : '正在开机或做开机后设置'}`, '等它做完再试');
     // the manager boots with the window only; one running headless is not adopted (no switch while it runs)
-    if (inst.running && !inst._.win) return errResp('busy', `魔改 AVD 实例 ${i} 正以无头方式运行，运行中不能换成带窗口`, `先关机再换：modavd stop ${i}，再 modavd start ${i} --window`);
+    if (inst.running && !inst._.win) return errResp('busy', `ModAVD 实例 ${i} 正以无头方式运行，运行中不能换成带窗口`, `先关机再换：modavd stop ${i}，再 modavd start ${i} --window`);
     if (inst.status === 'online') {
       const j = newJob('start', i);
       run(j, [[400, () => step(j, 'launch', `实例 ${i} 已在运行（pid ${inst.pid}），不重新开机`, 50)], [600, () => step(j, 'boot', `实例 ${i} 安卓已开机`, 610)],
@@ -1016,7 +1016,7 @@ async function handle(url, init) {
     return json(j, 202);
   }
   if (act === 'stop') {
-    if (busyJob && busyJob.kind !== 'start') return errResp('busy', `魔改 AVD 实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '安装 APK'}`, '等它做完再试');
+    if (busyJob && busyJob.kind !== 'start') return errResp('busy', `ModAVD 实例 ${i} 正在${busyJob.kind === 'stop' ? '关机' : '安装 APK'}`, '等它做完再试');
     const j = newJob('stop', i);
     if (!inst.running) {
       setTimeout(() => finishJob(j, { index: i, name: inst.name, method: 'already_offline', synced: false, seconds: 0.1, warnings: [] }), 300);
@@ -1024,8 +1024,8 @@ async function handle(url, init) {
     return json(j, 202);
   }
   if (act === 'install') {
-    if (inst.status !== 'online') return errResp('busy', `魔改 AVD 实例 ${i} 没有开机`, '开机后再安装');
-    if (busyJob) return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (inst.status !== 'online') return errResp('busy', `ModAVD 实例 ${i} 没有开机`, '开机后再安装');
+    if (busyJob) return errResp('busy', `ModAVD 实例 ${i} 正在做别的事`, '等它做完再试');
     const f = init.body instanceof FormData ? init.body.get('apk') : null;
     if (!f) return errResp('usage', '没有收到 APK 文件');
     const j = newJob('install', i);
@@ -1036,7 +1036,7 @@ async function handle(url, init) {
   if (act === 'playstore-install' || act === 'playstore-uninstall') {
     const install = act === 'playstore-install';
     const reason = (code, message, advice, r) => fail(STATUS_OF[code], code, message, advice, { reason: r });
-    if (busyJob || inst.status === 'creating') return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (busyJob || inst.status === 'creating') return errResp('busy', `ModAVD 实例 ${i} 正在做别的事`, '等它做完再试');
     if (sdkJob()) return errResp('busy', `任务 ${sdkJob().kind === 'components' ? '补全组件' : '导入 Google Play 商店的文件'} 正在运行（任务 ${sdkJob().id}），等它做完再试`);
     if (install && !db.store.ready) {
       return reason('not_ready', `这个根目录还没有 Google Play 商店的五个文件，或者文件不全、已损坏（${ROOT}\\sdk\\playstore）`,
@@ -1051,7 +1051,7 @@ async function handle(url, init) {
   }
   if (act === 'gles32-on' || act === 'gles32-off') {
     const on = act === 'gles32-on';
-    if (busyJob || inst.status === 'creating') return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (busyJob || inst.status === 'creating') return errResp('busy', `ModAVD 实例 ${i} 正在做别的事`, '等它做完再试');
     if (inst.bridge === 'off') {
       return fail(STATUS_OF.not_ready, 'not_ready', `实例 ${i} 没有 arm64 执行桥，不按可写系统镜像开机，改不了它报的 GLES 版本`, `先运行 modavd bridge ${i} install 装上执行桥，再开这个开关`, { reason: 'gles32_no_bridge' });
     }
@@ -1061,7 +1061,7 @@ async function handle(url, init) {
   }
   if (act === 'playstore-gsfid') {
     if (inst.status !== 'online') return errResp('busy', `实例 ${i} 没有开机`, '开机后才能取 GSF ID');
-    if (busyJob) return errResp('busy', `魔改 AVD 实例 ${i} 正在做别的事`, '等它做完再试');
+    if (busyJob) return errResp('busy', `ModAVD 实例 ${i} 正在做别的事`, '等它做完再试');
     if (db.nogsf) {
       return fail(STATUS_OF.not_ready, 'not_ready', `实例 ${i} 还没有 GSF ID`, 'Google 服务框架联网登记后才有：开着网等一两分钟，再试一次', { reason: 'no_gsf_id' });
     }
@@ -1084,14 +1084,14 @@ async function handle(url, init) {
     } else if (act === 'disk-trim') {
       step(j, 'disk_trim', `实例 ${i} 正在触发磁盘回收`, 0);
       setTimeout(() => {
-        if (inst.status !== 'online') return failJob(j, 'unsupported', `魔改 AVD 实例 ${i} 没有在运行，请先开机再回收磁盘空间`, '');
+        if (inst.status !== 'online') return failJob(j, 'unsupported', `ModAVD 实例 ${i} 没有在运行，请先开机再回收磁盘空间`, '');
         d.alloc = Math.max(3 * GB, d.alloc - 1.5 * GB);
         finishJob(j, { index: i, discard_max_bytes: 2 * GB });
       }, 1800);
     } else {
       step(j, 'disk_compact', `实例 ${i} 正在整理磁盘（重写数据盘文件，要几分钟）`, 0);
       setTimeout(() => {
-        if (inst.running) return failJob(j, 'busy', `魔改 AVD 实例 ${i} 未关闭，无法整理磁盘`, `先 modavd stop ${i}，关机后再整理`);
+        if (inst.running) return failJob(j, 'busy', `ModAVD 实例 ${i} 未关闭，无法整理磁盘`, `先 modavd stop ${i}，关机后再整理`);
         const before = d.onDisk;
         d.onDisk = Math.min(before, d.alloc + 0.1 * GB);
         finishJob(j, { index: i, overlay: `${inst.path}\\userdata-qemu.img.qcow2`, before_on_disk_bytes: Math.round(before), after_on_disk_bytes: Math.round(d.onDisk), freed_bytes: Math.round(before - d.onDisk) });
@@ -1100,7 +1100,7 @@ async function handle(url, init) {
     return json(j, 202);
   }
   if (act === 'input') {
-    if (inst.status !== 'online') return errResp('busy', `魔改 AVD 实例 ${i} 没有开机`);
+    if (inst.status !== 'online') return errResp('busy', `ModAVD 实例 ${i} 没有开机`);
     if (body.type === 'tap') {
       inst._.tap = { x: body.x, y: body.y, t: now() };
       if (inst._.mode !== 'game') inst._.mode = 'game';
@@ -1111,7 +1111,7 @@ async function handle(url, init) {
   }
   if (act === 'screenshot') {
     window.__mockShots[i] = (window.__mockShots[i] || 0) + 1;
-    if (inst.status !== 'online') return errResp('busy', `魔改 AVD 实例 ${i} 没有开机`);
+    if (inst.status !== 'online') return errResp('busy', `ModAVD 实例 ${i} 没有开机`);
     if (db.shotfail) return errResp('internal', '截图失败：adb exec-out screencap 退出码 1', '');
     const blob = await screenshot(inst);
     return new Response(blob, { status: 200, headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' } });

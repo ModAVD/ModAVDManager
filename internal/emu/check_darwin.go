@@ -16,7 +16,7 @@ import (
 // A directory named arm64-v8a must not silently make an x86 image compatible.
 func (m *Manager) platformCheckItems() []CheckItem {
 	it := CheckItem{ID: "guest-architecture", Title: "客体架构", OK: checkOK(false), Blocking: true,
-		Advice: "请使用 macos-arm64 版魔改 AVD 和对应的 Apple Silicon 系统镜像"}
+		Advice: "请使用 macos-arm64 版 ModAVD 和对应的 Apple Silicon 系统镜像"}
 	p := root.CurrentPlatform()
 	if !p.Supported() || p.GuestABI != "arm64-v8a" || p.GuestArch != "arm64" {
 		it.Reason = "当前 macOS 管理器仅支持 Apple Silicon 和 arm64-v8a 客体"

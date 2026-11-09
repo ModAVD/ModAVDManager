@@ -253,7 +253,7 @@ func TestProxyPackages(t *testing.T) {
 	}
 	// emu says it does not run (no recent list): the same 409
 	h.f.mu.Lock()
-	h.f.shellErr = errs.New(errs.Unsupported, "魔改 AVD 实例 3 没有在运行")
+	h.f.shellErr = errs.New(errs.Unsupported, "ModAVD 实例 3 没有在运行")
 	h.f.mu.Unlock()
 	h.s.hub.dropCached()
 	expectError(t, h.do("GET", "/api/instances/3/packages", nil), 409, errs.Busy)

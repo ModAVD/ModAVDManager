@@ -635,7 +635,7 @@ func TestListAndGet(t *testing.T) {
 	os.Remove(r.AvdHome())
 	_, err := Get(r, 0)
 	wantCode(t, err, errs.NotFound)
-	if err.Error() != "魔改 AVD 实例 0 不存在" {
+	if err.Error() != "ModAVD 实例 0 不存在" {
 		t.Fatalf("message: %v", err)
 	}
 	for _, i := range []int{4, 0, 9} {
@@ -727,9 +727,9 @@ func TestValidate(t *testing.T) {
 		memory, cpu, data *int
 		msg               string
 	}{
-		{ip(1000), nil, nil, "魔改 AVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
-		{ip(0), ip(3), ip(1), "魔改 AVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
-		{nil, ip(3), ip(1), "魔改 AVD 的 CPU 核数只能选 2 / 4 / 6"},
+		{ip(1000), nil, nil, "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
+		{ip(0), ip(3), ip(1), "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
+		{nil, ip(3), ip(1), "ModAVD 的 CPU 核数只能选 2 / 4 / 6"},
 		{nil, nil, ip(15), "数据盘上限只能在 16–512 GB 之间"},
 		{nil, nil, ip(513), "数据盘上限只能在 16–512 GB 之间"},
 	} {
@@ -753,7 +753,7 @@ func TestValidate(t *testing.T) {
 	}
 	_, err = ValidateFPS(ip(0))
 	wantCode(t, err, errs.InvalidArgument)
-	if err.Error() != "魔改 AVD 的帧率只能选 30 / 60" {
+	if err.Error() != "ModAVD 的帧率只能选 30 / 60" {
 		t.Errorf("fps message %q", err.Error())
 	}
 }
@@ -805,7 +805,7 @@ func TestFreeIndex(t *testing.T) {
 	}
 	_, err = FreeIndex(def, all, func(ports []int) []int { return ports })
 	wantCode(t, err, errs.Busy)
-	if err.Error() != "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" {
+	if err.Error() != "ModAVD 实例已满（端口段 20000–20100 最多 9 台）" {
 		t.Fatalf("message %v", err)
 	}
 	// another plan: the ports asked about and the message are the plan's
@@ -815,7 +815,7 @@ func TestFreeIndex(t *testing.T) {
 		t.Fatalf("plan 21000: FreeIndex = %d %v, asked %v", i, err, asked)
 	}
 	_, err = FreeIndex(root.PortPlan{Base: 21000}, all, func(ports []int) []int { return ports })
-	if err == nil || err.Error() != "魔改 AVD 实例已满（端口段 21000–21100 最多 9 台）" {
+	if err == nil || err.Error() != "ModAVD 实例已满（端口段 21000–21100 最多 9 台）" {
 		t.Fatalf("plan 21000: message %v", err)
 	}
 	all[7] = true

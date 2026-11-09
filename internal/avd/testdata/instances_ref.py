@@ -328,12 +328,12 @@ def validate_options(memory_mb, cpu, data_partition_gb):
     )
     if memory not in MEMORY_CHOICES_MB:
         raise ValueError(
-            "魔改 AVD 的内存只能选 "
+            "ModAVD 的内存只能选 "
             + " / ".join(f"{value // 1024} GB" for value in MEMORY_CHOICES_MB)
         )
     if cores not in CPU_CHOICES:
         raise ValueError(
-            "魔改 AVD 的 CPU 核数只能选 " + " / ".join(str(v) for v in CPU_CHOICES)
+            "ModAVD 的 CPU 核数只能选 " + " / ".join(str(v) for v in CPU_CHOICES)
         )
     low, high = DATA_PARTITION_RANGE_GB
     if not low <= data_gb <= high:
@@ -345,7 +345,7 @@ def validate_fps(fps):
     value = DEFAULT_FPS if fps is None else int(fps)
     if value not in FPS_CHOICES:
         raise ValueError(
-            "魔改 AVD 的帧率只能选 " + " / ".join(str(v) for v in FPS_CHOICES)
+            "ModAVD 的帧率只能选 " + " / ".join(str(v) for v in FPS_CHOICES)
         )
     return value
 
@@ -432,7 +432,7 @@ def write_instance_settings(root, idx, changes):
     """AvdManager.write_instance_settings for cpu / memoryMb / fps (no display keys, no expected values)."""
     instance = list_instances(root).get(str(idx))
     if instance is None:
-        raise RuntimeError(f"魔改 AVD 实例 {idx} 不存在")
+        raise RuntimeError(f"ModAVD 实例 {idx} 不存在")
     fps = validate_fps(changes["fps"]) if "fps" in changes else None
     memory, cpu, _ = validate_options(
         changes.get("memoryMb", memory_for(instance_meta(root, idx))),

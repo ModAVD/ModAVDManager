@@ -194,7 +194,7 @@ func TestOtherRootBusy(t *testing.T) {
 	if errs.DetailsOf(err)[errs.Reason] != "port_other_root" {
 		t.Errorf("details: %v", errs.DetailsOf(err))
 	}
-	if err.Code != errs.Busy || err.Message != `魔改 AVD 实例 3 的端口被另一个根目录的同编号实例占用（pid 4242，D:\ModAVD\avd\mas_3.avd）` ||
+	if err.Code != errs.Busy || err.Message != `ModAVD 实例 3 的端口被另一个根目录的同编号实例占用（pid 4242，D:\ModAVD\avd\mas_3.avd）` ||
 		err.Advice == "" {
 		t.Errorf("otherRootBusy = %+v", err)
 	}

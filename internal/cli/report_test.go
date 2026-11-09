@@ -54,11 +54,12 @@ func TestHumanCollectInfoMatchesScript(t *testing.T) {
 			t.Fatalf("%s: the script's privacy note head not found once", c.name)
 		}
 		want = strings.Replace(want, scriptPrivacyHead+"\n", head+"\n", 1)
-		// and for what the script said as if every user had AUTO-MAS (report's notAllMAS)
+		// and for what it says differently on purpose (report's reworded)
+		want = strings.Replace(want, "魔改AVD问题信息-", "ModAVD-问题信息-", 1)
 		want = strings.Replace(want, "实例配置、AUTO-MAS 日志（mas 文件夹）；", "实例配置；找到 AUTO-MAS 时还有它的日志（mas 文件夹）；", 1)
 		want = strings.Replace(want, "没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志\n", report.MasMissingNote+"\n", 1)
 		res := &report.CollectResult{
-			ZipPath: `{{BASE}}\out\魔改AVD问题信息-20260115-120000.zip`, ZipSize: "{{SIZE}}",
+			ZipPath: `{{BASE}}\out\ModAVD-问题信息-20260115-120000.zip`, ZipSize: "{{SIZE}}",
 			PrivacyNote: report.PrivacyNote, MasFound: c.mas, Problems: c.problems,
 		}
 		var b bytes.Buffer

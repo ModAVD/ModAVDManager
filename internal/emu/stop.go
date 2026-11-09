@@ -108,7 +108,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	state, _, _ := mm.creation(i)
 	creating := state == creationCreating && !opt.creating
 	if creating && !opt.CancelCreate {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），不能关机", i).
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在新建（后台开机做初始化），不能关机", i).
 			WithAdvice(fmt.Sprintf("等新建做完；进度用 modavd status 查看；确实要打断请用 modavd stop %d --cancel-create", i)), map[string]string{errs.Reason: "locked", errs.Lock: "create"})
 	}
 	if creating {
@@ -130,7 +130,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 		// already_offline would be a success the start then overrides by booting the instance. Wait a little for its
 		// qemu, still holding the stop lock: a start that has not got past its stop-lock check yet then cannot launch
 		// before this stop is over, and no other stop can get in between (see the header comment).
-		mm.Log.Infof("魔改 AVD 实例 %d 正在开机，等模拟器起来再关（最多 %.0f 秒）", i, startingQemuWait.Seconds())
+		mm.Log.Infof("ModAVD 实例 %d 正在开机，等模拟器起来再关（最多 %.0f 秒）", i, startingQemuWait.Seconds())
 		var found, starting bool
 		p, found, starting, err = waitStartingQemu(ctx, startingQemuWait, startingQemuPoll,
 			func() (host.Process, bool, error) { return mm.qemuOf(i) }, func() bool { return mm.lockHeld(i, "start") })
@@ -138,7 +138,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 			return nil, err
 		}
 		if !found && starting {
-			return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在开机，模拟器还没起来，稍后再关", i).
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在开机，模拟器还没起来，稍后再关", i).
 				WithAdvice("开机前的检查（硬件加速、Vulkan 等）可能要一两分钟"), map[string]string{errs.Reason: "starting"})
 		}
 		ok = found
@@ -147,7 +147,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 		// path, sync included, even if that runs past the budget.
 		launching = found && justLaunched(p, started, mm.booting(i))
 		if found && !launching {
-			mm.Log.Warnf("魔改 AVD 实例 %d 等开机时找到的模拟器不是刚拉起的（pid %d），按正常关机处理", i, p.PID)
+			mm.Log.Warnf("ModAVD 实例 %d 等开机时找到的模拟器不是刚拉起的（pid %d），按正常关机处理", i, p.PID)
 		}
 	}
 	if !ok {
@@ -278,12 +278,12 @@ func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started t
 		if err := ops.forceKill(forceKillWait); err != nil {
 			return "force", synced, err
 		}
-		log.Infof("魔改 AVD 实例 %d 已强制关闭", i)
+		log.Infof("ModAVD 实例 %d 已强制关闭", i)
 		return "force", synced, nil
 	}
 
 	if problem != "" {
-		log.Warnf("魔改 AVD 实例 %d 私有 adb 用不了，不能正常关机也不能 sync，直接用控制台关: %s", i, problem)
+		log.Warnf("ModAVD 实例 %d 私有 adb 用不了，不能正常关机也不能 sync，直接用控制台关: %s", i, problem)
 		return endQemu(ctx, log, i, "console_kill", false, consoleKillTimeout+closeTimeout, forceKillWait, ops)
 	}
 	// The foreground app goes home first and gets homeWait; the sync below takes what it wrote along (see the header
@@ -298,13 +298,13 @@ func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started t
 	}
 	reason := ops.graceful(gracefulWindow(time.Since(started)))
 	if reason == "" {
-		log.Infof("魔改 AVD 实例 %d 正常关机完成（%.1f s）", i, time.Since(started).Seconds())
+		log.Infof("ModAVD 实例 %d 正常关机完成（%.1f s）", i, time.Since(started).Seconds())
 		return "graceful", true, nil
 	}
 	if err := stopCanceled(ctx, i); err != nil {
 		return "graceful", false, err
 	}
-	log.Warnf("魔改 AVD 实例 %d 正常关机没成（%s），退回 sync + 控制台 kill", i, reason)
+	log.Warnf("ModAVD 实例 %d 正常关机没成（%s），退回 sync + 控制台 kill", i, reason)
 	synced := syncBeforeKill(log, i, "", fallbackSyncTimeout, ops.sync)
 	return endQemu(ctx, log, i, "sync_kill", presynced || synced, fallbackKillTimeout(time.Since(started)),
 		fallbackForceKillWait, ops)
@@ -315,13 +315,13 @@ func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started t
 func sendHome(ctx context.Context, log *logx.Logger, i int, home func(time.Duration) (bool, string)) error {
 	sent, failure := home(homeTimeout)
 	if failure != "" {
-		log.Warnf("魔改 AVD 实例 %d 关机前按 HOME 失败，照常关机: %s", i, failure)
+		log.Warnf("ModAVD 实例 %d 关机前按 HOME 失败，照常关机: %s", i, failure)
 		return nil
 	}
 	if !sent {
 		return nil
 	}
-	log.Infof("魔改 AVD 实例 %d 前台的应用已退到后台，等 %.0f 秒让它保存再关机", i, homeWait.Seconds())
+	log.Infof("ModAVD 实例 %d 前台的应用已退到后台，等 %.0f 秒让它保存再关机", i, homeWait.Seconds())
 	select {
 	case <-ctx.Done():
 		return stopCanceled(ctx, i)
@@ -336,9 +336,9 @@ func syncBeforeShutdown(log *logx.Logger, i int, sync func(time.Duration) (bool,
 	started := time.Now()
 	ok, output := sync(shutdownSyncTimeout)
 	if ok {
-		log.Debugf("魔改 AVD 实例 %d 发关机命令前 sync 完成（%.0f ms）", i, float64(time.Since(started).Microseconds())/1000)
+		log.Debugf("ModAVD 实例 %d 发关机命令前 sync 完成（%.0f ms）", i, float64(time.Since(started).Microseconds())/1000)
 	} else {
-		log.Warnf("魔改 AVD 实例 %d 发关机命令前 sync 失败，照常关机: %s", i, output)
+		log.Warnf("ModAVD 实例 %d 发关机命令前 sync 失败，照常关机: %s", i, output)
 	}
 	return ok
 }
@@ -348,7 +348,7 @@ func syncBeforeShutdown(log *logx.Logger, i int, sync func(time.Duration) (bool,
 // name, not console_kill: that one means the private adb of a booted guest was unusable and data may be lost; here
 // there is no guest data yet), never synced.
 func runLaunchingStop(ctx context.Context, log *logx.Logger, i int, killTimeout time.Duration, ops stopOps) (string, bool, error) {
-	log.Infof("魔改 AVD 实例 %d 的模拟器刚起来，安卓还没开机，不做正常关机和 sync，直接从控制台关", i)
+	log.Infof("ModAVD 实例 %d 的模拟器刚起来，安卓还没开机，不做正常关机和 sync，直接从控制台关", i)
 	return endQemu(ctx, log, i, "launching_kill", false, killTimeout, forceKillWait, ops)
 }
 
@@ -366,13 +366,13 @@ func endQemu(ctx context.Context, log *logx.Logger, i int, method string, synced
 		if err := stopCanceled(ctx, i); err != nil {
 			return method, synced, err
 		}
-		log.Warnf("魔改 AVD 实例 %d 未在 %.0f 秒内退出，强制结束", i, killTimeout.Seconds())
+		log.Warnf("ModAVD 实例 %d 未在 %.0f 秒内退出，强制结束", i, killTimeout.Seconds())
 		method += "+terminate"
 		if err := ops.forceKill(forceWait); err != nil {
 			return method, synced, err
 		}
 	}
-	log.Infof("魔改 AVD 实例 %d 已关闭", i)
+	log.Infof("ModAVD 实例 %d 已关闭", i)
 	return method, synced, nil
 }
 
@@ -385,9 +385,9 @@ func syncBeforeKill(log *logx.Logger, i int, problem string, timeout time.Durati
 		ok, output = sync(timeout)
 	}
 	if ok {
-		log.Infof("魔改 AVD 实例 %d 关机前 sync 完成（%.0f ms）", i, float64(time.Since(started).Microseconds())/1000)
+		log.Infof("ModAVD 实例 %d 关机前 sync 完成（%.0f ms）", i, float64(time.Since(started).Microseconds())/1000)
 	} else {
-		log.Warnf("魔改 AVD 实例 %d 关机前 sync 失败，照常关机: %s", i, output)
+		log.Warnf("ModAVD 实例 %d 关机前 sync 失败，照常关机: %s", i, output)
 	}
 	return ok
 }
@@ -508,7 +508,7 @@ func (q qemuKill) run(ctx context.Context, log *logx.Logger, i int, pid uint32, 
 		}
 		log.Debugf("结束实例 %d 的 qemu（pid %d）时 Windows 答复: %v（它已经在退出）", i, pid, killErr)
 	}
-	log.Warnf("魔改 AVD 实例 %d 的 qemu（pid %d）已强制结束，还在退出（等了 %.0f 秒）；稍后用 modavd status %d 确认它已退出",
+	log.Warnf("ModAVD 实例 %d 的 qemu（pid %d）已强制结束，还在退出（等了 %.0f 秒）；稍后用 modavd status %d 确认它已退出",
 		i, pid, wait.Seconds(), i)
 	return nil
 }
@@ -524,7 +524,7 @@ func terminateRefused(p host.Process) bool {
 // qemuNotEnded is the error of a stop after which qemu pid still runs because Windows refused to terminate it
 // (killErr).
 func qemuNotEnded(i int, pid uint32, killErr error) error {
-	return errs.Wrap(errs.Internal, killErr, fmt.Sprintf("魔改 AVD 实例 %d 的 qemu（pid %d）没能结束：%v", i, pid, killErr)).
+	return errs.Wrap(errs.Internal, killErr, fmt.Sprintf("ModAVD 实例 %d 的 qemu（pid %d）没能结束：%v", i, pid, killErr)).
 		WithAdvice("它可能是以管理员身份启动的（例如 AUTO-MAS 以管理员身份运行时）；用管理员权限再关一次，或在任务管理器里结束它")
 }
 

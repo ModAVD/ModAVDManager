@@ -43,7 +43,7 @@ var (
 const (
 	nativeTimeout   = 20 * time.Second // Invoke-Native -TimeoutSec default
 	accelTimeout    = 30 * time.Second
-	collectZipStart = "魔改AVD问题信息-"
+	collectZipStart = "ModAVD-问题信息-"
 )
 
 // CollectOptions for Collect; the first three are the script's -OutDir, -StageDir and -KeepStage.
@@ -238,9 +238,9 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	}()
 
 	c := &collector{ctx: ctx, root: rootDir, h: h, opt: opt, stage: stage, start: start, adbPort: root.DefaultAdbServerPort}
-	c.progress("魔改 AVD 问题信息收集")
+	c.progress("ModAVD 问题信息收集")
 	c.progress("ModAVD 目录：" + rootDir)
-	c.L("魔改 AVD 问题信息")
+	c.L("ModAVD 问题信息")
 	c.L(PrivacyNote)
 	c.L("生成时间：" + start.Format("2006-01-02 15:04:05 -07:00"))
 	// the script names the PowerShell that ran it here

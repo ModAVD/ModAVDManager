@@ -29,7 +29,7 @@ func (m *Manager) Shell(ctx context.Context, i int, command string, timeout time
 	if _, ok, err := m.qemuOf(i); err != nil {
 		return nil, err
 	} else if !ok {
-		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 没有在运行", i)
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 没有在运行", i)
 	}
 	res := m.shell(ctx, i, command, timeout)
 	if err := ctxErr(ctx); err != nil {

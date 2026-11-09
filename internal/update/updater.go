@@ -125,7 +125,7 @@ func (u *Updater) notUpdatable() string {
 		return "这个根目录在 mas-avd.json 里设了 sdkRoot（开发用的本地 SDK），不更新"
 	}
 	if !isFile(filepath.Join(u.l.emulator(), root.CurrentPlatform().Emulator)) {
-		return `这个根目录里没有 sdk\emulator，请先放好魔改 AVD`
+		return `这个根目录里没有 sdk\emulator，请先放好 ModAVD`
 	}
 	return ""
 }

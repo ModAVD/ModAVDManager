@@ -59,10 +59,10 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 		if err := ctxErr(ctx); err != nil {
 			return nil, err
 		}
-		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 没有开机，请先开机再安装 APK", i)
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 没有开机，请先开机再安装 APK", i)
 	}
 
-	m.Log.Infof("魔改 AVD 实例 %d 安装 APK: %s", i, path)
+	m.Log.Infof("ModAVD 实例 %d 安装 APK: %s", i, path)
 	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: apkInstallTimeout, Reregister: true},
 		"install", "-r", path)
 	// The guest is done with the install: a waiting start may restart zygote now (reading the manifest below is local).
@@ -72,14 +72,14 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 	}
 	last := installResultLine(res.Out)
 	if res.Code != 0 || !strings.HasPrefix(last, "Success") {
-		m.Log.Warnf("魔改 AVD 实例 %d 安装 %s 失败: %s", i, name, res.Out)
+		m.Log.Warnf("ModAVD 实例 %d 安装 %s 失败: %s", i, name, res.Out)
 		why := last
 		if why == "" {
 			why = "adb 返回 " + strconv.Itoa(res.Code)
 		}
 		return nil, errs.Newf(errs.Internal, "安装 %s 失败：%s", name, why)
 	}
-	m.Log.Infof("魔改 AVD 实例 %d 已安装 %s", i, name)
+	m.Log.Infof("ModAVD 实例 %d 已安装 %s", i, name)
 
 	out := &InstallResult{Index: i, APK: path, Output: last}
 	if man, err := apk.ReadManifest(path); err == nil && man != nil {

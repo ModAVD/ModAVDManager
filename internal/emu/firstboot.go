@@ -79,7 +79,7 @@ var debloatPackages = []string{
 // Bluetooth off, no immersive-mode hint, phone apps disabled, the light launcher, the renderer. A failed item leaves
 // initialized=false and the next boot tries again.
 func (m *Manager) firstBootInit(ctx context.Context, i int) {
-	m.Log.Infof("魔改 AVD 实例 %d 首次开机，正在初始化", i)
+	m.Log.Infof("ModAVD 实例 %d 首次开机，正在初始化", i)
 	var failures []string
 
 	// Wi-Fi is not turned off here: every boot turns it on with the fastpath (setupNetwork)
@@ -105,7 +105,7 @@ func (m *Manager) firstBootInit(ctx context.Context, i int) {
 	}
 	software := strings.Contains(strings.ToLower(renderer), "swiftshader")
 	if software {
-		m.Log.Warnf("魔改 AVD 实例 %d 正在用软件渲染（%s）：没有可用的显卡驱动，游戏会占满 CPU，请更新显卡驱动", i, renderer)
+		m.Log.Warnf("ModAVD 实例 %d 正在用软件渲染（%s）：没有可用的显卡驱动，游戏会占满 CPU，请更新显卡驱动", i, renderer)
 	}
 	if ctx.Err() != nil {
 		// the commands above were cut short: do not record a half run, the next boot does it again
@@ -113,12 +113,12 @@ func (m *Manager) firstBootInit(ctx context.Context, i int) {
 	}
 
 	if err := m.writeInitMeta(i, len(failures) == 0, launcher, renderer, software, failures); err != nil {
-		m.Log.Warnf("魔改 AVD 实例 %d 初始化结果没写进 mas-avd.json，下次开机重做: %v", i, err)
+		m.Log.Warnf("ModAVD 实例 %d 初始化结果没写进 mas-avd.json，下次开机重做: %v", i, err)
 	}
 	if len(failures) > 0 {
-		m.Log.Warnf("魔改 AVD 实例 %d 初始化有失败项，下次开机重试: %s", i, pyList(failures))
+		m.Log.Warnf("ModAVD 实例 %d 初始化有失败项，下次开机重试: %s", i, pyList(failures))
 	} else {
-		m.Log.Infof("魔改 AVD 实例 %d 初始化完成（桌面: %s）", i, launcher)
+		m.Log.Infof("ModAVD 实例 %d 初始化完成（桌面: %s）", i, launcher)
 	}
 }
 

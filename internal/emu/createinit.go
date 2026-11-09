@@ -112,7 +112,7 @@ func (m *Manager) notCreated(i int, what string) error {
 	state, message, logFile := m.creation(i)
 	switch state {
 	case creationCreating:
-		return errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在新建（后台开机做初始化），%s", i, what).
+		return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在新建（后台开机做初始化），%s", i, what).
 			WithAdvice("等它做完；进度用 modavd status 查看"), map[string]string{errs.Reason: "locked", errs.Lock: "create"})
 	case creationFailed:
 		advice := fmt.Sprintf("用 modavd create --resume %d 重新初始化，或者 modavd delete %d --yes 删掉", i, i)
@@ -123,7 +123,7 @@ func (m *Manager) notCreated(i int, what string) error {
 			message = "初始化没做完"
 		}
 		// the reason last: a setup error has its own brackets
-		return errs.Newf(errs.NotReady, "魔改 AVD 实例 %d 新建时初始化失败，%s：%s", i, what, message).WithAdvice(advice)
+		return errs.Newf(errs.NotReady, "ModAVD 实例 %d 新建时初始化失败，%s：%s", i, what, message).WithAdvice(advice)
 	}
 	return nil
 }
@@ -425,7 +425,7 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 		if logFile != "" {
 			advice += "；日志见 " + logFile
 		}
-		return nil, &errs.Error{Code: e.Code, Message: fmt.Sprintf("魔改 AVD 实例 %d 新建失败：%s", i, e.Message),
+		return nil, &errs.Error{Code: e.Code, Message: fmt.Sprintf("ModAVD 实例 %d 新建失败：%s", i, e.Message),
 			Advice: advice, Cause: err}
 	}
 	prog.stage("done", fmt.Sprintf("实例 %d 新建完成，已关机；第一次开机不用再做初始化", i))
@@ -450,7 +450,7 @@ func (m *Manager) stopCreateLeftover(ctx context.Context, i int) error {
 	defer cancel()
 	if err := createStop(m, sctx, i); err != nil {
 		e := errs.As(err)
-		return errs.Wrap(e.Code, err, fmt.Sprintf("魔改 AVD 实例 %d 上次新建时开的模拟器没能正常关掉: %s", i, e.Message)).
+		return errs.Wrap(e.Code, err, fmt.Sprintf("ModAVD 实例 %d 上次新建时开的模拟器没能正常关掉: %s", i, e.Message)).
 			WithAdvice(fmt.Sprintf("用 modavd stop %d 关掉它，再重试", i))
 	}
 	return nil

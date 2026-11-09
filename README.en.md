@@ -259,7 +259,7 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 
 ## Updating ModAVD
 
-`modavd update` updates the whole ModAVD package in the root folder (the emulator, components and scripts, and also `ModAVD.exe` and `tools\modavd.exe` themselves). It does the same thing as AUTO-MAS's "ModAVD one-click update" (`魔改 AVD 一键更新`), and uses the same `<root>\.update\` folder and state file: if an update is interrupted partway on either side, the other can finish it or roll it back. Under the current integration agreement, AUTO-MAS keeps its own updater for now; whether and when it switches to calling this command is up to the AUTO-MAS project's own maintenance, and this is not a feature or promise already delivered by this repository.
+`modavd update` updates the whole ModAVD package in the root folder (the emulator, components and scripts, and also `ModAVD.exe` and `tools\modavd.exe` themselves). It does the same thing as AUTO-MAS's ModAVD one-click update, and uses the same `<root>\.update\` folder and state file: if an update is interrupted partway on either side, the other can finish it or roll it back. Under the current integration agreement, AUTO-MAS keeps its own updater for now; whether and when it switches to calling this command is up to the AUTO-MAS project's own maintenance, and this is not a feature or promise already delivered by this repository.
 
 - It does only the step you explicitly ask for; it never goes online automatically and never downloads in the background:
   - `modavd update` (`status`) looks at local state only; `check` looks up the latest version;

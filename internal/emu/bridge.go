@@ -359,7 +359,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 	// The script's notes go to this log; the warnings of the cold boots come with their results (m, not mm, starts them).
 	col := &logx.Collector{}
 	mm := m.withLog(col.Sink())
-	mm.Log.Infof("魔改 AVD 实例 %d 有执行桥的开机标记，桥还没装：现在装（中间要关机再开机一到两次）", i)
+	mm.Log.Infof("ModAVD 实例 %d 有执行桥的开机标记，桥还没装：现在装（中间要关机再开机一到两次）", i)
 	notWritable := 0
 	for round := 1; round <= bridgeInstallRounds; round++ {
 		if opt.Progress != nil {
@@ -455,7 +455,7 @@ func (m *Manager) updateBridgeLocked(ctx context.Context, i int, opt StartOption
 		res.Warnings = append(res.Warnings, col.Messages()...)
 		return res, nil
 	}
-	mm.Log.Infof("魔改 AVD 实例 %d 的执行桥文件和根目录里的载荷不一样（多半是更新过 ModAVD 包）：现在更新，之后冷启动一次", i)
+	mm.Log.Infof("ModAVD 实例 %d 的执行桥文件和根目录里的载荷不一样（多半是更新过 ModAVD 包）：现在更新，之后冷启动一次", i)
 	if opt.Progress != nil {
 		opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 更新 arm64 执行桥", i), Done: 0,
 			Total: progressTotal})
@@ -603,7 +603,7 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装或卸执行桥，稍后再试", i), map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在装或卸执行桥，稍后再试", i), map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
 	}
 	defer bridgeLock.Unlock()
 	res := &BridgeResult{Index: i, Action: action, ExitCode: -1, Warnings: []string{}}

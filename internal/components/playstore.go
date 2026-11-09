@@ -184,7 +184,7 @@ func ImportPlayStore(ctx context.Context, r *root.Root, files []ImportFile, o Op
 		return nil, errs.New(errs.Unsupported, "这个系统还没有组件清单").WithAdvice("目前支持 Windows 和 Apple Silicon macOS")
 	}
 	if r == nil {
-		return nil, errs.New(errs.NotFound, "找不到魔改 AVD 根目录")
+		return nil, errs.New(errs.NotFound, "找不到 ModAVD 根目录")
 	}
 	if len(files) == 0 {
 		return nil, errs.New(errs.Usage, "没有给要导入的文件").
@@ -197,7 +197,7 @@ func ImportPlayStore(ctx context.Context, r *root.Root, files []ImportFile, o Op
 	f := &fetcher{r: r, o: o, sdk: r.SDK()}
 	emulator := filepath.Join("sdk", "emulator", root.CurrentPlatform().Emulator)
 	if _, err := os.Stat(filepath.Join(f.sdk, "emulator", root.CurrentPlatform().Emulator)); err != nil {
-		return nil, errs.Newf(errs.NotReady, "这里没有 %s，不像是魔改 AVD 的文件夹：%s", emulator, r.Dir)
+		return nil, errs.Newf(errs.NotReady, "这里没有 %s，不像是 ModAVD 的文件夹：%s", emulator, r.Dir)
 	}
 	if r.LocalSDKRoot() != "" {
 		return nil, errs.New(errs.NotReady, "这个根目录在 mas-avd.json 里设了 sdkRoot（开发用的本地 SDK），不导入组件").
@@ -230,7 +230,7 @@ func ImportPlayStore(ctx context.Context, r *root.Root, files []ImportFile, o Op
 		}
 		f.note(fmt.Sprintf("退出码 %d", errs.ExitCode(err)))
 	}()
-	f.say("魔改 AVD：用自己的文件补全 Google Play 商店")
+	f.say("ModAVD：用自己的文件补全 Google Play 商店")
 	f.say("文件夹：" + r.Dir)
 	if f.darwin() {
 		if err := f.platformPaths(); err != nil {

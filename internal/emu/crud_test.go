@@ -76,7 +76,7 @@ func TestDeleteHalfInstances(t *testing.T) {
 		t.Fatalf("explicit create on leftovers: %v", err)
 	}
 	deleted("directory without config.ini", 0)
-	if !strings.Contains(strings.Join(logs.Messages(), "\n"), "魔改 AVD 实例 0 不完整（只剩：") {
+	if !strings.Contains(strings.Join(logs.Messages(), "\n"), "ModAVD 实例 0 不完整（只剩：") {
 		t.Errorf("leftovers not reported: %q", logs.Messages())
 	}
 	create(0) // the index is usable again

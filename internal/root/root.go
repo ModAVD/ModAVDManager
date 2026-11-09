@@ -254,10 +254,10 @@ func Resolve(flag string) (*Root, error) {
 
 func resolve(flag, env, exe string) (*Root, error) {
 	if s := cleanArg(flag); s != "" {
-		return openDir(s, "--root 指定的")
+		return openDir(s, "--root 指定的 ")
 	}
 	if s := cleanArg(env); s != "" {
-		return openDir(s, "环境变量 "+EnvRoot+" 指定的")
+		return openDir(s, "环境变量 "+EnvRoot+" 指定的 ")
 	}
 	if exe != "" {
 		dir := filepath.Dir(exe)
@@ -267,7 +267,7 @@ func resolve(flag, env, exe string) (*Root, error) {
 			}
 		}
 	}
-	return nil, errs.New(errs.Usage, "找不到魔改 AVD 根目录").WithAdvice(
+	return nil, errs.New(errs.Usage, "找不到 ModAVD 根目录").WithAdvice(
 		"用 --root 指定根目录（里面有 sdk 文件夹和 mas-avd.json），或设置环境变量 " + EnvRoot +
 			"；modavd.exe 放在根目录或根目录的 tools 文件夹里时会自动找到")
 }
@@ -287,14 +287,14 @@ func looksLikeRoot(dir string) bool {
 func openDir(dir, what string) (*Root, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, errs.Wrap(errs.Usage, err, fmt.Sprintf("%s魔改 AVD 根目录写法不对: %s", what, dir))
+		return nil, errs.Wrap(errs.Usage, err, fmt.Sprintf("%sModAVD 根目录写法不对: %s", what, dir))
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		return nil, errs.Wrap(errs.NotFound, err, fmt.Sprintf("%s魔改 AVD 根目录不存在: %s", what, abs))
+		return nil, errs.Wrap(errs.NotFound, err, fmt.Sprintf("%sModAVD 根目录不存在: %s", what, abs))
 	}
 	if !fi.IsDir() {
-		return nil, errs.Newf(errs.NotFound, "%s魔改 AVD 根目录不是文件夹: %s", what, abs)
+		return nil, errs.Newf(errs.NotFound, "%sModAVD 根目录不是文件夹: %s", what, abs)
 	}
 	return &Root{Dir: abs}, nil
 }
@@ -345,7 +345,7 @@ func (r *Root) QemuImgExe() (string, error) {
 	exe := filepath.Join(r.RuntimeSDK(), "emulator", "qemu-img.exe")
 	if fi, err := os.Stat(exe); err != nil || fi.IsDir() {
 		return exe, errs.Newf(errs.NotReady, "找不到 qemu-img: %s", exe).
-			WithAdvice("魔改 AVD 的模拟器组件不完整，请更新组件后再试")
+			WithAdvice("ModAVD 的模拟器组件不完整，请更新组件后再试")
 	}
 	return exe, nil
 }
@@ -677,7 +677,7 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %s 的锁文件打不开: %s（%v）", AvdName(i), path, err))
 	}
 	if !ok {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
 			i, configLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "config"})
 	}
 	return &InstanceLock{l: l}, nil
@@ -782,7 +782,7 @@ const (
 const (
 	FetchComponentsAdvice = "在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后" +
 		"从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次"
-	PackageAdvice = "模拟器要用魔改 AVD 的发布包：从 https://github.com/ModAVD/ModAVD/releases 下载 " +
+	PackageAdvice = "模拟器要用 ModAVD 的发布包：从 https://github.com/ModAVD/ModAVD/releases 下载 " +
 		"ModAVD-<版本>-win-x64.zip，整个解压到这个目录"
 )
 

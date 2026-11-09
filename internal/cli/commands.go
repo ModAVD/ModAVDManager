@@ -124,7 +124,7 @@ func init() {
 		"status 列出这五个文件在不在、从哪来（download / import），不把它算进必需组件。" +
 		"不带参数时默认查看组件；source 查看或修改记住的下载源（auto、googledownloads_cn、tencent、google）。" +
 		"--json 时必须给 --accept-license（仅 fetch）。只有 Windows 有组件清单，darwin、linux 返回 unsupported。" +
-		"退出码：没同意许可协议是 2（license_declined），路径有中文、空间不够、不是魔改 AVD 的文件夹是 4，" +
+		"退出码：没同意许可协议是 2（license_declined），路径有中文、空间不够、不是 ModAVD 的文件夹是 4，" +
 		"正在补全是 5，下不成是 9（components_unavailable），下载或解压后没通过校验、导入的文件被拒收也是 9（components_rejected，" +
 		"--json 的 error.details.reason 是 unknown_file、mismatch 或 incomplete）。"
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
@@ -236,7 +236,7 @@ func init() {
 		{
 			name: "collect-info", args: "[--out-dir 目录] [--stage-dir 目录] [--keep-stage] [--no-explorer]",
 			summary: "收集问题信息，打成 zip",
-			details: "打成「魔改AVD问题信息-<时间>.zip」，默认放桌面，再打开资源管理器选中它（--no-explorer 不打开）。" +
+			details: "打成「ModAVD-问题信息-<时间>.zip」，默认放桌面，再打开资源管理器选中它（--no-explorer 不打开）。" +
 				"--stage-dir 是暂存目录的父目录（默认 %TEMP%），--keep-stage 保留暂存目录。每一节单独收，出错写进 summary.txt 接着收下一节。" +
 				"只读：不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，不起 adb server、不碰 5037。目前只支持 Windows。",
 			flags: []flagSpec{optOutDir, optStageDir, optKeepStage, optNoExplorer}, final: true,
@@ -805,7 +805,7 @@ func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) 
 		c.log.Infof("没有正在运行的实例")
 		return res, nil
 	}
-	c.log.Infof("同时正常关闭 %d 台魔改 AVD 实例（安卓正常关机）：%s", len(targets), joinInts(targets, "、"))
+	c.log.Infof("同时正常关闭 %d 台 ModAVD 实例（安卓正常关机）：%s", len(targets), joinInts(targets, "、"))
 	type outcome struct {
 		r   *emu.StopResult
 		err error
@@ -830,7 +830,7 @@ func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) 
 			if c.ctx.Err() != nil && errs.CodeOf(e) != errs.Canceled {
 				e = errs.Wrap(errs.Canceled, e, "已取消")
 			}
-			c.log.Warnf("魔改 AVD 实例 %d 关机失败: %s", targets[k], errs.As(e).Error())
+			c.log.Warnf("ModAVD 实例 %d 关机失败: %s", targets[k], errs.As(e).Error())
 			res.Failed = append(res.Failed, StopFailure{Index: targets[k], Error: errorInfo(e)})
 			continue
 		}

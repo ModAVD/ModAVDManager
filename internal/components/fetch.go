@@ -334,7 +334,7 @@ func Fetch(ctx context.Context, r *root.Root, o Options) (*Result, error) {
 		return nil, errs.New(errs.Unsupported, "这个系统还没有组件清单").WithAdvice("目前支持 Windows 和 Apple Silicon macOS")
 	}
 	if r == nil {
-		return nil, errs.New(errs.NotFound, "找不到魔改 AVD 根目录")
+		return nil, errs.New(errs.NotFound, "找不到 ModAVD 根目录")
 	}
 	if err := o.CheckTimeouts(); err != nil {
 		return nil, err
@@ -389,7 +389,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	if f.o.PlayStore {
 		what += "、Google Play 商店"
 	}
-	f.say("魔改 AVD：补全 Google 组件（" + what + "）")
+	f.say("ModAVD：补全 Google 组件（" + what + "）")
 	f.say("文件夹：" + r.Dir)
 	free := "-1"
 	if f.o.TestFreeSpaceMB != nil {
@@ -413,7 +413,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 		if f.darwin() {
 			advice = "请完整解压 Apple Silicon 发行包，再在包根目录运行 modavd components fetch"
 		}
-		return nil, errs.Newf(errs.NotReady, "这里没有 %s，不像是魔改 AVD 的文件夹：%s", filepath.Join("sdk", "emulator", root.CurrentPlatform().Emulator), r.Dir).
+		return nil, errs.Newf(errs.NotReady, "这里没有 %s，不像是 ModAVD 的文件夹：%s", filepath.Join("sdk", "emulator", root.CurrentPlatform().Emulator), r.Dir).
 			WithAdvice(advice)
 	}
 	if r.LocalSDKRoot() != "" {

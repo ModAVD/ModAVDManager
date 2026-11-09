@@ -161,15 +161,18 @@ func modavdPrivacyHead() string {
 	return head
 }
 
-// notAllMAS: what the scripts said as if every user had AUTO-MAS, and what modavd says instead (many use ModAVD
-// without it). Applied in order, to the scripts' lines.
-var notAllMAS = []struct{ script, modavd string }{
+// reworded: what the scripts said that modavd says differently on purpose, applied in order to the scripts' lines:
+// what they said as if every user had AUTO-MAS (many use ModAVD without it), and the old Chinese name for ModAVD
+// (it is ModAVD in every language).
+var reworded = []struct{ script, modavd string }{
 	{"提示：没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志。", "提示：" + MasMissingNote},
 	{"没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志", "没找到 AUTO-MAS 安装目录（不用 AUTO-MAS 的不用管）"},
 	{"（多半是 AUTO-MAS 以管理员运行）", "（多半是模拟器以管理员身份运行）"},
 	{"实例配置、AUTO-MAS 日志（mas 文件夹）；", "实例配置；找到 AUTO-MAS 时还有它的日志（mas 文件夹）；"},
 	{"在 AUTO-MAS 里开着实例时再双击运行一次", "开着实例时再生成一次"},
 	{"再把最后三行补上就行。", "再把最后两行补上就行。"},
+	{"魔改AVD问题信息-", "ModAVD-问题信息-"},
+	{"魔改 AVD", "ModAVD"},
 }
 
 // modavdLine is what modavd writes on purpose instead of a line of collect-info.ps1's summary.txt:
@@ -177,7 +180,7 @@ var notAllMAS = []struct{ script, modavd string }{
 //   - the adb.exe the live section runs: modavd speaks the adb host protocol itself (no adb.exe, never a server of
 //     its own), to the server that listens on the port;
 //   - the first line of the privacy note: who does not upload is the manager or the CLI, not a script;
-//   - notAllMAS.
+//   - reworded.
 func (f *fixture) modavdLine(line string) string {
 	if line == "PowerShell：{{PSVERSION}}" {
 		return "modavd：" + buildinfo.Version + "（" + runtime.Version() + "）"
@@ -185,7 +188,7 @@ func (f *fixture) modavdLine(line string) string {
 	if line == scriptPrivacyHead {
 		return modavdPrivacyHead()
 	}
-	for _, r := range notAllMAS {
+	for _, r := range reworded {
 		line = strings.Replace(line, r.script, r.modavd, 1)
 	}
 	if strings.HasPrefix(line, "adb：") && strings.Contains(line, "  -P "+strconv.Itoa(f.adbPort)+"（") {
@@ -383,12 +386,12 @@ func TestCollectMatchesScript(t *testing.T) {
 
 			// the end of the console output: zip path, the privacy note word for word but for modavdLine's
 			console, _ := f.golden(t, name, "collect-console.txt")
-			if !containsLine(lines(console), "文件："+res.ZipPath) {
-				t.Errorf("zip %s, the script printed:\n%s", res.ZipPath, console)
-			}
 			var consoleLines []string
 			for _, l := range lines(console) {
 				consoleLines = append(consoleLines, f.modavdLine(l))
+			}
+			if !containsLine(consoleLines, "文件："+res.ZipPath) {
+				t.Errorf("zip %s, the script printed:\n%s", res.ZipPath, console)
 			}
 			if !strings.Contains(strings.Join(consoleLines, "\r\n"), PrivacyNote) || res.PrivacyNote != PrivacyNote {
 				t.Error("the privacy note is not the one collect-info.ps1 prints, but for modavdLine's")

@@ -368,7 +368,7 @@ func (m *Manager) playStoreLock(i int) (*host.FileLock, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, errs.WithDetails(errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正在装卸执行桥、Google Play 商店或改 GLES 3.2 开关，稍后再试", i),
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正在装卸执行桥、Google Play 商店或改 GLES 3.2 开关，稍后再试", i),
 			map[string]string{errs.Reason: "locked", errs.Lock: "bridge"})
 	}
 	return lock, nil

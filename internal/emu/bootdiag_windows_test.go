@@ -35,7 +35,7 @@ func TestSaveBootFailure(t *testing.T) {
 		return m.saveBootFailure(ctx, i, err, running)
 	}
 
-	failure := errs.New(errs.Timeout, "魔改 AVD 实例 6 启动超时")
+	failure := errs.New(errs.Timeout, "ModAVD 实例 6 启动超时")
 	diagDirs := func() []string {
 		matches, _ := filepath.Glob(filepath.Join(r.LogsDir(), "mas_6-*-bootfail"))
 		return matches
