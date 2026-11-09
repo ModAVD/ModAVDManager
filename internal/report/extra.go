@@ -31,12 +31,18 @@ var (
 
 const netshTimeout = 15 * time.Second
 
-// managerLogs are the manager's own logs in logs\; a missing .1 backup is not mentioned.
-var managerLogs = []struct{ name, what string }{
-	{"modavd-ui.log", "管理器日志"},
-	{"modavd-ui.log.1", "管理器日志（上一份）"},
-	{"modavd-bootwatch.log", "开机守护日志"},
-	{"modavd-bootwatch.log.1", "开机守护日志（上一份）"},
+// managerLogs are the manager's own logs in logs\, with the private adb servers' log (modavd before 0.7 had none); a
+// missing quiet one is not mentioned.
+var managerLogs = []struct {
+	name, what string
+	quiet      bool
+}{
+	{"modavd-ui.log", "管理器日志", false},
+	{"modavd-ui.log.1", "管理器日志（上一份）", true},
+	{"modavd-bootwatch.log", "开机守护日志", false},
+	{"modavd-bootwatch.log.1", "开机守护日志（上一份）", true},
+	{"adb-server.log", "私有 adb server 日志", true},
+	{"adb-server.log.1", "私有 adb server 日志（上一份）", true},
 }
 
 // extra runs one of these sections like step (a failure or a panic is a line and a problem), without a timing line.
@@ -60,15 +66,15 @@ func (c *collector) extra(name string, fn func() error) {
 	}
 }
 
-// managerLogFiles copies modavd-ui.log, modavd-bootwatch.log and their .1 backups (the last managerLogTailBytes of
-// each) into logs\ of the package.
+// managerLogFiles copies modavd-ui.log, modavd-bootwatch.log, adb-server.log and their .1 backups (the last
+// managerLogTailBytes of each) into logs\ of the package.
 func (c *collector) managerLogFiles() error {
 	c.section(sectionManagerLogs)
 	logDir := filepath.Join(c.root, root.LogsDir)
 	for _, f := range managerLogs {
 		src := filepath.Join(logDir, f.name)
 		if !isFile(src) {
-			if !strings.HasSuffix(f.name, ".1") {
+			if !f.quiet {
 				c.L(f.what + "（" + f.name + "）：没有")
 			}
 			continue
