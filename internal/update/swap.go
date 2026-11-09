@@ -361,7 +361,7 @@ func (u *Updater) recoverAfter(err error) error {
 	msg, rerr := u.recoverState()
 	switch {
 	case rerr != nil:
-		msg = fmt.Sprintf("当场恢复也失败了（%v），下次更新或 AUTO-MAS 启动时会再按记录恢复", rerr)
+		msg = fmt.Sprintf("当场恢复也失败了（%v），下次更新时会再按记录恢复（用 AUTO-MAS 的，它启动时也会）", rerr)
 	case msg == "":
 		msg = "状态已经完整"
 	}

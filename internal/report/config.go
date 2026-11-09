@@ -46,13 +46,13 @@ func GameName(pkg string) (string, bool) {
 var notGames = []string{"de.jrpie.android.launcher"}
 
 // The lines the user fills in.
-var configTail = []string{"AUTO-MAS 版本：", "用的脚本（MAA / M9A / …）：", "效果（能跑 / 有问题，问题是…）："}
+var configTail = []string{"怎么用的（自己玩 / AUTO-MAS 及版本 / MAA、M9A 等脚本）：", "效果（能跑 / 有问题，问题是…）："}
 
 const (
 	configTitle    = "【魔改 AVD 试用配置】"
-	configNotOpen  = "游戏包：没有实例开着，读不到。在 AUTO-MAS 里开着实例时再双击运行一次，就会列出来"
+	configNotOpen  = "游戏包：没有实例开着，读不到。开着实例时再生成一次，就会列出来"
 	emuCheckWait   = 20 * time.Second
-	clipboardOK    = "已复制到剪贴板：粘贴到群里，再把最后三行补上就行。"
+	clipboardOK    = "已复制到剪贴板：粘贴到群里，再把最后两行补上就行。"
 	clipboardError = "复制到剪贴板失败（%s），请手动选中上面的文字复制。"
 )
 

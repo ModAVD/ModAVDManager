@@ -391,7 +391,7 @@ function collectRows(j) {
       () => api.post('/api/open', { what: 'collect-info', job: j.id }).catch(toastError)))];
   if (r.sections?.length) rows.push(h('ul', { class: 'diag-sections' }, ...r.sections.map((x) => h('li', { class: x.error ? 'tone-err' : 'tone-ok', text: `${x.name}：${x.error || '完成'}` }))));
   else if (r.problems?.length) rows.push(h('p', { class: 'f-hint', text: `有 ${r.problems.length} 节没收集成功，原因写在包里的 summary.txt，照样提交就行。` }));
-  if (r.mas_found === false) rows.push(h('p', { class: 'f-hint', text: '没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志。' }));
+  if (r.mas_found === false) rows.push(h('p', { class: 'f-hint', text: '没找到 AUTO-MAS 安装目录。用 AUTO-MAS 的，反馈时请另附上它 debug 文件夹里的日志；不用 AUTO-MAS 的不用管。' }));
   return rows;
 }
 

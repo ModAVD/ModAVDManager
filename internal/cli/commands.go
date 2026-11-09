@@ -933,7 +933,7 @@ func humanCollectInfo(w io.Writer, data any) {
 		fmt.Fprintln(w, l)
 	}
 	if !r.MasFound {
-		fmt.Fprintln(w, "没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志")
+		fmt.Fprintln(w, report.MasMissingNote)
 	}
 	if len(r.Problems) > 0 {
 		fmt.Fprintf(w, "有 %d 节没收集成功，原因写在 zip 里的 summary.txt，照样提交就行。\n", len(r.Problems))

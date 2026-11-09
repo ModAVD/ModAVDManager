@@ -186,7 +186,7 @@ func TestComponentsFetchOptions(t *testing.T) {
 		t.Fatalf("quiet: %q", res.stderr)
 	}
 	if !strings.Contains(res.stdout, "已装好：平台工具（adb）（版本 37.0.1）") || !strings.Contains(res.stdout, "原来不完整的目录改名为") ||
-		!strings.Contains(res.stdout, "完成，可以在 AUTO-MAS 里添加这个文件夹了。") {
+		!strings.Contains(res.stdout, "完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。") {
 		t.Fatalf("summary %q", res.stdout)
 	}
 }

@@ -459,7 +459,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 		if f.darwin() {
 			f.say("组件都已齐全，不需要下载。当前 macOS 版本暂未开放实例创建与启动。")
 		} else {
-			f.say("组件都已齐全，不需要下载。完成，可以在 AUTO-MAS 里添加这个文件夹了。")
+			f.say("组件都已齐全，不需要下载。完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。")
 		}
 		return res, nil
 	}
@@ -534,7 +534,7 @@ func (f *fetcher) run(ctx context.Context) (res *Result, err error) {
 	if f.darwin() {
 		f.say("组件补全完成。当前 macOS 版本暂未开放实例创建与启动。")
 	} else {
-		f.say("完成，可以在 AUTO-MAS 里添加这个文件夹了。")
+		f.say("完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。")
 	}
 	return res, nil
 }

@@ -602,7 +602,7 @@ func formatComponents(w io.Writer, data any) {
 		if !fetched {
 			fmt.Fprint(w, "组件都已齐全，不需要下载。")
 		}
-		fmt.Fprintln(w, "完成，可以在 AUTO-MAS 里添加这个文件夹了。")
+		fmt.Fprintln(w, "完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。")
 	}
 }
 

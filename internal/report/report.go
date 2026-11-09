@@ -28,14 +28,19 @@ import (
 	"modavd/internal/root"
 )
 
-// PrivacyNote is the head of summary.txt and the last thing printed: collect-info.ps1's $PrivacyNote word for word,
-// but for the first line. The script's said "脚本不会上传"; from ModAVD 0.38.2 the package has no such script any
-// more (ModAVD/ModAVD#45), and what collects and what could upload is the manager or the CLI, so it says those.
+// PrivacyNote is the head of summary.txt and the last thing printed: collect-info.ps1's $PrivacyNote, but for the
+// first line and the AUTO-MAS logs. The script's said "脚本不会上传"; from ModAVD 0.38.2 the package has no such
+// script any more (ModAVD/ModAVD#45), and what collects and what could upload is the manager or the CLI, so it says
+// those. The script listed the AUTO-MAS logs as if every user had AUTO-MAS; they are there only when it is found.
 const PrivacyNote = "隐私提示：问题包只保存在本机，管理器和命令行都不会上传它。\r\n" +
-	"- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n" +
+	"- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置；找到 AUTO-MAS 时还有它的日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。\r\n" +
 	"- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。\r\n" +
 	"- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。\r\n" +
 	"- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。"
+
+// MasMissingNote: shown after collecting when no AUTO-MAS installation was found. Many users do not use AUTO-MAS, so
+// it asks only those who do for its logs.
+const MasMissingNote = "没找到 AUTO-MAS 安装目录。用 AUTO-MAS 的，反馈时请另附上它 debug 文件夹里的日志；不用 AUTO-MAS 的不用管。"
 
 // ---- .NET number formatting --------------------------------------------------------------------------------------
 

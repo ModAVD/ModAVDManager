@@ -162,7 +162,7 @@ func (r *Root) checkPorts(allowLegacy bool) *errs.Error {
 	legacy := p.Base == 5500 || p.Base > maxPortBase
 	if problem != "" && !(allowLegacy && legacy) {
 		return errs.New(errs.InvalidArgument, problem).WithAdvice(fmt.Sprintf(
-			"先关掉这个根目录的所有实例，再把 portBase 改成 %d（和 AUTO-MAS 一样），或者 %d–%d 之间 100 的整数倍，避开 5500（开发和测试用的根目录用 21000）；原配置仍可查状态和关机",
+			"先关掉这个根目录的所有实例，再把 portBase 改成 %d（默认值），或者 %d–%d 之间 100 的整数倍，避开 5500（开发和测试用的根目录用 21000）；原配置仍可查状态和关机",
 			DefaultPortBase, minPortBase, maxPortBase))
 	}
 	if p.Base == DefaultPortBase {

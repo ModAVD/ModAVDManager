@@ -161,17 +161,32 @@ func modavdPrivacyHead() string {
 	return head
 }
 
+// notAllMAS: what the scripts said as if every user had AUTO-MAS, and what modavd says instead (many use ModAVD
+// without it). Applied in order, to the scripts' lines.
+var notAllMAS = []struct{ script, modavd string }{
+	{"提示：没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志。", "提示：" + MasMissingNote},
+	{"没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志", "没找到 AUTO-MAS 安装目录（不用 AUTO-MAS 的不用管）"},
+	{"（多半是 AUTO-MAS 以管理员运行）", "（多半是模拟器以管理员身份运行）"},
+	{"实例配置、AUTO-MAS 日志（mas 文件夹）；", "实例配置；找到 AUTO-MAS 时还有它的日志（mas 文件夹）；"},
+	{"在 AUTO-MAS 里开着实例时再双击运行一次", "开着实例时再生成一次"},
+	{"再把最后三行补上就行。", "再把最后两行补上就行。"},
+}
+
 // modavdLine is what modavd writes on purpose instead of a line of collect-info.ps1's summary.txt:
 //   - the PowerShell that ran the script: modavd's version and Go version;
 //   - the adb.exe the live section runs: modavd speaks the adb host protocol itself (no adb.exe, never a server of
 //     its own), to the server that listens on the port;
-//   - the first line of the privacy note: who does not upload is the manager or the CLI, not a script.
+//   - the first line of the privacy note: who does not upload is the manager or the CLI, not a script;
+//   - notAllMAS.
 func (f *fixture) modavdLine(line string) string {
 	if line == "PowerShell：{{PSVERSION}}" {
 		return "modavd：" + buildinfo.Version + "（" + runtime.Version() + "）"
 	}
 	if line == scriptPrivacyHead {
 		return modavdPrivacyHead()
+	}
+	for _, r := range notAllMAS {
+		line = strings.Replace(line, r.script, r.modavd, 1)
 	}
 	if strings.HasPrefix(line, "adb：") && strings.Contains(line, "  -P "+strconv.Itoa(f.adbPort)+"（") {
 		var pid uint32
@@ -366,14 +381,17 @@ func TestCollectMatchesScript(t *testing.T) {
 				}
 			}
 
-			// the end of the console output: zip path, the privacy note word for word but for its first line
+			// the end of the console output: zip path, the privacy note word for word but for modavdLine's
 			console, _ := f.golden(t, name, "collect-console.txt")
 			if !containsLine(lines(console), "文件："+res.ZipPath) {
 				t.Errorf("zip %s, the script printed:\n%s", res.ZipPath, console)
 			}
-			scriptNote := scriptPrivacyHead + strings.TrimPrefix(PrivacyNote, modavdPrivacyHead())
-			if !strings.Contains(console, scriptNote) || res.PrivacyNote != PrivacyNote {
-				t.Error("the privacy note is not the one collect-info.ps1 prints, but for its first line")
+			var consoleLines []string
+			for _, l := range lines(console) {
+				consoleLines = append(consoleLines, f.modavdLine(l))
+			}
+			if !strings.Contains(strings.Join(consoleLines, "\r\n"), PrivacyNote) || res.PrivacyNote != PrivacyNote {
+				t.Error("the privacy note is not the one collect-info.ps1 prints, but for modavdLine's")
 			}
 			if strings.Contains(PrivacyNote, "脚本") || !strings.HasPrefix(PrivacyNote, "隐私提示：问题包只保存在本机，") {
 				t.Errorf("privacy note head %q", modavdPrivacyHead())
@@ -407,7 +425,17 @@ func TestReportConfigMatchesScript(t *testing.T) {
 			}
 			// the script prints a blank line, the lines, a blank line and what happened to the clipboard
 			want, _ := f.golden(t, name, "report-config.txt")
-			wl := lines(want)
+			var wl []string
+			for _, l := range lines(want) {
+				// the script asked for the AUTO-MAS version and the scripts on two lines; modavd asks how it is used
+				if l == "用的脚本（MAA / M9A / …）：" {
+					continue
+				}
+				if l == "AUTO-MAS 版本：" {
+					l = configTail[0]
+				}
+				wl = append(wl, f.modavdLine(l))
+			}
 			if len(wl) < 3 || wl[0] != "" || wl[len(wl)-2] != "" {
 				t.Fatalf("unexpected golden shape: %q", wl)
 			}

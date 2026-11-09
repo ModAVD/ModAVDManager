@@ -471,7 +471,7 @@ func TestFetchInstallsThenSkips(t *testing.T) {
 		t.Errorf("the download source line is not before the license:\n%s", logged)
 	}
 	for _, s := range []string{"参数：AcceptLicense=true", "  URL " + m.url() + "pt.zip", "下载结束：", "退出码 0",
-		"完成，可以在 AUTO-MAS 里添加这个文件夹了。"} {
+		"完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。"} {
 		if !strings.Contains(logged, s) {
 			t.Errorf("log lacks %q:\n%s", s, logged)
 		}
