@@ -83,7 +83,11 @@ var (
 	optAfterPID      = flagSpec{"after-pid", kindInt, "PID", "管理器用：先等这个进程退出（最多 60 秒）再装，只和 install 一起用"}
 	optReopen        = flagSpec{"reopen", kindString, "程序", "管理器用：装完（成不成都）把结果写进 .update\\manager-result.json，再启动这个程序（完整路径），只和 install 一起用"}
 	optReopenArg     = flagSpec{"reopen-arg", kindStrings, "参数", "管理器用：启动 --reopen 的程序时带的参数，按顺序，可以给多次"}
-	optBootNoBridge  = flagSpec{"no-bridge", kindBool, "",
+	optUpdateSource  = flagSpec{"source", kindString, "github|mirrorchyan", "这次用的更新源，盖过「设置」里的，不保存；recover 不用"}
+	optCDKDPAPI      = flagSpec{"cdk-dpapi", kindString, "BASE64",
+		"这次用的 Mirror 酱 CDK，不保存：调用方用 Windows DPAPI（CryptProtectData，不带 entropy）加密 UTF-8 的 CDK 后的 base64；" +
+			"空串表示这次不用 CDK；只在 Windows 上可用，recover 不用"}
+	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
 		"不询问，直接视为同意《Android 软件开发套件许可协议》（自动化用；协议全文照样取回并打印，取不到照样退出）；--json 时必须给"}
@@ -351,18 +355,23 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "update", args: "[status|check|prepare|install|recover] [--automas-version V] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
+			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
 			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
-			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）。不自动联网，只做给出的那一步：" +
+			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）；" +
+				"调用方有自己的设置时用 --source 和 --cdk-dpapi 传这一次的，只盖过「设置」、不保存，status 里的 source、cdk_set 是这次生效的。" +
+				"--cdk-dpapi 是用 Windows DPAPI 加密好的 CDK 的 base64，解不开或格式不对是 invalid_argument，CDK 不进日志和输出。" +
+				"不自动联网，只做给出的那一步：" +
 				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
 				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器窗口和 MCP 客户端；" +
 				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
 				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
 				"命令等它退出再换上新版，然后重新打开管理器。" +
+				"--json 时每个进度（换阶段、下载中约 2 秒一次）在 stderr 的日志行里多一个 progress 对象：" +
+				`{"stage":"checking|downloading|extracting|verifying|installing","percent":-1 或 0–100,"done_bytes":N,"total_bytes":N}。` +
 				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
 			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
-			flags: []flagSpec{optAutoMAS, optAfterPID, optReopen, optReopenArg}, final: true,
+			flags: []flagSpec{optUpdateSource, optCDKDPAPI, optAutoMAS, optAfterPID, optReopen, optReopenArg}, final: true,
 			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
@@ -1449,19 +1458,29 @@ func runUpdate(c *cmdCtx) (any, error) {
 	case reopen != "" && !filepath.IsAbs(reopen):
 		return nil, errs.Newf(errs.Usage, "--reopen 要给程序的完整路径，收到「%s」", reopen)
 	}
+	opt := update.Options{AutoMASVersion: c.inv.strOpt("automas-version")}
+	if err := updateCallerSettings(c.inv, action, &opt); err != nil {
+		return nil, err
+	}
 	r, err := c.deps.resolveRoot(c.inv.root)
 	if err != nil {
 		return nil, err
 	}
+	// Stage changes are logged by the updater itself (with their progress fields); downloads here, about every 2 s,
+	// the first of each download and the last.
 	var last time.Time
-	u := update.New(r, c.log, update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
-		Progress: func(p update.Progress) {
-			if p.Stage != "downloading" || (time.Since(last) < 2*time.Second && p.Done != p.Total) {
-				return
-			}
-			last = time.Now()
-			c.log.Infof("%s：%.1f%%（%.1f / %.1f MB）", p.Message, p.Percent, float64(p.Done)/(1<<20), float64(p.Total)/(1<<20))
-		}})
+	lastStage := ""
+	opt.Progress = func(p update.Progress) {
+		first := p.Stage != lastStage
+		lastStage = p.Stage
+		if p.Stage != "downloading" || (!first && time.Since(last) < 2*time.Second && p.Done != p.Total) {
+			return
+		}
+		last = time.Now()
+		c.log.LogFields(logx.Info, fmt.Sprintf("%s：%.1f%%（%.1f / %.1f MB）", p.Message, p.Percent,
+			float64(p.Done)/(1<<20), float64(p.Total)/(1<<20)), p.Fields())
+	}
+	u := update.New(r, c.log, opt)
 	switch action {
 	case "check":
 		return u.Check(c.ctx)
@@ -1476,6 +1495,30 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return u.Recover(c.ctx)
 	}
 	return u.Status(), nil
+}
+
+// updateCallerSettings puts --source and --cdk-dpapi into opt: this run's source and CDK, never saved. Checked before
+// the root is looked up; no message quotes the --cdk-dpapi value or the CDK.
+func updateCallerSettings(inv *invocation, action string, opt *update.Options) error {
+	hasSource, hasCDK := inv.isSet("source"), inv.isSet("cdk-dpapi")
+	if (hasSource || hasCDK) && action == "recover" {
+		return errs.New(errs.Usage, "--source、--cdk-dpapi 不能和 recover 一起用").WithAdvice(findCommand("update").usageAdvice())
+	}
+	if hasSource {
+		s, err := update.CheckSource(strings.ToLower(strings.TrimSpace(inv.strOpt("source"))))
+		if err != nil {
+			return err
+		}
+		opt.Source = s
+	}
+	if hasCDK {
+		cdk, err := update.CallerCDK(inv.strOpt("cdk-dpapi"))
+		if err != nil {
+			return err
+		}
+		opt.CDK = &cdk
+	}
+	return nil
 }
 
 // installHandoff is `update install` for the manager's 更新 (update/handoff.go): wait for the manager (afterPID) to exit,

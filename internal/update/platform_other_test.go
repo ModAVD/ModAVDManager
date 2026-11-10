@@ -53,6 +53,15 @@ func updateTree(t *testing.T, dir string) []string {
 	return paths
 }
 
+// --cdk-dpapi is Windows DPAPI: unsupported elsewhere, "" included, before looking at the value.
+func TestCallerCDKUnsupported(t *testing.T) {
+	for _, in := range []string{"", "AQID", "%%%"} {
+		if got, err := CallerCDK(in); errs.CodeOf(err) != errs.Unsupported || got != "" {
+			t.Errorf("CallerCDK(%q) = %q %v", in, got, err)
+		}
+	}
+}
+
 func TestSaveSettingsUnsupported(t *testing.T) {
 	if nativeDarwinSettings && root.CurrentPlatform().Supported() {
 		t.Skip("native macOS supports per-user settings")

@@ -79,7 +79,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）。除模拟器日志外，还收管理器、开机守护和私有 adb server 的日志（`modavd-ui.log`、`modavd-bootwatch.log`、`adb-server.log` 及其 `.1`，各取最后 5 MB）、所有 adb.exe 进程和 adb server 日志（`%TEMP%\adb.log` 最后 2 MB）、Windows 保留的 TCP 端口（netsh），并指出本目录要用的端口有没有落在里面；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
 | `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`、`components import-playstore <文件或文件夹>…` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」）；`--play-store`、`import-playstore` 补全可选的 Google Play 商店（见下） |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
-| `update [status\|check\|prepare\|install\|recover] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源（见「更新 ModAVD」） |
+| `update [status\|check\|prepare\|install\|recover] [--source github\|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源，或调用方这次传的更新源和 CDK（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
 
 Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、macOS、HVF、Metal 和组件版本；游戏列表只向归属已确认的运行实例与现有私有 ADB 查询，不启动服务。问题包只收本目录的实例配置白名单和最多 8 份模拟器日志，每份最多 2 MiB、总文本最多 20 MiB，过滤常见凭据字段、路径和设备标识。macOS 不收截图、系统转储或其他应用日志；分享前请检查问题包。默认复制配置到剪贴板、用 Finder 显示问题包，自动化可用 `--no-clipboard` / `--no-explorer`。
@@ -143,7 +143,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
 **机读输出**（`--json`）：
 
 - stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice","details"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
-- 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
+- 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`，可能多出字段（比如 `update` 的进度行带 `progress`，见「更新 ModAVD」），调用方要容忍不认识的键。调用方不要把 stderr 并进 stdout。
 - `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
 - **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
 - **错误的 `details`**：可选对象，值全部是字符串。增加这些键不改变现有 `code`、`message` 或 protocol；调用方要容忍缺少字段、不认识的键和值。管理器 HTTP 响应和失败任务保留同一份字段；MCP 的 `isError` 文本在原有错误后追加一行 `error.details: {…}`，其中 `{…}` 是 JSON。
@@ -263,14 +263,21 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 
 ## 更新 ModAVD
 
-`modavd update` 更新根目录里的整个 ModAVD 包（模拟器、组件、脚本，也包括 `ModAVD.exe` 和 `tools\modavd.exe` 自己），和 AUTO-MAS 里的 ModAVD 一键更新做的是同一件事，用的也是同一个 `<根>\.update\` 目录和状态文件：哪边更新到一半被打断，另一边都能接着补完或退回。按当前对接约定，AUTO-MAS 目前保留自己的更新器；是否以及何时改成调用这个命令，由 AUTO-MAS 项目自己的维护决定，这不是本仓库已经交付的功能或承诺。
+`modavd update` 更新根目录里的整个 ModAVD 包（模拟器、组件、脚本，也包括 `ModAVD.exe` 和 `tools\modavd.exe` 自己），和 AUTO-MAS 里的 ModAVD 一键更新做的是同一件事，用的也是同一个 `<根>\.update\` 目录和状态文件：哪边更新到一半被打断，另一边都能接着补完或退回。有自己更新设置的调用方（比如 AUTO-MAS）可以每次用 `--source`、`--cdk-dpapi` 传自己的更新源和 CDK，不必改管理器里的设置。
 
 - 只做明确要求的那一步，不自动联网、不在后台下载：
   - `modavd update`（`status`）只看本地；`check` 查最新版本；
   - `prepare` 下载、解包、按包里的 `modavd-manifest.json` 逐文件核对、暂存好，实例开着也行；
   - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器窗口和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
   - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
-- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。
+- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
+- 调用方传这一次的设置（`status`、`check`、`prepare`、`install` 都可以带，`recover` 不带；只盖过「设置」里的，不保存，`status` 等结果里的 `source`、`cdk_set` 是这次生效的）：
+  - `--source github|mirrorchyan`：这次用的更新源。
+  - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`）表示这次不用 CDK，「设置」里存了也不用。
+  - 密文和 CDK 都不进日志、错误、`.update\state.json` 和返回值。
+- 进度（`--json` 时）：每个进度事件在 stderr 上是一行日志，比平常多一个 `progress` 对象：`{"time":"…","level":"info","msg":"…","progress":{"stage":"downloading","percent":12.3,"done_bytes":123,"total_bytes":1000}}`。
+  - `stage` 是 `checking`（只有 `check` 有）、`downloading`、`extracting`、`verifying`、`installing`；换阶段时各一行（`percent` 为 -1、字节数为 0）；下载中约 2 秒一行，每次下载的第一行和下完那行一定有。
+  - `--quiet` 时不出（进度是 info 级）。不带 `--json` 时照旧是人看的文字。stdout 仍然只有最后一行结果。
 - 管理器「设置」里点「更新」：管理器先下载、核对、暂存好（这时实例照常用）；有别的程序在跑这个根目录的 modavd（比如 `modavd mcp`）或有实例正在新建，就一台都不关、提示先处理；再正常关掉所有在运行的实例，然后启动 `tools\modavd.exe update install --after-pid <管理器 pid> --reopen <管理器程序> [--reopen-arg 参数]...` 并退出。命令行等管理器退出、换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数重新打开管理器，新管理器打开时提示更新结果。换不上也照样重新打开，下载好的新版留着，下次不用重下。命令行的输出在 `logs\modavd-update.log`。`--after-pid`、`--reopen`、`--reopen-arg` 只和 `install` 一起用，是给管理器用的。
 - macOS 的更新设置和组件下载源分别保存在 `~/Library/Application Support/ModAVD/update-settings.json` 和 `components-settings.json`。CDK 使用 AES-GCM 加密，随机包装密钥留在当前用户的 Keychain；钥匙串锁定或未授权时保存失败，不会降级为明文存储。复制设置文件到其他用户或设备不会同时转移密钥。
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。

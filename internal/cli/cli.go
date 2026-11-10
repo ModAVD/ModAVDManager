@@ -33,6 +33,8 @@
 //	servers                                               emu.ServersResult
 //	version                                               VersionResult {"version","protocol","go"} (no root needed)
 //	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
+//	update status|check|prepare|install [--source github|mirrorchyan] [--cdk-dpapi B64]   the same with this run's
+//	                                                      source / MirrorChyan CDK instead of the saved settings
 //	update install --after-pid P --reopen EXE [--reopen-arg A]...   the same, for the manager's 更新 (update/handoff.go)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
@@ -49,6 +51,14 @@
 // and logs go to stderr as text (logx.TextSink). Log level Info; --quiet Warn; --verbose Debug (and the cause of an
 // error). adb and mcp never print an envelope (their stdout belongs to adb / the protocol): their errors go to
 // stderr only.
+//
+// update's --source and --cdk-dpapi are never saved; status / check report them as source and cdk_set. --cdk-dpapi
+// is the base64 of a Windows DPAPI blob (CryptProtectData of the UTF-8 CDK, no entropy, user or machine scope):
+// not base64, not decryptable or not a valid CDK is invalid_argument, on other platforms unsupported; "" means no
+// CDK this run. Neither the value nor the CDK appears in any log line, message or result. With --json, every update
+// progress event (each stage change; downloads about every 2 s plus the first and last) is a log line with one more
+// key, "progress": {"stage","percent","done_bytes","total_bytes"}; stage is checking / downloading / extracting /
+// verifying / installing, percent -1 when unknown (bytes 0 then). Log lines may gain keys like this one.
 //
 // error.details is optional, with string values only. These additions do not change code/message or Protocol 2.
 // busy reasons: running, locked, starting (stop before qemu exists), stopping (start awaiting shutdown),
@@ -263,7 +273,7 @@ func newLogger(w io.Writer, g globals) *logx.Logger {
 		min = logx.Debug
 	}
 	if g.json {
-		return logx.New(logx.JSONSink(w, min))
+		return logx.NewFields(logx.JSONFieldSink(w, min))
 	}
 	return logx.New(logx.TextSink(w, min))
 }

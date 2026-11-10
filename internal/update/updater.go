@@ -2,7 +2,8 @@
 // or MirrorChyan, the way AUTO-MAS's own updater does and on the same files under <root>\.update (state.go), so the
 // two can take over each other's half-done work while both exist. AUTO-MAS keeps its updater for two more major
 // versions and then calls `modavd update` instead; until then the manager only shows the settings (source, CDK) and
-// the state, and only the command line installs.
+// the state, and only the command line installs. A caller with settings of its own passes them for one run
+// (Options.Source / CDK: `modavd update --source`, `--cdk-dpapi`); they are never saved.
 //
 // Nothing here runs on its own: no check at start-up, no background download. Each step is asked for: check (ask the
 // chosen source), prepare (download, unpack, verify, stage — instances may run), install (prepare if needed, then
@@ -48,6 +49,23 @@ type Options struct {
 	AutoMASVersion string
 	// Progress, when set, is told about each step.
 	Progress func(Progress)
+	// Source, when not "", is the update source of this run instead of the saved setting (SourceGitHub or
+	// SourceMirrorChyan; `modavd update --source`). Never saved.
+	Source string
+	// CDK, when not nil, is the MirrorChyan CDK of this run instead of the saved one, "" for none (`modavd update
+	// --cdk-dpapi`, already checked by CallerCDK). Never saved, logged or reported.
+	CDK *string
+}
+
+// Fields is p for a log line (logx.LogFields): {"progress":{"stage","percent","done_bytes","total_bytes"}}, the
+// message being the line's own msg.
+func (p Progress) Fields() logx.Fields {
+	return logx.Fields{"progress": struct {
+		Stage   string  `json:"stage"`
+		Percent float64 `json:"percent"`
+		Done    int64   `json:"done_bytes"`
+		Total   int64   `json:"total_bytes"`
+	}{p.Stage, p.Percent, p.Done, p.Total}}
 }
 
 // Updater updates one root.
@@ -85,9 +103,25 @@ func (u *Updater) progress(stage, msg string, percent float64, done, total int64
 	}
 }
 
+// step logs a new stage, with its progress as fields (one line with a progress object in `modavd update --json`).
 func (u *Updater) step(stage, msg string) {
-	u.Log.Infof("%s", msg)
-	u.progress(stage, msg, -1, 0, 0)
+	p := Progress{Stage: stage, Message: msg, Percent: -1}
+	u.Log.LogFields(logx.Info, msg, p.Fields())
+	if u.Opt.Progress != nil {
+		u.Opt.Progress(p)
+	}
+}
+
+// settings are the saved settings with this run's Source and CDK on top.
+func (u *Updater) settings() Settings {
+	s := LoadSettings()
+	if u.Opt.Source != "" {
+		s.Source = u.Opt.Source
+	}
+	if u.Opt.CDK != nil {
+		s.cdk = *u.Opt.CDK
+	}
+	return s
 }
 
 // Status is the result of every update command (`modavd update --json`, the manager's settings). All fields are
@@ -98,8 +132,8 @@ type Status struct {
 	NotUpdatableReason string   `json:"not_updatable_reason"`
 	CurrentVersion     string   `json:"current_version"` // vX.Y.Z, "" when unknown
 	CurrentBuild       string   `json:"current_build"`   // mas-N, "" when unknown
-	Source             string   `json:"source"`          // the setting: github / mirrorchyan
-	CDKSet             bool     `json:"cdk_set"`         // a MirrorChyan CDK is set (never the CDK itself)
+	Source             string   `json:"source"`          // in effect: --source, else the setting (github / mirrorchyan)
+	CDKSet             bool     `json:"cdk_set"`         // a MirrorChyan CDK is in effect (--cdk-dpapi or saved; never the CDK)
 	Checked            bool     `json:"checked"`         // a source was asked and answered
 	CheckError         string   `json:"check_error"`
 	LatestVersion      string   `json:"latest_version"` // vX.Y.Z of the latest release, "" when not asked
@@ -132,7 +166,7 @@ func (u *Updater) notUpdatable() string {
 
 // status fills what needs no network.
 func (u *Updater) status() *Status {
-	set := LoadSettings()
+	set := u.settings()
 	st := &Status{Root: u.Root.Dir, Source: set.Source, CDKSet: set.HasCDK(), Notices: []string{}}
 	st.NotUpdatableReason = u.notUpdatable()
 	st.Updatable = st.NotUpdatableReason == ""
@@ -326,7 +360,7 @@ func (u *Updater) prepare(ctx context.Context, st *Status) error {
 // pick is AUTO-MAS _pick_package: the release to download, nil when nothing is newer. MirrorChyan with the CDK when
 // that is the choice (an incremental package when the root's manifest allows), GitHub otherwise or as the fallback.
 func (u *Updater) pick(ctx context.Context, st *Status) (*release, error) {
-	set := LoadSettings()
+	set := u.settings()
 	local, haveLocal := LocalVersion(u.Root)
 	newer := func(r *release) bool { return !haveLocal || local.Less(r.version) }
 	if set.Source == SourceMirrorChyan && set.HasCDK() {

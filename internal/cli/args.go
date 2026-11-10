@@ -63,6 +63,17 @@ func splitFlag(a string) (name, value string, hasValue bool) {
 	return strings.Cut(a, "=")
 }
 
+// secretFlags are the flags whose value no message may quote (update --cdk-dpapi).
+var secretFlags = map[string]bool{"cdk-dpapi": true}
+
+// shownFlag is a for an error message: "--cdk-dpapi=…" without its value.
+func shownFlag(a string) string {
+	if name, _, has := splitFlag(a); has && secretFlags[name] {
+		return "--" + name + "=…"
+	}
+	return a
+}
+
 func isGlobalName(name string) bool {
 	switch name {
 	case "root", "json", "quiet", "verbose", "help", "h":
@@ -109,7 +120,7 @@ func parseStrict(args []string) (*invocation, error) {
 			return inv, err
 		}
 		if !ok {
-			return inv, errs.Newf(errs.Usage, "未知选项 %s（命令名前面只能放 --root / --json / --quiet / --verbose）", args[k]).
+			return inv, errs.Newf(errs.Usage, "未知选项 %s（命令名前面只能放 --root / --json / --quiet / --verbose）", shownFlag(args[k])).
 				WithAdvice(helpAdvice)
 		}
 	}
@@ -215,7 +226,7 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 	name, value, has := splitFlag(args[*k])
 	spec := inv.cmd.spec(name)
 	if spec == nil {
-		return errs.Newf(errs.Usage, "命令 %s 没有选项 %s", inv.cmd.name, args[*k]).WithAdvice(inv.cmd.usageAdvice())
+		return errs.Newf(errs.Usage, "命令 %s 没有选项 %s", inv.cmd.name, shownFlag(args[*k])).WithAdvice(inv.cmd.usageAdvice())
 	}
 	switch spec.kind {
 	case kindBool:
@@ -244,6 +255,9 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 		}
 	}
 	if err := inv.fs.Set(name, value); err != nil {
+		if secretFlags[name] {
+			value = "…"
+		}
 		return errs.Newf(errs.Usage, "选项 --%s 的值不对：「%s」", name, value).WithAdvice(inv.cmd.usageAdvice())
 	}
 	*k++

@@ -814,7 +814,8 @@ const helpTail = `
 全局选项（写在命令前后都行；adb、shell 要写在命令本身前面）：
   --root <目录>  ModAVD 根目录；不给就用环境变量 MODAVD_ROOT，再不行用 modavd.exe 所在目录或它的上一级
   --json         stdout 只输出一行 JSON：{"ok":true,"data":…} 或 {"ok":false,"error":{"code","message","advice"}}；
-                 日志以每行一个 JSON 对象写到 stderr
+                 日志以每行一个 JSON 对象写到 stderr（{"time","level","msg"}，可能多出字段，
+                 比如 update 的进度行带 "progress"）
   --quiet        只输出警告和错误日志
   --verbose      输出调试日志和错误原因
 

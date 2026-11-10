@@ -87,6 +87,51 @@ func LoadSettings() Settings {
 	return s
 }
 
+// checkCDK is cdk trimmed, or invalid_argument when it cannot be a MirrorChyan CDK. The error never quotes it.
+func checkCDK(cdk string) (string, error) {
+	v := strings.TrimSpace(cdk)
+	if len(v) > 256 || strings.ContainsAny(v, "\r\n\t &?#=") {
+		return "", errs.New(errs.InvalidArgument, "CDK 的格式不对")
+	}
+	return v, nil
+}
+
+// CheckSource is source when it is SourceGitHub or SourceMirrorChyan, else invalid_argument.
+func CheckSource(source string) (string, error) {
+	switch source {
+	case SourceGitHub, SourceMirrorChyan:
+		return source, nil
+	}
+	return "", errs.Newf(errs.InvalidArgument, "更新源只能是 %s 或 %s，收到「%s」", SourceGitHub, SourceMirrorChyan, source)
+}
+
+// CallerCDK is the MirrorChyan CDK a caller passed for one run (`modavd update --cdk-dpapi`): b64 is the base64 of
+// a Windows DPAPI blob of the UTF-8 CDK, protected by the caller without entropy (CryptProtectData; user or machine
+// scope, the blob says which). "" is no CDK. A blob that is not base64, does not decrypt or is not a CDK is
+// invalid_argument; other platforms are unsupported. Neither the blob nor the CDK ever goes into an error.
+func CallerCDK(b64 string) (string, error) {
+	if !root.CurrentPlatform().Windows() {
+		return "", errs.New(errs.Unsupported, "--cdk-dpapi 只在 Windows 上可用")
+	}
+	if b64 == "" {
+		return "", nil
+	}
+	blob, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	if err != nil || len(blob) == 0 {
+		return "", errs.New(errs.InvalidArgument, "--cdk-dpapi 不是 base64")
+	}
+	plain, err := host.Unprotect(blob, nil)
+	if err != nil {
+		return "", errs.New(errs.InvalidArgument, "--cdk-dpapi 解不开（要用当前用户或本机的 DPAPI 加密，不带 entropy）")
+	}
+	v, err := checkCDK(string(plain))
+	clear(plain)
+	if err != nil {
+		return "", errs.New(errs.InvalidArgument, "--cdk-dpapi 解出来的 CDK 格式不对")
+	}
+	return v, nil
+}
+
 // SaveSettings changes the source (when not "") and the CDK (when cdk is not nil; "" clears it).
 func SaveSettings(source string, cdk *string) (Settings, error) {
 	s := LoadSettings()
@@ -101,9 +146,9 @@ func SaveSettings(source string, cdk *string) (Settings, error) {
 		return s, errs.Newf(errs.InvalidArgument, "更新源只能是 %s 或 %s，收到「%s」", SourceGitHub, SourceMirrorChyan, source)
 	}
 	if cdk != nil {
-		v := strings.TrimSpace(*cdk)
-		if len(v) > 256 || strings.ContainsAny(v, "\r\n\t &?#=") {
-			return s, errs.New(errs.InvalidArgument, "CDK 的格式不对")
+		v, err := checkCDK(*cdk)
+		if err != nil {
+			return s, err
 		}
 		s.cdk = v
 	}
