@@ -44,8 +44,17 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "invalid tag: $env:TAG" }
-          git merge-base --is-ancestor $env:SHA origin/main
-          if ($LASTEXITCODE -ne 0) { throw 'tag is not on origin/main' }
+          # Full ref names: a tag called origin/main would win over the remote branch.
+          # On main, or on any release/* branch.
+          git merge-base --is-ancestor $env:SHA refs/remotes/origin/main
+          $onBranch = ($LASTEXITCODE -eq 0)
+          if (-not $onBranch) {
+            foreach ($ref in @(git for-each-ref --format='%(refname)' refs/remotes/origin/release/)) {
+              git merge-base --is-ancestor $env:SHA $ref
+              if ($LASTEXITCODE -eq 0) { $onBranch = $true; break }
+            }
+          }
+          if (-not $onBranch) { throw 'tag is not on origin/main or any origin/release/* branch' }
       - name: build and verify
         shell: pwsh
         env:
