@@ -1,0 +1,3 @@
+86de0a142ec23f4be5cf21d3798611f8ae6c66c1911e8a97709b08ba5e8a536a  ModAVD.exe
+5f0c06ff1fbad88a304396d87a0de63b04b0a22acc662ac01397b23145e2cd8e  ModAVDManager-0.7.0-win-x64.zip
+ac67e159f850aca647a61eb21c999fadecb56d6221102b36b4ebbf4e5024f49c  tools/modavd.exe
