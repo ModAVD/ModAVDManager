@@ -563,8 +563,22 @@ func idlepollCap(cores, spare int) int {
 	return max(0, min(cores, spare))
 }
 
-// setupIdlepoll starts the watcher with at most limit busy loops per burst.
+// guestPollsItself: the guest booted with the _CST table of syncIOQemuArgs and registered acpi_idle (driver is the
+// content of /sys/devices/system/cpu/cpuidle/current_driver, "none" without the table). Its menu governor then
+// busy-waits on the CPU whose task waits for I/O, for as long as that pays.
+func guestPollsItself(driver string) bool {
+	return strings.TrimSpace(driver) == "acpi_idle"
+}
+
+// setupIdlepoll starts the watcher with at most limit busy loops per burst, unless the guest busy-waits by itself:
+// the loops then add nothing and keep every vCPU busy for the whole burst. 11-10, Arknights resource download on a
+// 6-vCPU instance with the table: 10.4-11.8 MiB/s and 6.0 host cores for qemu with the loops, 11.3-12.1 MiB/s and
+// 3.8 cores without.
 func (m *Manager) setupIdlepoll(ctx context.Context, i int, limit int) {
+	if guestPollsItself(m.shell(ctx, i, "cat /sys/devices/system/cpu/cpuidle/current_driver", 0).Out) {
+		m.Log.Infof("实例 %d 密集读写加速: 客体等读写时自己忙等（acpi_idle），不起忙等守护", i)
+		return
+	}
 	remote, ok := m.pushGuestScript(ctx, i, guest.IdlePoll)
 	if !ok {
 		return

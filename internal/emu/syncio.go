@@ -26,7 +26,9 @@ import (
 //
 // Measured 11-10 on a 6-core test instance (two writers, 7 KB + fsync each, the Arknights download pattern):
 // 15-16 MB/s without, 19 with the first, 19-22 with the second, 33-36 with both; single-threaded 4 KiB + fsync
-// 584-638 us -> 319 us. An idle guest spent 0.1 s of 240 CPU-seconds busy-waiting.
+// 584-638 us -> 319 us. An idle guest spent 0.1 s of 240 CPU-seconds busy-waiting. The Arknights resource download
+// itself, three alternating 150 s windows each: 6.9-7.8 -> 10.4-11.8 MiB/s. With the table the busy loops of
+// mas-idlepoll.sh are not started any more (setupIdlepoll).
 //
 // Windows only: the other hosts use another accelerator and were not measured.
 const (

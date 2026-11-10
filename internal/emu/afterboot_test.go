@@ -76,6 +76,20 @@ func TestIdlepollReport(t *testing.T) {
 	}
 }
 
+func TestGuestPollsItself(t *testing.T) {
+	// what `cat /sys/devices/system/cpu/cpuidle/current_driver` prints: acpi_idle with the _CST table, none without
+	for driver, want := range map[string]bool{
+		"acpi_idle\n": true, "acpi_idle\r\n": true, " acpi_idle ": true,
+		"none\n": false, "": false, "haltpoll\n": false, "intel_idle\n": false,
+		"cat: /sys/devices/system/cpu/cpuidle/current_driver: No such file or directory\n": false,
+		"acpi_idle2\n": false,
+	} {
+		if got := guestPollsItself(driver); got != want {
+			t.Errorf("guestPollsItself(%q) = %v, want %v", driver, got, want)
+		}
+	}
+}
+
 func TestParseWriteback(t *testing.T) {
 	if e, w, ok := parseWriteback("200\r\n100\r\n"); !ok || e != 200 || w != 100 {
 		t.Errorf("good: %d %d %v", e, w, ok)

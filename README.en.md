@@ -180,7 +180,11 @@ On Apple Silicon macOS, downloads and imports use Android 15 Google Play `arm64-
   - The group with the largest free share (free logical processors ÷ the group's logical processors) is chosen, the bigger L3 on a tie; a single instance gets the big-L3 group.
   - When no group has room for the instance's vCPUs, it is not pinned.
   - "Free" means after the vCPUs of every qemu on the machine, including those of other root folders and those started by AUTO-MAS. Those processes are only read, never changed.
-- While the guest does many small disk writes (downloads, for example), it runs one busy loop per vCPU (`mas-idlepoll.sh`) so the vCPUs do not halt, which makes downloads faster.
+- Many small disk writes (downloads, for example) are made faster on Windows by two extra QEMU arguments at boot. What "written" means stays the same: a request completes once the data is in the host file.
+  - `-global virtio-blk-pci.ioeventfd=off`: the vCPU thread handles disk requests itself, with fewer thread hand-offs.
+  - `-acpitable`: the guest gets an idle-state table (`modavd-cst.aml` in the instance folder, generated for its CPU count). While it waits for a disk request it busy-waits briefly (200 µs at most) before halting, and halts as usual otherwise.
+  - Boot with the environment variable `MODAVD_SYNC_IO=off` to leave both arguments out.
+- Without the table (`MODAVD_SYNC_IO=off`, an instance whose CPU count cannot be read, or a table path that does not fit on QEMU's command line), the earlier method is used: while the guest does many small disk writes it runs one busy loop per vCPU (`mas-idlepoll.sh`) so the vCPUs do not halt.
   - The number of loops never exceeds what the host has left: logical processors minus the vCPUs of every qemu (this instance's included; counted within its group when pinned).
   - So on machines with fewer than twice as many logical processors as the instance has vCPUs, even a single instance gets fewer loops: a default 6-core instance gets 2 on an 8-thread machine and none on 6 threads or fewer, and downloads are slower than with all loops (measured on a 7950X3D, 1–2 loops do about as well as none).
   - This is a deliberate trade-off: it leaves processors for qemu's own threads, Windows and other programs.
