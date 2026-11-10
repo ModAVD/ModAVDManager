@@ -110,10 +110,6 @@ func containsMirror(list []Mirror, m Mirror) bool {
 	return false
 }
 
-func (f *fetcher) licenseFrom(ctx context.Context, m Mirror) (string, error) {
-	return f.licenseFromSpec(ctx, m, licenseManifest, licenseID, "")
-}
-
 func (f *fetcher) licenseFromSpec(ctx context.Context, m Mirror, manifest, id, digest string) (string, error) {
 	body, err := f.getBytes(ctx, m.Base+manifest, "取许可协议清单 "+manifest)
 	if err != nil {

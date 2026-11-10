@@ -13,8 +13,8 @@ import (
 	"modavd/internal/testutil"
 )
 
-// TestFetchUnsupportedPlatform: linux has no catalogue; the code (not just the text) says so, before
-// anything is read or written.
+// TestFetchUnsupportedPlatform: linux has no catalogue; builds without native macOS component support have no
+// darwin catalogue either. The code (not just the text) says so, before anything is read or written.
 func TestFetchUnsupportedPlatform(t *testing.T) {
 	old := fetchGOOS
 	t.Cleanup(func() { fetchGOOS = old })
@@ -23,7 +23,11 @@ func TestFetchUnsupportedPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, goos := range []string{"linux"} {
+	gooses := []string{"linux"}
+	if !nativeDarwinComponents {
+		gooses = append(gooses, "darwin")
+	}
+	for _, goos := range gooses {
 		fetchGOOS = goos
 		_, err := Fetch(context.Background(), r, Options{AcceptLicense: true, MirrorURLs: []string{"http://127.0.0.1:1/"}})
 		if errs.CodeOf(err) != errs.Unsupported || errs.ExitCode(err) != 4 {
@@ -32,6 +36,22 @@ func TestFetchUnsupportedPlatform(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("wrote %v", entries)
+	}
+}
+
+func TestLicenseUnsupportedPlatform(t *testing.T) {
+	old := fetchGOOS
+	t.Cleanup(func() { fetchGOOS = old })
+	gooses := []string{"linux"}
+	if !nativeDarwinComponents {
+		gooses = append(gooses, "darwin")
+	}
+	for _, goos := range gooses {
+		fetchGOOS = goos
+		_, _, err := License(context.Background(), SourceSettings{MirrorURLs: []string{"http://127.0.0.1:1/"}})
+		if errs.CodeOf(err) != errs.Unsupported || errs.ExitCode(err) != 4 {
+			t.Errorf("%s: %v (%s)", goos, err, errs.CodeOf(err))
+		}
 	}
 }
 
