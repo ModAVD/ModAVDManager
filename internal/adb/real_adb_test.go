@@ -19,10 +19,17 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
 )
+
+// tableListening: the system listener table has port (never a connection: an emulator's adb port is one of them).
+func tableListening(port int) bool {
+	_, up, _ := host.ListenerPID(port)
+	return up
+}
 
 // Private test ports for the real adb test. Never the production servers (5037, 20049, 20050), the dev launcher's
 // 20089, or an instance port.
@@ -88,7 +95,7 @@ func killServer(t *testing.T, adbExe string, port int) {
 	t.Logf("adb -P %d kill-server: err=%v out=%q", port, err, strings.TrimSpace(string(out)))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if up, _ := listening(port); !up {
+		if !tableListening(port) {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -129,7 +136,7 @@ func TestRealAdb(t *testing.T) {
 	}
 	r, adbExe := realRoot(t)
 	for _, p := range []int{testServerPort, testScriptPort} {
-		up, err := listening(p)
+		_, up, err := host.ListenerPID(p)
 		if err != nil {
 			t.Fatalf("listener table: %v", err)
 		}
@@ -301,7 +308,7 @@ func TestRealAdb(t *testing.T) {
 		if elapsed > 8*time.Second {
 			t.Errorf("adb with a server holding its pipe took %v", elapsed)
 		}
-		if up, _ := listening(testScriptPort); !up {
+		if !tableListening(testScriptPort) {
 			t.Errorf("script port not listening after start-server")
 		}
 	})
@@ -309,7 +316,7 @@ func TestRealAdb(t *testing.T) {
 	t.Run("prepare for close starts the server", func(t *testing.T) {
 		// Server down, no qemu of ours on the adb port: the server is started, nothing is registered.
 		const console = 20080
-		if up, _ := listening(console + 1); up {
+		if tableListening(console + 1) {
 			t.Skipf("端口 %d 有人在监听，跳过", console+1)
 		}
 		killServer(t, adbExe, testServerPort)
@@ -317,7 +324,7 @@ func TestRealAdb(t *testing.T) {
 		if want := fmt.Sprintf("adb 端口 %d 上不是这台实例的模拟器，不替它登记", console+1); reason != want {
 			t.Errorf("PrepareForClose = %q, want %q", reason, want)
 		}
-		if up, _ := listening(testServerPort); !up {
+		if !tableListening(testServerPort) {
 			t.Errorf("PrepareForClose did not start the server")
 		}
 	})

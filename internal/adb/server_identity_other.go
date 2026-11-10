@@ -21,7 +21,7 @@ func serverBelongsTo(_ *root.Root, _ int, _ uint32, name string) bool {
 // Keep Windows' original startup wait: it observes the listening state after
 // spawning adb. Darwin additionally verifies who acquired the port.
 func (c *Client) startedServerListening(_ serverKind, port int) (bool, error) {
-	return listening(port)
+	return c.listening(port)
 }
 
 func registrationStillOwned(*Client, int, host.Process) bool { return true }

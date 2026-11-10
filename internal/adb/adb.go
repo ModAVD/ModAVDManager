@@ -231,15 +231,27 @@ func (c *Client) portConflict(k serverKind, port int, pid uint32, name string) *
 		k.label, port, name, pid, c.Root.MetadataPath(), k.key, k.otherKey)
 }
 
-// listener reports whether somebody listens on port, with its PID and process name ("" when unreadable). Reads the
-// system table only; connecting to an emulator's adb port would disturb it.
-func listener(port int) (up bool, pid uint32, name string, err error) {
-	pid, up, err = host.ListenerPID(port)
+// listener reports whether somebody listens on an adb server port, with its PID and process name ("" when unreadable
+// or unknown). The system table first. When the table has nothing on port but an adb server there answers host:version
+// (adbAnswers, Windows), it listens all the same, owner unknown: a user's Windows 10.0.26300 showed nothing on the
+// private server's port for half an hour while that server served the emulator. Both that and a table row in a state
+// other than LISTEN are said once per root and port.
+func (c *Client) listener(port int) (up bool, pid uint32, name string, err error) {
+	pid, up, err = listenerPID(port)
 	if err != nil {
 		return false, 0, "", errs.Wrap(errs.Internal, err, "读不出系统的 TCP 监听表: "+err.Error())
 	}
 	if !up {
-		return false, 0, "", nil
+		if !adbAnswers(port) {
+			return false, 0, "", nil
+		}
+		c.noteListener(port, "missing", fmt.Sprintf(
+			"系统的 TCP 监听表里看不到端口 %d，但那里有 adb server 应答 host:version，按在监听处理", port))
+		return true, 0, "", nil
+	}
+	if state, odd := oddListenerState(port); odd {
+		c.noteListener(port, "state", fmt.Sprintf(
+			"系统的 TCP 监听表里端口 %d 的状态值是 %d（不是 LISTEN 的 2），照样算在监听", port, state))
 	}
 	if pid != 0 {
 		name = host.ProcessName(pid)
@@ -247,15 +259,31 @@ func listener(port int) (up bool, pid uint32, name string, err error) {
 	return true, pid, name, nil
 }
 
-func listening(port int) (bool, error) {
-	up, _, _, err := listener(port)
+func (c *Client) listening(port int) (bool, error) {
+	up, _, _, err := c.listener(port)
 	return up, err
+}
+
+// listenerPID and oddListenerState are host's (variables for the tests).
+var (
+	listenerPID      = host.ListenerPID
+	oddListenerState = host.OddListenerState
+)
+
+// listenerNotes: what noteListener has said, by root, port and kind.
+var listenerNotes sync.Map
+
+// noteListener warns msg once per process for this root, port and kind.
+func (c *Client) noteListener(port int, kind, msg string) {
+	if _, said := listenerNotes.LoadOrStore(serverKey(c.Root, port)+"|"+kind, true); !said {
+		c.Log.Warnf("%s", msg)
+	}
 }
 
 // serverListening also verifies the native server's ownership. A busy port alone
 // must never authorize an adb client or an emulator registration.
 func (c *Client) serverListening(k serverKind, port int) (bool, error) {
-	up, pid, name, err := listener(port)
+	up, pid, name, err := c.listener(port)
 	if err != nil || !up {
 		return up, err
 	}

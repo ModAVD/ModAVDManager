@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -50,8 +51,14 @@ func tcpTable(af uintptr) ([]byte, error) {
 	return nil, syscall.Errno(errorInsufficientBuffer)
 }
 
-// parseTCPTable reads the listening rows of a MIB_TCPTABLE_OWNER_PID / MIB_TCP6TABLE_OWNER_PID (dwNumEntries, then
-// the rows from offset 4). The port is in network byte order in the low 16 bits of dwLocalPort.
+// parseTCPTable reads the rows of a MIB_TCPTABLE_OWNER_PID / MIB_TCP6TABLE_OWNER_PID (dwNumEntries, then the rows
+// from offset 4). The port is in network byte order in the low 16 bits of dwLocalPort.
+//
+// Every row counts: the class asked for, TCP_TABLE_OWNER_PID_LISTENER, holds listening endpoints only. A row whose
+// dwState is not MIB_TCP_STATE_LISTEN is kept all the same, and its state remembered (OddListenerState). This used to
+// drop such rows. On a user's Windows 10.0.26300 the private adb server listened on its port for half an hour, the
+// emulator registered with it, and modavd kept seeing nothing there and starting servers; collect-info, which reads
+// the same table without that check, listed the server.
 func parseTCPTable(buf []byte, rowSize, stateOff, portOff, pidOff int) []Listener {
 	if len(buf) < 4 {
 		return nil
@@ -63,16 +70,30 @@ func parseTCPTable(buf []byte, rowSize, stateOff, portOff, pidOff int) []Listene
 		if row+rowSize > len(buf) {
 			break
 		}
-		if binary.LittleEndian.Uint32(buf[row+stateOff:]) != mibTCPStateListen {
-			continue
-		}
 		v := binary.LittleEndian.Uint32(buf[row+portOff:])
-		out = append(out, Listener{
+		l := Listener{
 			Port: int(v&0xff)<<8 | int(v>>8&0xff),
 			PID:  binary.LittleEndian.Uint32(buf[row+pidOff:]),
-		})
+		}
+		if state := binary.LittleEndian.Uint32(buf[row+stateOff:]); state != mibTCPStateListen {
+			oddStates.Store(l.Port, state)
+		}
+		out = append(out, l)
 	}
 	return out
+}
+
+// oddStates: port -> the last dwState other than MIB_TCP_STATE_LISTEN a listener table row of that port had.
+var oddStates sync.Map
+
+// OddListenerState is the dwState other than MIB_TCP_STATE_LISTEN (2) the system listener table has shown for port
+// since this process started, if any (the row counted as listening all the same, see parseTCPTable).
+func OddListenerState(port int) (uint32, bool) {
+	v, ok := oddStates.Load(port)
+	if !ok {
+		return 0, false
+	}
+	return v.(uint32), true
 }
 
 // Listeners is every LISTEN socket, TCP over IPv4 and IPv6 (GetExtendedTcpTable TCP_TABLE_OWNER_PID_LISTENER), like
