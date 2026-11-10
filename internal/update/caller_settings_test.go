@@ -29,8 +29,10 @@ func protectedCDK(t *testing.T, cdk string) string {
 }
 
 func TestCallerCDK(t *testing.T) {
-	if got, err := CallerCDK(""); err != nil || got != "" {
-		t.Fatalf(`"": %q %v`, got, err)
+	for _, empty := range []string{"", "   ", "\t\r\n"} {
+		if got, err := CallerCDK(empty); err != nil || got != "" {
+			t.Fatalf(`%q: %q %v`, empty, got, err)
+		}
 	}
 	if got, err := CallerCDK(protectedCDK(t, "  caller-cdk-42\r\n")); err != nil || got != "caller-cdk-42" {
 		t.Fatalf("valid: %q %v", got, err)

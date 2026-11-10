@@ -86,7 +86,7 @@ var (
 	optUpdateSource  = flagSpec{"source", kindString, "github|mirrorchyan", "这次用的更新源，盖过「设置」里的，不保存；recover 不用"}
 	optCDKDPAPI      = flagSpec{"cdk-dpapi", kindString, "BASE64",
 		"这次用的 Mirror 酱 CDK，不保存：调用方用 Windows DPAPI（CryptProtectData，不带 entropy）加密 UTF-8 的 CDK 后的 base64；" +
-			"空串表示这次不用 CDK；只在 Windows 上可用，recover 不用"}
+			"空串（或只有空白）表示这次不用 CDK；只在 Windows 上可用，recover 不用"}
 	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
@@ -367,7 +367,8 @@ func init() {
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
 				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
 				"命令等它退出再换上新版，然后重新打开管理器。" +
-				"--json 时每个进度（换阶段、下载中约 2 秒一次）在 stderr 的日志行里多一个 progress 对象：" +
+				"--json 时每个进度在 stderr 的日志行里多一个 progress 对象（checking、extracting、verifying、installing 开始时各一行，percent 为 -1；" +
+				"downloading 第一行就带真实进度，之后约 2 秒一行，下完那行一定有）：" +
 				`{"stage":"checking|downloading|extracting|verifying|installing","percent":-1 或 0–100,"done_bytes":N,"total_bytes":N}。` +
 				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
 			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
@@ -1442,7 +1443,7 @@ func runUpdate(c *cmdCtx) (any, error) {
 	switch action {
 	case "status", "check", "prepare", "install", "recover":
 	default:
-		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.pos[0]).
+		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.shownPos(c.inv.pos[0])).
 			WithAdvice(findCommand("update").usageAdvice())
 	}
 	afterPID, reopen, reopenArgs := c.inv.intOpt("after-pid"), c.inv.strOpt("reopen"), c.inv.strsOpt("reopen-arg")

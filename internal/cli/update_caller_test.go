@@ -68,6 +68,14 @@ func TestUpdateCallerFlagErrors(t *testing.T) {
 		{[]string{"update", "prepare", "--cdk-dpapi", secret}, errs.InvalidArgument}, // base64, but not DPAPI
 		{[]string{"update", "install", "--cdk-dpapi=" + dpapiArg(t, "bad&cdk")}, errs.InvalidArgument},
 		{[]string{"list", "--cdk-dpapi=" + secret}, errs.Usage},
+		// malformed lines that used to leave the value as an extra positional argument, quoted back
+		{[]string{"update", "install", "--source", "--cdk-dpapi", secret}, errs.Usage},
+		{[]string{"update", "status", "--automas-version", "--cdk-dpapi", secret}, errs.Usage},
+		{[]string{"update", "install", "--source", "--cdk-dpapi=" + secret}, errs.Usage},
+		{[]string{"update", "install", "--after-pid", "--cdk-dpapi=" + secret}, errs.Usage},
+		{[]string{"update", "install", "--cdk-dpapi=", secret}, errs.Usage},
+		{[]string{"update", "status", "--cdk-dpapi=" + secret, "xx"}, errs.Usage},
+		{[]string{"update", "--cdk-dpapi=", secret}, errs.Usage},
 		{[]string{"--cdk-dpapi=" + secret, "update"}, errs.Usage},
 	} {
 		h, opts, resolved := updateHarness(t)
@@ -85,7 +93,7 @@ func TestUpdateCallerFlagErrors(t *testing.T) {
 			if v, ok := strings.CutPrefix(a, "--cdk-dpapi="); ok {
 				a = v
 			}
-			if len(a) > 12 && (strings.Contains(res.stdout, a) || strings.Contains(res.stderr, a)) {
+			if len(a) > 12 && !strings.HasPrefix(a, "--") && (strings.Contains(res.stdout, a) || strings.Contains(res.stderr, a)) {
 				t.Errorf("%v: the value is echoed: %s %s", c.args, res.stdout, res.stderr)
 			}
 		}
@@ -114,13 +122,24 @@ func TestUpdateCallerSettingsPassed(t *testing.T) {
 		}
 	}
 
-	// "" is no CDK this run; no flag is no override
-	h, opts, _ = updateHarness(t)
-	if res := h.run(t, nil, "update", "install", "--cdk-dpapi", "", "--json"); res.code != 0 {
-		t.Fatalf("exit %d: %s", res.code, res.stdout)
+	// "" (or only blanks) is no CDK this run; no flag is no override
+	for _, empty := range []string{"", "   ", "\t\r\n"} {
+		h, opts, _ = updateHarness(t)
+		if res := h.run(t, nil, "update", "install", "--cdk-dpapi", empty, "--json"); res.code != 0 {
+			t.Fatalf("%q: exit %d: %s", empty, res.code, res.stdout)
+		}
+		if o := (*opts)[0]; o.CDK == nil || *o.CDK != "" || o.Source != "" {
+			t.Fatalf(`--cdk-dpapi %q: %+v`, empty, o)
+		}
 	}
-	if o := (*opts)[0]; o.CDK == nil || *o.CDK != "" || o.Source != "" {
-		t.Fatalf(`--cdk-dpapi "": %+v`, o)
+	// a repeatable flag still forwards a global or own option name verbatim (the manager's --reopen-arg --root)
+	h, _, _ = updateHarness(t)
+	var reopened []string
+	h.reopen = func(exe string, args []string) error { reopened = args; return nil }
+	if res := h.run(t, nil, "update", "install", "--reopen", `C:\M\ModAVD.exe`, "--reopen-arg", "--root",
+		"--reopen-arg", `C:\M`, "--reopen-arg", "--source", "--json"); res.code != 0 ||
+		strings.Join(reopened, " ") != `--root C:\M --source` {
+		t.Fatalf("--reopen-arg --root: exit %d: %s %v", res.code, res.stdout, reopened)
 	}
 	h, opts, _ = updateHarness(t)
 	if res := h.run(t, nil, "update", "install", "--source", "github", "--json"); res.code != 0 {

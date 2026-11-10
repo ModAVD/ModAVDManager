@@ -1,9 +1,8 @@
 // Package update updates the ModAVD package of a root (emulator, components, scripts and this manager) from GitHub
 // or MirrorChyan, the way AUTO-MAS's own updater does and on the same files under <root>\.update (state.go), so the
-// two can take over each other's half-done work while both exist. AUTO-MAS keeps its updater for two more major
-// versions and then calls `modavd update` instead; until then the manager only shows the settings (source, CDK) and
-// the state, and only the command line installs. A caller with settings of its own passes them for one run
-// (Options.Source / CDK: `modavd update --source`, `--cdk-dpapi`); they are never saved.
+// two can take over each other's half-done work. Callers (AUTO-MAS, the manager's 更新 through the command line,
+// update/handoff.go) run it as `modavd update`; one with settings of its own passes them for one run
+// (Options.Source / CDK: `modavd update --source`, `--cdk-dpapi`), and they are never saved.
 //
 // Nothing here runs on its own: no check at start-up, no background download. Each step is asked for: check (ask the
 // chosen source), prepare (download, unpack, verify, stage — instances may run), install (prepare if needed, then

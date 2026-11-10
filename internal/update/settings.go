@@ -107,16 +107,17 @@ func CheckSource(source string) (string, error) {
 
 // CallerCDK is the MirrorChyan CDK a caller passed for one run (`modavd update --cdk-dpapi`): b64 is the base64 of
 // a Windows DPAPI blob of the UTF-8 CDK, protected by the caller without entropy (CryptProtectData; user or machine
-// scope, the blob says which). "" is no CDK. A blob that is not base64, does not decrypt or is not a CDK is
+// scope, the blob says which). "" (or only blanks) is no CDK. A blob that is not base64, does not decrypt or is not a CDK is
 // invalid_argument; other platforms are unsupported. Neither the blob nor the CDK ever goes into an error.
 func CallerCDK(b64 string) (string, error) {
 	if !root.CurrentPlatform().Windows() {
 		return "", errs.New(errs.Unsupported, "--cdk-dpapi 只在 Windows 上可用")
 	}
+	b64 = strings.TrimSpace(b64)
 	if b64 == "" {
 		return "", nil
 	}
-	blob, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	blob, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil || len(blob) == 0 {
 		return "", errs.New(errs.InvalidArgument, "--cdk-dpapi 不是 base64")
 	}

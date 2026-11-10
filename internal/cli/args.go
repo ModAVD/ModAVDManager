@@ -52,6 +52,17 @@ type invocation struct {
 	pos  []string      // positional arguments
 	rest []string      // passthrough commands: everything after <i>, verbatim
 	fs   *flag.FlagSet // the command's flags (nil without a command)
+	// secret: a secret flag (secretFlags) is somewhere on the line, so no message quotes a positional argument (a
+	// misplaced value would be the secret: `update install --cdk-dpapi= <B64>`).
+	secret bool
+}
+
+// shownPos is a positional argument for an error message: "…" when the line has a secret flag.
+func (inv *invocation) shownPos(s string) string {
+	if inv.secret {
+		return "…"
+	}
+	return s
 }
 
 func isFlag(a string) bool { return len(a) > 1 && a[0] == '-' && a != "--" }
@@ -113,6 +124,11 @@ func parseArgs(args []string) (*invocation, error) {
 
 func parseStrict(args []string) (*invocation, error) {
 	inv := &invocation{}
+	for _, a := range args {
+		if name, _, _ := splitFlag(a); isFlag(a) && secretFlags[name] {
+			inv.secret = true
+		}
+	}
 	k := 0
 	for k < len(args) && isFlag(args[k]) {
 		ok, err := inv.global(args, &k)
@@ -239,7 +255,11 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 		}
 	default:
 		if !has {
-			if *k+1 >= len(args) {
+			// The next argument is this command's own option (`--source --cdk-dpapi B64`): the value is missing,
+			// rather than that option being taken as the value and its own value left as a positional argument.
+			// Repeatable flags (--reopen-arg forwards any argument verbatim) and global names (--reopen-arg --root)
+			// still take it.
+			if *k+1 >= len(args) || spec.kind != kindStrings && inv.cmd.isOwnFlag(args[*k+1]) {
 				return errs.Newf(errs.Usage, "选项 --%s 后面缺少值", name).WithAdvice(inv.cmd.usageAdvice())
 			}
 			*k++
@@ -280,6 +300,15 @@ func (c *command) newFlagSet() *flag.FlagSet {
 		}
 	}
 	return fs
+}
+
+// isOwnFlag: a is one of c's options ("--name" or "--name=value").
+func (c *command) isOwnFlag(a string) bool {
+	if !isFlag(a) {
+		return false
+	}
+	name, _, _ := splitFlag(a)
+	return c.spec(name) != nil
 }
 
 func (c *command) spec(name string) *flagSpec {
@@ -348,6 +377,9 @@ func (inv *invocation) checkArgs() error {
 		return errs.New(errs.Usage, missing(what)).WithAdvice(c.usageAdvice())
 	}
 	if c.maxPos >= 0 && n > c.maxPos {
+		if inv.secret {
+			return errs.Newf(errs.Usage, "多余的参数（%d 个）", n-c.maxPos).WithAdvice(c.usageAdvice())
+		}
 		return errs.Newf(errs.Usage, "多余的参数：%s", strings.Join(inv.pos[c.maxPos:], " ")).WithAdvice(c.usageAdvice())
 	}
 	if c.restName != "" && len(inv.rest) == 0 {

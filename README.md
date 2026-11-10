@@ -273,10 +273,12 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
 - 调用方传这一次的设置（`status`、`check`、`prepare`、`install` 都可以带，`recover` 不带；只盖过「设置」里的，不保存，`status` 等结果里的 `source`、`cdk_set` 是这次生效的）：
   - `--source github|mirrorchyan`：这次用的更新源。
-  - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`）表示这次不用 CDK，「设置」里存了也不用。
+  - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`，或只有空白）表示这次不用 CDK，「设置」里存了也不用。
   - 密文和 CDK 都不进日志、错误、`.update\state.json` 和返回值。
 - 进度（`--json` 时）：每个进度事件在 stderr 上是一行日志，比平常多一个 `progress` 对象：`{"time":"…","level":"info","msg":"…","progress":{"stage":"downloading","percent":12.3,"done_bytes":123,"total_bytes":1000}}`。
-  - `stage` 是 `checking`（只有 `check` 有）、`downloading`、`extracting`、`verifying`、`installing`；换阶段时各一行（`percent` 为 -1、字节数为 0）；下载中约 2 秒一行，每次下载的第一行和下完那行一定有。
+  - `stage` 是 `checking`（只有 `check` 有）、`downloading`、`extracting`、`verifying`、`installing`。
+  - `checking`、`extracting`、`verifying`、`installing` 开始时各一行，`percent` 为 -1、字节数为 0。
+  - `downloading` 没有这样的一行：进入下载阶段的第一行就带真实的 `percent` 和字节数，之后约 2 秒一行，下完那行一定有。
   - `--quiet` 时不出（进度是 info 级）。不带 `--json` 时照旧是人看的文字。stdout 仍然只有最后一行结果。
 - 管理器「设置」里点「更新」：管理器先下载、核对、暂存好（这时实例照常用）；有别的程序在跑这个根目录的 modavd（比如 `modavd mcp`）或有实例正在新建，就一台都不关、提示先处理；再正常关掉所有在运行的实例，然后启动 `tools\modavd.exe update install --after-pid <管理器 pid> --reopen <管理器程序> [--reopen-arg 参数]...` 并退出。命令行等管理器退出、换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数重新打开管理器，新管理器打开时提示更新结果。换不上也照样重新打开，下载好的新版留着，下次不用重下。命令行的输出在 `logs\modavd-update.log`。`--after-pid`、`--reopen`、`--reopen-arg` 只和 `install` 一起用，是给管理器用的。
 - macOS 的更新设置和组件下载源分别保存在 `~/Library/Application Support/ModAVD/update-settings.json` 和 `components-settings.json`。CDK 使用 AES-GCM 加密，随机包装密钥留在当前用户的 Keychain；钥匙串锁定或未授权时保存失败，不会降级为明文存储。复制设置文件到其他用户或设备不会同时转移密钥。
