@@ -39,8 +39,10 @@ const adbServerStartTimeout = 20 * time.Second
 //     #32). Wi-Fi then comes from the emulator's own hostapd and slirp, where it falls back when netsim is unreachable;
 //     no Bluetooth, which the first boot turns off anyway. Uwb is on in the SDK defaults, only the image keeps it off.
 //
+// qemuExtra comes last, still inside the -qemu part: the manager's own QEMU arguments (syncIOQemuArgs).
+//
 // The window is not an instance option: it is decided at boot by whoever starts it.
-func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []string {
+func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuExtra ...string) []string {
 	args := []string{
 		"-avd", avdName,
 		"-no-snapshot",
@@ -75,7 +77,7 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []str
 	if root.CurrentPlatform().MirrorOS != "macos" {
 		args = append(args, "-device", "virtio-balloon-pci,free-page-reporting=on")
 	}
-	return args
+	return append(args, qemuExtra...)
 }
 
 // launchPlan is what prepareLaunch settled before emulator.exe is started.
@@ -156,7 +158,7 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	}
 
 	headless := !window
-	args := buildLaunchArgs(inst.Name, port, memoryMB, headless)
+	args := buildLaunchArgs(inst.Name, port, memoryMB, headless, m.syncIOQemuArgs(inst)...)
 	m.pruneLogs(i)
 	logPath, err := emulatorLogPath(m.Root.LogsDir(), inst.Name)
 	if err != nil {
