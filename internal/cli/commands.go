@@ -77,7 +77,7 @@ var (
 	optCancelCreate  = flagSpec{"cancel-create", kindBool, "", "允许打断新建中的初始化，之后用 create --resume N 重做"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
 	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
-	optCheckMB       = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
+	optCheckMB       = flagSpec{"memory", kindString, "M", "不再起作用，留着兼容以前的调用（开机前不查内存）"}
 	optNoBridge      = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
 	optAutoMAS       = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
 	optAfterPID      = flagSpec{"after-pid", kindInt, "PID", "管理器用：先等这个进程退出（最多 60 秒）再装，只和 install 一起用"}
@@ -224,9 +224,10 @@ func init() {
 		},
 		{
 			name: "check", args: "[--memory M]", summary: "开机前的电脑检查",
-			details: "路径、组件、模拟器版本、硬件加速、Vulkan、磁盘、内存。没通过也返回 0：看 ready（--json）或结论那一行。",
-			flags:   []flagSpec{optCheckMB},
-			run:     runCheck, human: humanOf(formatCheck),
+			details: "路径、组件、模拟器版本、硬件加速、Vulkan、磁盘。没通过也返回 0：看 ready（--json）或结论那一行。" +
+				"不查内存：页面文件会补上物理内存的不足，真分不到内存时 start 报 insufficient_memory（退出码 10）。",
+			flags: []flagSpec{optCheckMB},
+			run:   runCheck, human: humanOf(formatCheck),
 		},
 		{
 			name: "report-config", args: "[--no-clipboard]", summary: "复制电脑配置和实例里装的游戏",

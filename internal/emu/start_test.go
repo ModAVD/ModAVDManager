@@ -308,6 +308,10 @@ func TestWithSetupAdvice(t *testing.T) {
 	if got := withSetupAdvice(gone, advice); got != error(gone) || gone.Advice != "" {
 		t.Errorf("launch failed: %v", got)
 	}
+	oom := errs.New(errs.InsufficientMemory, "内存不足").WithAdvice("关程序")
+	if got := withSetupAdvice(oom, advice); got != error(oom) || oom.Advice != "关程序" {
+		t.Errorf("insufficient memory: %v", got)
+	}
 	if withSetupAdvice(nil, advice) != nil {
 		t.Error("nil error")
 	}

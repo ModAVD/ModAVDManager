@@ -159,23 +159,6 @@ func TestEmulatorItem(t *testing.T) {
 	}
 }
 
-func TestMemoryItem(t *testing.T) {
-	it := memoryItem(6144, 8000, nil)
-	if it.OK == nil || !*it.OK || it.Reason != "实例内存 6 GB，启动约需 7.5 GB，当前可用 7.8 GB" {
-		t.Fatalf("enough = %+v", it)
-	}
-	it = memoryItem(6144, 7679, nil)
-	if it.OK == nil || *it.OK || !strings.HasPrefix(it.Reason, "电脑可用内存不足：实例内存 6 GB") || it.Advice == "" {
-		t.Fatalf("short = %+v", it)
-	}
-	if it := memoryItem(6144, 7680, nil); !*it.OK {
-		t.Fatalf("exactly enough must pass: %+v", it)
-	}
-	if it := memoryItem(4096, 0, errors.New("x")); it.OK != nil || !it.Blocking {
-		t.Fatalf("unreadable = %+v", it)
-	}
-}
-
 func TestDiskItem(t *testing.T) {
 	it := diskItem(`E:\`, 8<<30, nil)
 	if it.OK == nil || !*it.OK || it.Reason != `实例所在盘 E:\ 剩余 8.0 GB` {
@@ -204,11 +187,11 @@ func TestFirstBlockingFailureAndPrecheckError(t *testing.T) {
 		{ID: "path", OK: checkOK(true), Blocking: true},
 		{ID: "acceleration", OK: nil, Blocking: true},       // not checkable: does not stop the boot
 		{ID: "vulkan", OK: checkOK(false), Blocking: false}, // only a warning
-		{ID: "memory", OK: checkOK(false), Blocking: true, Reason: "r", Advice: "a"},
-		{ID: "disk", OK: checkOK(false), Blocking: true},
+		{ID: "disk", OK: checkOK(false), Blocking: true, Reason: "r", Advice: "a"},
+		{ID: "ports", OK: checkOK(false), Blocking: true},
 	}
 	bad, failed := firstBlockingFailure(items)
-	if !failed || bad.ID != "memory" {
+	if !failed || bad.ID != "disk" {
 		t.Fatalf("first failure = %+v %v", bad, failed)
 	}
 	if _, failed := firstBlockingFailure(items[:3]); failed {
@@ -217,7 +200,7 @@ func TestFirstBlockingFailureAndPrecheckError(t *testing.T) {
 
 	err := precheckError(bad, func() error { return nil })
 	if errs.CodeOf(err) != errs.PrecheckFailed || err.Error() != "r。a" {
-		t.Fatalf("memory -> %v (%s)", err, errs.CodeOf(err))
+		t.Fatalf("disk -> %v (%s)", err, errs.CodeOf(err))
 	}
 	err = precheckError(CheckItem{ID: "emulator", Reason: "old"}, func() error { return nil })
 	if errs.CodeOf(err) != errs.NotReady {

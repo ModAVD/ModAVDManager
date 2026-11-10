@@ -154,6 +154,41 @@ func TestFileContains(t *testing.T) {
 	}
 }
 
+// TestEmulatorExitedError: an emulator that quit for lack of memory (each message it writes then) is
+// insufficient_memory with the advice and exit code 10; any other exit stays launch_failed.
+func TestEmulatorExitedError(t *testing.T) {
+	dir := testutil.TempDir(t)
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for k, line := range []string{
+		"ERROR: Insufficient RAM free for launching emulator.\nPlease free up memory (close other programs and files),\n",
+		"qemu-system-x86_64.exe: cannot set up guest memory 'android.ram': Cannot allocate memory\n",
+		"Failed to allocate memory: 1455\n",
+		"PANIC: not enough memory\n",
+	} {
+		path := write("oom"+strconv.Itoa(k)+".log", "INFO    | Android emulator version 36.1.9.0\n"+line)
+		err := emulatorExitedError(3, "1", path)
+		e := errs.As(err)
+		if e.Code != errs.InsufficientMemory || errs.ExitCode(err) != 10 || !strings.Contains(e.Message, "电脑内存不足") ||
+			!strings.Contains(e.Message, "emulator.exe 退出码 1") || !strings.Contains(e.Advice, "页面文件") {
+			t.Errorf("%q -> %s %q %q", line, e.Code, e.Message, e.Advice)
+		}
+	}
+	other := write("other.log", "INFO    | Android emulator version 36.1.9.0\nERROR   | Unknown AVD name [mas_3]\n")
+	if e := errs.As(emulatorExitedError(3, "未知", other)); e.Code != errs.LaunchFailed || e.Advice != "" ||
+		e.Message != "ModAVD 实例 3 启动失败（emulator.exe 退出码 未知）：INFO    | Android emulator version 36.1.9.0 | ERROR   | Unknown AVD name [mas_3]" {
+		t.Errorf("other exit -> %s %q %q", e.Code, e.Message, e.Advice)
+	}
+	if e := errs.As(emulatorExitedError(3, "1", filepath.Join(dir, "missing.log"))); e.Code != errs.LaunchFailed {
+		t.Errorf("no log -> %s", e.Code)
+	}
+}
+
 // TestOtherRootQemu: only a qemu that is instance i by name and ports and that the root check gives to another root.
 func TestOtherRootQemu(t *testing.T) {
 	c := root.PortPlan{Base: root.DefaultPortBase}.Console(3)

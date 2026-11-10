@@ -273,7 +273,7 @@ function renderNotes(c, inst, v) {
   if (f) {
     const e = f.error || {};
     // 内存不够 is the one failure a setting fixes: offer the setting right there
-    const mem = e.code === 'precheck_failed' && /内存/.test(e.message || '');
+    const mem = e.code === 'insufficient_memory';
     notes.push({ tone: 'err', ic: 'bad', text: `${FAIL[f.kind] || '失败'}：${e.message || '原因未知'}`, advice: e.advice, job: f.id, mem });
   }
   if (inst.software_renderer) notes.push({ tone: 'warn', ic: 'alert', text: '软件渲染：显卡驱动不可用，游戏会卡' });

@@ -675,7 +675,7 @@ func TestSharedMemory(t *testing.T) {
 	}
 }
 
-func TestDiskFreeAndMemory(t *testing.T) {
+func TestDiskFree(t *testing.T) {
 	dir := workDir(t)
 	free, err := DiskFree(dir)
 	if err != nil || free == 0 {
@@ -691,12 +691,6 @@ func TestDiskFreeAndMemory(t *testing.T) {
 		t.Errorf("DiskFree(file) = %d %v", n, err)
 	}
 	t.Logf("free on %s: %.1f GiB", filepath.VolumeName(dir), float64(free)/(1<<30))
-
-	mb, err := AvailableMemoryMB()
-	if err != nil || mb == 0 {
-		t.Fatalf("AvailableMemoryMB = %d %v", mb, err)
-	}
-	t.Logf("available memory: %d MiB", mb)
 }
 
 func TestGetCompressedFileSize(t *testing.T) {

@@ -24,7 +24,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | `busy`、`already_exists`、`port_conflict` | 409 |
 | `not_ready`、`precheck_failed`、`unsupported` | 422 |
 | `canceled` | 499 |
-| `launch_failed`、`update_unavailable`、`update_rejected`、`proxy_unavailable` | 502 |
+| `launch_failed`、`insufficient_memory`、`update_unavailable`、`update_rejected`、`proxy_unavailable` | 502 |
 | `timeout` | 504 |
 | 其余 | 500 |
 

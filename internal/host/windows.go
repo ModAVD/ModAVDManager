@@ -66,7 +66,6 @@ func DiskFree(path string) (uint64, error)              { return win.DiskFree(pa
 func GetCompressedFileSize(path string) (uint64, error) { return win.GetCompressedFileSize(path) }
 func VolumeFileSystem(path string) (string, error)      { return win.VolumeFileSystem(path) }
 func MoveFileReplaceThrough(src, dst string) error      { return win.MoveFileReplaceThrough(src, dst) }
-func AvailableMemoryMB() (uint64, error)                { return win.AvailableMemoryMB() }
 func Protect(data, entropy []byte) ([]byte, error)      { return win.Protect(data, entropy) }
 func Unprotect(data, entropy []byte) ([]byte, error)    { return win.Unprotect(data, entropy) }
 func SetEmulatorWindowsVisible(pid uint32, visible bool) (int, error) {

@@ -257,28 +257,6 @@ func MoveFileReplaceThrough(src, dst string) error {
 	return nil
 }
 
-type memoryStatusEx struct {
-	Length               uint32
-	MemoryLoad           uint32
-	TotalPhys            uint64
-	AvailPhys            uint64
-	TotalPageFile        uint64
-	AvailPageFile        uint64
-	TotalVirtual         uint64
-	AvailVirtual         uint64
-	AvailExtendedVirtual uint64
-}
-
-// AvailableMemoryMB is GlobalMemoryStatusEx ullAvailPhys in MiB (psutil virtual_memory().available).
-func AvailableMemoryMB() (uint64, error) {
-	var m memoryStatusEx
-	m.Length = uint32(unsafe.Sizeof(m))
-	if r, err := call(procGlobalMemoryStatusEx, uintptr(unsafe.Pointer(&m))); r == 0 {
-		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("读不到可用内存: %v", err))
-	}
-	return m.AvailPhys / (1024 * 1024), nil
-}
-
 // OpenStableRead keeps the file from being written, renamed or deleted while
 // a raw backing is being verified or an offline overlay is being copied.
 func OpenStableRead(path string) (*os.File, error) {

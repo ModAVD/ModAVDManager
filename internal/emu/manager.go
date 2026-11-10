@@ -56,7 +56,6 @@ const (
 	fallbackKillMin        = 1 * time.Second
 	fallbackKillMax        = 5 * time.Second
 	fallbackForceKillWait  = 1 * time.Second
-	hostMemoryOverheadMB   = 1536
 	minFreeDiskGBToBoot    = 8
 	accelCheckTimeout      = 60 * time.Second
 	vulkanProbeTimeout     = 30 * time.Second

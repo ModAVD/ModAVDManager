@@ -418,6 +418,7 @@ func TestExitCodes(t *testing.T) {
 		errs.Usage: 2, errs.InvalidArgument: 2, errs.NotFound: 3, errs.NotReady: 4, errs.PrecheckFailed: 4,
 		errs.Unsupported: 4, errs.Busy: 5, errs.AlreadyExists: 5, errs.PortConflict: 5, errs.Timeout: 6,
 		errs.LaunchFailed: 7, errs.Canceled: 8, errs.Internal: 1, errs.MetadataUnreadable: 1, errs.ProxyUnavailable: 9,
+		errs.InsufficientMemory: 10,
 	}
 	for code, want := range codes {
 		for _, jsonMode := range []bool{false, true} {

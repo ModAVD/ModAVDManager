@@ -103,15 +103,15 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	ports := m.Root.Ports()
 	// The same-numbered instance of another root without a port plan of its own (production D:\ModAVD next to a test
 	// root that sets no portBase) runs on exactly our ports. Said before the host checks, which would otherwise fail
-	// first (it takes the memory) with a message that does not name the real cause.
+	// first with a message that does not name the real cause.
 	if p, where, found := m.otherRootInstance(ports, i); found {
 		return nil, otherRootBusy(i, p, where)
 	}
-	// the host check uses exactly the memory -memory passes below: the instance's own, not one guessed per game
-	memoryMB := avd.MemoryFor(m.Root, i)
-	if err := m.precheckBeforeLaunch(ctx, memoryMB); err != nil {
+	if err := m.precheckBeforeLaunch(ctx); err != nil {
 		return nil, err
 	}
+	// -memory is the instance's own setting, not one guessed per game
+	memoryMB := avd.MemoryFor(m.Root, i)
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
@@ -331,6 +331,37 @@ func logTail(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// emulatorMemoryMarkers are what the emulator writes before it quits for lack of host memory: util/oslib-win32.c and
+// oslib-posix.c (the guest RAM does not fit in what the host can still commit), exec.c (the guest RAM could not be set
+// up), qemu_oom_check and android/utils (any other allocation).
+var emulatorMemoryMarkers = []string{
+	"Insufficient RAM free for launching emulator",
+	"cannot set up guest memory",
+	"Failed to allocate memory",
+	"PANIC: not enough memory",
+}
+
+// bootOutOfMemory: the emulator log of this boot (a new file per boot) says the host could not give it memory.
+func bootOutOfMemory(logPath string) bool {
+	for _, marker := range emulatorMemoryMarkers {
+		if fileContains(logPath, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// emulatorExitedError is the error of a boot whose emulator.exe exited before qemu showed up (code: its exit code, or
+// "未知"): insufficient memory when its log says so (bootOutOfMemory), else launch failed. Host memory is not checked
+// before a boot, so this is where a boot that does not get its memory is told apart.
+func emulatorExitedError(i int, code, logPath string) error {
+	if bootOutOfMemory(logPath) {
+		return errs.Newf(errs.InsufficientMemory, "ModAVD 实例 %d 启动失败：电脑内存不足，模拟器分不到实例的内存（emulator.exe 退出码 %s）：%s",
+			i, code, logTail(logPath, 8)).WithAdvice("请关闭部分程序、调小实例内存，或调大虚拟内存（页面文件）")
+	}
+	return errs.Newf(errs.LaunchFailed, "ModAVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s", i, code, logTail(logPath, 8))
 }
 
 // fileContains reports whether the file holds needle (the emulator log's modavd_ime line).
