@@ -143,7 +143,7 @@ func httpStatus(code string) int {
 		return http.StatusUnprocessableEntity
 	case errs.Canceled:
 		return 499 // nginx's "client closed request": there is no standard status for it
-	case errs.LaunchFailed, errs.UpdateUnavailable, errs.UpdateRejected, errs.ProxyUnavailable:
+	case errs.LaunchFailed, errs.InsufficientMemory, errs.UpdateUnavailable, errs.UpdateRejected, errs.ProxyUnavailable:
 		return http.StatusBadGateway
 	case errs.Timeout:
 		return http.StatusGatewayTimeout

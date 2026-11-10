@@ -271,7 +271,7 @@ type StopResult struct {
 }
 
 // CheckItem is one host check (AUTO-MAS precheck.PrecheckItem). ID: path / components / emulator / acceleration /
-// vulkan / disk / memory; ports (modavd's own) only for a root whose mas-avd.json sets portBase.
+// vulkan / disk; ports (modavd's own) only for a root whose mas-avd.json sets portBase.
 type CheckItem struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
@@ -282,7 +282,7 @@ type CheckItem struct {
 }
 
 type CheckOptions struct {
-	// MemoryMB to judge host memory against (default avd.DefaultMemoryMB).
+	// MemoryMB is not used: host memory is not checked (check --memory and MCP memory_mb are still accepted).
 	MemoryMB int
 	// Refresh: run the acceleration check and the Vulkan probe again instead of using their cached results
 	// (AUTO-MAS run_prechecks(refresh=True), the "重新检查" button). Only long-running processes (MCP, the manager)

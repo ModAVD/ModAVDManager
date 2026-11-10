@@ -116,7 +116,7 @@ function oldJob(kind, i, state, agoSec, tookSec, extra = {}) {
   return j;
 }
 
-const MEM_FAIL = ['precheck_failed', '电脑可用内存不足：实例内存 6 GB，启动约需 7.5 GB，当前可用 5.1 GB', '请关闭部分程序，或调小实例内存'];
+const MEM_FAIL = ['insufficient_memory', 'ModAVD 实例 3 启动失败：电脑内存不足，模拟器分不到实例的内存（emulator.exe 退出码 1）：ERROR: Insufficient RAM free for launching emulator.', '请关闭部分程序、调小实例内存，或调大虚拟内存（页面文件）'];
 
 function setup(sc) {
   if (sc === 'empty') return;
@@ -218,7 +218,6 @@ function checkResult() {
     it('acceleration', '硬件虚拟化', true, true, 'Windows 虚拟机监控程序平台（WHPX）可用'),
     it('vulkan', '显卡 Vulkan', true, false, '可用显卡：NVIDIA GeForce RTX 3060'),
     it('disk', '磁盘', true, true, '实例所在盘 E:\\ 剩余 412.6 GB'),
-    it('memory', '内存', true, true, '实例内存 6 GB，启动约需 7.5 GB，当前可用 18.3 GB'),
   ];
   const comps = [
     { id: 'platform-tools', name: '平台工具（adb）', version: '36.0.0', build: '', installed: true, optional: false, local_sdk: false },
@@ -828,7 +827,7 @@ async function screenshot(inst) {
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const fail = (status, code, message, advice = '', details) => json({ error: { code, message, advice, ...(details ? { details } : {}) } }, status);
-const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, unsupported: 422, canceled: 499, launch_failed: 502, proxy_unavailable: 502, timeout: 504 };
+const STATUS_OF = { usage: 400, invalid_argument: 400, not_found: 404, busy: 409, already_exists: 409, not_ready: 422, precheck_failed: 422, unsupported: 422, canceled: 499, launch_failed: 502, insufficient_memory: 502, proxy_unavailable: 502, timeout: 504 };
 const PKG = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 
 // what speaks at a typed proxy address: 7890 / 7897 a mixed port, 7891 an HTTP proxy, anything else nothing

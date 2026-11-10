@@ -74,7 +74,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM；成功只表示触发请求已返回，不等待或确认客体回收完成；模拟器太旧、不支持回收时返回不支持（退出码 4） |
 | `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；关机且取得启动锁后才运行只读的 qcow2 元数据检查，给出已分配和估计可回收大小。整理中或锁不可用时，仅返回可读取的文件头、宿主占用和原因；不可读的数值省略，不修复镜像 |
 | `disk <i> compact` | 整理已关机实例的数据盘；预计收益不足时跳过重写；转换后先校验再原子替换，原盘在替换成功前不动；报告前后占用和增减；大盘预算可达数十小时，正常整理基本不会超时，停止请取消；仅支持 NTFS/ReFS，拒绝快照或重写空间不足，详见[预算与结果契约](internal/emu/COMPACT.md) |
-| `check [--memory M]` | 开机前的电脑检查 |
+| `check [--memory M]` | 开机前的电脑检查。不查内存（页面文件会补上物理内存的不足），`--memory` 留着兼容、不再起作用；真分不到内存时 `start` 报 `insufficient_memory`（退出码 10） |
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）。除模拟器日志外，还收管理器、开机守护和私有 adb server 的日志（`modavd-ui.log`、`modavd-bootwatch.log`、`adb-server.log` 及其 `.1`，各取最后 5 MB）、所有 adb.exe 进程和 adb server 日志（`%TEMP%\adb.log` 最后 2 MB）、Windows 保留的 TCP 端口（netsh），并指出本目录要用的端口有没有落在里面；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
 | `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`、`components import-playstore <文件或文件夹>…` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」）；`--play-store`、`import-playstore` 补全可选的 Google Play 商店（见下） |
@@ -164,7 +164,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
   - 进度：命令行逐步打印到 stderr，每行带「新建中 NN%」；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示「新建中 NN%」和进度条（别处发起的新建也显示），「更多」里可以取消新建，关掉窗口会在后台做完。
 
-**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
+**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到，10 电脑内存不足、模拟器分不到实例的内存而退出（`insufficient_memory`）。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 

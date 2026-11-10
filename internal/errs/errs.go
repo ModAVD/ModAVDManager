@@ -15,11 +15,12 @@ const (
 	NotFound           = "not_found"           // the instance does not exist
 	AlreadyExists      = "already_exists"      // the instance already exists
 	NotReady           = "not_ready"           // the root is incomplete: components missing, emulator not ours / too old
-	PrecheckFailed     = "precheck_failed"     // a blocking check before boot failed (acceleration, memory, disk ...)
+	PrecheckFailed     = "precheck_failed"     // a blocking check before boot failed (acceleration, disk ...)
 	Busy               = "busy"                // the instance is running, or another modavd holds its lock
 	PortConflict       = "port_conflict"       // a port we need is taken by some other program
 	Timeout            = "timeout"             // boot or shutdown did not finish in time
 	LaunchFailed       = "launch_failed"       // emulator.exe exited, or qemu went away while booting
+	InsufficientMemory = "insufficient_memory" // the emulator exited because the host could not give it the instance's memory
 	MetadataUnreadable = "metadata_unreadable" // mas-avd.json exists but cannot be read; never overwritten then
 	Unsupported        = "unsupported"         // not possible on this instance / host
 	Canceled           = "canceled"            // the caller canceled (Ctrl+C, MCP notifications/cancelled)
@@ -153,7 +154,7 @@ func As(err error) *Error {
 // ExitCode maps an error to the process exit code (part of the contract, see README):
 // 0 ok, 1 internal / other, 2 usage / invalid argument / license declined, 3 not found, 4 not ready / precheck
 // failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update or
-// components unavailable / rejected, proxy unavailable.
+// components unavailable / rejected, proxy unavailable, 10 insufficient memory.
 func ExitCode(err error) int {
 	switch CodeOf(err) {
 	case "":
@@ -174,6 +175,8 @@ func ExitCode(err error) int {
 		return 8
 	case UpdateUnavailable, UpdateRejected, ComponentsUnavailable, ComponentsRejected, ProxyUnavailable:
 		return 9
+	case InsufficientMemory:
+		return 10
 	default:
 		return 1
 	}

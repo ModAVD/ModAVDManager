@@ -8,7 +8,6 @@ package emu
 //   - components: platform tools and the system image (fetched by the manager's “补全组件” action or components fetch). Blocking.
 //   - emulator: only our own build from the ModAVD package, with Pkg.BuildId=mas-N >= MinModBuild. Blocking.
 //   - acceleration: emulator -accel-check (WHPX). Blocking.
-//   - memory: available host memory >= this boot's -memory + 1.5 GB. Blocking.
 //   - disk: free space on the instances' volume >= 8 GB (data disks are sparse and grow). Blocking.
 //   - vulkan: a child process loads vulkan-1.dll and lists the devices. Only a warning: without hardware Vulkan the
 //     emulator falls back to SwiftShader, boots and renders correctly, only slowly; the probe can also be wrong
@@ -28,7 +27,6 @@ import (
 	"time"
 
 	"modavd/internal/adb"
-	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/host"
 	"modavd/internal/root"
@@ -48,12 +46,8 @@ const (
 	vulkanTimeoutCacheFor = 60 * time.Second
 )
 
-// Check runs all host checks (path, components, emulator, acceleration, vulkan, disk, memory).
+// Check runs all host checks (path, components, emulator, acceleration, vulkan, disk).
 func (m *Manager) Check(ctx context.Context, opt CheckOptions) (*CheckResult, error) {
-	memoryMB := opt.MemoryMB
-	if memoryMB <= 0 {
-		memoryMB = avd.DefaultMemoryMB
-	}
 	comps := m.Root.Components()
 
 	// The two slow ones (a child process each) run side by side, like AUTO-MAS run_prechecks.
@@ -73,7 +67,6 @@ func (m *Manager) Check(ctx context.Context, opt CheckOptions) (*CheckResult, er
 		accel,
 		vulkan,
 		m.diskItemNow(),
-		memoryItemNow(memoryMB),
 	}
 	items = append(items, m.platformCheckItems()...)
 	if it, ok := portsItem(m.Root.Ports(), m.Root.CheckPorts()); ok {
@@ -99,17 +92,17 @@ func ComponentStatuses(comps []root.ComponentStatus) []ComponentStatus {
 	return out
 }
 
-// precheckBeforeLaunch: the blocking checks before a boot (path, components, emulator, acceleration, memory against
-// memoryMB, disk), errs.PrecheckFailed / errs.NotReady for the first failing one; vulkan only warns. memoryMB must be
-// the -memory of this boot. Order and messages as AUTO-MAS check_before_launch.
-func (m *Manager) precheckBeforeLaunch(ctx context.Context, memoryMB int) error {
+// precheckBeforeLaunch: the blocking checks before a boot (path, components, emulator, acceleration, disk),
+// errs.PrecheckFailed / errs.NotReady for the first failing one; vulkan only warns. Order and messages as AUTO-MAS
+// check_before_launch. Host memory is not checked: the page file makes up for physical memory, so only the emulator
+// knows whether it gets the instance's memory, and a boot that does not is reported as such (bootOutOfMemory).
+func (m *Manager) precheckBeforeLaunch(ctx context.Context) error {
 	comps := m.Root.Components()
 	items := []CheckItem{
 		pathItem(m.Root.Dir),
 		componentsItem(comps, m.missingAdvice),
 		platformEmulatorItem(m.emulatorFacts()),
 		m.accelerationItem(ctx, true),
-		memoryItemNow(memoryMB),
 		m.diskItemNow(),
 	}
 	items = append(items, m.platformCheckItems()...)
@@ -353,29 +346,6 @@ func emulatorItem(f emulatorFacts) CheckItem {
 		Reason: fmt.Sprintf("内测包版本过旧（%s）", shown),
 		Advice: fmt.Sprintf("请把 ModAVD 更新到 0.%d.0 或更新的版本，实例和游戏数据不受影响", root.MinModBuild),
 	}
-}
-
-// memoryItem: memoryMB is the -memory this boot passes (the instance's own setting).
-func memoryItem(memoryMB int, availableMB uint64, err error) CheckItem {
-	if err != nil {
-		return CheckItem{ID: "memory", Title: "内存", OK: nil, Blocking: true, Reason: fmt.Sprintf("查不了电脑可用内存: %v", err)}
-	}
-	needed := memoryMB + hostMemoryOverheadMB
-	text := fmt.Sprintf("实例内存 %.0f GB，启动约需 %.1f GB，当前可用 %.1f GB",
-		float64(memoryMB)/1024, float64(needed)/1024, float64(availableMB)/1024)
-	if availableMB >= uint64(needed) {
-		return CheckItem{ID: "memory", Title: "内存", OK: checkOK(true), Blocking: true, Reason: text}
-	}
-	return CheckItem{
-		ID: "memory", Title: "内存", OK: checkOK(false), Blocking: true,
-		Reason: "电脑可用内存不足：" + text,
-		Advice: "请关闭部分程序，或调小实例内存",
-	}
-}
-
-func memoryItemNow(memoryMB int) CheckItem {
-	avail, err := host.AvailableMemoryMB()
-	return memoryItem(memoryMB, avail, err)
 }
 
 // diskItem: free space of the volume holding <root>\avd (drive like `E:\`).

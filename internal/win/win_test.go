@@ -639,11 +639,17 @@ func TestParseTCPTable(t *testing.T) {
 	buf := make([]byte, 4+3*tcp4RowSize)
 	binary.LittleEndian.PutUint32(buf, 3)
 	row(buf, 4, tcp4State, tcp4Port, tcp4PID, mibTCPStateListen, 20089, 1234)
-	row(buf, 4+tcp4RowSize, tcp4State, tcp4Port, tcp4PID, 5, 20090, 99) // ESTABLISHED: skipped
+	row(buf, 4+tcp4RowSize, tcp4State, tcp4Port, tcp4PID, 5, 20090, 99) // not LISTEN: kept, its state remembered
 	row(buf, 4+2*tcp4RowSize, tcp4State, tcp4Port, tcp4PID, mibTCPStateListen, 5037, 42)
 	if got := parseTCPTable(buf, tcp4RowSize, tcp4State, tcp4Port, tcp4PID); !slices.Equal(got,
-		[]Listener{{20089, 1234}, {5037, 42}}) {
+		[]Listener{{20089, 1234}, {20090, 99}, {5037, 42}}) {
 		t.Errorf("v4 %v", got)
+	}
+	if st, ok := OddListenerState(20090); !ok || st != 5 {
+		t.Errorf("odd state of 20090: %d %v", st, ok)
+	}
+	if _, ok := OddListenerState(20089); ok {
+		t.Error("a LISTEN row remembered as odd")
 	}
 	buf6 := make([]byte, 4+tcp6RowSize)
 	binary.LittleEndian.PutUint32(buf6, 2) // claims 2 rows, holds 1: no overrun
@@ -675,7 +681,7 @@ func TestSharedMemory(t *testing.T) {
 	}
 }
 
-func TestDiskFreeAndMemory(t *testing.T) {
+func TestDiskFree(t *testing.T) {
 	dir := workDir(t)
 	free, err := DiskFree(dir)
 	if err != nil || free == 0 {
@@ -691,12 +697,6 @@ func TestDiskFreeAndMemory(t *testing.T) {
 		t.Errorf("DiskFree(file) = %d %v", n, err)
 	}
 	t.Logf("free on %s: %.1f GiB", filepath.VolumeName(dir), float64(free)/(1<<30))
-
-	mb, err := AvailableMemoryMB()
-	if err != nil || mb == 0 {
-		t.Fatalf("AvailableMemoryMB = %d %v", mb, err)
-	}
-	t.Logf("available memory: %d MiB", mb)
 }
 
 func TestGetCompressedFileSize(t *testing.T) {

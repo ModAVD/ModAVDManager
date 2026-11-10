@@ -231,33 +231,103 @@ func (c *Client) portConflict(k serverKind, port int, pid uint32, name string) *
 		k.label, port, name, pid, c.Root.MetadataPath(), k.key, k.otherKey)
 }
 
-// listener reports whether somebody listens on port, with its PID and process name ("" when unreadable). Reads the
-// system table only; connecting to an emulator's adb port would disturb it.
-func listener(port int) (up bool, pid uint32, name string, err error) {
-	pid, up, err = host.ListenerPID(port)
+// Whether an adb server listens on one of the root's server ports is asked of the port itself first (adbProbe,
+// Windows): host:version, what every adb command sends first anyway. An answer is an adb server, and that is all an
+// adb command needs; nothing accepting connections means none. The system's TCP listener table is read only when
+// something there does not answer like adb (to name who holds the port), and once per port to report what it shows
+// (noteTable). It used to be read first and believed: on two users' Windows 10.0.26300 it showed nothing on the
+// private server's port for half an hour while that server answered, served the emulator and collect-info, and every
+// adb command was refused before it was sent. Elsewhere (adbProbe gives probeSkip) the table and the platform's
+// ownership check decide, as before.
+
+// listener is what the system table says about port: whether somebody listens there, with its PID and process name
+// ("" when unreadable). A row in a state other than LISTEN counts (see win.parseTCPTable), said once.
+func (c *Client) listener(port int) (up bool, pid uint32, name string, err error) {
+	pid, up, err = listenerPID(port)
 	if err != nil {
 		return false, 0, "", errs.Wrap(errs.Internal, err, "读不出系统的 TCP 监听表: "+err.Error())
 	}
 	if !up {
 		return false, 0, "", nil
 	}
+	c.noteOddState(port)
 	if pid != 0 {
 		name = host.ProcessName(pid)
 	}
 	return true, pid, name, nil
 }
 
-func listening(port int) (bool, error) {
-	up, _, _, err := listener(port)
+// listening: an adb server (or, where no probe is made, anybody) listens on port.
+func (c *Client) listening(port int) (bool, error) {
+	switch adbProbe(port) {
+	case probeAdb:
+		c.noteTable(port)
+		return true, nil
+	case probeNone:
+		return false, nil
+	}
+	up, _, _, err := c.listener(port)
 	return up, err
 }
 
-// serverListening also verifies the native server's ownership. A busy port alone
-// must never authorize an adb client or an emulator registration.
+// listenerPID and oddListenerState are host's (variables for the tests).
+var (
+	listenerPID      = host.ListenerPID
+	oddListenerState = host.OddListenerState
+)
+
+// listenerNotes: what noteListener has said, by root, port and kind.
+var listenerNotes sync.Map
+
+// noteListener warns msg once per process for this root, port and kind.
+func (c *Client) noteListener(port int, kind, msg string) {
+	if _, said := listenerNotes.LoadOrStore(serverKey(c.Root, port)+"|"+kind, true); !said {
+		c.Log.Warnf("%s", msg)
+	}
+}
+
+// noteOddState says once that the table has shown port in a state other than LISTEN.
+func (c *Client) noteOddState(port int) {
+	if state, odd := oddListenerState(port); odd {
+		c.noteListener(port, "state", fmt.Sprintf(
+			"系统的 TCP 监听表里端口 %d 的状态值是 %d（不是 LISTEN 的 2），照样算在监听", port, state))
+	}
+}
+
+// noteTable reads the table once per process for a port whose adb server answered, and says what is wrong with it:
+// nothing there, or a state other than LISTEN. Only a report: the answer decided.
+func (c *Client) noteTable(port int) {
+	if _, done := listenerNotes.LoadOrStore(serverKey(c.Root, port)+"|checked", true); done {
+		return
+	}
+	if _, up, err := listenerPID(port); err == nil && !up {
+		c.noteListener(port, "missing", fmt.Sprintf(
+			"端口 %d 上的 adb server 在应答，系统的 TCP 监听表里却看不到它（这台电脑的监听表不可靠，不影响使用）", port))
+	}
+	c.noteOddState(port)
+}
+
+// serverListening: the root's adb server of kind k listens on port. Something else there is errs.PortConflict:
+// a busy port alone must never authorize an adb client or an emulator registration.
 func (c *Client) serverListening(k serverKind, port int) (bool, error) {
-	up, pid, name, err := listener(port)
-	if err != nil || !up {
-		return up, err
+	probe := adbProbe(port)
+	switch probe {
+	case probeAdb:
+		c.noteTable(port)
+		return true, nil
+	case probeNone:
+		return false, nil
+	}
+	up, pid, name, err := c.listener(port)
+	if err != nil {
+		return false, err
+	}
+	if probe == probeOther && !up {
+		// it accepts connections and does not answer like adb, and the table does not say whose it is
+		return false, c.portConflict(k, port, 0, "不认识的程序")
+	}
+	if !up {
+		return false, nil
 	}
 	if !serverBelongsTo(c.Root, port, pid, name) {
 		return false, c.portConflict(k, port, pid, name)

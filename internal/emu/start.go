@@ -503,8 +503,7 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			if c, ok := emulator.ExitCode(); ok {
 				code = strconv.FormatUint(uint64(c), 10)
 			}
-			return host.Process{}, errs.Newf(errs.LaunchFailed, "ModAVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s",
-				i, code, logTail(logPath, 8))
+			return host.Process{}, emulatorExitedError(i, code, logPath)
 		}
 		if adopted != nil && stopSeen != nil && !*stopSeen && m.lockHeld(i, "stop") {
 			*stopSeen = true
@@ -656,11 +655,11 @@ func clockText(t, now time.Time) string {
 	return t.Format("15:04")
 }
 
-// withSetupAdvice adds advice (setupAdvice) to err (a copy; the cause is kept). Not for LaunchFailed: the emulator is
-// gone.
+// withSetupAdvice adds advice (setupAdvice) to err (a copy; the cause is kept). Not for LaunchFailed and
+// InsufficientMemory: the emulator is gone.
 func withSetupAdvice(err error, advice string) error {
 	e := errs.As(err)
-	if e == nil || e.Code == errs.LaunchFailed {
+	if e == nil || e.Code == errs.LaunchFailed || e.Code == errs.InsufficientMemory {
 		return err
 	}
 	c := *e

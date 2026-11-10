@@ -100,6 +100,8 @@ func ListenerPID(int) (uint32, bool, error) { return 0, false, errUnsupported }
 // BusyPorts compares requested ports with the Windows TCP and UDP tables.
 func BusyPorts([]int) ([]int, error) { return nil, errUnsupported }
 
+// OddListenerState: the Windows listener table only.
+func OddListenerState(int) (uint32, bool) { return 0, false }
+
 func DiskFree(string) (uint64, error)                { return 0, errUnsupported }
-func AvailableMemoryMB() (uint64, error)             { return 0, errUnsupported }
 func MetalDevices(context.Context) ([]string, error) { return nil, errUnsupported }

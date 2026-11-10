@@ -87,7 +87,7 @@ func TestErrorStatusMapping(t *testing.T) {
 	cases := map[string]int{
 		errs.Usage: 400, errs.InvalidArgument: 400, errs.NotFound: 404, errs.Busy: 409, errs.AlreadyExists: 409,
 		errs.PortConflict: 409, errs.NotReady: 422, errs.PrecheckFailed: 422, errs.Unsupported: 422,
-		errs.Canceled: 499, errs.LaunchFailed: 502, errs.ProxyUnavailable: 502, errs.Timeout: 504, errs.Internal: 500,
+		errs.Canceled: 499, errs.LaunchFailed: 502, errs.InsufficientMemory: 502, errs.ProxyUnavailable: 502, errs.Timeout: 504, errs.Internal: 500,
 		errs.MetadataUnreadable: 500, errs.NotImplemented: 500,
 	}
 	for code, status := range cases {

@@ -74,7 +74,6 @@ var (
 	procGetVolumePathNameW               = modkernel32.NewProc("GetVolumePathNameW")
 	procGetVolumeInformationW            = modkernel32.NewProc("GetVolumeInformationW")
 	procGetCompressedFileSizeW           = modkernel32.NewProc("GetCompressedFileSizeW")
-	procGlobalMemoryStatusEx             = modkernel32.NewProc("GlobalMemoryStatusEx")
 	procLockFileEx                       = modkernel32.NewProc("LockFileEx")
 	procUnlockFileEx                     = modkernel32.NewProc("UnlockFileEx")
 	procGetProcessId                     = modkernel32.NewProc("GetProcessId")

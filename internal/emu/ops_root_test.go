@@ -184,7 +184,8 @@ func TestOpsCheckOnEmptyRoot(t *testing.T) {
 		ids = append(ids, it.ID)
 		byID[it.ID] = it
 	}
-	if got := strings.Join(ids, ","); got != "path,components,emulator,acceleration,vulkan,disk,memory" {
+	// no memory item: host memory is not checked before a boot
+	if got := strings.Join(ids, ","); got != "path,components,emulator,acceleration,vulkan,disk" {
 		t.Fatalf("items = %s", got)
 	}
 	if res.Ready {
@@ -216,7 +217,7 @@ func TestOpsCheckOnEmptyRoot(t *testing.T) {
 	}
 	t.Logf("check: %s", b)
 
-	err = m.precheckBeforeLaunch(ctx, 6144)
+	err = m.precheckBeforeLaunch(ctx)
 	if errs.CodeOf(err) != errs.NotReady {
 		t.Fatalf("precheck on an empty root: %v (%s)", err, errs.CodeOf(err))
 	}
