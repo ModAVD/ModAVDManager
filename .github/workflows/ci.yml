@@ -38,6 +38,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          # nothing is installed with a package manager; zizmor flags the default cache on release branches
+          package-manager-cache: false
       - name: display coordinate tests
         run: node --test scripts/test_display_tap.mjs
       - name: disk UI tests
@@ -151,6 +153,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          # nothing is installed with a package manager; zizmor flags the default cache on release branches
+          package-manager-cache: false
       - name: create cancellation menu tests
         run: node --experimental-vm-modules --test scripts/test_create_cancel.mjs
 
