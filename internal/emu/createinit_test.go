@@ -383,6 +383,51 @@ func TestCreateFailsThenResumes(t *testing.T) {
 	}
 }
 
+// TestCreateFailureLogIsThisAttempts: a create that fails before the emulator is launched (no adb, no system image)
+// does not point at a log an earlier boot of the index left; one the attempt wrote is named (ModAVD/ModAVD#174).
+func TestCreateFailureLogIsThisAttempts(t *testing.T) {
+	m, _ := opsTestManager(t)
+	ctx := context.Background()
+	logs := m.Root.LogsDir()
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(logs, "mas_6-20260101-080000.log")
+	if err := os.WriteFile(old, []byte("old boot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	twoDaysAgo := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(old, twoDaysAgo, twoDaysAgo); err != nil {
+		t.Fatal(err)
+	}
+	var h createHooks
+	var fresh string // set: the failed start wrote this log but did not return it
+	h.start = func(*Manager, context.Context, int, StartOptions) (*StartResult, error) {
+		if fresh != "" {
+			if err := os.WriteFile(fresh, []byte("this boot\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil, errs.New(errs.NotReady, "根目录缺 adb")
+	}
+	h.install(t)
+	i := 6
+	_, err := m.Create(ctx, CreateRequest{Index: &i, NoBridge: true})
+	opsSkipIfNotImplemented(t, err)
+	if err == nil || strings.Contains(err.Error(), "日志见") {
+		t.Fatalf("pre-launch failure names a log: %v", err)
+	}
+	if info, _ := m.Info(ctx, 6); info == nil || info.CreationLog != "" {
+		t.Fatalf("pre-launch failure recorded a log: %+v", info)
+	}
+
+	fresh = filepath.Join(logs, "mas_6-20260110-080000.log")
+	_, err = m.Create(ctx, CreateRequest{Index: &i, Resume: true})
+	if err == nil || !strings.Contains(err.Error(), "日志见 "+fresh) {
+		t.Fatalf("failure after a launch does not name its log: %v", err)
+	}
+}
+
 // TestCreateKilled: "creating" that nobody works on (the create was killed, its lock went with it) reads as failed and
 // can be resumed or deleted.
 func TestCreateKilled(t *testing.T) {
