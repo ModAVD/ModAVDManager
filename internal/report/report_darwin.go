@@ -310,7 +310,7 @@ func darwinGames(ctx context.Context, r *root.Root, index int, pid uint32, creat
 	var result []string
 	for _, line := range strings.Split(packages, "\n") {
 		pkg, ok := strings.CutPrefix(strings.TrimSpace(line), "package:")
-		if !ok || len(pkg) > 255 || !darwinPackage.MatchString(pkg) || containsFold(notGames, pkg) || pkg == "org.modavd.ime" {
+		if !ok || len(pkg) > 255 || !darwinPackage.MatchString(pkg) || containsFold(notGames, pkg) {
 			continue
 		}
 		if len(result) == 100 {

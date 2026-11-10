@@ -41,8 +41,8 @@ func GameName(pkg string) (string, bool) {
 	return "", false
 }
 
-// notGames: $NotGames, apps that come with the emulator.
-var notGames = []string{"de.jrpie.android.launcher"}
+// notGames: $NotGames, apps ModAVD itself puts in an instance (the light launchers, the host IME).
+var notGames = root.OwnPackages
 
 // The lines the user fills in.
 var configTail = []string{"怎么用的（自己玩 / AUTO-MAS 及版本 / MAA、M9A 等脚本）：", "效果（能跑 / 有问题，问题是…）："}

@@ -99,7 +99,7 @@
           "features": "stat_v2,shell_v2,cmd",
           "shell": {
             "getprop sys.boot_completed": {"out": "1\n"},
-            "pm list packages -3": {"out": "package:com.hypergryph.arknights\npackage:de.jrpie.android.launcher\npackage:org.modavd.ime\npackage:com.example.zeta\npackage:COM.MIHOYO.HKRPG\n"},
+            "pm list packages -3": {"out": "package:com.hypergryph.arknights\npackage:de.jrpie.android.launcher\npackage:org.modavd.ime\npackage:com.example.zeta\npackage:org.fossify.home\npackage:COM.MIHOYO.HKRPG\n"},
             "dumpsys package com.hypergryph.arknights 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=2.6.21\n"},
             "dumpsys package org.modavd.ime 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=1.0\n"},
             "dumpsys package com.example.zeta 2>/dev/null | grep -m1 versionName=": {"out": ""},

@@ -8,7 +8,7 @@ CPU：Fake Socket 2（ 核  线程）
 显卡：Intel(R) UHD Graphics 770（驱动 31.0.101.5186）
 模拟器：mas-36，放在 {{DRIVE}}: 盘（剩余 206 GB，USB SSD）
 硬件加速：WHPX(10.0.26200) 可用
-实例 1，6 GB：com.example.zeta、明日方舟（官服） 2.6.21、崩坏：星穹铁道（官服） 3.5.0、org.modavd.ime 1.0
+实例 1，6 GB：com.example.zeta、明日方舟（官服） 2.6.21、崩坏：星穹铁道（官服） 3.5.0
 实例 3，4 GB：读不到（还没开完机）
 实例 7：读不到（adb server 返回 FAIL：device '127.0.0.1:20071' not found）
 实例 9：没装
