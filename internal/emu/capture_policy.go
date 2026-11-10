@@ -58,11 +58,12 @@ func (m *Manager) writeCaptureState(i int, state captureState) error {
 	return os.Rename(tmp, path)
 }
 
-// Native process paths may name the same file through /var and /private/var.
-// On non-Windows hosts only an existing file identity establishes ownership.
+// Native process paths may name the same file through /var and /private/var, and on Windows a process image path
+// has its links resolved while the root's paths may go through a junction (sdk\platform-tools linked to a shared
+// SDK, the root folder itself). The same name on Windows, or else the same existing file, establishes ownership.
 func capturePathMatches(a, b string) bool {
-	if root.CurrentPlatform().Windows() {
-		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	if root.CurrentPlatform().Windows() && strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) {
+		return true
 	}
 	left, err := os.Stat(a)
 	if err != nil {
