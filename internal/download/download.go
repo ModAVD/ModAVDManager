@@ -223,6 +223,9 @@ type FileOptions struct {
 	Fresh            bool
 	Start            func(offset int64, restarted bool)
 	Progress         func(done int64)
+	// BeforeWrite can stop a transfer before opening the output or writing the
+	// next chunk (for example when the target volume runs out of space).
+	BeforeWrite func() error
 }
 
 // File resumes from the existing file size and validates the response before writing. Success requires exactly
@@ -271,6 +274,11 @@ func (c *Client) File(ctx context.Context, o FileOptions) error {
 		return sizeError("文件大小和预期不符（服务器给 %d 字节，应为 %d 字节）", resp.ContentLength, expected)
 	}
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if o.BeforeWrite != nil {
+		if err := o.BeforeWrite(); err != nil {
+			return err
+		}
+	}
 	restarted := existing > 0 && status == http.StatusOK
 	switch {
 	case resume:
@@ -293,6 +301,11 @@ func (c *Client) File(ctx context.Context, o FileOptions) error {
 	for {
 		n, rerr := resp.read(buf, c.stallTimeout())
 		if n > 0 {
+			if o.BeforeWrite != nil {
+				if err := o.BeforeWrite(); err != nil {
+					return err
+				}
+			}
 			if done+int64(n) > expected {
 				return sizeError("文件大小和预期不符（收到的比 %d 字节多）", expected)
 			}

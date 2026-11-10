@@ -16,6 +16,9 @@ import (
 )
 
 func TestWriteOperationsUnsupportedWithoutWrites(t *testing.T) {
+	if nativeDarwinSettings && root.CurrentPlatform().Supported() {
+		t.Skip("native macOS supports update transactions")
+	}
 	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {

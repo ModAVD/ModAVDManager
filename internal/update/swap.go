@@ -93,6 +93,9 @@ func (l layout) abortStaging(reason string) error {
 // stagedVersion is the version waiting to be installed: phase staged with its stage\emulator there.
 func (l layout) stagedVersion() (Version, bool) {
 	st := l.readState()
+	if v, ok := l.nativeStagedVersion(st); ok {
+		return v, true
+	}
 	if phaseOf(st) != phaseStaged || !isDir(l.stageEmulator()) {
 		return Version{}, false
 	}
@@ -455,6 +458,9 @@ func (u *Updater) recordHistory(from, to, source, asset string) {
 // recover is AUTO-MAS recover(): finish or undo a swap that was cut off, drop a preparation that was, clean up
 // leftovers. The message says what it did ("" when nothing).
 func (u *Updater) recover() (string, error) {
+	if u.nativeUpdates() {
+		return u.recoverNativeWorkspace()
+	}
 	if phaseOf(u.l.readState()) == phaseSwapping {
 		unlock, err := u.lockForSwap("恢复更新")
 		if err != nil {
@@ -581,6 +587,9 @@ func (u *Updater) processesUsing(programs bool) ([]processUse, error) {
 	scan := u.scan
 	if scan == nil {
 		scan = func(programs bool) ([]processUse, error) {
+			if u.nativeUpdates() {
+				return u.nativeProcessesUsing(programs)
+			}
 			return u.scanProcesses(programs, host.ListProcesses, host.Process.ImagePath)
 		}
 	}

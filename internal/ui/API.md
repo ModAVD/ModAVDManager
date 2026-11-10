@@ -179,6 +179,8 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
   3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。半秒后它还在跑，任务才算成功，结果 `{handoff: true, version, stopped, message}`；从这时起别的任务一律回 409，约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；新管理器启动时读走这份结果，放进 `handoff`。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
 - 管理器装的时候不带 AUTO-MAS 的版本检查（和人用命令行装一样），页面在 `required_automas` 不为空时提示用 AUTO-MAS 的先更新 AUTO-MAS。
 - 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。有别的任务在跑时回 409 `busy`；更新任务在跑时，别的任务也回 409。
+- macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
+
 
 ## 生命周期
 

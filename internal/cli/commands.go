@@ -356,7 +356,7 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
+			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--package ZIP --sha256 HEX] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
 			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
 			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）；" +
 				"调用方有自己的设置时用 --source 和 --cdk-dpapi 传这一次的，只盖过「设置」、不保存，status 里的 source、cdk_set 是这次生效的。" +
@@ -368,12 +368,16 @@ func init() {
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
 				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
 				"命令等它退出再换上新版，然后重新打开管理器。" +
+				"macOS 可用 --package ZIP --sha256 HEX 准备或安装本地完整签名包；摘要需从可信来源独立取得。" +
 				"--json 时每个进度在 stderr 的日志行里多一个 progress 对象（checking、extracting、verifying、installing 开始时各一行，percent 为 -1；" +
 				"downloading 第一行就带真实进度，之后约 2 秒一行，下完那行一定有）：" +
 				`{"stage":"checking|downloading|extracting|verifying|installing","percent":-1 或 0–100,"done_bytes":N,"total_bytes":N}。` +
 				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
 			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
-			flags: []flagSpec{optUpdateSource, optCDKDPAPI, optAutoMAS, optAfterPID, optReopen, optReopenArg}, final: true,
+			flags: []flagSpec{optUpdateSource, optCDKDPAPI, optAutoMAS,
+				{name: "package", kind: kindString, arg: "ZIP", help: "macOS 本地完整更新包"},
+				{name: "sha256", kind: kindString, arg: "HEX", help: "本地更新包的独立可信 SHA-256"},
+				optAfterPID, optReopen, optReopenArg}, final: true,
 			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
@@ -1447,6 +1451,9 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.shownPos(c.inv.pos[0])).
 			WithAdvice(findCommand("update").usageAdvice())
 	}
+	if (c.inv.strOpt("package") != "" || c.inv.strOpt("sha256") != "") && action != "prepare" && action != "install" {
+		return nil, errs.New(errs.Usage, "--package 和 --sha256 只用于 update prepare 或 install")
+	}
 	afterPID, reopen, reopenArgs := c.inv.intOpt("after-pid"), c.inv.strOpt("reopen"), c.inv.strsOpt("reopen-arg")
 	handoff := afterPID != 0 || reopen != "" || len(reopenArgs) > 0
 	switch {
@@ -1460,7 +1467,8 @@ func runUpdate(c *cmdCtx) (any, error) {
 	case reopen != "" && !filepath.IsAbs(reopen):
 		return nil, errs.Newf(errs.Usage, "--reopen 要给程序的完整路径，收到「%s」", reopen)
 	}
-	opt := update.Options{AutoMASVersion: c.inv.strOpt("automas-version")}
+	opt := update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
+		PackagePath: c.inv.strOpt("package"), PackageSHA256: c.inv.strOpt("sha256")}
 	if err := updateCallerSettings(c.inv, action, &opt); err != nil {
 		return nil, err
 	}
