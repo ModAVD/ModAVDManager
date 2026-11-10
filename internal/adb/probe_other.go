@@ -2,5 +2,5 @@
 
 package adb
 
-// adbAnswers: elsewhere the listener check stays the system's (macOS also verifies who owns the port).
-var adbAnswers = func(int) bool { return false }
+// adbProbe: elsewhere the system table and the platform's ownership check decide (macOS verifies who owns the port).
+var adbProbe = func(int) probeResult { return probeSkip }
