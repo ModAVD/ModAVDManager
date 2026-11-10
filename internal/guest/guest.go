@@ -60,6 +60,9 @@ const (
 	GLES32 = "gles32.sh"
 	// PlayStore installs, checks and removes the Google Play Store (modavd only, not in AUTO-MAS).
 	PlayStore = "playstore.sh"
+	// DownloadDisk keeps the download folder of games that fsync after every few KB on a disk of its own, where
+	// fsync does not wait and the folder is committed as a whole every 3 s (modavd only, ModAVD/ModAVD#35).
+	DownloadDisk = "modavd-dldisk.sh"
 )
 
 // RemoteDir is where the scripts go in the guest.

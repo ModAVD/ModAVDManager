@@ -219,6 +219,9 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 				m.recheckHostIme(i, m.guestIO(ctx, i))
 			}
 		},
+		// 12) download disks (dldisk.go). After 11: the framework restart there remounts the shared storage, and a
+		//     disk mounted on it before would be gone with it
+		func() { m.setupDownloadDisk(ctx, i) },
 	}
 	for _, step := range steps {
 		if err := ctxErr(ctx); err != nil {
