@@ -271,7 +271,7 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 - One root folder gets one server; double-clicking again just reopens the window. The state file is in `%LOCALAPPDATA%\ModAVD\`, and the log is at `<root>\logs\modavd-ui.log`.
 - After the window is closed, it waits for the running tasks to finish before exiting.
 - Options: `--root`, `--port`, `--no-window` (start only the server), `--dev` (exposes a fake backend under `/dev/`, for adjusting page styles).
-- The front end / back end API is in `internal/ui/API.md` (in Chinese). The pages are in `internal/ui/web/`; the icons are not licensed under the code license (see `internal/ui/web/assets/README.md` and [NOTICE](NOTICE)).
+- The front end / back end API is in `internal/ui/API.en.md`. The pages are in `internal/ui/web/`; the icons are not licensed under the code license (see `internal/ui/web/assets/README.md` and [NOTICE](NOTICE)).
 
 ## Updating ModAVD
 

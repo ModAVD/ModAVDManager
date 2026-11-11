@@ -1,5 +1,9 @@
 # modavd 管理器的 HTTP 接口（`internal/ui` ↔ `internal/ui/web`）
 
+**简体中文** | [English](API.en.md)
+
+<!-- API.md 和 API.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
 内部契约，前端（`web/`）和服务端（`*.go`）按这份写；改了两边一起改。字段名、结构和 CLI `--json` 的 `data` 相同（`internal/emu/types.go`）。
 
 ## 连接与安全
