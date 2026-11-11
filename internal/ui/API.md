@@ -40,7 +40,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效 |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool, boss_key?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
@@ -72,6 +72,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/components/import-playstore` | `multipart/form-data`，文件字段 `file`，每个文件一个（1–8 个）：Google 官方的 Google Play 版镜像压缩包 `x86_64-34_r14.zip`，或者那五个文件本身（文件名都不限） | 202 `Job`（`kind` 是 `playstore-import`，根任务，`index` 为 `-1`）：「使用我自己的文件」。不下载、不问许可协议。服务端把上传存到临时文件夹，任务结束删掉；任务按大小认出每个文件，压缩包核对 Google 仓库清单的大小和 SHA-1，五个文件各自核对写死的大小和 SHA-256；结果是 `PlayStoreImportResult`。上传本身不对时立即回 400：不是 multipart 是 `usage`，没有 `file` 字段是 `usage`，空文件、超过 8 个、单个比压缩包还大是 `invalid_argument`。文件被拒收时任务以 `components_rejected` 失败，什么也不改，`details.reason`：`unknown_file`（大小既不是压缩包也不是五个文件之一）、`mismatch`（大小对上了、哈希对不上）、`incomplete`（只给了一部分，根目录里又没有其余的）；另一个补全或导入在跑是 409 `busy`；空间不够 422 `precheck_failed` |
 | POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
 | GET | `/api/diag/report-config` | | `{"text":"…"}` |
+| GET | `/api/boss-keys` | | `{"supported","taken"}`：`supported` 是这个管理器有老板键（Windows，托盘图标放成了）；`taken` 是已知被别的程序占着的键（注册或试注册没成），没有是 `[]` |
+| POST | `/api/boss-keys/check` | `{key}` | `{"key","taken"}`：`key` 是存下来的写法（`"Ctrl+Alt+Shift+1"`；`""`、`"none"` 是不要，回 `""`），`taken` 是现在试注册（注册上马上注销）没成；这个管理器自己为别的实例注册着的不算。键写得不对 400 `invalid_argument`，没有老板键 422 `unsupported` |
 | GET | `/api/check?index={i}&refresh=1` | 两个参数均可省略 | `CheckResult` 的原有字段，加 `instance_index`、`memory_mb`、`root_ready`（要几秒：硬件加速检查和 Vulkan 探测） |
 | GET | `/api/jobs` | | `{"jobs":[Job]}`，新的在前，最多 50 个 |
 | GET | `/api/jobs/{id}` | | `Job` |
@@ -205,10 +207,21 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
   - 新版打开窗口以后删掉旧的 `ui-edge`；还有 Edge 在用它（开着旧版管理器）时跳过，下次打开再删。删不掉只记日志，不影响打开。
 - 同一个根目录只开一个服务：再次双击时，把已有的窗口重新打开。
 - Apple Silicon macOS 默认用系统浏览器打开；`--chrome-window` 可改为 Chrome 应用窗口，使用 `~/Library/Application Support/ModAVD/ui-chrome` 独立配置，关闭同步和扩展。Chrome 不可用时回到默认浏览器。单实例锁和状态也在该用户的 `ModAVD` 目录，目录打开操作交给 Finder；根目录可以自动从外层的 `ModAVD.app` 定位。
+- Windows 上管理器在托盘里放一个图标（见下「老板键和托盘」），关掉窗口不退出，留在托盘里，直到在托盘图标的右键菜单里点「退出」：那时等正在跑的任务做完再退出（有页面开着也退）。托盘图标放不成时照下面的规则。
 - 窗口关掉（Edge 进程退出，或者 60 秒内没有任何事件流连着）以后，等正在跑的任务做完，服务再退出。
   - Edge 进程在启动后 10 秒内就退出：当作把窗口交给了同一配置下已在运行的 Edge，不算关窗，之后按事件流规则判断。
   - 真正关窗后，5 秒内没有事件流连着就退出（有任务先等任务做完）。
   - `--dev` 不会因为空闲退出。
+
+## 老板键和托盘
+
+ModAVD/ModAVD#101，只有 Windows。
+
+- 每台实例一个老板键：`InstanceInfo.boss_key`（`"Ctrl+Alt+Shift+1"`，`""` 是不要），存在 `mas-avd.json` 的 `instances.<i>.bossKey`；没写过时编号 0–9 是 Ctrl+Alt+Shift+编号（主键盘那排数字），超过 9 没有。至少带 Ctrl、Alt、Shift 中的一个，不收 Win；按键可以是数字、字母、F1–F24、Num0–Num9、Space、Insert、Delete、Home、End、PageUp、PageDown、方向键。
+- 由管理器统一 `RegisterHotKey`：同一个键只注册一次，只在用它的实例里有带窗口运行着的时候注册，都关了或都是无头的就注销。每 3 秒按进程和实例文件对一遍（不走 adb），改了设置马上对一遍。注册不上的键进 `taken`，之后每轮再试，别的程序放了就注册上。
+- 按下时，这个键管的实例里带窗口运行着的：有一台的窗口显示着就全部藏起来，全都藏着就全部显示（同 `modavd window <i> show|hide`，按窗口现在显不显示，不管是谁藏的）。藏着照旧渲染、照旧能截图，任务栏上没有按钮，位置大小不变。
+- 托盘图标：左键点一下把藏着的窗口都显示出来；右键菜单「打开管理器」「退出」。退出前（任何方式退出都一样）先把藏着的窗口都显示出来，再注销全部老板键、去掉图标。
+- 设置页的老板键一项：点一下输入框再按组合；改了先 `POST /api/boss-keys/check` 当场试一次，保存时 `PATCH` 再试一次；打开设置时按 `GET /api/boss-keys` 的 `taken` 在被占的键旁边标警告图标。`supported` 为 `false` 时不显示这一项。
 
 `resolution` 只接受 1080 和 720。新建默认 1080，分别联动 1920×1080 / DPI 280 与 1280×720 / DPI 240；修改保留方向，下次开机生效。`InstanceInfo.config.resolution` 是按当前配置宽高识别的档位，运行中修改后表示下次开机的设置。
 

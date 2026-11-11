@@ -67,6 +67,7 @@ var (
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
+	optBossKey       = flagSpec{"boss-key", kindString, "组合", "老板键，比如 Ctrl+Alt+Shift+1（Ctrl、Alt、Shift 至少带一个，不收 Win）；none 是不要（只有 Windows）"}
 	optAutoGrow      = flagSpec{"auto-grow", kindString, "on|off", "数据盘快满时下次开机前自动扩容（默认开）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
@@ -182,13 +183,15 @@ func init() {
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--auto-grow on|off] [--diagnostics on|off]",
-			summary: "修改实例设置和诊断模式",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--auto-grow on|off] [--diagnostics on|off] [--boss-key 组合|none]",
+			summary: "修改实例设置、诊断模式和老板键",
 			details: "至少给一个选项。诊断模式和自动扩容开关立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
 				"自动扩容（默认开）：开机后数据盘剩余不到 5 GB 或不到 10% 时，下次开机前自动扩大 16 GB，到 256 GB 为止；" +
-				"宿主盘扩完要还剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，否则只提示。磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optAutoGrow, optDiagnostics},
+				"宿主盘扩完要还剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，否则只提示。磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘。" +
+				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
+				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optAutoGrow, optDiagnostics, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -264,7 +267,7 @@ func init() {
 		},
 		{
 			name: "window", args: "<i> show|hide", summary: "显示或隐藏实例的窗口",
-			details:  "只对带窗口开机的实例有效；无头开机的实例没有窗口。",
+			details:  "只对带窗口开机的实例有效；无头开机的实例没有窗口。藏起来以后照旧渲染、照旧能截图，任务栏上没有它的按钮；也可以用老板键（set --boss-key）藏起、叫回。",
 			posNames: []string{"实例编号", "show 或 hide"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runWindow, human: humanOf(formatWindow),
@@ -366,7 +369,7 @@ func init() {
 				"--cdk-dpapi 是用 Windows DPAPI 加密好的 CDK 的 base64，解不开或格式不对是 invalid_argument，CDK 不进日志和输出。" +
 				"不自动联网，只做给出的那一步：" +
 				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
-				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器窗口和 MCP 客户端；" +
+				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器（包括托盘里的）和 MCP 客户端；" +
 				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
 				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
@@ -612,9 +615,13 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		enabled := value == "on"
 		req.DataAutoGrow = &enabled
 	}
+	if inv.isSet("boss-key") {
+		k := inv.strOpt("boss-key")
+		req.BossKey = &k
+	}
 	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
-		req.Diagnostics == nil && req.DataAutoGrow == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--auto-grow、--diagnostics 中的一个").
+		req.Diagnostics == nil && req.DataAutoGrow == nil && req.BossKey == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--auto-grow、--diagnostics、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

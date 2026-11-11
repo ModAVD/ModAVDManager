@@ -97,7 +97,10 @@ type InstanceInfo struct {
 	SoftwareRenderer bool   `json:"software_renderer"`
 	Diagnostics      bool   `json:"diagnostics"`
 	DiagnosticsSince string `json:"diagnostics_since,omitempty"`
-	Path             string `json:"path"` // <root>\avd\mas_<i>.avd
+	// BossKey is the instance's boss key as the manager uses it ("Ctrl+Alt+Shift+1"; instances.<i>.bossKey, or the
+	// default for 0–9 when never set); "" = none. Windows only, "" elsewhere (bosskey.go).
+	BossKey string `json:"boss_key"`
+	Path    string `json:"path"` // <root>\avd\mas_<i>.avd
 	// AppProxy is the per-app proxy as set (mas-avd.json only; `modavd proxy <i>` asks the guest); null when never set.
 	AppProxy *AppProxySummary `json:"app_proxy"`
 	// DataSpace is /data's free space after the last boot and the automatic growth of the data partition
@@ -146,11 +149,14 @@ type CreateRequest struct {
 
 type UpdateRequest struct {
 	Diagnostics *bool
-	Title       *string
-	MemoryMB    *int
-	CPU         *int
-	FPS         *int
-	Resolution  *int
+	// BossKey: the instance's boss key ("Ctrl+Alt+Shift+1"; "" or "none" = no boss key). Takes effect at once in a
+	// running manager. Windows only.
+	BossKey    *string
+	Title      *string
+	MemoryMB   *int
+	CPU        *int
+	FPS        *int
+	Resolution *int
 	// DataPartitionGB raises the data partition (never lowers it); see avd.UpdateOptions.
 	DataPartitionGB *int
 	// DataAutoGrow turns the automatic growth of the data partition on or off (autogrow.go; mas-avd.json, at once).

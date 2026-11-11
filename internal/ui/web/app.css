@@ -377,6 +377,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .fps-ctl .with-suffix { width: 96px; }
 .fps-ctl input[type="range"] { flex: 1; min-width: 120px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .suffix { position: absolute; right: 12px; color: var(--text-3); font-size: 13px; pointer-events: none; }
+/* the boss key: the input that takes a key combination, its clear button and the warning when another program has it */
+.bosskey { display: flex; align-items: center; gap: 6px; }
+.bosskey .input { width: 200px; caret-color: transparent; cursor: pointer; }
+.bk-warn { display: inline-flex; color: var(--warn-dot); cursor: help; }
+.bk-warn .ic { width: 18px; height: 18px; }
 
 .seg {
   display: inline-flex; gap: 2px; padding: 3px; flex-wrap: wrap;

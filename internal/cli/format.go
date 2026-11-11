@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -251,6 +252,9 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		}
 	}
 	kv("诊断模式", diagnostics)
+	if runtime.GOOS == "windows" {
+		kv("老板键", bossKeyText(in.BossKey))
+	}
 	kv("adb 地址", in.AdbAddress)
 	kv("序列号", in.Serial+"（私有 adb server 上）")
 	kv("端口", fmt.Sprintf("控制台 %d，adb %d，gRPC %d", in.Ports.Console, in.Ports.Adb, in.Ports.Grpc))
@@ -301,6 +305,14 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		kv("按应用走代理", state)
 	}
 	kv("路径", in.Path)
+}
+
+// bossKeyText is a boss key for people: "无" when there is none.
+func bossKeyText(key string) string {
+	if key == "" {
+		return "无"
+	}
+	return key
 }
 
 func formatStatus(w io.Writer, s *StatusResult) {
@@ -388,6 +400,9 @@ func appliedParts(applied map[string]any) []string {
 			} else {
 				parts = append(parts, "诊断模式 关")
 			}
+		case "boss_key":
+			key, _ := v.(string)
+			parts = append(parts, "老板键 "+bossKeyText(key))
 		case "data_auto_grow":
 			if enabled, _ := v.(bool); enabled {
 				parts = append(parts, "数据盘自动扩容 开")

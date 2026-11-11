@@ -124,21 +124,33 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		FPS             *int    `json:"fps"`
 		Resolution      *int    `json:"resolution"`
 		DataPartitionGB *int    `json:"data_partition_gb"`
+		BossKey         *string `json:"boss_key"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil && body.Diagnostics == nil {
-		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb 中的一项"))
+	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil && body.Diagnostics == nil && body.BossKey == nil {
+		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb、diagnostics、boss_key 中的一项"))
 		return
 	}
 	res, err := s.mgr.Update(detached(r), i, emu.UpdateRequest{Title: body.Title, MemoryMB: body.MemoryMB, CPU: body.CPU,
-		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB, Diagnostics: body.Diagnostics})
+		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB, Diagnostics: body.Diagnostics,
+		BossKey: body.BossKey})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	s.hub.requestRefresh()
+	if body.BossKey != nil && s.boss != nil {
+		// the new key takes effect now: tried at once (shown on the settings page), registered by the next sync
+		taken := s.boss.check(res.Instance.BossKey)
+		s.kickBossKeys()
+		writeJSON(w, http.StatusOK, struct {
+			*emu.UpdateResult
+			BossKeyTaken bool `json:"boss_key_taken"`
+		}{res, taken})
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
