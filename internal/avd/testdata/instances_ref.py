@@ -4,7 +4,8 @@
 #
 # Intentional differences: created_at is injected for byte comparisons. ModAVD#100
 # defaults new instances to 1080p and preserves either preset on existing instances. ModAVD#180 takes any
-# frame rate in 1–60 instead of 30 / 60.
+# frame rate in 1–60 instead of 30 / 60. ModAVD#153: no data partition size given is 自动扩盘 (256 GB,
+# dataDiskMode "auto"); a given size is dataDiskMode "manual".
 #
 #   python -I instances_ref.py <job.json> <out.json>
 #
@@ -34,7 +35,7 @@ MEMORY_CHOICES_MB = (3072, 4096, 5120, 6144)
 CPU_CHOICES = (2, 4, 6)
 DEFAULT_MEMORY_MB = 6144
 DEFAULT_CPU = 6
-DEFAULT_DATA_PARTITION_GB = 64
+DEFAULT_DATA_PARTITION_GB = 256
 DATA_PARTITION_RANGE_GB = (16, 512)
 SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1920, 1080, 280
 FPS_RANGE = (1, 60)
@@ -351,7 +352,8 @@ def validate_fps(fps):
 
 
 def create_instance_files(
-    root, native_index, *, title, memory_mb, cpu, data_partition_gb, fps=DEFAULT_FPS, created_at
+    root, native_index, *, title, memory_mb, cpu, data_partition_gb, fps=DEFAULT_FPS, created_at,
+    data_disk_mode="auto",
 ):
     if not valid_native_index(native_index):
         raise ValueError(f"原生索引 {native_index} 不可用")
@@ -393,6 +395,7 @@ def create_instance_files(
         memoryMb=memory_mb,
         initialized=False,
         createdAt=created_at,
+        dataDiskMode=data_disk_mode,
     )
     return AvdInstance(str(native_index), name, title or name, config)
 
@@ -423,7 +426,7 @@ def create_instance(root, index, title, memory_mb, cpu, data_gb, fps, created_at
     refresh = validate_fps(fps)
     create_instance_files(
         root, int(index), title=title, memory_mb=memory, cpu=cores, data_partition_gb=data, fps=refresh,
-        created_at=created_at,
+        created_at=created_at, data_disk_mode="auto" if data_gb is None else "manual",
     )
     return str(index)
 

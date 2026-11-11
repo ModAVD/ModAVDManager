@@ -221,7 +221,7 @@ func goRun(r *root.Root, op refOp) (any, error) {
 		defer func() { nowISO = old }()
 		nowISO = func() string { return op["created_at"].(string) }
 		in, err := Create(r, op["index"].(int), CreateOptions{Title: title, MemoryMB: memory, CPU: cpu,
-			DataPartitionGB: data, FPS: fps})
+			DataPartitionGB: data, DataDiskManual: optInt(op, "data_gb") != nil, FPS: fps})
 		if err != nil {
 			return nil, err
 		}
@@ -530,7 +530,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	if len(keys) < 3 || strings.Join(keys[:3], ",") != "memoryMb,initialized,createdAt" {
 		t.Errorf("production meta keys %v", keys)
 	}
-	if got := strings.Join(r.InstanceMeta(1).Keys(), ","); got != "memoryMb,initialized,createdAt" {
+	if got := strings.Join(r.InstanceMeta(1).Keys(), ","); got != "memoryMb,initialized,createdAt,dataDiskMode" {
 		t.Errorf("meta keys %s", got)
 	}
 }
@@ -722,7 +722,7 @@ func TestParseMemoryMB(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	m, c, d, err := ValidateOptions(nil, nil, nil)
-	if err != nil || m != 6144 || c != 6 || d != 64 {
+	if err != nil || m != 6144 || c != 6 || d != AutoDataPartitionGB {
 		t.Fatalf("defaults %d %d %d %v", m, c, d, err)
 	}
 	for _, tc := range []struct {
@@ -972,14 +972,14 @@ func TestUpdateDataPartition(t *testing.T) {
 	}
 	before := readFile(t, ConfigPath(r, 0))
 	applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)})
-	if err != nil || fmt.Sprint(applied) != "map[data_partition_gb:96]" {
+	if err != nil || fmt.Sprint(applied) != "map[data_disk_mode:manual data_partition_gb:96]" {
 		t.Fatalf("raise: %v %v", applied, err)
 	}
 	// changed in place, nothing else touched
 	if want := strings.Replace(string(before), "disk.dataPartition.size=64G\r\n", "disk.dataPartition.size=96G\r\n", 1); string(readFile(t, ConfigPath(r, 0))) != want {
 		t.Fatalf("config after raise:\n%s", readFile(t, ConfigPath(r, 0)))
 	}
-	if applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)}); err != nil || fmt.Sprint(applied) != "map[data_partition_gb:96]" {
+	if applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)}); err != nil || fmt.Sprint(applied) != "map[data_disk_mode:manual data_partition_gb:96]" {
 		t.Fatalf("same size: %v %v", applied, err)
 	}
 	cfg := readFile(t, ConfigPath(r, 0))
@@ -1108,7 +1108,7 @@ func TestCreateKeepsOtherMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "{\r\n  \"a\": 1,\r\n  \"instances\": {\r\n    \"2\": {\r\n      \"x\": true\r\n    },\r\n    \"0\": {\r\n" +
-		"      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n      \"createdAt\": \"2026-10-28T16:00:00\"\r\n" +
+		"      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n      \"createdAt\": \"2026-10-28T16:00:00\",\r\n      \"dataDiskMode\": \"auto\"\r\n" +
 		"    }\r\n  },\r\n  \"b\": [\r\n    1000.0\r\n  ]\r\n}"
 	if got := string(readFile(t, r.MetadataPath())); got != want {
 		t.Fatalf("got %q", got)
@@ -1129,7 +1129,7 @@ func TestCreateMarksCreating(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "{\r\n  \"instances\": {\r\n    \"0\": {\r\n      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n" +
-		"      \"createdAt\": \"2026-11-02T21:00:00\",\r\n      \"creationState\": \"creating\"\r\n    }\r\n  }\r\n}"
+		"      \"createdAt\": \"2026-11-02T21:00:00\",\r\n      \"dataDiskMode\": \"auto\",\r\n      \"creationState\": \"creating\"\r\n    }\r\n  }\r\n}"
 	if got := string(readFile(t, r.MetadataPath())); got != want {
 		t.Fatalf("got %q", got)
 	}

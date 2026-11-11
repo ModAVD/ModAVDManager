@@ -196,9 +196,13 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		cfg.DataPartitionGB = n
 	}
 	cfg.Width, cfg.Height, cfg.DPI = in.Display()
+	meta := m.Root.InstanceMeta(i)
+	cfg.DataDiskMode = avd.DataDiskManual
+	if avd.DataDiskAutoMeta(meta) {
+		cfg.DataDiskMode = avd.DataDiskAuto
+	}
 	info.Config = cfg
 
-	meta := m.Root.InstanceMeta(i)
 	if meta != nil {
 		info.Diagnostics, _ = meta.Get("diagnostics").BoolVal()
 		info.DiagnosticsSince = metaText(meta.Get("diagnosticsSince"))
@@ -211,7 +215,12 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 		info.GLES32 = gles32Record(meta)
 	}
-	info.DataSpace = dataSpaceInfo(i, meta, cfg.DataPartitionGB)
+	hostFree := int64(-1)
+	if n, err := hostDiskFree(in.Dir); err == nil {
+		hostFree = int64(min(n, uint64(1)<<62))
+	}
+	info.DataSpace = dataSpaceInfo(i, meta, cfg.DataPartitionGB, hostFree)
+	info.DataSpace.HostBytes = hostDataBytes(in.Dir)
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info
 }

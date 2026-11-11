@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/avd"
 	"modavd/internal/components"
 	"modavd/internal/emu"
 )
@@ -265,7 +266,7 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	kv("内存", fmtMemory(cfg.MemoryMB))
 	kv("核数", intOrDash(cfg.CPU))
 	kv("帧率", intOrDash(cfg.FPS))
-	kv("数据盘", fmtGB(cfg.DataPartitionGB)+"（"+dataSpaceSummary(in.DataSpace)+"）")
+	kv("数据盘", dataDiskText(cfg)+"，"+dataSpaceSummary(in.DataSpace))
 	if in.DataSpace.Message != "" {
 		kv("数据盘提示", dataSpaceNote(in.DataSpace))
 	}
@@ -310,17 +311,25 @@ func formatStatus(w io.Writer, s *StatusResult) {
 	}
 }
 
-// dataSpaceSummary is what info shows after the data partition's size: the free space after the last boot and
-// whether automatic growth is on ("剩余 3.2 GB，自动扩容开").
+// dataDiskText is the data disk's mode and size: "自动扩盘（256 GB）" / "64 GB（指定大小）".
+func dataDiskText(cfg emu.InstanceConfig) string {
+	if cfg.DataDiskMode == avd.DataDiskManual {
+		return fmtGB(cfg.DataPartitionGB) + "（指定大小）"
+	}
+	return "自动扩盘（" + fmtGB(cfg.DataPartitionGB) + "）"
+}
+
+// dataSpaceSummary is what info shows after the data disk: what it takes on the host and the free space after the
+// last boot ("宿主占用 12.3 GB，上次开机剩余 200.0 GB").
 func dataSpaceSummary(d emu.DataSpace) string {
-	s := "自动扩容开"
-	if !d.AutoGrow {
-		s = "自动扩容关"
+	host := "宿主占用读不到"
+	if d.HostBytes >= 0 {
+		host = fmt.Sprintf("宿主占用 %.1f GB", float64(d.HostBytes)/(1<<30))
 	}
 	if d.TotalBytes > 0 {
-		s = fmt.Sprintf("上次开机剩余 %.1f GB，%s", float64(d.FreeBytes)/(1<<30), s)
+		return fmt.Sprintf("%s，上次开机剩余 %.1f GB", host, float64(d.FreeBytes)/(1<<30))
 	}
-	return s
+	return host
 }
 
 // dataSpaceNote is the message with its advice ("数据盘只剩 …；手动扩容：modavd set …").
@@ -334,7 +343,7 @@ func dataSpaceNote(d emu.DataSpace) string {
 func formatCreate(w io.Writer, in *emu.InstanceInfo) {
 	cfg := in.Config
 	fmt.Fprintf(w, "已创建%s：内存 %s，%s 核，%s 帧，数据盘 %s\n", instLabel(in.Index, in.Name, in.Title),
-		fmtMemory(cfg.MemoryMB), intOrDash(cfg.CPU), intOrDash(cfg.FPS), fmtGB(cfg.DataPartitionGB))
+		fmtMemory(cfg.MemoryMB), intOrDash(cfg.CPU), intOrDash(cfg.FPS), dataDiskText(cfg))
 	fmt.Fprintf(w, "adb 地址：%s\n", in.AdbAddress)
 	fmt.Fprintf(w, "路径：%s\n", in.Path)
 }
@@ -381,18 +390,18 @@ func appliedParts(applied map[string]any) []string {
 		case "resolution":
 			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
 		case "data_partition_gb":
-			parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+			if applied["data_disk_mode"] == avd.DataDiskAuto {
+				parts = append(parts, fmt.Sprintf("数据盘 自动扩盘（%v GB，下次开机生效）", v))
+			} else {
+				parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+			}
+		case "data_disk_mode":
+			// said with data_partition_gb
 		case "diagnostics":
 			if enabled, _ := v.(bool); enabled {
 				parts = append(parts, "诊断模式 开")
 			} else {
 				parts = append(parts, "诊断模式 关")
-			}
-		case "data_auto_grow":
-			if enabled, _ := v.(bool); enabled {
-				parts = append(parts, "数据盘自动扩容 开")
-			} else {
-				parts = append(parts, "数据盘自动扩容 关")
 			}
 		default:
 			parts = append(parts, fmt.Sprintf("%s %v", k, v))

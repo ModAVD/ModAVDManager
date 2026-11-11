@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"modavd/internal/avd"
 	"modavd/internal/buildinfo"
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -58,16 +60,36 @@ func (c *command) usageAdvice() string { return "用法：" + c.usage() }
 
 const helpAdvice = "运行 modavd help 查看全部命令"
 
+// dataDiskHelp is the data disk's two modes, in create's and set's help.
+const dataDiskHelp = "数据盘两种：--data-gb auto 自动扩盘（默认），一开始就是 256 GB，磁盘镜像按实际写入增长，宿主盘只为写进去的数据付空间" +
+	"（比 64 GB 多占约 1 GB 的文件系统结构）；--data-gb N 指定 16–512 GB，不自动扩，快满时提醒。"
+
+// dataGBOpt reads --data-gb: auto (true) or a size; neither when not given.
+func dataGBOpt(inv *invocation) (gb *int, auto bool, err error) {
+	if !inv.isSet("data-gb") {
+		return nil, false, nil
+	}
+	v := strings.TrimSpace(inv.strOpt("data-gb"))
+	if strings.EqualFold(v, "auto") {
+		return nil, true, nil
+	}
+	n, convErr := strconv.Atoi(v)
+	if convErr != nil {
+		return nil, false, errs.Newf(errs.InvalidArgument, "--data-gb 只能是 auto 或 %d–%d 的整数（GB），收到「%s」",
+			avd.MinDataPartitionGB, avd.MaxDataPartitionGB, v)
+	}
+	return &n, false, nil
+}
+
 var (
 	optIndex         = flagSpec{"index", kindString, "N", "实例编号（不给就取最小的空闲编号，端口也要空着）"}
 	optTitle         = flagSpec{"title", kindString, "T", "显示名称"}
 	optMemory        = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 MB，也可写 6G"}
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
-	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
+	optDataGB        = flagSpec{"data-gb", kindString, "auto|N", "数据盘：auto 自动扩盘（默认），或指定大小 16–512 GB"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
-	optAutoGrow      = flagSpec{"auto-grow", kindString, "on|off", "数据盘快满时下次开机前自动扩容（默认开）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
 	optHeadless      = flagSpec{"headless", kindBool, "", "无头开机（不带 --window 时本来就是无头）；实例已经带窗口运行时报错，不接管"}
@@ -169,9 +191,10 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 1-60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
-			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
+			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘自动扩盘、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
+				dataDiskHelp +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
 				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
 				"之后第一次开机和平常一样快。新建的实例不带 Google Play 商店，要的话建好后用 playstore <i> install 补全。" +
@@ -182,13 +205,11 @@ func init() {
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--auto-grow on|off] [--diagnostics on|off]",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb auto|N] [--diagnostics on|off]",
 			summary: "修改实例设置和诊断模式",
-			details: "至少给一个选项。诊断模式和自动扩容开关立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
-				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
-				"自动扩容（默认开）：开机后数据盘剩余不到 5 GB 或不到 10% 时，下次开机前自动扩大 16 GB，到 256 GB 为止；" +
-				"宿主盘扩完要还剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，否则只提示。磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optAutoGrow, optDiagnostics},
+			details: "至少给一个选项。诊断模式立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
+				dataDiskHelp + "数据盘只能改大，游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。",
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optDiagnostics},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -457,7 +478,7 @@ type StatusResult struct {
 	Serial     string    `json:"serial"`
 	AdbAddress string    `json:"adb_address"`
 	Ports      emu.Ports `json:"ports"`
-	// DataSpace: emu.InstanceInfo.DataSpace (free space after the last boot, the automatic growth of the data partition)
+	// DataSpace: emu.InstanceInfo.DataSpace (the data disk on the host, /data's free space after the last boot)
 	DataSpace emu.DataSpace `json:"data_space"`
 }
 
@@ -552,7 +573,12 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.MemoryMB = &mb
 	}
 	req.CPU = intPtrOpt(inv, "cpu")
-	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
+	// auto and not given are the same: 自动扩盘
+	gb, _, err := dataGBOpt(inv)
+	if err != nil {
+		return req, err
+	}
+	req.DataPartitionGB = gb
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
 	req.NoBridge = inv.boolOpt("no-bridge")
@@ -595,7 +621,11 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	req.CPU = intPtrOpt(inv, "cpu")
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
-	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
+	gb, auto, err := dataGBOpt(inv)
+	if err != nil {
+		return req, err
+	}
+	req.DataPartitionGB, req.DataDiskAuto = gb, auto
 	if inv.isSet("diagnostics") {
 		value := strings.ToLower(inv.strOpt("diagnostics"))
 		if value != "on" && value != "off" {
@@ -604,17 +634,9 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		enabled := value == "on"
 		req.Diagnostics = &enabled
 	}
-	if inv.isSet("auto-grow") {
-		value := strings.ToLower(inv.strOpt("auto-grow"))
-		if value != "on" && value != "off" {
-			return req, errs.New(errs.InvalidArgument, "--auto-grow 只能是 on 或 off")
-		}
-		enabled := value == "on"
-		req.DataAutoGrow = &enabled
-	}
 	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
-		req.Diagnostics == nil && req.DataAutoGrow == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--auto-grow、--diagnostics 中的一个").
+		!req.DataDiskAuto && req.Diagnostics == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--diagnostics 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

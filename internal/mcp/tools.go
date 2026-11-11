@@ -188,9 +188,9 @@ func toolDefs() []*toolDef {
 				"Until then its status is creating, with creation_progress (0-100) in get_instance / list_instances; a "+
 				"failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
 				"Omitted options take the defaults (%d MB memory, %d CPU "+
-				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory and CPU "+
+				"cores, automatic data disk, %d fps); index defaults to the smallest free one. Memory and CPU "+
 				"only accept the listed steps, fps any whole number in its range; the data partition can later only be made larger (update_instance).",
-				avd.DefaultMemoryMB, avd.DefaultCPU, avd.DefaultDataPartitionGB, avd.DefaultFPS),
+				avd.DefaultMemoryMB, avd.DefaultCPU, avd.DefaultFPS),
 			mutating(false, false), reflect.TypeFor[emu.InstanceInfo](), []prop{
 				{"title", false, map[string]any{"type": "string",
 					"description": "Display name; default: the instance name (" + root.AvdNamePrefix + "<index>)."}},
@@ -198,7 +198,9 @@ func toolDefs() []*toolDef {
 				memoryProp("Guest memory in MB."),
 				cpuProp("CPU cores."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
-					"maximum": avd.MaxDataPartitionGB, "description": "Size of the data partition (games) in GB."}},
+					"maximum": avd.MaxDataPartitionGB, "description": fmt.Sprintf("A fixed size of the data partition (games) "+
+						"in GB. Omitted: automatic data disk (%d GB from the start; the disk image is sparse, so the host only "+
+						"pays for what is written).", avd.AutoDataPartitionGB)}},
 				fpsProp("Display refresh rate in Hz, 1-60."),
 				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280 (default), 720 = 1280×720 / DPI 240."),
 			},
@@ -241,7 +243,7 @@ func toolDefs() []*toolDef {
 			})),
 
 		finishing(newTool("update_instance", "Update instance",
-			"Change the title, memory, CPU cores, frame rate, resolution or data partition size of an instance. The changes take "+
+			"Change the title, memory, CPU cores, frame rate, resolution or data disk (a fixed size or automatic) of an instance. The changes take "+
 				"effect at its next boot (applies_next_boot=true when it is running now).",
 			mutating(true, true), reflect.TypeFor[emu.UpdateResult](), []prop{
 				indexProp(true),
@@ -252,8 +254,11 @@ func toolDefs() []*toolDef {
 				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280, 720 = 1280×720 / DPI 240. Preserves orientation; next boot."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "New data partition size in GB; can only be " +
-						"raised. Game data is kept: the emulator grows the disk at the next boot and the file " +
-						"system is grown online after it."}},
+						"raised, and the data disk then keeps this size (manual). Game data is kept: the emulator grows the " +
+						"disk at the next boot and the file system is grown online after it."}},
+				{"data_disk_auto", false, map[string]any{"type": "boolean", "description": fmt.Sprintf("true: make the data "+
+					"disk automatic (%d GB from the next boot, the host only pays for what is written). Not together with "+
+					"data_partition_gb.", avd.AutoDataPartitionGB)}},
 			},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
@@ -279,8 +284,14 @@ func toolDefs() []*toolDef {
 				if req.DataPartitionGB, err = a.optInt("data_partition_gb"); err != nil {
 					return nil, err
 				}
-				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil {
-					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb 至少给一项")
+				auto, err := a.optBool("data_disk_auto")
+				if err != nil {
+					return nil, err
+				}
+				req.DataDiskAuto = auto != nil && *auto
+				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
+					!req.DataDiskAuto {
+					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto 至少给一项")
 				}
 				return b.Update(ctx, i, req)
 			})),

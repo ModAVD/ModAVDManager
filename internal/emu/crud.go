@@ -38,6 +38,8 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	if req.Resume {
 		return m.resumeCreate(ctx, req)
 	}
+	// no size given: 自动扩盘 (autogrow.go)
+	manualDisk := req.DataPartitionGB != nil
 	memory, cpu, dataGB, err := avd.ValidateOptions(req.MemoryMB, req.CPU, req.DataPartitionGB)
 	if err != nil {
 		return nil, err
@@ -98,13 +100,18 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 		return nil, err
 	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
-		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps, Resolution: resolution, Creating: !req.filesOnly,
+		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, DataDiskManual: manualDisk, FPS: fps, Resolution: resolution,
+		Creating: !req.filesOnly,
 	})
 	if err != nil {
 		lock.Unlock()
 		return nil, err
 	}
-	m.Log.Infof("已新建 ModAVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %d GB / 帧率 %d）", i, memory, cpu, dataGB, fps)
+	disk := "自动扩盘"
+	if manualDisk {
+		disk = fmt.Sprintf("%d GB", dataGB)
+	}
+	m.Log.Infof("已新建 ModAVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %s / 帧率 %d）", i, memory, cpu, disk, fps)
 	if req.NoBridge {
 		// recorded, so no start installs it (bridge.go)
 		if err := m.setBridgeWanted(i, false); err != nil {
@@ -211,9 +218,11 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	// legacy disk sizes or AUTO-MAS's automatic memory when the request only changes this switch.
 	applied := map[string]any{}
 	var err error
-	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil {
+	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil ||
+		req.DataDiskAuto {
 		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
 			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
+			DataDiskAuto: req.DataDiskAuto,
 		})
 		if err != nil {
 			return nil, err
@@ -223,13 +232,6 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		applied = map[string]any{}
 	}
 	nextBoot := len(applied) > 0
-	// the automatic growth of the data partition: a record the next start and after-boot step read (autogrow.go)
-	if req.DataAutoGrow != nil {
-		if err := m.setDataAutoGrow(i, *req.DataAutoGrow); err != nil {
-			return nil, err
-		}
-		applied["data_auto_grow"] = *req.DataAutoGrow
-	}
 	var cleanup *DiagnosticsCleanup
 	var warnings []string
 	if req.Diagnostics != nil {

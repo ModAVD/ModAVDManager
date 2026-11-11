@@ -62,8 +62,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 1-60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--auto-grow on\|off] [--diagnostics on\|off]` | 修改；诊断模式和自动扩容开关立即生效，其余设置下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--auto-grow` 开关数据盘自动扩容（默认开，见下） |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto\|N] [--fps 1-60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建（数据盘默认自动扩盘，见下），并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb auto\|N] [--diagnostics on\|off]` | 修改；诊断模式立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
@@ -92,12 +92,11 @@ Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、m
 自动回收日志里的秒数是 adb/su 命令往返耗时。客体是否完成或失败，需要另看客体信号，
 不能用暂时稳定的 discard 计数判定。
 
-**数据盘自动扩容**（默认开）：
+**数据盘**有两种，新建和设置里二选一（命令行 `--data-gb auto|N`）：
 
-- 每次开机后读一次客体 `/data` 的剩余。剩余不到 5 GB 或不到 10% 时，下次开机前自动把数据盘扩大 16 GB（和 `set --data-gb` 是同一套：开机时扩磁盘镜像，开机后在线扩文件系统），游戏数据不动；到 256 GB 为止，再大要手动 `set --data-gb`（最大 512）。
-- 磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘（16 GB 扩到 32 GB 时，宿主侧只多了约 0.3 GB）。只有宿主盘在扩完以后还能剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，不够就不扩、只提示。
-- 快满、扩了、没扩成、到上限，`status`、`info` 和管理器卡片上都会提示，带上手动扩容的命令；JSON 里是 `data_space`。
-- 按实例关掉：`modavd set <i> --auto-grow off`（记在 `mas-avd.json` 这台实例的 `dataAutoGrow`），关了以后快满时只提示。
+- **自动扩盘**（默认）：数据盘一开始就是 256 GB。磁盘镜像按实际写入增长，电脑硬盘只为写进去的数据付空间，客体里一直有很多剩余，不用等开关机，也不用管大小。比 64 GB 的盘一次性多占约 1 GB（新块组的文件系统结构，扩完后几分钟内在后台写完）。没写过模式的旧实例也按自动扩盘处理：下次开机前扩到 256 GB，开机后在线扩文件系统，游戏数据不动；0.36 之前按 16 GB 及以下建的盘只能扩到约 30 GB，照旧在日志里报出来。电脑硬盘剩余不到 20 GB 时，`status`、`info` 和管理器卡片会提醒。
+- **指定大小**：16–512 GB，给多少就是多少，以后只能改大，不自动扩。剩余不到 5 GB 或不到 10% 时（每次开机后读一次），`status`、`info` 和管理器卡片会提醒，带上改大或改成自动扩盘的命令。
+- 模式记在 `mas-avd.json` 这台实例的 `dataDiskMode`（`auto` / `manual`，没写就是 `auto`）；大小照旧在 `config.ini` 的 `disk.dataPartition.size`。`info` 显示数据盘在电脑上实际占多少；JSON 里是 `config.data_disk_mode` 和 `data_space`。
 
 Apple Silicon macOS 使用 SDK 中原生的 `qemu-img`。磁盘占用按宿主已分配块计算，排除稀疏文件空洞；APFS 克隆可能共享数据块，整理前后文件占用的差值不保证等于整个卷增加的可用空间。普通日志清理会检查实际打开的文件，保留正在使用、身份已变化、带链接或意外子目录的候选；macOS 的诊断模式开关仍未开放。
 

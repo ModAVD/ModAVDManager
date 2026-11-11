@@ -61,7 +61,7 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	if !root.ValidIndex(i) || created.Title != "测试实例" || created.Status != StatusOffline || created.Running || created.PID != 0 {
 		t.Fatalf("created = %+v", created)
 	}
-	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Resolution: 1080, Width: 1920, Height: 1080, DPI: 280}
+	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 256, DataDiskMode: "auto", Resolution: 1080, Width: 1920, Height: 1080, DPI: 280}
 	if created.Config != want {
 		t.Fatalf("config = %+v, want %+v", created.Config, want)
 	}

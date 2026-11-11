@@ -66,7 +66,7 @@ func sampleInstance(i int) emu.InstanceInfo {
 		Index: i, Name: root.AvdName(i), Title: root.AvdName(i), Status: emu.StatusOffline,
 		Serial: p.Serial(i), AdbAddress: "127.0.0.1:" + itoa(p.Adb(i)),
 		Ports:  emu.Ports{Console: p.Console(i), Adb: p.Adb(i), Grpc: p.Grpc(i)},
-		Config: emu.InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Width: 1280, Height: 720, DPI: 240},
+		Config: emu.InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, DataDiskMode: "manual", Width: 1280, Height: 720, DPI: 240},
 		Path:   `D:\r\avd\` + root.AvdName(i) + ".avd",
 	}
 }
@@ -1020,7 +1020,7 @@ func TestStatusSubset(t *testing.T) {
 	r := h.run(t, nil, "status", "3", "--json")
 	// where to reach it comes along (ModAVD/ModAVD#75): a root with portBase is not on 20000 + 10 * i
 	const at = `"serial":"emulator-20030","adb_address":"127.0.0.1:20031","ports":{"console":20030,"adb":20031,"grpc":20032}` +
-		`,"data_space":{"auto_grow":false,"free_bytes":0,"total_bytes":0,"checked_at":"","low":false,"state":"","from_gb":0,"to_gb":0,"message":"","advice":""}`
+		`,"data_space":{"free_bytes":0,"total_bytes":0,"checked_at":"","low":false,"host_bytes":0,"host_free_bytes":0,"state":"","message":"","advice":""}`
 	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0,` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)

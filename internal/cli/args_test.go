@@ -332,37 +332,65 @@ func TestBuildUpdateRequest(t *testing.T) {
 	if err != nil || req.Resolution == nil || *req.Resolution != 1080 || req.MemoryMB != nil {
 		t.Fatalf("resolution alone: %+v %v", req, err)
 	}
-	for v, want := range map[string]bool{"off": false, "on": true, "OFF": false} {
-		req, err = buildUpdateRequest(mustParse(t, "set", "3", "--auto-grow", v))
-		if err != nil || req.DataAutoGrow == nil || *req.DataAutoGrow != want || req.DataPartitionGB != nil || req.Diagnostics != nil {
-			t.Errorf("--auto-grow %s alone: %+v %v", v, req, err)
+	for _, v := range []string{"auto", "AUTO", " auto "} {
+		req, err = buildUpdateRequest(mustParse(t, "set", "3", "--data-gb", v))
+		if err != nil || !req.DataDiskAuto || req.DataPartitionGB != nil || req.Diagnostics != nil {
+			t.Errorf("--data-gb %q: %+v %v", v, req, err)
 		}
 	}
-	if _, err := buildUpdateRequest(mustParse(t, "set", "3", "--auto-grow", "yes")); errs.CodeOf(err) != errs.InvalidArgument {
-		t.Errorf("--auto-grow yes: %v", err)
+	for _, v := range []string{"yes", "64G", ""} {
+		if _, err := buildUpdateRequest(mustParse(t, "set", "3", "--data-gb", v)); errs.CodeOf(err) != errs.InvalidArgument {
+			t.Errorf("--data-gb %q: %v", v, err)
+		}
+	}
+}
+
+func TestBuildCreateRequestDataDisk(t *testing.T) {
+	withFakeMemory(t)
+	for _, args := range [][]string{{"create"}, {"create", "--data-gb", "auto"}} {
+		req, err := buildCreateRequest(mustParse(t, args...))
+		if err != nil || req.DataPartitionGB != nil {
+			t.Errorf("%v: %+v %v (want 自动扩盘: no size)", args, req, err)
+		}
+	}
+	req, err := buildCreateRequest(mustParse(t, "create", "--data-gb", "48"))
+	if err != nil || req.DataPartitionGB == nil || *req.DataPartitionGB != 48 {
+		t.Errorf("--data-gb 48: %+v %v", req, err)
+	}
+	if _, err := buildCreateRequest(mustParse(t, "create", "--data-gb", "big")); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("--data-gb big: %v", err)
 	}
 }
 
 func TestFormatDataSpace(t *testing.T) {
 	var b strings.Builder
-	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{AutoGrow: true, State: "pending",
-		Message: "数据盘只剩 1.8 GB（共 47.0 GB），下次开机前自动扩到 64 GB", Advice: "不想自动扩：modavd set 3 --auto-grow off"}})
-	if out := b.String(); !strings.Contains(out, "数据盘：数据盘只剩 1.8 GB") || !strings.Contains(out, "modavd set 3 --auto-grow off") {
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{State: "low",
+		Message: "数据盘只剩 1.8 GB（共 47.0 GB）", Advice: "改成自动扩盘：modavd set 3 --data-gb auto"}})
+	if out := b.String(); !strings.Contains(out, "数据盘：数据盘只剩 1.8 GB") || !strings.Contains(out, "modavd set 3 --data-gb auto") {
 		t.Errorf("status:\n%s", out)
 	}
 	b.Reset()
-	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{AutoGrow: true}})
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline})
 	if strings.Contains(b.String(), "数据盘") {
 		t.Errorf("status without a note:\n%s", b.String())
 	}
-	if s := dataSpaceSummary(emu.DataSpace{AutoGrow: false, FreeBytes: 3 << 30, TotalBytes: 60 << 30}); s != "上次开机剩余 3.0 GB，自动扩容关" {
+	if s := dataSpaceSummary(emu.DataSpace{HostBytes: 12 << 30, FreeBytes: 3 << 30, TotalBytes: 60 << 30}); s != "宿主占用 12.0 GB，上次开机剩余 3.0 GB" {
 		t.Errorf("summary %q", s)
 	}
-	if s := dataSpaceSummary(emu.DataSpace{AutoGrow: true}); s != "自动扩容开" {
+	if s := dataSpaceSummary(emu.DataSpace{HostBytes: -1}); s != "宿主占用读不到" {
 		t.Errorf("summary never read %q", s)
 	}
-	if got := appliedParts(map[string]any{"data_auto_grow": false}); len(got) != 1 || got[0] != "数据盘自动扩容 关" {
-		t.Errorf("applied %q", got)
+	if s := dataDiskText(emu.InstanceConfig{DataPartitionGB: 256, DataDiskMode: "auto"}); s != "自动扩盘（256 GB）" {
+		t.Errorf("auto %q", s)
+	}
+	if s := dataDiskText(emu.InstanceConfig{DataPartitionGB: 64, DataDiskMode: "manual"}); s != "64 GB（指定大小）" {
+		t.Errorf("manual %q", s)
+	}
+	if got := appliedParts(map[string]any{"data_partition_gb": 256, "data_disk_mode": "auto"}); len(got) != 1 || got[0] != "数据盘 自动扩盘（256 GB，下次开机生效）" {
+		t.Errorf("applied auto %q", got)
+	}
+	if got := appliedParts(map[string]any{"data_partition_gb": 96, "data_disk_mode": "manual"}); len(got) != 1 || got[0] != "数据盘 96 GB（下次开机扩大）" {
+		t.Errorf("applied manual %q", got)
 	}
 }
 

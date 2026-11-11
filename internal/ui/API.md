@@ -39,8 +39,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效 |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool}` | `UpdateResult`；诊断立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给 |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
@@ -171,14 +171,14 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 - `InstanceInfo.gles32`（bool）：开关的记录（`mas-avd.json` 的 `gles32`；不问客体）。界面据此在「更多操作」里显示「开启 / 关闭报告 GLES 3.2（实验）」；`bridge` 为 `off` 的实例开不了（会回 `gles32_no_bridge`），已经开着的仍可关。
 - 页面选文件和装 APK 一样：`<input type="file">`（可多选），每个文件追加一个 `file` 字段，用 `FormData` 发 `multipart/form-data`。
 
-### 数据盘剩余和自动扩容 `InstanceInfo.data_space`
+### 数据盘 `InstanceConfig.data_disk_mode`、`InstanceInfo.data_space`
 
-`{"auto_grow","free_bytes","total_bytes","checked_at","low","state","from_gb","to_gb","message","advice"}`，和 `modavd info` / `status --json` 的 `data_space` 相同，只读 `mas-avd.json`，不问客体。
-
-- 每次开机后读一次客体 `/data` 的剩余（`free_bytes` / `total_bytes`，`checked_at` 是那时）；剩余不到 5 GB 或不到 10% 是 `low`。
-- `auto_grow`：自动扩容开着（默认开，`modavd set <i> --auto-grow off` 关）。开着时，`low` 的实例下次开机前自动扩大 16 GB，到 256 GB 为止；宿主盘扩完要还剩至少 20 GB 才扩。
-- `state`：`""`（没什么要说的）、`pending`（下次开机扩到 `to_gb`）、`grown`（开机前已从 `from_gb` 扩到 `to_gb`）、`host_low`（宿主盘不够，没扩）、`at_max`（到了 256 GB）、`fs_behind`（旧版建的盘文件系统扩不过去）、`failed`（扩容没做成）、`low`（自动扩容关着）。
-- `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条提示：`pending`、`grown` 是普通提示，其余是警告。
+- `config.data_disk_mode`：`auto`（自动扩盘：数据盘一开始就是 256 GB，按实际写入占电脑硬盘；`mas-avd.json` 没写模式的旧实例也是，下次开机前扩到 256 GB）或 `manual`（指定大小，`data_partition_gb` 就是用户给的）。新建和设置里二选一，选指定大小才有大小输入框。
+- `data_space`：`{"free_bytes","total_bytes","checked_at","low","host_bytes","host_free_bytes","state","message","advice"}`，和 `modavd info` / `status --json` 的 `data_space` 相同，不问客体。
+  - 每次开机后读一次客体 `/data` 的剩余（`free_bytes` / `total_bytes`，`checked_at` 是那时）；剩余不到 5 GB 或不到 10%、并且读数就是现在这个大小的，是 `low`。
+  - `host_bytes`：数据盘文件在电脑上实际占的字节（稀疏文件，只算写进去的）；`host_free_bytes`：它所在的盘的剩余。读不到是 `-1`。
+  - `state`：`""`（没什么要说的）、`low`（数据盘快满）、`host_low`（自动扩盘、电脑硬盘剩余不到 20 GB）。
+  - `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条警告。
 
 ### 更新 `UpdateView`
 

@@ -1,10 +1,11 @@
 package emu
 
 import (
-	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
+	"modavd/internal/avd"
 	"modavd/internal/jsonord"
 )
 
@@ -31,50 +32,25 @@ func TestDataLow(t *testing.T) {
 	}
 }
 
-func TestPlanAutoGrow(t *testing.T) {
-	low := dataSpaceRecord{FreeBytes: 2 * gb, TotalBytes: 47 * gb, SizeGB: 48}
-	enough := func(free uint64) func() (uint64, error) { return func() (uint64, error) { return free, nil } }
-	need := uint64(autoGrowStepGB)<<30 + autoGrowHostReserve
+func TestAutoDiskTarget(t *testing.T) {
 	cases := []struct {
 		name      string
-		on        bool
-		space     dataSpaceRecord
-		spaceOK   bool
+		auto      bool
 		current   int
 		currentOK bool
-		host      func() (uint64, error)
-		want      growPlan
+		want      int
 	}{
-		{"low, room on the host", true, low, true, 48, true, enough(500 << 30),
-			growPlan{State: dataStateGrown, From: 48, To: 64, HostFree: 500 << 30, HostNeed: need}},
-		{"host exactly enough", true, low, true, 48, true, enough(need),
-			growPlan{State: dataStateGrown, From: 48, To: 64, HostFree: int64(need), HostNeed: need}},
-		{"host one byte short", true, low, true, 48, true, enough(need - 1),
-			growPlan{State: dataStateHostLow, From: 48, To: 64, HostFree: int64(need - 1), HostNeed: need}},
-		{"host unreadable", true, low, true, 48, true, func() (uint64, error) { return 0, errors.New("x") },
-			growPlan{State: dataStateHostLow, From: 48, To: 64, HostFree: -1, HostNeed: need}},
-		{"not low", true, dataSpaceRecord{FreeBytes: 20 * gb, TotalBytes: 47 * gb, SizeGB: 48}, true, 48, true, nil, growPlan{}},
-		{"no reading", true, dataSpaceRecord{}, false, 48, true, nil, growPlan{}},
-		{"reading of another size (raised since)", true, low, true, 64, true, nil, growPlan{}},
-		{"reading before the disk reached its size", true, dataSpaceRecord{FreeBytes: gb, TotalBytes: 16 * gb}, true, 32, true, nil, growPlan{}},
-		{"size unknown", true, low, true, 0, false, nil, growPlan{}},
-		{"off", false, low, true, 48, true, nil, growPlan{State: dataStateLow, From: 48, HostFree: -1}},
-		{"file system behind", true, dataSpaceRecord{FreeBytes: gb, TotalBytes: 30 * gb, SizeGB: 32, FSBehind: true}, true, 32, true, nil,
-			growPlan{State: dataStateFSBehind, From: 32, HostFree: -1}},
-		{"at the limit", true, dataSpaceRecord{FreeBytes: gb, TotalBytes: 250 * gb, SizeGB: 256}, true, 256, true, nil,
-			growPlan{State: dataStateAtMax, From: 256, HostFree: -1}},
-		{"above the limit (raised by hand)", true, dataSpaceRecord{FreeBytes: gb, TotalBytes: 300 * gb, SizeGB: 300}, true, 300, true, nil,
-			growPlan{State: dataStateAtMax, From: 300, HostFree: -1}},
-		{"last step stops at the limit", true, dataSpaceRecord{FreeBytes: gb, TotalBytes: 245 * gb, SizeGB: 250}, true, 250, true, enough(500 << 30),
-			growPlan{State: dataStateGrown, From: 250, To: 256, HostFree: 500 << 30, HostNeed: 6<<30 + autoGrowHostReserve}},
+		{"old 64 GB instance", true, 64, true, avd.AutoDataPartitionGB},
+		{"old 16 GB instance", true, 16, true, avd.AutoDataPartitionGB},
+		{"one short", true, avd.AutoDataPartitionGB - 1, true, avd.AutoDataPartitionGB},
+		{"at the automatic size", true, avd.AutoDataPartitionGB, true, 0},
+		{"larger already", true, 512, true, 0},
+		{"manual", false, 64, true, 0},
+		{"size unreadable", true, 0, false, 0},
 	}
 	for _, c := range cases {
-		host := c.host
-		if host == nil {
-			host = func() (uint64, error) { t.Errorf("%s: host asked", c.name); return 0, nil }
-		}
-		if got := planAutoGrow(c.on, c.space, c.spaceOK, c.current, c.currentOK, host); got != c.want {
-			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		if got := autoDiskTarget(c.auto, c.current, c.currentOK); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
 		}
 	}
 }
@@ -103,48 +79,57 @@ func metaOf(t *testing.T, s string) *jsonord.Obj {
 }
 
 func TestDataSpaceInfo(t *testing.T) {
-	lowAt48 := `"dataSpace": {"freeBytes": 1932735283, "totalBytes": 50465865728, "sizeGb": 48, "fsBehind": false, "at": 1800000000}`
+	// 1.8 GB free of a disk of size GB
+	low := func(size int64) string {
+		return `"dataSpace": {"freeBytes": 1932735283, "totalBytes": ` + strconv.FormatInt(size*gb, 10) + `, "sizeGb": ` +
+			strconv.FormatInt(size, 10) + `, "at": 1800000000}`
+	}
+	fine256 := `"dataSpace": {"freeBytes": 214748364800, "totalBytes": 270000000000, "sizeGb": 256, "at": 1800000000}`
 	cases := []struct {
 		name, meta string
 		current    int
+		hostFree   int64
 		state      string
-		inMessage  []string // in Message + Advice
+		in         []string // in Message + Advice
+		notIn      []string
 	}{
-		{"never read", `{}`, 48, "", nil},
-		{"pending", `{` + lowAt48 + `}`, 48, dataStatePending, []string{"1.8 GB", "64 GB", "--auto-grow off"}},
-		{"off", `{"dataAutoGrow": false, ` + lowAt48 + `}`, 48, dataStateLow, []string{"自动扩容已关", "modavd set 3 --data-gb 64", "--auto-grow on"}},
-		{"grown, not read since", `{` + lowAt48 + `, "dataGrow": {"state": "grown", "fromGb": 48, "toGb": 64, "at": 1}}`, 64, dataStateGrown,
-			[]string{"48 GB", "64 GB"}},
-		{"grown and read again, fine", `{"dataSpace": {"freeBytes": 17179869184, "totalBytes": 67108864000, "sizeGb": 64, "at": 2},` +
-			` "dataGrow": {"state": "grown", "fromGb": 48, "toGb": 64, "at": 1}}`, 64, dataStateGrown, nil},
-		{"grown and still low: pending again", `{"dataSpace": {"freeBytes": 1073741824, "totalBytes": 67108864000, "sizeGb": 64, "at": 2},` +
-			` "dataGrow": {"state": "grown", "fromGb": 48, "toGb": 64, "at": 1}}`, 64, dataStatePending, []string{"80 GB"}},
-		{"host low", `{` + lowAt48 + `, "dataGrow": {"state": "host_low", "fromGb": 48, "toGb": 64, "hostFreeBytes": 10737418240, "at": 1}}`, 48,
-			dataStateHostLow, []string{"10.0 GB", "36.0 GB", "modavd set 3 --data-gb 64"}},
-		{"at max", `{"dataSpace": {"freeBytes": 1073741824, "totalBytes": 270000000000, "sizeGb": 256, "at": 2}}`, 256, dataStateAtMax,
-			[]string{"256 GB", "modavd set 3 --data-gb 272"}},
-		{"failed", `{` + lowAt48 + `, "dataGrow": {"state": "failed", "fromGb": 48, "toGb": 64, "error": "写不了", "at": 1}}`, 48,
-			dataStateFailed, []string{"写不了", "modavd set 3 --data-gb 64"}},
-		{"raised by hand since the reading", `{` + lowAt48 + `}`, 96, "", nil},
-		{"old record of another size", `{"dataSpace": {"freeBytes": 17179869184, "totalBytes": 67108864000, "sizeGb": 64, "at": 2},` +
-			` "dataGrow": {"state": "host_low", "fromGb": 48, "toGb": 64, "at": 1}}`, 64, "", nil},
+		{"never read", `{}`, 256, 500 * gb, "", nil, nil},
+		{"automatic, plenty", `{` + fine256 + `}`, 256, 500 * gb, "", nil, nil},
+		{"automatic, host low", `{` + fine256 + `}`, 256, 19 * gb, dataStateHostLow, []string{"19.0 GB", "宿主盘"}, nil},
+		{"automatic, host exactly at the line", `{` + fine256 + `}`, 256, hostLowBytes, "", nil, nil},
+		{"automatic, host unknown", `{` + fine256 + `}`, 256, -1, "", nil, nil},
+		{"manual, host low: not said", `{"dataDiskMode": "manual", "dataSpace": {"freeBytes": 32000000000, "totalBytes": 64000000000, "sizeGb": 64, "at": 1}}`,
+			64, 10 * gb, "", nil, nil},
+		{"manual, low", `{"dataDiskMode": "manual", ` + low(48) + `}`, 48, 500 * gb, dataStateLow,
+			[]string{"1.8 GB", "--data-gb auto", "modavd set 3 --data-gb 72"}, nil},
+		{"automatic at 256, low", `{"dataDiskMode": "auto", ` + low(256) + `}`, 256, 500 * gb, dataStateLow,
+			[]string{"256 GB", "modavd set 3 --data-gb 384"}, []string{"--data-gb auto"}},
+		{"old instance without a mode, low before its growth", `{` + low(64) + `}`, 64, 500 * gb, dataStateLow,
+			[]string{"自动扩到 256 GB"}, nil},
+		{"manual at 512, low", `{"dataDiskMode": "manual", ` + low(512) + `}`, 512, 500 * gb, dataStateLow, []string{"已是最大"}, nil},
+		{"file system behind", `{"dataSpace": {"freeBytes": 1073741824, "totalBytes": 32212254720, "sizeGb": 256, "fsBehind": true, "at": 1}}`,
+			256, 500 * gb, dataStateLow, []string{"新建一台实例"}, nil},
+		{"low reading of another size (raised since)", `{"dataDiskMode": "manual", ` + low(48) + `}`, 96, 500 * gb, "", nil, nil},
+		{"low wins over host low", `{` + low(256) + `}`, 256, gb, dataStateLow, nil, nil},
 	}
 	for _, c := range cases {
-		d := dataSpaceInfo(3, metaOf(t, c.meta), c.current)
+		d := dataSpaceInfo(3, metaOf(t, c.meta), c.current, c.hostFree)
 		if d.State != c.state {
 			t.Errorf("%s: state %q, want %q (%+v)", c.name, d.State, c.state, d)
 			continue
 		}
-		if (d.State == "") != (d.Message == "") {
-			t.Errorf("%s: message %q for state %q", c.name, d.Message, d.State)
+		if (d.State == "") != (d.Message == "") || d.HostFreeBytes != c.hostFree {
+			t.Errorf("%s: %+v", c.name, d)
 		}
-		for _, s := range c.inMessage {
+		for _, s := range c.in {
 			if !strings.Contains(d.Message+" "+d.Advice, s) {
 				t.Errorf("%s: %q not in %q / %q", c.name, s, d.Message, d.Advice)
 			}
 		}
-	}
-	if d := dataSpaceInfo(0, nil, 64); !d.AutoGrow || d.State != "" || d.TotalBytes != 0 {
-		t.Errorf("no metadata: %+v", d)
+		for _, s := range c.notIn {
+			if strings.Contains(d.Message+" "+d.Advice, s) {
+				t.Errorf("%s: %q in %q / %q", c.name, s, d.Message, d.Advice)
+			}
+		}
 	}
 }
