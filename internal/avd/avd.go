@@ -26,14 +26,16 @@ import (
 var (
 	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144}
 	CPUChoices        = []int{2, 4, 6}
-	FPSChoices        = []int{30, 60}
 	ResolutionChoices = []int{1080, 720}
 )
 
 const (
-	DefaultMemoryMB        = 6144
-	DefaultCPU             = 6
-	DefaultFPS             = 60
+	DefaultMemoryMB = 6144
+	DefaultCPU      = 6
+	DefaultFPS      = 60
+	// Any whole frame rate in MinFPS..MaxFPS (ModAVD#180); written as hw.lcd.vsync.
+	MinFPS                 = 1
+	MaxFPS                 = 60
 	DefaultDataPartitionGB = 64
 	MinDataPartitionGB     = 16
 	MaxDataPartitionGB     = 512
@@ -521,14 +523,14 @@ func ValidateOptions(memoryMB, cpu, dataGB *int) (int, int, int, error) {
 	return memory, cores, data, nil
 }
 
-// ValidateFPS: nil means DefaultFPS; anything not in FPSChoices is errs.InvalidArgument.
+// ValidateFPS: nil means DefaultFPS; anything outside MinFPS..MaxFPS is errs.InvalidArgument.
 func ValidateFPS(fps *int) (int, error) {
 	value := DefaultFPS
 	if fps != nil {
 		value = *fps
 	}
-	if !slices.Contains(FPSChoices, value) {
-		return 0, errs.New(errs.InvalidArgument, "ModAVD 的帧率只能选 "+joinInts(FPSChoices, "%d", 1))
+	if value < MinFPS || value > MaxFPS {
+		return 0, errs.Newf(errs.InvalidArgument, "帧率只能在 %d–%d 之间", MinFPS, MaxFPS)
 	}
 	return value, nil
 }

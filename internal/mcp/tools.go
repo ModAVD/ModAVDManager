@@ -90,7 +90,8 @@ func cpuProp(desc string) prop {
 }
 
 func fpsProp(desc string) prop {
-	return prop{"fps", false, map[string]any{"type": "integer", "enum": avd.FPSChoices, "description": desc}}
+	return prop{"fps", false, map[string]any{"type": "integer", "minimum": avd.MinFPS, "maximum": avd.MaxFPS,
+		"description": desc}}
 }
 
 func resolutionProp(desc string) prop {
@@ -187,8 +188,8 @@ func toolDefs() []*toolDef {
 				"Until then its status is creating, with creation_progress (0-100) in get_instance / list_instances; a "+
 				"failed setup leaves create_failed (retry with the CLI's create --resume, or delete it). "+
 				"Omitted options take the defaults (%d MB memory, %d CPU "+
-				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory, CPU and fps "+
-				"only accept the listed steps; the data partition can later only be made larger (update_instance).",
+				"cores, %d GB data partition, %d fps); index defaults to the smallest free one. Memory and CPU "+
+				"only accept the listed steps, fps any whole number in its range; the data partition can later only be made larger (update_instance).",
 				avd.DefaultMemoryMB, avd.DefaultCPU, avd.DefaultDataPartitionGB, avd.DefaultFPS),
 			mutating(false, false), reflect.TypeFor[emu.InstanceInfo](), []prop{
 				{"title", false, map[string]any{"type": "string",
@@ -198,7 +199,7 @@ func toolDefs() []*toolDef {
 				cpuProp("CPU cores."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "Size of the data partition (games) in GB."}},
-				fpsProp("Display refresh rate."),
+				fpsProp("Display refresh rate in Hz, 1-60."),
 				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280 (default), 720 = 1280×720 / DPI 240."),
 			},
 			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
@@ -247,7 +248,7 @@ func toolDefs() []*toolDef {
 				{"title", false, map[string]any{"type": "string", "description": "New display name."}},
 				memoryProp("New guest memory in MB."),
 				cpuProp("New CPU core count."),
-				fpsProp("New display refresh rate."),
+				fpsProp("New display refresh rate in Hz, 1-60."),
 				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280, 720 = 1280×720 / DPI 240. Preserves orientation; next boot."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "New data partition size in GB; can only be " +
