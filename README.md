@@ -284,7 +284,7 @@ Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目�
   - `prepare` 下载、解包、按包里的 `modavd-manifest.json` 逐文件核对、暂存好，实例开着也行；
   - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器窗口和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
   - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
-- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
+- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release；先按区间只下变了的文件、没变的从本地复制，服务器不认 Range、变了的超过整包 40% 或 3000 个文件、取回的数据或拼好后的清单核对不过时改下整包，原因写进 `notices`）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
 - 调用方传这一次的设置（`status`、`check`、`prepare`、`install` 都可以带，`recover` 不带；只盖过「设置」里的，不保存，`status` 等结果里的 `source`、`cdk_set` 是这次生效的）：
   - `--source github|mirrorchyan`：这次用的更新源。
   - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`，或只有空白）表示这次不用 CDK，「设置」里存了也不用。

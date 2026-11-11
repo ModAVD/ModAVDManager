@@ -354,7 +354,7 @@ func (u *Updater) prepare(ctx context.Context, st *Status) error {
 	if err := u.checkSpace(); err != nil {
 		return err
 	}
-	err = u.stage(ctx, r)
+	err = u.stage(ctx, r, st)
 	if err != nil && r.source == SourceMirrorChyan && errs.CodeOf(err) == errs.UpdateRejected {
 		note := "Mirror 酱的包核对不过，改从 GitHub 下载"
 		if r.incremental {
@@ -366,7 +366,7 @@ func (u *Updater) prepare(ctx context.Context, st *Status) error {
 		if gerr != nil {
 			return gerr
 		}
-		err = u.stage(ctx, gh)
+		err = u.stage(ctx, gh, st)
 	}
 	return err
 }
@@ -480,8 +480,10 @@ func (u *Updater) checkSpace() error {
 }
 
 // stage is AUTO-MAS _stage_release: preparing → download → unpack → verify → stage → staged; any failure goes back
-// to idle with the reason (and drops a download that turned out bad).
-func (u *Updater) stage(ctx context.Context, r *release) (err error) {
+// to idle with the reason (and drops a download that turned out bad). GitHub's full package is first tried by range
+// (range.go: only the changed files); when that does not work the reason goes into st's notices and the whole
+// package is downloaded.
+func (u *Updater) stage(ctx context.Context, r *release, st *Status) (err error) {
 	if r.assetName == "" || r.url == "" {
 		return sourceError("%s 没有能下载的包", r.version.Display())
 	}
@@ -503,31 +505,47 @@ func (u *Updater) stage(ctx context.Context, r *release) (err error) {
 		}
 		u.l.abortStaging(reason)
 	}()
-	if archive, err = u.download(ctx, r); err != nil {
-		return err
-	}
 	var files int
-	if r.incremental {
-		u.step("extracting", "正在按增量包拼新版")
-		files, err = u.l.buildPatchedPackage(u.Root, archive, r.base)
-	} else {
-		u.step("extracting", "正在解包")
-		files, err = u.l.extractPackage(archive, r.topDir, nil)
+	var verified, mode string
+	if u.rangeAllowed(r) {
+		files, verified, err = u.stageByRange(ctx, r)
+		var ru *rangeUnavailable
+		switch {
+		case err == nil:
+			mode = "range"
+		case errors.As(err, &ru):
+			note := rangeNotice(err)
+			u.Log.Infof("%s", note)
+			st.Notices = append(st.Notices, note)
+		default:
+			return err
+		}
 	}
-	if err != nil {
-		return err
-	}
-	u.step("verifying", "正在按清单核对每个文件")
-	verified, err := u.l.verifyPackage(r.version, r.tag)
-	if err != nil {
-		return err
+	if mode == "" {
+		if archive, err = u.download(ctx, r); err != nil {
+			return err
+		}
+		if r.incremental {
+			u.step("extracting", "正在按增量包拼新版")
+			files, err = u.l.buildPatchedPackage(u.Root, archive, r.base)
+		} else {
+			u.step("extracting", "正在解包")
+			files, err = u.l.extractPackage(archive, r.topDir, nil)
+		}
+		if err != nil {
+			return err
+		}
+		u.step("verifying", "正在按清单核对每个文件")
+		if verified, err = u.l.verifyPackage(r.version, r.tag); err != nil {
+			return err
+		}
+		mode = "full"
+		if r.incremental {
+			mode = "incremental"
+		}
 	}
 	if err := u.l.buildStage(r.version); err != nil {
 		return err
-	}
-	mode := "full"
-	if r.incremental {
-		mode = "incremental"
 	}
 	if err := u.l.finishStaging(target, verified, files, mode); err != nil {
 		return errs.Wrap(errs.Internal, err, "记录暂存失败: "+err.Error())
