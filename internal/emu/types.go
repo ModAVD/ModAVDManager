@@ -100,6 +100,9 @@ type InstanceInfo struct {
 	Path             string `json:"path"` // <root>\avd\mas_<i>.avd
 	// AppProxy is the per-app proxy as set (mas-avd.json only; `modavd proxy <i>` asks the guest); null when never set.
 	AppProxy *AppProxySummary `json:"app_proxy"`
+	// DataSpace is /data's free space after the last boot and the automatic growth of the data partition
+	// (autogrow.go; from mas-avd.json, the guest is not asked).
+	DataSpace DataSpace `json:"data_space"`
 }
 
 // RootInfo describes the root a command worked on.
@@ -150,6 +153,8 @@ type UpdateRequest struct {
 	Resolution  *int
 	// DataPartitionGB raises the data partition (never lowers it); see avd.UpdateOptions.
 	DataPartitionGB *int
+	// DataAutoGrow turns the automatic growth of the data partition on or off (autogrow.go; mas-avd.json, at once).
+	DataAutoGrow *bool
 }
 
 type UpdateResult struct {

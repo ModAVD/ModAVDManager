@@ -277,6 +277,13 @@ function renderNotes(c, inst, v) {
     notes.push({ tone: 'err', ic: 'bad', text: `${FAIL[f.kind] || '失败'}：${e.message || '原因未知'}`, advice: e.advice, job: f.id, mem });
   }
   if (inst.software_renderer) notes.push({ tone: 'warn', ic: 'alert', text: '软件渲染：显卡驱动不可用，游戏会卡' });
+  // data partition almost full / grown automatically (InstanceInfo.data_space): pending and grown are information,
+  // the rest (not grown, or growth off) need the user
+  const ds = inst.data_space;
+  if (ds && ds.message) {
+    const info = ds.state === 'pending' || ds.state === 'grown';
+    notes.push({ tone: info ? 'info' : 'warn', ic: info ? 'info' : 'alert', text: ds.message, advice: ds.advice });
+  }
   if (!inst.initialized && !inst.running && !inst.creation && v.key !== 'starting' && v.key !== 'creating') notes.push({ tone: 'info', ic: 'info', text: '首次开机会做初始化，约 1⁠–⁠2 分钟' });
   const sig = JSON.stringify(notes);
   if (sig === c.nsig) return;

@@ -56,6 +56,9 @@ function mk(i, title, o = {}) {
     app_proxy: null,
     // the execution bridge (off | pending | installed | unknown) and the Google Play Store's record
     bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store, play_store_partial: false, gles32: false,
+    // /data after the last boot and the automatic growth (API.md 数据盘剩余和自动扩容); o.ds overrides
+    data_space: { auto_grow: true, free_bytes: initialized ? 20 * 2 ** 30 : 0, total_bytes: initialized ? (o.disk || 64) * 2 ** 30 : 0,
+      checked_at: initialized ? iso(now() - 3600000) : '', low: false, state: '', from_gb: 0, to_gb: 0, message: '', advice: '', ...(o.ds || {}) },
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
@@ -133,10 +136,13 @@ function setup(sc) {
     mk(2, '星穹铁道', { status: 'online', upMin: 58, scene: 3 });
     mk(3, '重返未来 1999', { status: 'starting', upMin: 0.3, scene: 2 });
     mk(4, '蔚蓝档案', { status: 'online', upMin: 12, scene: 2, fps: 30 });
-    mk(6, '碧蓝航线', { status: 'offline', mem: 4096, cpu: 4, fps: 30 });
+    mk(6, '碧蓝航线', { status: 'offline', mem: 4096, cpu: 4, fps: 30, disk: 48, ds: { free_bytes: 1932735283, total_bytes: 47 * 2 ** 30, low: true,
+      state: 'pending', from_gb: 48, to_gb: 64, message: '数据盘只剩 1.8 GB（共 47.0 GB），下次开机前自动扩到 64 GB', advice: '不想自动扩：modavd set 6 --auto-grow off' } });
     mk(7, '日常备用', { status: 'online', upMin: 7, scene: 1, sw: true, mem: 3072, cpu: 2, fps: 30 });
     mk(8, '', { status: 'offline', initialized: false, disk: 32 });
-    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4, bridge: 'off' });
+    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4, bridge: 'off', ds: { free_bytes: 2 ** 30, total_bytes: 63 * 2 ** 30, low: true,
+      state: 'host_low', from_gb: 64, to_gb: 80, message: '数据盘只剩 1.0 GB，宿主盘只剩 12.0 GB，没有自动扩容（扩 16 GB 要宿主盘留够 36.0 GB）',
+      advice: '腾出宿主盘空间后，下次开机会再自动扩；也可以手动：modavd set 9 --data-gb 80' } });
     longStart(3, 9);
     return;
   }

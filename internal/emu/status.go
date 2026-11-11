@@ -198,7 +198,8 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	cfg.Width, cfg.Height, cfg.DPI = in.Display()
 	info.Config = cfg
 
-	if meta := m.Root.InstanceMeta(i); meta != nil {
+	meta := m.Root.InstanceMeta(i)
+	if meta != nil {
 		info.Diagnostics, _ = meta.Get("diagnostics").BoolVal()
 		info.DiagnosticsSince = metaText(meta.Get("diagnosticsSince"))
 		info.Initialized = metaTruthy(meta.Get("initialized"))
@@ -210,6 +211,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 		info.GLES32 = gles32Record(meta)
 	}
+	info.DataSpace = dataSpaceInfo(i, meta, cfg.DataPartitionGB)
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info
 }

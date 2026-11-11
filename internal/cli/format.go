@@ -265,7 +265,10 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	kv("内存", fmtMemory(cfg.MemoryMB))
 	kv("核数", intOrDash(cfg.CPU))
 	kv("帧率", intOrDash(cfg.FPS))
-	kv("数据盘", fmtGB(cfg.DataPartitionGB))
+	kv("数据盘", fmtGB(cfg.DataPartitionGB)+"（"+dataSpaceSummary(in.DataSpace)+"）")
+	if in.DataSpace.Message != "" {
+		kv("数据盘提示", dataSpaceNote(in.DataSpace))
+	}
 	if cfg.Width > 0 && cfg.Height > 0 {
 		kv("显示", fmt.Sprintf("%dx%d，%d dpi", cfg.Width, cfg.Height, cfg.DPI))
 	}
@@ -302,6 +305,30 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 
 func formatStatus(w io.Writer, s *StatusResult) {
 	fmt.Fprintf(w, "实例 %d：%s\n", s.Index, statusDetail(s.Status, s.CreationProgress, s.PID, "", s.Busy))
+	if s.DataSpace.Message != "" {
+		fmt.Fprintf(w, "数据盘：%s\n", dataSpaceNote(s.DataSpace))
+	}
+}
+
+// dataSpaceSummary is what info shows after the data partition's size: the free space after the last boot and
+// whether automatic growth is on ("剩余 3.2 GB，自动扩容开").
+func dataSpaceSummary(d emu.DataSpace) string {
+	s := "自动扩容开"
+	if !d.AutoGrow {
+		s = "自动扩容关"
+	}
+	if d.TotalBytes > 0 {
+		s = fmt.Sprintf("上次开机剩余 %.1f GB，%s", float64(d.FreeBytes)/(1<<30), s)
+	}
+	return s
+}
+
+// dataSpaceNote is the message with its advice ("数据盘只剩 …；手动扩容：modavd set …").
+func dataSpaceNote(d emu.DataSpace) string {
+	if d.Advice == "" {
+		return d.Message
+	}
+	return d.Message + "；" + d.Advice
 }
 
 func formatCreate(w io.Writer, in *emu.InstanceInfo) {
@@ -360,6 +387,12 @@ func appliedParts(applied map[string]any) []string {
 				parts = append(parts, "诊断模式 开")
 			} else {
 				parts = append(parts, "诊断模式 关")
+			}
+		case "data_auto_grow":
+			if enabled, _ := v.(bool); enabled {
+				parts = append(parts, "数据盘自动扩容 开")
+			} else {
+				parts = append(parts, "数据盘自动扩容 关")
 			}
 		default:
 			parts = append(parts, fmt.Sprintf("%s %v", k, v))

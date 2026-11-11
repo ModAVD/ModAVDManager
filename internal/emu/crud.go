@@ -195,7 +195,8 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	return m.setupNew(ctx, i, in.Config, req, lock)
 }
 
-// Update changes title / memory / cpu / fps / data partition size (next boot).
+// Update changes title / memory / cpu / fps / data partition size (next boot), the data partition's automatic growth
+// and diagnostics (at once).
 func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
 	if err := requireLifecycle(); err != nil {
 		return nil, err
@@ -222,6 +223,13 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		applied = map[string]any{}
 	}
 	nextBoot := len(applied) > 0
+	// the automatic growth of the data partition: a record the next start and after-boot step read (autogrow.go)
+	if req.DataAutoGrow != nil {
+		if err := m.setDataAutoGrow(i, *req.DataAutoGrow); err != nil {
+			return nil, err
+		}
+		applied["data_auto_grow"] = *req.DataAutoGrow
+	}
 	var cleanup *DiagnosticsCleanup
 	var warnings []string
 	if req.Diagnostics != nil {
