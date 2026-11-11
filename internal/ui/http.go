@@ -59,6 +59,8 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/components/import-playstore", s.handleImportPlayStore)
 	m.HandleFunc("POST /api/diag/collect", s.handleDiagCollect)
 	m.HandleFunc("GET /api/diag/report-config", s.handleReportConfig)
+	m.HandleFunc("GET /api/boss-keys", s.handleBossKeys)
+	m.HandleFunc("POST /api/boss-keys/check", s.handleBossKeyCheck)
 	m.HandleFunc("GET /api/check", s.handleCheck)
 	m.HandleFunc("GET /api/jobs", s.handleJobs)
 	m.HandleFunc("GET /api/jobs/{id}", s.handleJob)

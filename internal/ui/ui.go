@@ -8,7 +8,8 @@
 // its to do (the CLI boots headless; a running instance is never switched).
 //
 // Lifetime: the server exits once its window is gone (the browser app process it started exited, or no event stream has
-// been connected for IdleExit) and the running jobs are done.
+// been connected for IdleExit) and the running jobs are done. With the tray icon (Options.Tray, bosskey.go) it stays
+// in the tray instead, until 退出 in the icon's menu.
 package ui
 
 import (
@@ -58,8 +59,13 @@ type Options struct {
 	// Reopen is how the CLI starts this manager again after 设置 → 更新 swapped the new version in (update_apply.go);
 	// nil: the manager cannot update itself (更新 is refused, checking still works).
 	Reopen *Reopen
+	// Tray puts the manager's icon in the notification area and registers the instances' boss keys (bosskey.go;
+	// Windows only, ignored elsewhere). The manager then stays after its window closed, in the tray, until 退出 in the
+	// icon's menu (or the process is told to end).
+	Tray bool
 
 	// Test hooks.
+	newTray        newTrayFunc // the tray of Tray; nil = the real one
 	prepareUpdate  func(ctx context.Context, lg *logx.Logger, progress func(update.Progress)) (*update.Status, error)
 	cliVersion     func(exe string) (string, error)
 	programsInUse  func() ([]string, error)
@@ -136,6 +142,15 @@ type server struct {
 	exitOnce      sync.Once
 	// handingOff: the CLI has taken the swap; no job may start any more (startJob), the manager is about to exit
 	handingOff atomic.Bool
+
+	// the tray icon and boss keys (bosskey.go); tray and boss are nil without them. Set before serving.
+	tray         trayHost
+	boss         *bossKeys
+	bossKick     chan struct{}
+	trayExit     chan struct{} // closed by 退出 in the icon's menu
+	trayExitOnce sync.Once
+	toggleMu     sync.Mutex // one boss key press or tray click at a time
+	base         string     // "http://127.0.0.1:<port>/", set once before serving
 }
 
 func newServer(opt Options) (*server, error) {
@@ -241,6 +256,7 @@ func newServer(opt Options) (*server, error) {
 		s.spawn = realSpawn
 	}
 	s.exitReq = make(chan struct{})
+	s.bossKick = make(chan struct{}, 1)
 	s.mgr = newBackend(lg.Tee(s.eventLogSink("")))
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.jobCtx, s.jobCancel = context.WithCancel(context.Background())
@@ -271,6 +287,14 @@ func Run(ctx context.Context, opt Options) error {
 		return listenError(addr, err)
 	}
 	s.port = ln.Addr().(*net.TCPAddr).Port
+	s.base = fmt.Sprintf("http://127.0.0.1:%d/", s.port)
+	if opt.Tray {
+		newTray := opt.newTray
+		if newTray == nil {
+			newTray = realNewTray
+		}
+		s.startTray(newTray)
+	}
 
 	srv := &http.Server{
 		Handler:           s,
@@ -289,7 +313,7 @@ func Run(ctx context.Context, opt Options) error {
 	go s.proxyLoop()
 	cleanUploads(s.log)
 
-	base := fmt.Sprintf("http://127.0.0.1:%d/", s.port)
+	base := s.base
 	s.log.Infof("管理器已启动: %s（根目录 %s）", base, s.root.Dir)
 	if opt.Ready != nil {
 		opt.Ready(base, s.token)
@@ -312,6 +336,7 @@ func Run(ctx context.Context, opt Options) error {
 	}
 
 	s.waitForExit(ctx, w)
+	s.stopTray()
 
 	s.log.Infof("管理器退出")
 	s.cancel() // ends the event streams, which Shutdown would otherwise wait for
@@ -329,12 +354,17 @@ func Run(ctx context.Context, opt Options) error {
 // gone and no job runs. A window counts as gone when the Edge process we started exited (unless it was a hand-off to
 // a running Edge) and no event stream is connected for closeGrace, or when no event stream has been connected for
 // idleExit. A page that connects again while jobs finish keeps the manager running.
+//
+// With the tray icon (bosskey.go) a gone window does not end the manager: it stays in the tray until 退出 in the
+// icon's menu, which then ends it once no job runs, whether or not a page is still open.
 func (s *server) waitForExit(ctx context.Context, w *Window) {
 	var edgeDone <-chan struct{}
 	if w != nil {
 		edgeDone = w.Done
 	}
-	windowClosed := false
+	resident := s.tray != nil
+	trayExit := s.trayExit // nil without the tray: never ready
+	windowClosed, exitAsked := false, false
 	waitingLogged := false
 	tick := time.NewTicker(s.exitEvery)
 	defer tick.Stop()
@@ -365,23 +395,39 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 					s.log.Infof("Edge 把窗口交给了已在运行的 Edge；之后按页面连接判断窗口是否关闭")
 				}
 			} else {
-				s.log.Infof("管理器窗口已关闭")
+				if resident {
+					s.log.Infof("管理器窗口已关闭，管理器留在托盘")
+				} else {
+					s.log.Infof("管理器窗口已关闭")
+				}
 				windowClosed = true
 			}
+		case <-trayExit:
+			trayExit = nil // closed: once is enough
+			exitAsked = true
 		case <-tick.C:
 		}
-		clients, idle := s.hub.idle()
-		if clients > 0 {
-			waitingLogged = false
-			continue
-		}
-		gone := (windowClosed && idle >= s.closeGrace) || (s.idleExit > 0 && idle >= s.idleExit)
-		if !gone {
-			continue
+		if !exitAsked {
+			if resident {
+				continue
+			}
+			clients, idle := s.hub.idle()
+			if clients > 0 {
+				waitingLogged = false
+				continue
+			}
+			gone := (windowClosed && idle >= s.closeGrace) || (s.idleExit > 0 && idle >= s.idleExit)
+			if !gone {
+				continue
+			}
 		}
 		if n := s.jobs.running(); n > 0 {
 			if !waitingLogged {
-				s.log.Infof("窗口已关闭，等 %d 个正在跑的任务做完再退出", n)
+				if exitAsked {
+					s.log.Infof("等 %d 个正在跑的任务做完再退出", n)
+				} else {
+					s.log.Infof("窗口已关闭，等 %d 个正在跑的任务做完再退出", n)
+				}
 				waitingLogged = true
 			}
 			continue

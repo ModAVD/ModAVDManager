@@ -215,6 +215,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 		info.GLES32 = gles32Record(meta)
 	}
+	info.BossKey = m.bossKeyOf(i)
 	hostFree := int64(-1)
 	if n, err := hostDiskFree(in.Dir); err == nil {
 		hostFree = int64(min(n, uint64(1)<<62))

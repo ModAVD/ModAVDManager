@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/appproxy"
+	"modavd/internal/bosskey"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
@@ -66,6 +68,12 @@ type fake struct {
 	startGate    chan struct{} // Start waits here (after its first progress) when set
 	stopGate     chan struct{}
 	stopErr      error // Stop fails with it (after its gate)
+
+	// boss keys: BossKeyTargets answers bossTargets / bossErr; ToggleBossKey and ShowHiddenWindows are recorded
+	bossTargets []emu.BossKeyTarget
+	bossErr     error
+	toggles     []string
+	showHidden  int
 
 	shot        adb.Result
 	shotDelay   time.Duration
@@ -185,7 +193,35 @@ func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (
 		in.Diagnostics = *req.Diagnostics
 		applied["diagnostics"] = *req.Diagnostics
 	}
+	if req.BossKey != nil {
+		key, err := bosskey.Normalize(*req.BossKey)
+		if err != nil {
+			return nil, err
+		}
+		in.BossKey = key
+		applied["boss_key"] = key
+	}
 	return &emu.UpdateResult{Instance: in, Applied: applied}, nil
+}
+
+func (b fakeBackend) BossKeyTargets(ctx context.Context) ([]emu.BossKeyTarget, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	return slices.Clone(b.f.bossTargets), b.f.bossErr
+}
+
+func (b fakeBackend) ToggleBossKey(ctx context.Context, key string) (*emu.BossKeyToggle, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.toggles = append(b.f.toggles, key)
+	return &emu.BossKeyToggle{Key: key}, nil
+}
+
+func (b fakeBackend) ShowHiddenWindows(ctx context.Context) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.showHidden++
+	return nil, nil
 }
 
 func (b fakeBackend) PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error) {
@@ -466,6 +502,9 @@ func newHarness(t *testing.T, mod func(*Options)) *harness {
 	h.s = s
 	h.ts = httptest.NewUnstartedServer(s)
 	s.port = h.ts.Listener.Addr().(*net.TCPAddr).Port
+	if opt.Tray && opt.newTray != nil { // as Run does, before serving
+		s.startTray(opt.newTray)
+	}
 	h.ts.Start()
 	go s.pollLoop()
 	go s.proxyLoop()
