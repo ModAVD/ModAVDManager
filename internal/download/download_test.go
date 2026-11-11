@@ -82,6 +82,58 @@ func TestFileProtocol(t *testing.T) {
 	}
 }
 
+func TestRange(t *testing.T) {
+	for _, tc := range []struct {
+		name, cr, body string
+		status         int
+		kind           Kind
+		ok             bool
+	}{
+		{"range", "bytes 2-4/10", "cde", 206, 0, true},
+		{"whole file", "", "abcdefghij", 200, NoRange, false},
+		{"other range", "bytes 2-9/10", "cdefghij", 206, NoRange, false},
+		{"other total", "bytes 2-4/11", "cde", 206, NoRange, false},
+		{"short", "bytes 2-4/10", "cd", 206, Network, false},
+		{"long", "bytes 2-4/10", "cdef", 206, Size, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Range") != "bytes=2-4" || r.Header.Get("Accept-Encoding") != "identity" {
+					t.Errorf("headers %v", r.Header)
+				}
+				w.Header().Set("Content-Range", tc.cr)
+				switch tc.name {
+				case "short": // cut off before the declared length
+					w.Header().Set("Content-Length", "3")
+				case "long": // chunked, no length to check up front
+				default:
+					w.Header().Set("Content-Length", fmt.Sprint(len(tc.body)))
+				}
+				w.WriteHeader(tc.status)
+				w.(http.Flusher).Flush()
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			d := Client{HTTP: NewHTTPClient(0)}
+			b, err := d.Range(context.Background(), srv.URL, 2, 3, 10, "test")
+			if tc.ok {
+				if err != nil || string(b) != "cde" {
+					t.Fatalf("%q %v", b, err)
+				}
+				return
+			}
+			var e *Error
+			if !errors.As(err, &e) || e.Kind != tc.kind {
+				t.Fatalf("want kind %d, got %v", tc.kind, err)
+			}
+		})
+	}
+	d := Client{HTTP: NewHTTPClient(0)}
+	if _, err := d.Range(context.Background(), "http://example.invalid", 8, 3, 10, "test"); err == nil {
+		t.Fatal("a range past the end was asked for")
+	}
+}
+
 func TestStallAndCancellation(t *testing.T) {
 	for _, cancelNow := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancelNow), func(t *testing.T) {

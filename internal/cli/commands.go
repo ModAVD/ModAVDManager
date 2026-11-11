@@ -65,9 +65,10 @@ var (
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
 	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
-	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
+	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
 	optBossKey       = flagSpec{"boss-key", kindString, "组合", "老板键，比如 Ctrl+Alt+Shift+1（Ctrl、Alt、Shift 至少带一个，不收 Win）；none 是不要（只有 Windows）"}
+	optAutoGrow      = flagSpec{"auto-grow", kindString, "on|off", "数据盘快满时下次开机前自动扩容（默认开）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
 	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
 	optHeadless      = flagSpec{"headless", kindBool, "", "无头开机（不带 --window 时本来就是无头）；实例已经带窗口运行时报错，不接管"}
@@ -169,7 +170,7 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 1-60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
@@ -182,13 +183,15 @@ func init() {
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--diagnostics on|off] [--boss-key 组合|none]",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb N] [--auto-grow on|off] [--diagnostics on|off] [--boss-key 组合|none]",
 			summary: "修改实例设置、诊断模式和老板键",
-			details: "至少给一个选项。诊断模式立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
+			details: "至少给一个选项。诊断模式和自动扩容开关立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
+				"自动扩容（默认开）：开机后数据盘剩余不到 5 GB 或不到 10% 时，下次开机前自动扩大 16 GB，到 256 GB 为止；" +
+				"宿主盘扩完要还剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，否则只提示。磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘。" +
 				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
 				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optDiagnostics, optBossKey},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optAutoGrow, optDiagnostics, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -457,6 +460,8 @@ type StatusResult struct {
 	Serial     string    `json:"serial"`
 	AdbAddress string    `json:"adb_address"`
 	Ports      emu.Ports `json:"ports"`
+	// DataSpace: emu.InstanceInfo.DataSpace (free space after the last boot, the automatic growth of the data partition)
+	DataSpace emu.DataSpace `json:"data_space"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
@@ -602,12 +607,21 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		enabled := value == "on"
 		req.Diagnostics = &enabled
 	}
+	if inv.isSet("auto-grow") {
+		value := strings.ToLower(inv.strOpt("auto-grow"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--auto-grow 只能是 on 或 off")
+		}
+		enabled := value == "on"
+		req.DataAutoGrow = &enabled
+	}
 	if inv.isSet("boss-key") {
 		k := inv.strOpt("boss-key")
 		req.BossKey = &k
 	}
-	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil && req.Diagnostics == nil && req.BossKey == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--diagnostics、--boss-key 中的一个").
+	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
+		req.Diagnostics == nil && req.DataAutoGrow == nil && req.BossKey == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--auto-grow、--diagnostics、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil
@@ -639,7 +653,7 @@ func intPtrOpt(inv *invocation, name string) *int {
 func statusOf(in *emu.InstanceInfo) *StatusResult {
 	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted, Window: in.Window,
 		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
-		CreationProgress: in.CreationProgress, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports}
+		CreationProgress: in.CreationProgress, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports, DataSpace: in.DataSpace}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------

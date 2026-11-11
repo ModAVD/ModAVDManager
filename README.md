@@ -62,8 +62,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--diagnostics on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 1-60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建，并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb N] [--auto-grow on\|off] [--diagnostics on\|off] [--boss-key 组合\|none]` | 修改；诊断模式、自动扩容开关和老板键立即生效，其余设置下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--auto-grow` 开关数据盘自动扩容（默认开，见下）。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
@@ -84,13 +84,20 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、macOS、HVF、Metal 和组件版本；游戏列表只向归属已确认的运行实例与现有私有 ADB 查询，不启动服务。问题包只收本目录的实例配置白名单和最多 8 份模拟器日志，每份最多 2 MiB、总文本最多 20 MiB，过滤常见凭据字段、路径和设备标识。macOS 不收截图、系统转储或其他应用日志；分享前请检查问题包。默认复制配置到剪贴板、用 Finder 显示问题包，自动化可用 `--no-clipboard` / `--no-explorer`。
 
-- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 30 / 60。
+- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 1–60 的整数（默认 60）。
 - 根目录：`--root`，没给就用环境变量 `MODAVD_ROOT`，再没有就用 `modavd.exe` 所在目录或它的上一级。
 - 0.3.0 起没有 `restart`：先 `stop` 再 `start`。旧的调用报用法错误（退出码 2），提示改用这两步。
 
 `trim` 的 GUI 任务完成、MCP 成功返回和开机后自动回收日志都只表示触发请求已返回。
 自动回收日志里的秒数是 adb/su 命令往返耗时。客体是否完成或失败，需要另看客体信号，
 不能用暂时稳定的 discard 计数判定。
+
+**数据盘自动扩容**（默认开）：
+
+- 每次开机后读一次客体 `/data` 的剩余。剩余不到 5 GB 或不到 10% 时，下次开机前自动把数据盘扩大 16 GB（和 `set --data-gb` 是同一套：开机时扩磁盘镜像，开机后在线扩文件系统），游戏数据不动；到 256 GB 为止，再大要手动 `set --data-gb`（最大 512）。
+- 磁盘镜像按实际写入增长，扩大本身几乎不占宿主盘（16 GB 扩到 32 GB 时，宿主侧只多了约 0.3 GB）。只有宿主盘在扩完以后还能剩至少 20 GB（扩 16 GB 时要剩 36 GB 以上）才扩，不够就不扩、只提示。
+- 快满、扩了、没扩成、到上限，`status`、`info` 和管理器卡片上都会提示，带上手动扩容的命令；JSON 里是 `data_space`。
+- 按实例关掉：`modavd set <i> --auto-grow off`（记在 `mas-avd.json` 这台实例的 `dataAutoGrow`），关了以后快满时只提示。
 
 Apple Silicon macOS 使用 SDK 中原生的 `qemu-img`。磁盘占用按宿主已分配块计算，排除稀疏文件空洞；APFS 克隆可能共享数据块，整理前后文件占用的差值不保证等于整个卷增加的可用空间。普通日志清理会检查实际打开的文件，保留正在使用、身份已变化、带链接或意外子目录的候选；macOS 的诊断模式开关仍未开放。
 
@@ -291,7 +298,7 @@ Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目�
   - `prepare` 下载、解包、按包里的 `modavd-manifest.json` 逐文件核对、暂存好，实例开着也行；
   - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器（包括托盘里的）和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
   - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
-- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release，整包）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
+- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release；先按区间只下变了的文件、没变的从本地复制，服务器不认 Range、变了的超过整包 40% 或 3000 个文件、取回的数据或拼好后的清单核对不过时改下整包，原因写进 `notices`）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
 - 调用方传这一次的设置（`status`、`check`、`prepare`、`install` 都可以带，`recover` 不带；只盖过「设置」里的，不保存，`status` 等结果里的 `source`、`cdk_set` 是这次生效的）：
   - `--source github|mirrorchyan`：这次用的更新源。
   - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`，或只有空白）表示这次不用 CDK，「设置」里存了也不用。

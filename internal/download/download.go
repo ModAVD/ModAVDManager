@@ -35,6 +35,9 @@ const (
 	Timeout
 	Size
 	Encoding
+	// NoRange: a range request was answered with something other than exactly that range (200 with the whole file,
+	// another range); the server cannot serve ranges.
+	NoRange
 )
 
 type Error struct {
@@ -133,10 +136,10 @@ func (r *response) close() {
 }
 
 // get sends a GET for the raw bytes (Accept-Encoding: identity: dl.google.com gzips the zip again for a client that
-// accepts gzip, and a range resume then lands in the compressed stream) from offset when > 0. Connect, TLS handshake,
-// redirects and the response headers together get ConnectTimeout (the script's Get-Response). Any answer but a 2xx
-// without Content-Encoding is an error and its connection is closed.
-func (c *Client) get(ctx context.Context, rawURL string, offset int64, what string) (*response, error) {
+// accepts gzip, and a range resume then lands in the compressed stream), with a Range header rng when not "". Connect,
+// TLS handshake, redirects and the response headers together get ConnectTimeout (the script's Get-Response). Any
+// answer but a 2xx without Content-Encoding is an error and its connection is closed.
+func (c *Client) get(ctx context.Context, rawURL, rng, what string) (*response, error) {
 	rctx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -145,8 +148,8 @@ func (c *Client) get(ctx context.Context, rawURL string, offset int64, what stri
 	}
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("User-Agent", UserAgent())
-	if offset > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	if rng != "" {
+		req.Header.Set("Range", rng)
 	}
 	resp := &response{cancel: cancel}
 	resp.timer = time.AfterFunc(c.connectTimeout(), func() { resp.fired.Store(true); cancel() })
@@ -178,7 +181,7 @@ func (c *Client) get(ctx context.Context, rawURL string, offset int64, what stri
 
 // Bytes reads a small response with a body deadline and a byte limit, in addition to the connection and stall limits.
 func (c *Client) Bytes(ctx context.Context, rawURL, what string, maxBytes int, overall time.Duration) ([]byte, error) {
-	resp, err := c.get(ctx, rawURL, 0, what)
+	resp, err := c.get(ctx, rawURL, "", what)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +248,11 @@ func (c *Client) File(ctx context.Context, o FileOptions) error {
 	if !o.Fresh && existing == expected {
 		return nil
 	}
-	resp, err := c.get(ctx, rawURL, existing, what)
+	rng := ""
+	if existing > 0 {
+		rng = fmt.Sprintf("bytes=%d-", existing)
+	}
+	resp, err := c.get(ctx, rawURL, rng, what)
 	var fe *Error
 	if existing > 0 && errors.As(err, &fe) && fe.Status == http.StatusRequestedRangeNotSatisfiable {
 		// The response cannot establish that the local prefix is invalid. Preserve it for another source or attempt.
@@ -345,4 +352,52 @@ func (c *Client) File(ctx context.Context, o FileOptions) error {
 		return &Error{Message: fmt.Sprintf("下载不完整：应为 %d 字节，实际 %d 字节", expected, size)}
 	}
 	return nil
+}
+
+// Range reads bytes [offset, offset+length) of a file of total bytes with one range request. The answer must be 206
+// with exactly that Content-Range; anything else (a server that ignores Range answers 200 with the whole file) is an
+// Error of Kind NoRange, and its body is not read.
+func (c *Client) Range(ctx context.Context, rawURL string, offset, length, total int64, what string) ([]byte, error) {
+	if offset < 0 || length <= 0 || offset+length > total {
+		return nil, &Error{Message: fmt.Sprintf("要的区间不对（%d+%d / %d）", offset, length, total)}
+	}
+	end := offset + length - 1
+	resp, err := c.get(ctx, rawURL, fmt.Sprintf("bytes=%d-%d", offset, end), what)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.close()
+	want := fmt.Sprintf("bytes %d-%d/%d", offset, end, total)
+	if got := resp.Header.Get("Content-Range"); resp.StatusCode != http.StatusPartialContent || got != want {
+		return nil, &Error{Message: fmt.Sprintf("服务器没按区间回（HTTP %d，Content-Range: %q，要的是 %s）", resp.StatusCode, got, want),
+			Kind: NoRange, Status: resp.StatusCode}
+	}
+	if resp.ContentLength >= 0 && resp.ContentLength != length {
+		return nil, sizeError("区间大小和预期不符（服务器给 %d 字节，应为 %d 字节）", resp.ContentLength, length)
+	}
+	buf := make([]byte, length+1) // one more to notice a longer body
+	done := 0
+	for {
+		n, rerr := resp.read(buf[done:], c.stallTimeout())
+		done += n
+		if done > int(length) {
+			return nil, sizeError("区间大小和预期不符（收到的比 %d 字节多）", length)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			if ctx.Err() != nil {
+				return nil, canceled(ctx)
+			}
+			if resp.fired.Load() {
+				return nil, timeoutError("超时：%s（收数据，已收 %d 字节），%s 秒内没有进展", what, done, seconds(c.stallTimeout()))
+			}
+			return nil, &Error{Message: "收数据出错：" + NetError(rerr, "")}
+		}
+	}
+	if done != int(length) {
+		return nil, &Error{Message: fmt.Sprintf("区间没收全：应为 %d 字节，实际 %d 字节", length, done)}
+	}
+	return buf[:length], nil
 }

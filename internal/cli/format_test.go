@@ -132,7 +132,7 @@ func TestFormatInfo(t *testing.T) {
 		"状态：运行中（PID 1234，启动于 2026-10-28T15:04:05+01:00，正在关机）\n",
 		"adb 地址：127.0.0.1:20031\n", "序列号：emulator-20030（私有 adb server 上）\n",
 		"端口：控制台 20030，adb 20031，gRPC 20032\n", "截图共享内存：SHM_videmulator20030（已就绪）\n",
-		"内存：6 GB\n", "核数：6\n", "帧率：60\n", "数据盘：64 GB\n", "显示：1280x720，240 dpi\n",
+		"内存：6 GB\n", "核数：6\n", "帧率：60\n", "数据盘：64 GB（自动扩容关）\n", "显示：1280x720，240 dpi\n",
 		"首次初始化：还没做", "渲染器：SwiftShader 软件渲染", `路径：D:\r\avd\mas_3.avd`,
 	} {
 		if !strings.Contains(out, want) {

@@ -112,6 +112,9 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if err := m.precheckBeforeLaunch(ctx); err != nil {
 		return nil, err
 	}
+	// the last boot found /data low: grow the data partition now, the emulator grows the disk at this launch
+	// (autogrow.go; never stops the start)
+	m.autoGrowData(i)
 	// -memory is the instance's own setting, not one guessed per game
 	memoryMB := avd.MemoryFor(m.Root, i)
 	if err := ctxErr(ctx); err != nil {

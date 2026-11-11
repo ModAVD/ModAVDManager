@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"modavd/internal/avd"
+	"modavd/internal/emu"
 	"modavd/internal/errs"
 )
 
@@ -331,7 +332,38 @@ func TestBuildUpdateRequest(t *testing.T) {
 	if err != nil || req.Resolution == nil || *req.Resolution != 1080 || req.MemoryMB != nil {
 		t.Fatalf("resolution alone: %+v %v", req, err)
 	}
+	for v, want := range map[string]bool{"off": false, "on": true, "OFF": false} {
+		req, err = buildUpdateRequest(mustParse(t, "set", "3", "--auto-grow", v))
+		if err != nil || req.DataAutoGrow == nil || *req.DataAutoGrow != want || req.DataPartitionGB != nil || req.Diagnostics != nil {
+			t.Errorf("--auto-grow %s alone: %+v %v", v, req, err)
+		}
+	}
+	if _, err := buildUpdateRequest(mustParse(t, "set", "3", "--auto-grow", "yes")); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("--auto-grow yes: %v", err)
+	}
+}
 
+func TestFormatDataSpace(t *testing.T) {
+	var b strings.Builder
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{AutoGrow: true, State: "pending",
+		Message: "数据盘只剩 1.8 GB（共 47.0 GB），下次开机前自动扩到 64 GB", Advice: "不想自动扩：modavd set 3 --auto-grow off"}})
+	if out := b.String(); !strings.Contains(out, "数据盘：数据盘只剩 1.8 GB") || !strings.Contains(out, "modavd set 3 --auto-grow off") {
+		t.Errorf("status:\n%s", out)
+	}
+	b.Reset()
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{AutoGrow: true}})
+	if strings.Contains(b.String(), "数据盘") {
+		t.Errorf("status without a note:\n%s", b.String())
+	}
+	if s := dataSpaceSummary(emu.DataSpace{AutoGrow: false, FreeBytes: 3 << 30, TotalBytes: 60 << 30}); s != "上次开机剩余 3.0 GB，自动扩容关" {
+		t.Errorf("summary %q", s)
+	}
+	if s := dataSpaceSummary(emu.DataSpace{AutoGrow: true}); s != "自动扩容开" {
+		t.Errorf("summary never read %q", s)
+	}
+	if got := appliedParts(map[string]any{"data_auto_grow": false}); len(got) != 1 || got[0] != "数据盘自动扩容 关" {
+		t.Errorf("applied %q", got)
+	}
 }
 
 func TestBuildStartOptions(t *testing.T) {

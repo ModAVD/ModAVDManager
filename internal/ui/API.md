@@ -173,6 +173,15 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 - `InstanceInfo.gles32`（bool）：开关的记录（`mas-avd.json` 的 `gles32`；不问客体）。界面据此在「更多操作」里显示「开启 / 关闭报告 GLES 3.2（实验）」；`bridge` 为 `off` 的实例开不了（会回 `gles32_no_bridge`），已经开着的仍可关。
 - 页面选文件和装 APK 一样：`<input type="file">`（可多选），每个文件追加一个 `file` 字段，用 `FormData` 发 `multipart/form-data`。
 
+### 数据盘剩余和自动扩容 `InstanceInfo.data_space`
+
+`{"auto_grow","free_bytes","total_bytes","checked_at","low","state","from_gb","to_gb","message","advice"}`，和 `modavd info` / `status --json` 的 `data_space` 相同，只读 `mas-avd.json`，不问客体。
+
+- 每次开机后读一次客体 `/data` 的剩余（`free_bytes` / `total_bytes`，`checked_at` 是那时）；剩余不到 5 GB 或不到 10% 是 `low`。
+- `auto_grow`：自动扩容开着（默认开，`modavd set <i> --auto-grow off` 关）。开着时，`low` 的实例下次开机前自动扩大 16 GB，到 256 GB 为止；宿主盘扩完要还剩至少 20 GB 才扩。
+- `state`：`""`（没什么要说的）、`pending`（下次开机扩到 `to_gb`）、`grown`（开机前已从 `from_gb` 扩到 `to_gb`）、`host_low`（宿主盘不够，没扩）、`at_max`（到了 256 GB）、`fs_behind`（旧版建的盘文件系统扩不过去）、`failed`（扩容没做成）、`low`（自动扩容关着）。
+- `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条提示：`pending`、`grown` 是普通提示，其余是警告。
+
 ### 更新 `UpdateView`
 
 `update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{at, ok, updated, version, message, error: {code, message, advice} | null}`；这个管理器不是那次重新打开的、或者结果超过 30 分钟，是 `null`）。

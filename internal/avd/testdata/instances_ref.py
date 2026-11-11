@@ -3,7 +3,8 @@
 # so it runs without the app package. Keep it a copy: when AUTO-MAS changes, copy again.
 #
 # Intentional differences: created_at is injected for byte comparisons. ModAVD#100
-# defaults new instances to 1080p and preserves either preset on existing instances.
+# defaults new instances to 1080p and preserves either preset on existing instances. ModAVD#180 takes any
+# frame rate in 1–60 instead of 30 / 60.
 #
 #   python -I instances_ref.py <job.json> <out.json>
 #
@@ -36,7 +37,7 @@ DEFAULT_CPU = 6
 DEFAULT_DATA_PARTITION_GB = 64
 DATA_PARTITION_RANGE_GB = (16, 512)
 SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1920, 1080, 280
-FPS_CHOICES = (30, 60)
+FPS_RANGE = (1, 60)
 DEFAULT_FPS = 60
 
 
@@ -343,10 +344,9 @@ def validate_options(memory_mb, cpu, data_partition_gb):
 
 def validate_fps(fps):
     value = DEFAULT_FPS if fps is None else int(fps)
-    if value not in FPS_CHOICES:
-        raise ValueError(
-            "ModAVD 的帧率只能选 " + " / ".join(str(v) for v in FPS_CHOICES)
-        )
+    low, high = FPS_RANGE
+    if not low <= value <= high:
+        raise ValueError(f"帧率只能在 {low}–{high} 之间")
     return value
 
 

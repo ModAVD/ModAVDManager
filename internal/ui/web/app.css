@@ -372,6 +372,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .with-suffix .input { padding-right: 40px; }
 /* the native spinner would sit on top of 「GB」; arrow keys still step the value */
 .with-suffix .input::-webkit-inner-spin-button, .with-suffix .input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+/* frame rate: the number box (name="fps", the value sent) and a slider kept in step */
+.fps-ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fps-ctl .with-suffix { width: 96px; }
+.fps-ctl input[type="range"] { flex: 1; min-width: 120px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .suffix { position: absolute; right: 12px; color: var(--text-3); font-size: 13px; pointer-events: none; }
 /* the boss key: the input that takes a key combination, its clear button and the warning when another program has it */
 .bosskey { display: flex; align-items: center; gap: 6px; }
