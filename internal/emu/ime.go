@@ -21,7 +21,7 @@ import (
 // alone, so `adb shell input`, maatouch and MaaFW input reach the app as before. Same constants as AUTO-MAS HOST_IME*
 // and the launcher's embedded setup script.
 const (
-	hostImePackage = "org.modavd.ime"
+	hostImePackage = root.HostImePackage
 	hostImeID      = "org.modavd.ime/.HostImeService"
 	// the emulator has the modavd_ime channel from mas-35 on
 	hostImeMinBuild = 35

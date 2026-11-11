@@ -17,7 +17,7 @@ import (
 // developer-signed, MIT. It shows in the display's natural orientation (ours is landscape). Pinned to 0.2.12: another
 // version needs the keys, files and version below checked against its source again.
 const (
-	lightLauncherPackage = "de.jrpie.android.launcher"
+	lightLauncherPackage = root.LauncherPackage
 	lightLauncherHome    = "de.jrpie.android.launcher/.ui.HomeActivity"
 	// its PreferenceManager.getDefaultSharedPreferences file
 	lightLauncherPrefsFile = "/data/data/de.jrpie.android.launcher/shared_prefs/de.jrpie.android.launcher_preferences.xml"

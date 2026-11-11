@@ -785,6 +785,18 @@ const (
 	ImeName              = "宿主输入法 org.modavd.ime"
 )
 
+// Packages ModAVD itself puts in an instance, in one place so the guest code in emu and report-config (which must not
+// list them as games) cannot drift apart.
+const (
+	LauncherPackage = "de.jrpie.android.launcher" // the light launcher µLauncher
+	HostImePackage  = "org.modavd.ime"            // the host input method
+	// FossifyLauncherPackage: the earlier light launcher; instances created before µLauncher still have it.
+	FossifyLauncherPackage = "org.fossify.home"
+)
+
+// OwnPackages are the packages above: not games.
+var OwnPackages = []string{LauncherPackage, HostImePackage, FossifyLauncherPackage}
+
 // Advice for missing components (AUTO-MAS FETCH_COMPONENTS_ADVICE / PACKAGE_ADVICE; "回来点「检查」" is AUTO-MAS's
 // button, here it is the check command).
 const (
