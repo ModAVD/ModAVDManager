@@ -110,6 +110,7 @@ type fakeSources struct {
 	zip      []byte
 	digest   string
 	mirror   func(q map[string]string) (int, any) // business code, data
+	dl       http.HandlerFunc                     // serves the package instead of http.ServeContent when set
 	requests atomic.Int32
 }
 
@@ -129,6 +130,10 @@ func newSources(t *testing.T, n int, zipBytes []byte) *fakeSources {
 	})
 	mux.HandleFunc("/dl/", func(w http.ResponseWriter, r *http.Request) {
 		f.requests.Add(1)
+		if f.dl != nil {
+			f.dl(w, r)
+			return
+		}
 		http.ServeContent(w, r, "pkg.zip", zipTime, bytes.NewReader(f.zip))
 	})
 	mux.HandleFunc("/mc/ModAVD/latest", func(w http.ResponseWriter, r *http.Request) {
@@ -438,7 +443,8 @@ func TestMirrorChyan(t *testing.T) {
 		t.Fatalf("check query %v", seen[0])
 	}
 	st, err := u.Install(context.Background())
-	if err != nil || !st.Updated || len(st.Notices) != 1 || !strings.Contains(st.Notices[0], "填入的 CDK 错误") {
+	// every file changed between the two builds: GitHub's range path falls back to the whole package (second notice)
+	if err != nil || !st.Updated || len(st.Notices) != 2 || !strings.Contains(st.Notices[0], "填入的 CDK 错误") || !strings.Contains(st.Notices[1], "变了的文件太多") {
 		t.Fatalf("install with a bad CDK: %+v %v", st, err)
 	}
 	if last := seen[len(seen)-1]; last["cdk"] != "cdk-secret-1" || last["current_version"] != "v0.36.0" {
