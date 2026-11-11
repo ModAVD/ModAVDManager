@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +21,48 @@ import (
 	"modavd/internal/root"
 	"modavd/internal/win"
 )
+
+// sdk\platform-tools (or the root folder) reached through a junction: the adb image path the process reports has the
+// link resolved, the root's AdbExe does not; both name our adb (ModAVD/ModAVD#135).
+func TestCapturePathMatchesThroughJunction(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sdk-shared", "platform-tools")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	adbReal := filepath.Join(target, "adb.exe")
+	other := filepath.Join(target, "AdbWinApi.dll")
+	for _, f := range []string{adbReal, other} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "root", "sdk", "platform-tools")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Skipf("mklink /J: %v %s", err, out)
+	}
+	t.Cleanup(func() { os.Remove(link) }) // the junction only
+	adbLinked := filepath.Join(link, "adb.exe")
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{adbReal, adbLinked, true},
+		{adbLinked, adbReal, true},
+		{target, link, true},                      // a root folder that is itself a junction
+		{strings.ToUpper(adbReal), adbReal, true}, // same name, other case
+		{other, adbLinked, false},
+		{filepath.Join(target, "missing.exe"), filepath.Join(link, "missing.exe"), false},
+		{"", adbLinked, false},
+	} {
+		if got := capturePathMatches(c.a, c.b); got != c.want {
+			t.Errorf("capturePathMatches(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
 
 func liveDiagnosticCapture(t *testing.T) (*Manager, win.Process, string) {
 	t.Helper()
