@@ -37,9 +37,12 @@ type InstanceConfig struct {
 	FPS             int `json:"fps"`
 	Resolution      int `json:"resolution"`
 	DataPartitionGB int `json:"data_partition_gb"`
-	Width           int `json:"width"`
-	Height          int `json:"height"`
-	DPI             int `json:"dpi"`
+	// DataDiskMode: "auto" (自动扩盘: the data partition is avd.AutoDataPartitionGB and the host pays only for what is
+	// written; also an instance whose mas-avd.json says nothing) or "manual" (DataPartitionGB as the user set it).
+	DataDiskMode string `json:"data_disk_mode"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	DPI          int    `json:"dpi"`
 }
 
 type InstanceInfo struct {
@@ -103,8 +106,8 @@ type InstanceInfo struct {
 	Path    string `json:"path"` // <root>\avd\mas_<i>.avd
 	// AppProxy is the per-app proxy as set (mas-avd.json only; `modavd proxy <i>` asks the guest); null when never set.
 	AppProxy *AppProxySummary `json:"app_proxy"`
-	// DataSpace is /data's free space after the last boot and the automatic growth of the data partition
-	// (autogrow.go; from mas-avd.json, the guest is not asked).
+	// DataSpace is the data disk's host side and /data's free space after the last boot (autogrow.go; the guest is not
+	// asked).
 	DataSpace DataSpace `json:"data_space"`
 }
 
@@ -127,10 +130,11 @@ type ListResult struct {
 }
 
 type CreateRequest struct {
-	Index           *int // nil = the smallest free index whose ports are free
-	Title           string
-	MemoryMB        *int
-	CPU             *int
+	Index    *int // nil = the smallest free index whose ports are free
+	Title    string
+	MemoryMB *int
+	CPU      *int
+	// DataPartitionGB is a data partition size the user chose (manual); nil: 自动扩盘 (avd.AutoDataPartitionGB).
 	DataPartitionGB *int
 	FPS             *int
 	Resolution      *int
@@ -157,10 +161,11 @@ type UpdateRequest struct {
 	CPU        *int
 	FPS        *int
 	Resolution *int
-	// DataPartitionGB raises the data partition (never lowers it); see avd.UpdateOptions.
+	// DataPartitionGB raises the data partition (never lowers it) and makes it manual; see avd.UpdateOptions.
 	DataPartitionGB *int
-	// DataAutoGrow turns the automatic growth of the data partition on or off (autogrow.go; mas-avd.json, at once).
-	DataAutoGrow *bool
+	// DataDiskAuto switches the data disk to 自动扩盘 (raised to avd.AutoDataPartitionGB at the next boot); not together
+	// with DataPartitionGB.
+	DataDiskAuto bool
 }
 
 type UpdateResult struct {

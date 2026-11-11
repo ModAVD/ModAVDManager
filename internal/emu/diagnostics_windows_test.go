@@ -338,7 +338,7 @@ func TestDiagnosticsOnlyDoesNotRewriteInstanceSettings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := bytes.ReplaceAll(raw, []byte("disk.dataPartition.size=64G"), []byte("disk.dataPartition.size="+disk))
+			before := bytes.ReplaceAll(raw, []byte("disk.dataPartition.size=256G"), []byte("disk.dataPartition.size="+disk))
 			before = bytes.ReplaceAll(before, []byte("hw.ramSize=6144M"), []byte("hw.ramSize=auto"))
 			if !bytes.Contains(before, []byte("disk.dataPartition.size="+disk)) || !bytes.Contains(before, []byte("hw.ramSize=auto")) {
 				t.Fatal("fixture settings did not change")

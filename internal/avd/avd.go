@@ -34,11 +34,22 @@ const (
 	DefaultCPU      = 6
 	DefaultFPS      = 60
 	// Any whole frame rate in MinFPS..MaxFPS (ModAVD#180); written as hw.lcd.vsync.
-	MinFPS                 = 1
-	MaxFPS                 = 60
-	DefaultDataPartitionGB = 64
+	MinFPS = 1
+	MaxFPS = 60
+	// AutoDataPartitionGB is the data partition of an instance whose data disk grows by itself (自动扩盘, the default,
+	// ModAVD#153): the disk image is sparse, so the host only pays for what the guest writes (64 -> 256 GB took about
+	// 1 GB more host disk on 11-11, the new block groups' inode tables), and the guest always has room.
+	AutoDataPartitionGB = 256
+	// DefaultDataPartitionGB is the size a new instance gets: automatic.
+	DefaultDataPartitionGB = AutoDataPartitionGB
 	MinDataPartitionGB     = 16
 	MaxDataPartitionGB     = 512
+	// DataDiskModeKey is instances.<i>.dataDiskMode in mas-avd.json: DataDiskManual for a size the user set, anything
+	// else (DataDiskAuto, or absent: instances made before it) automatic. The size itself stays in config.ini
+	// (disk.dataPartition.size, read by AUTO-MAS too).
+	DataDiskModeKey = "dataDiskMode"
+	DataDiskAuto    = "auto"
+	DataDiskManual  = "manual"
 	// New instances default to 1080p. Existing instances are identified by their dimensions.
 	DefaultResolution = 1080
 	TargetAPI         = "android-34"
@@ -312,6 +323,13 @@ func (in *Instance) DataPartitionGB() (int, bool) {
 	return 0, false
 }
 
+// DataDiskAutoMeta: the data disk of the instance with metadata meta grows by itself (DataDiskModeKey is not
+// DataDiskManual; nil metadata too).
+func DataDiskAutoMeta(meta *jsonord.Obj) bool {
+	s, _ := meta.Get(DataDiskModeKey).Str()
+	return s != DataDiskManual
+}
+
 // Display returns the size and density the instance will boot with (after DisplayChanges).
 func (in *Instance) Display() (width, height, dpi int) {
 	ch := DisplayChanges(in.Config)
@@ -573,6 +591,9 @@ type CreateOptions struct {
 	DataPartitionGB int
 	FPS             int
 	Resolution      int // 0 = DefaultResolution
+	// DataDiskManual: DataPartitionGB is a size the user chose (dataDiskMode manual); otherwise the data disk grows by
+	// itself (dataDiskMode auto; the caller passes AutoDataPartitionGB).
+	DataDiskManual bool
 	// Creating also sets instances.<i>.creationState = "creating" (emu's create setup), in the same write as the other
 	// keys: the instance is never listed without it.
 	Creating bool
@@ -690,6 +711,11 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		meta.Set("memoryMb", jsonord.NewInt(int64(memory)))
 		meta.Set("initialized", jsonord.NewBool(false))
 		meta.Set("createdAt", jsonord.NewString(createdAt))
+		mode := DataDiskAuto
+		if opt.DataDiskManual {
+			mode = DataDiskManual
+		}
+		meta.Set(DataDiskModeKey, jsonord.NewString(mode))
 		if opt.Creating {
 			meta.Set("creationState", jsonord.NewString("creating"))
 		}
@@ -741,7 +767,11 @@ type UpdateOptions struct {
 	// DataPartitionGB raises disk.dataPartition.size (modavd only; AUTO-MAS cannot change it): within
 	// MinDataPartitionGB..MaxDataPartitionGB and never below the current value. The emulator (sdk-mas36 on) grows the
 	// disk image at the next boot without touching the data, and the boot's after-boot step grows the file system.
+	// It makes the data disk manual (dataDiskMode manual).
 	DataPartitionGB *int
+	// DataDiskAuto makes the data disk automatic (dataDiskMode auto) and raises it to AutoDataPartitionGB unless it is
+	// larger already. Not together with DataPartitionGB.
+	DataDiskAuto bool
 }
 
 // Update writes the changed keys like AUTO-MAS write_instance_settings: hw.ramSize=<n>M and hw.cpu.ncore always
@@ -798,6 +828,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 			cpuArg = &n
 		}
 	}
+	if opt.DataDiskAuto && opt.DataPartitionGB != nil {
+		return nil, errs.New(errs.InvalidArgument, "数据盘只能二选一：自动扩盘，或者指定大小")
+	}
 	var dataArg *int
 	currentData, currentOK := in.DataPartitionGB()
 	if currentOK {
@@ -805,6 +838,13 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	}
 	if opt.DataPartitionGB != nil {
 		dataArg = opt.DataPartitionGB
+	}
+	if opt.DataDiskAuto {
+		auto := AutoDataPartitionGB
+		if currentOK && currentData > auto && currentData <= MaxDataPartitionGB {
+			auto = currentData // larger already: kept
+		}
+		dataArg = &auto
 	}
 	memory, cpu, data, err := ValidateOptions(memoryArg, cpuArg, dataArg)
 	if err != nil {
@@ -826,7 +866,7 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.Resolution != nil {
 		changes = append(changes, displayChanges(in.Config, resolution)...)
 	}
-	if opt.DataPartitionGB != nil {
+	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		changes = append(changes, [2]string{"disk.dataPartition.size", strconv.Itoa(data) + "G"})
 	}
 	title := ""
@@ -841,7 +881,14 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 		return nil, err
 	}
 	// memory goes into the metadata every time: boots pass it as -memory, so old "auto" instances get a fixed value
-	if err := r.UpdateInstanceMeta(i, map[string]*jsonord.Value{"memoryMb": jsonord.NewInt(int64(memory))}); err != nil {
+	metaChanges := map[string]*jsonord.Value{"memoryMb": jsonord.NewInt(int64(memory))}
+	switch {
+	case opt.DataDiskAuto:
+		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskAuto)
+	case opt.DataPartitionGB != nil:
+		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskManual)
+	}
+	if err := r.UpdateInstanceMeta(i, metaChanges); err != nil {
 		return nil, err
 	}
 	applied := map[string]any{}
@@ -860,8 +907,12 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.Resolution != nil {
 		applied["resolution"] = resolution
 	}
-	if opt.DataPartitionGB != nil {
+	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		applied["data_partition_gb"] = data
+		applied["data_disk_mode"] = DataDiskManual
+		if opt.DataDiskAuto {
+			applied["data_disk_mode"] = DataDiskAuto
+		}
 	}
 	return applied, nil
 }

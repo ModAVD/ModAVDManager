@@ -30,6 +30,58 @@ function segRow(text, name, opts, value, ...more) {
       opts.map(([v, t]) => h('label', null, h('input', { type: 'radio', name, value: String(v), checked: v === value }), h('span', { text: t })))), ...more)];
 }
 
+// Data disk (ModAVD#153): 自动扩盘 (the default: 256 GB from the start, the host only pays for what is written) or a
+// size the user sets; the size box shows only for the latter. minGB: the smallest size (16, or the current size in
+// the settings: it can only grow). value(quiet) is {auto: true}, {auto: false, gb}, or null after showing the error
+// (quiet: no error shown).
+const DISK_AUTO_GB = 256;
+const DISK_MAX_GB = 512;
+function diskField(prefix, mode, gb, minGB) {
+  const id = prefix + '-disk';
+  const labelId = id + '-l';
+  const startAuto = mode !== 'manual';
+  const num = h('input', { class: 'input', id, type: 'number', min: String(minGB), max: String(DISK_MAX_GB), step: '1',
+    value: String(startAuto ? Math.max(minGB, 64) : gb), inputmode: 'numeric', 'aria-describedby': id + '-h', 'aria-label': '数据盘大小' });
+  const size = h('span', { class: 'with-suffix' }, num, h('span', { class: 'suffix', text: 'GB' }));
+  const hintEl = hint('', id + '-h');
+  const err = h('p', { class: 'f-err', id: id + '-e', role: 'alert', hidden: true });
+  const radios = [['auto', '自动扩盘'], ['manual', '指定大小']].map(([v]) =>
+    h('input', { type: 'radio', name: prefix + '-diskmode', value: v, checked: (v === 'auto') === startAuto }));
+  const seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': labelId },
+    radios.map((r, k) => h('label', null, r, h('span', { text: k === 0 ? '自动扩盘' : '指定大小' }))));
+  const isAuto = () => radios[0].checked;
+  const clear = () => {
+    if (err.hidden) return;
+    err.hidden = true;
+    hintEl.hidden = false;
+    attr(num, 'aria-invalid', null);
+    attr(num, 'aria-describedby', id + '-h');
+  };
+  const sync = () => {
+    size.hidden = isAuto();
+    hintEl.textContent = isAuto() ? `一开始就是 ${DISK_AUTO_GB} GB，按实际写入占电脑硬盘，不用管大小`
+      : `${minGB}–${DISK_MAX_GB} GB，以后只能改大；快满时会提醒`;
+    clear();
+  };
+  seg.addEventListener('change', sync);
+  num.addEventListener('input', clear);
+  sync();
+  const value = (quiet) => {
+    if (isAuto()) return { auto: true };
+    const n = Number(num.value);
+    if (num.value.trim() && Number.isInteger(n) && n >= minGB && n <= DISK_MAX_GB) return { auto: false, gb: n };
+    if (quiet) return null;
+    err.replaceChildren(icon('alert'), h('span', { text: `要填 ${minGB}–${DISK_MAX_GB} 之间的整数（单位 GB）` }));
+    err.hidden = false;
+    hintEl.hidden = true;
+    attr(num, 'aria-invalid', true);
+    attr(num, 'aria-describedby', id + '-e');
+    num.focus();
+    return null;
+  };
+  return { rows: [h('span', { class: 'f-label', id: labelId, text: '数据盘' }), cell(seg, size, hintEl, err)], value };
+}
+
 // Frame rate 1–60 (ModAVD#180): a number box named fps (what the form sends) and a slider moving with it.
 // check() returns the value, or shows the error under the field and returns null.
 function fpsField(prefix, value) {
@@ -108,10 +160,7 @@ export function openCreate() {
   }
   const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: '比如：明日方舟 · 主号' });
   const titleHint = hint('');
-  const disk = h('input', { class: 'input', id: 'c-disk', type: 'number', min: '16', max: '512', step: '1', value: '64', inputmode: 'numeric', 'aria-describedby': 'c-disk-h' });
-  // the error takes the hint's line (both one line), so the dialog does not move when it shows
-  const diskHint = hint('按实际写入增长。16–512 GB，建好后不能改', 'c-disk-h');
-  const diskErr = h('p', { class: 'f-err', id: 'c-disk-e', role: 'alert', hidden: true });
+  const disk = diskField('c', 'auto', 64, 16);
   const idx = h('select', { class: 'select', id: 'c-index' }, h('option', { value: '', text: `自动（编号 ${free[0]}）` }),
     free.map((i) => h('option', { value: String(i), text: `编号 ${i}` })));
   const idxHint = hint('');
@@ -124,13 +173,6 @@ export function openCreate() {
   };
   idx.addEventListener('change', sync);
   sync();
-  disk.addEventListener('input', () => {
-    if (diskErr.hidden) return;
-    diskErr.hidden = true;
-    diskHint.hidden = false;
-    attr(disk, 'aria-invalid', null);
-    attr(disk, 'aria-describedby', 'c-disk-h');
-  });
   const fps = fpsField('c', 60);
   const box = errorBox();
   const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: '新建' }));
@@ -142,28 +184,21 @@ export function openCreate() {
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
       segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
-      inputRow('数据盘上限', h('span', { class: 'with-suffix' }, disk, h('span', { class: 'suffix', text: 'GB' })), diskHint, diskErr),
+      disk.rows,
       inputRow('编号', idx, idxHint)), box),
     actions: { ok },
     onSubmit() {
       const f = ctl.form.elements;
-      const n = Number(disk.value);
-      if (!disk.value.trim() || !Number.isInteger(n) || n < 16 || n > 512) {
-        diskErr.replaceChildren(icon('alert'), h('span', { text: '要填 16–512 之间的整数（单位 GB）' }));
-        diskErr.hidden = false;
-        diskHint.hidden = true;
-        attr(disk, 'aria-invalid', true);
-        attr(disk, 'aria-describedby', 'c-disk-e');
-        disk.focus();
-        return;
-      }
+      const d = disk.value();
+      if (d === null) return;
       const fpsValue = fps.check();
       if (fpsValue === null) return;
       submit(ctl, ok, '正在新建…', box, async () => {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
         const job = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
-          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
+          // no size: 自动扩盘
+          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb, index: idx.value === '' ? undefined : Number(idx.value),
         });
         A.onJob(job);
         S.watch.add(job.id);
@@ -184,9 +219,13 @@ export function openSettings(i, field) {
   const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: inst0.name });
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
-  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率和分辨率在下次开机生效。诊断设置立即生效。' }));
+  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率、分辨率和数据盘在下次开机生效。诊断设置立即生效。' }));
   const kv = h('dl', { class: 'kv' });
   const fps = fpsField('s', cfg.fps);
+  const diskAuto0 = cfg.data_disk_mode !== 'manual';
+  const diskGB0 = cfg.data_partition_gb || 16;
+  // the size can only grow
+  const disk = diskField('s', cfg.data_disk_mode, diskGB0, Math.max(16, diskGB0));
   const box = errorBox();
   const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: '保存' }));
   const del = btn('btn btn-danger-ghost left', [icon('trash'), '删除…'], () => { if (!instance(i).running) openDelete(i); });
@@ -202,6 +241,7 @@ export function openSettings(i, field) {
         segRow('CPU', 'cpu', CPU, cfg.cpu),
         fps.rows,
         segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
+        disk.rows,
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
           hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h')),
         boss.row),
@@ -222,6 +262,10 @@ export function openSettings(i, field) {
       const v = f[k].value === '' ? null : Number(f[k].value);
       if (v != null && v !== cfg[key]) out[key] = v;
     }
+    // 自动扩盘 or a size; an invalid size is no change yet (saving shows the error)
+    const d = disk.value(true);
+    if (d && d.auto && !diskAuto0) out.data_disk_auto = true;
+    else if (d && !d.auto && (diskAuto0 || d.gb !== diskGB0)) out.data_partition_gb = d.gb;
     return out;
   }
   function dirty() {
@@ -232,7 +276,7 @@ export function openSettings(i, field) {
 
   async function saveSettings() {
     if (ctl.busy || save.getAttribute('aria-disabled') === 'true') return;
-    if (fps.check() === null) return;
+    if (fps.check() === null || disk.value() === null) return;
     const pending = changes();
     if (pending.diagnostics === false) {
       ctl.busy = true;
@@ -408,7 +452,8 @@ function infoRows(inst) {
     ['adb 地址', inst.adb_address, 'mono', ibtn('copy', '复制 adb 地址', () => A.copy(inst.adb_address))],
     ['序列号', inst.serial, port ? `私有 adb server ${port} 上` : ''],
     ['端口', `控制台 ${p.console} · adb ${p.adb} · gRPC ${p.grpc}`],
-    ['数据盘上限', `${cfg.data_partition_gb} GB`, '按实际写入增长，建好后不能改'],
+    ['数据盘', cfg.data_disk_mode === 'manual' ? `${cfg.data_partition_gb} GB（指定大小）` : `自动扩盘（${cfg.data_partition_gb} GB）`,
+      inst.data_space && inst.data_space.host_bytes >= 0 ? `电脑上实际占 ${fmtBytes(inst.data_space.host_bytes)}` : ''],
     ['显示', cfg.width ? `${cfg.width}×${cfg.height} · ${cfg.dpi} dpi` : '—'],
     ['渲染器', inst.renderer || (inst.initialized ? '未知' : '首次开机后才知道'), inst.software_renderer ? '软件渲染（没有可用的显卡驱动）' : ''],
     ['截图共享内存', shm.shm || '—', shm.shm ? (shm.shm_ready ? '已就绪' : '未就绪') : ''],

@@ -10,7 +10,7 @@
 //	list                                                  emu.ListResult
 //	info <i>                                              emu.InstanceInfo
 //	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,serial,adb_address,ports,data_space}
-//	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb N] [--fps 1-60]    emu.InstanceInfo
+//	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb auto|N] [--fps 1-60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
 //	proxy <i> [on|off] [--server URL|auto] [--add P] [--remove P] [--apps P]   emu.AppProxyResult
 //	proxy <i> test                                        emu.AppProxyTestResult

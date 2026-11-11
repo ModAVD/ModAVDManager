@@ -39,8 +39,8 @@ HTTP 4xx / 5xx with the body `{"error":{"code":"…","message":"…","advice":"�
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job` (`kind` is `create`: it boots in the background, finishes the initial setup and shuts down again, which takes a few minutes. When `index` is not given, the server picks the number first, and `Job.index` is the new instance's; the result is an `InstanceInfo`). A new instance comes without the Google Play store (there is no `play_store` field; sending one returns 400). If you want it, use `playstore-install` below after the instance is created |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, diagnostics?: bool, boss_key?: string}` | `UpdateResult`; the diagnostics setting and the boss key take effect immediately, ordinary configuration at the next boot. When `boss_key` is given, the result has one more field `boss_key_taken` (bool): the new key was tried at once, and `true` means another program holds it (see "Boss keys and the tray" below) |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job` (`kind` is `create`: without `data_partition_gb` the data disk is automatic (256 GB), with it a fixed size; it boots in the background, finishes the initial setup and shuts down again, which takes a few minutes. When `index` is not given, the server picks the number first, and `Job.index` is the new instance's; the result is an `InstanceInfo`). A new instance comes without the Google Play store (there is no `play_store` field; sending one returns 400). If you want it, use `playstore-install` below after the instance is created |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string}` | `UpdateResult`; the diagnostics setting and the boss key take effect immediately, ordinary configuration at the next boot. `data_partition_gb` gives the data disk a fixed size (only larger), `data_disk_auto: true` makes it automatic; not both. When `boss_key` is given, the result has one more field `boss_key_taken` (bool): the new key was tried at once, and `true` means another program holds it (see "Boss keys and the tray" below) |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`: the number of files and bytes that would be cleaned up when diagnostics is turned off; it changes no configuration and deletes no files |
 | DELETE | `/api/instances/{i}?confirm=1` | without `confirm=1` the server returns 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`: always boots with a window (the manager never boots headless; headless boot is command line only). If the instance is already running headless, the job fails with code `busy` (no switching while running) |
@@ -173,14 +173,14 @@ Some games require GLES 3.2 in their manifest, and the Play store judges ModAVD 
 - `InstanceInfo.gles32` (bool): the record of the switch (`gles32` in `mas-avd.json`; the guest is not queried). The UI uses it to show "Turn on / off reporting GLES 3.2 (experimental)" under "More actions"; an instance whose `bridge` is `off` cannot turn it on (it answers `gles32_no_bridge`), but one that is already on can still be turned off.
 - Choosing files on the page works like installing an APK: `<input type="file">` (multiple selection allowed), one `file` field appended per file, sent as `multipart/form-data` with `FormData`.
 
-### Data partition space and automatic growth `InstanceInfo.data_space`
+### Data disk `InstanceConfig.data_disk_mode`, `InstanceInfo.data_space`
 
-`{"auto_grow","free_bytes","total_bytes","checked_at","low","state","from_gb","to_gb","message","advice"}`, the same as `data_space` in `modavd info` / `status --json`; read from `mas-avd.json` only, the guest is not queried.
-
-- After every boot the guest's `/data` free space is read once (`free_bytes` / `total_bytes`, `checked_at` is when); less than 5 GB or less than 10% free is `low`.
-- `auto_grow`: automatic growth is on (on by default; `modavd set <i> --auto-grow off` turns it off). When on, a `low` instance's data partition grows by 16 GB before its next boot, up to 256 GB; only when the host volume still has at least 20 GB left after the growth.
-- `state`: `""` (nothing to tell), `pending` (the next boot grows it to `to_gb`), `grown` (grown from `from_gb` to `to_gb` before the boot), `host_low` (not grown: too little space on the host volume), `at_max` (256 GB reached), `fs_behind` (the file system of a disk made by an old version cannot grow), `failed` (growing failed), `low` (automatic growth is off).
-- `message` and `advice` are a sentence for people (Chinese) and a suggestion with the command; empty when `state` is `""`. The card shows them as a note: `pending` and `grown` as information, the rest as a warning.
+- `config.data_disk_mode`: `auto` (自动扩盘: the data disk is 256 GB from the start and takes host disk only for what is written; also older instances whose `mas-avd.json` has no mode, grown to 256 GB before their next boot) or `manual` (a fixed size: `data_partition_gb` is what the user set). Creating an instance and its settings offer one of the two; only the fixed size shows a size box.
+- `data_space`: `{"free_bytes","total_bytes","checked_at","low","host_bytes","host_free_bytes","state","message","advice"}`, the same as `data_space` in `modavd info` / `status --json`; the guest is not queried.
+  - After every boot the guest's `/data` free space is read once (`free_bytes` / `total_bytes`, `checked_at` is when); less than 5 GB or less than 10% free, read at the current size, is `low`.
+  - `host_bytes`: what the data disk files actually take on the host (sparse: only what was written); `host_free_bytes`: free space of the volume they are on. `-1` when unknown.
+  - `state`: `""` (nothing to tell), `low` (the data disk is almost full), `host_low` (automatic data disk and less than 20 GB free on the host volume).
+  - `message` and `advice` are a sentence for people (Chinese) and a suggestion with the command; empty when `state` is `""`. The card shows them as a warning.
 
 ### Update `UpdateView`
 

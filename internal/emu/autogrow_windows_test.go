@@ -5,32 +5,46 @@ package emu
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"modavd/internal/avd"
+	"modavd/internal/errs"
 	"modavd/internal/jsonord"
 )
 
-// autoGrowTestInstance makes instance files on a fresh root (opsTestManager: nothing runs, nothing outside the test
-// directory is read) with a data partition of dataGB, and replaces the host's free space with hostFree.
-func autoGrowTestInstance(t *testing.T, dataGB int, hostFree func(string) (uint64, error)) (*Manager, int) {
+// diskTestManager is a Manager on a fresh root (opsTestManager: nothing runs, nothing outside the test directory is
+// read) whose host free space is hostFree and whose data disk files take 3 GB each on the host.
+func diskTestManager(t *testing.T, hostFree uint64) *Manager {
 	t.Helper()
 	m, _ := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true, DataPartitionGB: &dataGB, NoBridge: true})
+	savedFree, savedAlloc := hostDiskFree, hostAllocated
+	inRoot := func(path string) {
+		if !strings.HasPrefix(path, m.Root.Dir) {
+			t.Errorf("host asked about %s, outside the test root", path)
+		}
+	}
+	hostDiskFree = func(path string) (uint64, error) { inRoot(path); return hostFree, nil }
+	hostAllocated = func(path string) (uint64, error) {
+		inRoot(path)
+		if filepath.Base(path) == userdataOverlay {
+			return 3 << 30, nil
+		}
+		return 0, errors.New("not there")
+	}
+	t.Cleanup(func() { hostDiskFree, hostAllocated = savedFree, savedAlloc })
+	return m
+}
+
+func createFiles(t *testing.T, m *Manager, dataGB *int) int {
+	t.Helper()
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true, DataPartitionGB: dataGB, NoBridge: true})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved := hostDiskFree
-	hostDiskFree = func(path string) (uint64, error) {
-		if !strings.HasPrefix(path, m.Root.Dir) {
-			t.Errorf("host free space asked for %s, outside the test root", path)
-		}
-		return hostFree(path)
-	}
-	t.Cleanup(func() { hostDiskFree = saved })
-	return m, created.Index
+	return created.Index
 }
 
 func configuredGB(t *testing.T, m *Manager, i int) int {
@@ -43,150 +57,9 @@ func configuredGB(t *testing.T, m *Manager, i int) int {
 	return n
 }
 
-func growState(m *Manager, i int) dataGrowRecord {
-	rec, _ := readDataGrow(m.Root.InstanceMeta(i))
-	return rec
-}
-
-func freeHost(n uint64) func(string) (uint64, error) {
-	return func(string) (uint64, error) { return n, nil }
-}
-
-// TestAutoGrowData: a low reading grows the data partition one step through avd.Update; the grown size then has no
-// reading of its own, so the next start leaves it (and drops the record); host too full, off, at the limit: not grown.
-func TestAutoGrowData(t *testing.T) {
-	m, i := autoGrowTestInstance(t, 16, freeHost(500<<30))
-	// what the after-boot step records: 16 GB disk, 1.2 GB free
-	m.recordDataSpace(i, dataSize{Device: 16 << 30, FSSize: 16 << 30, FreeBytes: 1288490188, TotalBytes: 16 * gb}, false)
-	if d := m.mustInfo(t, i).DataSpace; d.State != dataStatePending || d.ToGB != 32 || !d.Low || !d.AutoGrow {
-		t.Fatalf("after a low reading: %+v", d)
-	}
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 32 {
-		t.Fatalf("not grown: %d GB", n)
-	}
-	if rec := growState(m, i); rec.State != dataStateGrown || rec.FromGB != 16 || rec.ToGB != 32 {
-		t.Fatalf("record %+v", rec)
-	}
-	if d := m.mustInfo(t, i).DataSpace; d.State != dataStateGrown || d.FromGB != 16 || d.ToGB != 32 {
-		t.Fatalf("info after growing: %+v", d)
-	}
-	// a second start before any boot read the new size: nothing more
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 32 {
-		t.Fatalf("grown twice: %d GB", n)
-	}
-	if rec := growState(m, i); rec.State != "" {
-		t.Fatalf("stale record kept: %+v", rec)
-	}
-
-	// the boot after a manual raise (device not grown yet): the reading belongs to no size, no growth
-	m.recordDataSpace(i, dataSize{Device: 16 << 30, FSSize: 16 << 30, FreeBytes: gb, TotalBytes: 16 * gb}, false)
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 32 {
-		t.Fatalf("grew on a reading of the old size: %d GB", n)
-	}
-}
-
-func TestAutoGrowDataHostLow(t *testing.T) {
-	need := uint64(autoGrowStepGB)<<30 + autoGrowHostReserve
-	m, i := autoGrowTestInstance(t, 48, freeHost(need-1))
-	m.recordDataSpace(i, dataSize{Device: 48 << 30, FSSize: 48 << 30, FreeBytes: 2 * gb, TotalBytes: 47 * gb}, false)
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 48 {
-		t.Fatalf("grown with too little host space: %d GB", n)
-	}
-	rec := growState(m, i)
-	if rec.State != dataStateHostLow || rec.HostFreeBytes != int64(need-1) {
-		t.Fatalf("record %+v", rec)
-	}
-	d := m.mustInfo(t, i).DataSpace
-	if d.State != dataStateHostLow || !strings.Contains(d.Advice, "modavd set") {
-		t.Fatalf("info %+v", d)
-	}
-
-	// unreadable host: not grown either
-	hostDiskFree = func(string) (uint64, error) { return 0, errors.New("no") }
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 48 || growState(m, i).State != dataStateHostLow {
-		t.Fatalf("unreadable host: %d GB, %+v", n, growState(m, i))
-	}
-}
-
-// TestAutoGrowOff: `set --auto-grow off` is stored as false, and a low disk then stays as it is; on grows again.
-func TestAutoGrowOff(t *testing.T) {
-	m, i := autoGrowTestInstance(t, 16, freeHost(500<<30))
-	off, on := false, true
-	up, err := m.Update(context.Background(), i, UpdateRequest{DataAutoGrow: &off})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if up.Applied["data_auto_grow"] != false || up.Instance.DataSpace.AutoGrow || up.AppliesNextBoot {
-		t.Fatalf("update %+v", up)
-	}
-	if v, ok := m.Root.InstanceMeta(i).Get(dataAutoGrowKey).BoolVal(); !ok || v {
-		t.Fatalf("dataAutoGrow not stored as false")
-	}
-	m.recordDataSpace(i, dataSize{Device: 16 << 30, FSSize: 16 << 30, FreeBytes: gb, TotalBytes: 16 * gb}, false)
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 16 {
-		t.Fatalf("grown while off: %d GB", n)
-	}
-	if d := m.mustInfo(t, i).DataSpace; d.State != dataStateLow || !strings.Contains(d.Advice, "--data-gb 32") {
-		t.Fatalf("info while off: %+v", d)
-	}
-	if _, err := m.Update(context.Background(), i, UpdateRequest{DataAutoGrow: &on}); err != nil {
-		t.Fatal(err)
-	}
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 32 {
-		t.Fatalf("not grown after turning it on: %d GB", n)
-	}
-}
-
-func TestAutoGrowAtMax(t *testing.T) {
-	m, i := autoGrowTestInstance(t, autoGrowMaxGB, freeHost(1<<40))
-	m.recordDataSpace(i, dataSize{Device: autoGrowMaxGB << 30, FSSize: autoGrowMaxGB << 30, FreeBytes: gb, TotalBytes: 250 * gb}, false)
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != autoGrowMaxGB {
-		t.Fatalf("grown past the limit: %d GB", n)
-	}
-	if rec := growState(m, i); rec.State != dataStateAtMax {
-		t.Fatalf("record %+v", rec)
-	}
-}
-
-func TestAutoGrowFSBehind(t *testing.T) {
-	m, i := autoGrowTestInstance(t, 32, freeHost(1<<40))
-	m.recordDataSpace(i, dataSize{Device: 32 << 30, FSSize: 30 << 30, FreeBytes: gb, TotalBytes: 30 * gb}, true)
-	m.autoGrowData(i)
-	if n := configuredGB(t, m, i); n != 32 || growState(m, i).State != dataStateFSBehind {
-		t.Fatalf("%d GB, %+v", n, growState(m, i))
-	}
-}
-
-// TestRecordDataSpaceKeepsOtherKeys: the readings go under instances.<i> next to what AUTO-MAS and others wrote.
-func TestRecordDataSpaceKeepsOtherKeys(t *testing.T) {
-	m, i := autoGrowTestInstance(t, 16, freeHost(1<<40))
-	if err := m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
-		meta.Set("someoneElse", jsonord.NewString("x"))
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	m.recordDataSpace(i, dataSize{Device: 16 << 30, FSSize: 16 << 30, FreeBytes: 10 * gb, TotalBytes: 16 * gb}, false)
-	meta := m.Root.InstanceMeta(i)
-	if s, _ := meta.Get("someoneElse").Str(); s != "x" {
-		t.Fatal("other key lost")
-	}
-	if rec, ok := readDataSpace(meta); !ok || rec.SizeGB != 16 || rec.FreeBytes != 10*gb || rec.At == 0 {
-		t.Fatalf("reading %+v %v", rec, ok)
-	}
-	// statfs missing: nothing recorded over the last reading
-	m.recordDataSpace(i, dataSize{Device: 16 << 30, FSSize: 16 << 30}, false)
-	if rec, _ := readDataSpace(m.Root.InstanceMeta(i)); rec.FreeBytes != 10*gb {
-		t.Fatalf("reading overwritten without statfs: %+v", rec)
-	}
+func diskMode(m *Manager, i int) string {
+	s, _ := m.Root.InstanceMeta(i).Get(avd.DataDiskModeKey).Str()
+	return s
 }
 
 func (m *Manager) mustInfo(t *testing.T, i int) *InstanceInfo {
@@ -196,4 +69,146 @@ func (m *Manager) mustInfo(t *testing.T, i int) *InstanceInfo {
 		t.Fatal(err)
 	}
 	return info
+}
+
+// TestCreateDataDiskModes: no size is 自动扩盘 at 256 GB, a size is manual; info says which and what the disk takes on
+// the host.
+func TestCreateDataDiskModes(t *testing.T) {
+	m := diskTestManager(t, 500<<30)
+	auto := createFiles(t, m, nil)
+	if n := configuredGB(t, m, auto); n != avd.AutoDataPartitionGB || diskMode(m, auto) != avd.DataDiskAuto {
+		t.Fatalf("default create: %d GB, mode %q", n, diskMode(m, auto))
+	}
+	info := m.mustInfo(t, auto)
+	if info.Config.DataDiskMode != avd.DataDiskAuto || info.Config.DataPartitionGB != avd.AutoDataPartitionGB ||
+		info.DataSpace.HostBytes != 3<<30 || info.DataSpace.HostFreeBytes != 500<<30 || info.DataSpace.State != "" {
+		t.Fatalf("info %+v %+v", info.Config, info.DataSpace)
+	}
+	n := 48
+	manual := createFiles(t, m, &n)
+	if got := configuredGB(t, m, manual); got != 48 || diskMode(m, manual) != avd.DataDiskManual {
+		t.Fatalf("manual create: %d GB, mode %q", got, diskMode(m, manual))
+	}
+	if info := m.mustInfo(t, manual); info.Config.DataDiskMode != avd.DataDiskManual {
+		t.Fatalf("manual info %+v", info.Config)
+	}
+}
+
+// TestApplyAutoDisk: an instance from before the modes (no dataDiskMode, 64 GB) is raised to 256 GB before its next
+// launch and stays automatic; a manual one, and one at 256 GB, are left alone.
+func TestApplyAutoDisk(t *testing.T) {
+	m := diskTestManager(t, 500<<30)
+	n := 64
+	old := createFiles(t, m, &n)
+	if err := m.Root.EditInstanceMeta(old, func(meta *jsonord.Obj) error {
+		meta.Delete(avd.DataDiskModeKey) // made before the modes
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.applyAutoDisk(old)
+	if got := configuredGB(t, m, old); got != avd.AutoDataPartitionGB || diskMode(m, old) != avd.DataDiskAuto {
+		t.Fatalf("old instance: %d GB, mode %q", got, diskMode(m, old))
+	}
+	m.applyAutoDisk(old) // nothing more
+	if got := configuredGB(t, m, old); got != avd.AutoDataPartitionGB {
+		t.Fatalf("second start: %d GB", got)
+	}
+
+	manual := createFiles(t, m, &n)
+	m.applyAutoDisk(manual)
+	if got := configuredGB(t, m, manual); got != 64 || diskMode(m, manual) != avd.DataDiskManual {
+		t.Fatalf("manual grown: %d GB, mode %q", got, diskMode(m, manual))
+	}
+}
+
+// TestUpdateDataDiskMode: set --data-gb N makes it manual (only larger), set --data-gb auto makes it automatic at
+// 256 GB (or keeps a larger size); both at once are refused.
+func TestUpdateDataDiskMode(t *testing.T) {
+	m := diskTestManager(t, 500<<30)
+	n := 32
+	i := createFiles(t, m, &n)
+	ctx := context.Background()
+	up, err := m.Update(ctx, i, UpdateRequest{DataDiskAuto: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up.Applied["data_disk_mode"] != avd.DataDiskAuto || up.Applied["data_partition_gb"] != avd.AutoDataPartitionGB ||
+		up.Instance.Config.DataDiskMode != avd.DataDiskAuto || configuredGB(t, m, i) != avd.AutoDataPartitionGB {
+		t.Fatalf("to auto: %+v", up)
+	}
+	big := 300
+	if up, err = m.Update(ctx, i, UpdateRequest{DataPartitionGB: &big}); err != nil {
+		t.Fatal(err)
+	}
+	if up.Applied["data_disk_mode"] != avd.DataDiskManual || diskMode(m, i) != avd.DataDiskManual || configuredGB(t, m, i) != 300 {
+		t.Fatalf("to manual 300: %+v", up)
+	}
+	small := 64
+	if _, err := m.Update(ctx, i, UpdateRequest{DataPartitionGB: &small}); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Fatalf("shrink: %v", err)
+	}
+	// back to automatic: 300 GB stays
+	if _, err := m.Update(ctx, i, UpdateRequest{DataDiskAuto: true}); err != nil || configuredGB(t, m, i) != 300 || diskMode(m, i) != avd.DataDiskAuto {
+		t.Fatalf("auto above 256: %v, %d GB, %q", err, configuredGB(t, m, i), diskMode(m, i))
+	}
+	if _, err := m.Update(ctx, i, UpdateRequest{DataDiskAuto: true, DataPartitionGB: &big}); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Fatalf("both: %v", err)
+	}
+}
+
+// TestDataSpaceHostLow: an automatic disk on a host volume with less than 20 GB free says so; a manual one does not.
+func TestDataSpaceHostLow(t *testing.T) {
+	m := diskTestManager(t, 10<<30)
+	auto := createFiles(t, m, nil)
+	if d := m.mustInfo(t, auto).DataSpace; d.State != dataStateHostLow || !strings.Contains(d.Message, "10.0 GB") {
+		t.Fatalf("auto %+v", d)
+	}
+	n := 64
+	manual := createFiles(t, m, &n)
+	if d := m.mustInfo(t, manual).DataSpace; d.State != "" {
+		t.Fatalf("manual %+v", d)
+	}
+}
+
+// TestRecordDataSpace: a reading belongs to the configured size only once the device has it, a low one shows, and the
+// other keys under instances.<i> stay.
+func TestRecordDataSpace(t *testing.T) {
+	m := diskTestManager(t, 500<<30)
+	n := 48
+	i := createFiles(t, m, &n)
+	if err := m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
+		meta.Set("someoneElse", jsonord.NewString("x"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.recordDataSpace(i, dataSize{Device: 48 << 30, FSSize: 48 << 30, FreeBytes: gb, TotalBytes: 47 * gb}, false)
+	meta := m.Root.InstanceMeta(i)
+	if s, _ := meta.Get("someoneElse").Str(); s != "x" {
+		t.Fatal("other key lost")
+	}
+	if rec, ok := readDataSpace(meta); !ok || rec.SizeGB != 48 || rec.FreeBytes != gb || rec.At == 0 {
+		t.Fatalf("reading %+v %v", rec, ok)
+	}
+	if d := m.mustInfo(t, i).DataSpace; d.State != dataStateLow || !d.Low || !strings.Contains(d.Advice, "--data-gb auto") {
+		t.Fatalf("info %+v", d)
+	}
+	// raised by hand, the device not grown yet: the reading belongs to no size
+	big := 96
+	if _, err := m.Update(context.Background(), i, UpdateRequest{DataPartitionGB: &big}); err != nil {
+		t.Fatal(err)
+	}
+	m.recordDataSpace(i, dataSize{Device: 48 << 30, FSSize: 48 << 30, FreeBytes: gb, TotalBytes: 47 * gb}, false)
+	if rec, _ := readDataSpace(m.Root.InstanceMeta(i)); rec.SizeGB != 0 {
+		t.Fatalf("reading of the old size kept as the new: %+v", rec)
+	}
+	if d := m.mustInfo(t, i).DataSpace; d.State != "" {
+		t.Fatalf("low shown for a size not reached yet: %+v", d)
+	}
+	// statfs missing: nothing recorded over the last reading
+	m.recordDataSpace(i, dataSize{Device: 96 << 30, FSSize: 96 << 30}, false)
+	if rec, _ := readDataSpace(m.Root.InstanceMeta(i)); rec.FreeBytes != gb {
+		t.Fatalf("reading overwritten without statfs: %+v", rec)
+	}
 }

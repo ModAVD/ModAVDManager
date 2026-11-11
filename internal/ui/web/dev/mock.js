@@ -49,16 +49,18 @@ function mk(i, title, o = {}) {
     serial: 'emulator-' + console, adb_address: '127.0.0.1:' + (console + 1),
     ports: { console, adb: console + 1, grpc: console + 2 },
     screencap: { shm: 'SHM_videmulator' + console, shm_ready: st === 'online' },
-    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 64, resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.resolution === 1080 ? 280 : 240 },
+    // o.disk: a size the user set (manual); without it 自动扩盘 (256 GB)
+    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 256, data_disk_mode: o.disk ? 'manual' : 'auto', resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.resolution === 1080 ? 280 : 240 },
     initialized, launcher: initialized ? 'µLauncher' : '',
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
     app_proxy: null,
     // the execution bridge (off | pending | installed | unknown) and the Google Play Store's record
     bridge: o.bridge || (initialized ? 'installed' : 'pending'), play_store: !!o.store, play_store_partial: false, gles32: false,
-    // /data after the last boot and the automatic growth (API.md 数据盘剩余和自动扩容); o.ds overrides
-    data_space: { auto_grow: true, free_bytes: initialized ? 20 * 2 ** 30 : 0, total_bytes: initialized ? (o.disk || 64) * 2 ** 30 : 0,
-      checked_at: initialized ? iso(now() - 3600000) : '', low: false, state: '', from_gb: 0, to_gb: 0, message: '', advice: '', ...(o.ds || {}) },
+    // the data disk on the host and /data after the last boot (API.md 数据盘); o.ds overrides
+    data_space: { free_bytes: initialized ? 200 * 2 ** 30 : 0, total_bytes: initialized ? (o.disk || 256) * 2 ** 30 : 0,
+      checked_at: initialized ? iso(now() - 3600000) : '', low: false, host_bytes: initialized ? 23 * 2 ** 30 : 2 ** 30, host_free_bytes: 400 * 2 ** 30,
+      state: '', message: '', advice: '', ...(o.ds || {}) },
   };
   Object.defineProperty(inst, '_', { value: { scene: o.scene ?? i, mode: 'game', win: false, fail: o.fail || null, logs: initialized || st !== 'offline', tap: null }, enumerable: false });
   db.insts.set(i, inst);
@@ -137,12 +139,11 @@ function setup(sc) {
     mk(3, '重返未来 1999', { status: 'starting', upMin: 0.3, scene: 2 });
     mk(4, '蔚蓝档案', { status: 'online', upMin: 12, scene: 2, fps: 30 });
     mk(6, '碧蓝航线', { status: 'offline', mem: 4096, cpu: 4, fps: 30, disk: 48, ds: { free_bytes: 1932735283, total_bytes: 47 * 2 ** 30, low: true,
-      state: 'pending', from_gb: 48, to_gb: 64, message: '数据盘只剩 1.8 GB（共 47.0 GB），下次开机前自动扩到 64 GB', advice: '不想自动扩：modavd set 6 --auto-grow off' } });
+      state: 'low', message: '数据盘只剩 1.8 GB（共 47.0 GB）', advice: '改成自动扩盘：modavd set 6 --data-gb auto；或者改大：modavd set 6 --data-gb 72（下次开机生效）' } });
     mk(7, '日常备用', { status: 'online', upMin: 7, scene: 1, sw: true, mem: 3072, cpu: 2, fps: 30 });
     mk(8, '', { status: 'offline', initialized: false, disk: 32 });
-    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4, bridge: 'off', ds: { free_bytes: 2 ** 30, total_bytes: 63 * 2 ** 30, low: true,
-      state: 'host_low', from_gb: 64, to_gb: 80, message: '数据盘只剩 1.0 GB，宿主盘只剩 12.0 GB，没有自动扩容（扩 16 GB 要宿主盘留够 36.0 GB）',
-      advice: '腾出宿主盘空间后，下次开机会再自动扩；也可以手动：modavd set 9 --data-gb 80' } });
+    mk(9, '公主连结', { status: 'offline', mem: 5120, cpu: 4, bridge: 'off', ds: { host_free_bytes: 12 * 2 ** 30,
+      state: 'host_low', message: '宿主盘只剩 12.0 GB：自动扩盘的数据盘随写入增长，宿主盘满了游戏会写不进去', advice: '腾出宿主盘的空间' } });
     longStart(3, 9);
     return;
   }
@@ -885,7 +886,7 @@ async function handle(url, init) {
     if (db.insts.has(i)) return errResp('already_exists', `实例 mas_${i} 已存在`);
     await sleep(500);
     const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, resolution: body.resolution || 1080, disk: body.data_partition_gb, initialized: false, scene: i });
-    log('info', `已新建 ModAVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${inst.config.data_partition_gb} GB / 帧率 ${inst.config.fps}）`);
+    log('info', `已新建 ModAVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${body.data_partition_gb ? inst.config.data_partition_gb + ' GB' : '自动扩盘'} / 帧率 ${inst.config.fps}）`);
     emit('instances', list());
     return json(pub(inst), 201);
   }
@@ -997,6 +998,18 @@ async function handle(url, init) {
         applied.resolution = body.resolution;
       }
       for (const k of ['memory_mb', 'cpu', 'fps']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
+      // the data disk: 自动扩盘, or a size that can only grow
+      if (body.data_disk_auto && body.data_partition_gb != null) return errResp('invalid_argument', '数据盘只能二选一：自动扩盘，或者指定大小');
+      if (body.data_disk_auto) {
+        Object.assign(inst.config, { data_disk_mode: 'auto', data_partition_gb: Math.max(256, inst.config.data_partition_gb) });
+        Object.assign(applied, { data_partition_gb: inst.config.data_partition_gb, data_disk_mode: 'auto' });
+      } else if (body.data_partition_gb != null) {
+        if (!Number.isInteger(body.data_partition_gb) || body.data_partition_gb > 512 || body.data_partition_gb < inst.config.data_partition_gb) {
+          return errResp('invalid_argument', `数据盘只能改大（现在 ${inst.config.data_partition_gb} GB，最大 512 GB）`);
+        }
+        Object.assign(inst.config, { data_disk_mode: 'manual', data_partition_gb: body.data_partition_gb });
+        Object.assign(applied, { data_partition_gb: body.data_partition_gb, data_disk_mode: 'manual' });
+      }
       const out = {};
       if (body.boss_key != null) { inst.boss_key = applied.boss_key = body.boss_key; out.boss_key_taken = body.boss_key === 'Ctrl+Alt+Shift+3'; }
       emit('instances', list());
