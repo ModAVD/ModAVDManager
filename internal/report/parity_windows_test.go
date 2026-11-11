@@ -40,7 +40,17 @@ func testTempDir(t *testing.T) string {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return longPath(testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-"))
+	return longPath(testutil.MkdirTemp(t, base, tempDirName(t.Name())+"-"))
+}
+
+// tempDirName: a test name usable as a Windows directory name (subtests may name "quoted" or key: value cases).
+func tempDirName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, name)
 }
 
 func goldenPath(scenario string, parts ...string) string {

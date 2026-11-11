@@ -327,6 +327,8 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 			retErr = m.withCreateErrorState(i, retErr, true)
 		}
 	}()
+	// a log older than this attempt is from an earlier boot of the index: not this failure's
+	began := time.Now().Add(-2 * time.Second)
 	if err := m.setCreation(i, creationCreating, "", ""); err != nil {
 		return nil, err
 	}
@@ -348,7 +350,8 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 	// not published; target discovery is a snapshot, not a barrier to future creates.
 	if req.Resume {
 		if err := m.stopCreateLeftover(ctx, i); err != nil {
-			m.recordCreationFailure(i, err, m.newestEmulatorLog(i))
+			// the leftover being stopped booted earlier: its log is the one that matters
+			m.recordCreationFailure(i, err, m.newestEmulatorLog(i, time.Time{}))
 			return nil, err
 		}
 	}
@@ -417,7 +420,7 @@ func (m *Manager) setupNew(ctx context.Context, i int, cfg *avd.Ini, req CreateR
 			logFile = sr.LogFile
 		}
 		if logFile == "" {
-			logFile = m.newestEmulatorLog(i)
+			logFile = m.newestEmulatorLog(i, began) // none when the emulator was never launched
 		}
 		e := errs.As(err)
 		m.recordCreationFailure(i, err, logFile)
@@ -541,8 +544,8 @@ func (m *Manager) createPercent(i int) int {
 	return max(0, min(f.Percent, 100))
 }
 
-// newestEmulatorLog is the newest logs\mas_<i>-*.log ("" when none).
-func (m *Manager) newestEmulatorLog(i int) string {
+// newestEmulatorLog is the newest logs\mas_<i>-*.log written at or after since ("" when none).
+func (m *Manager) newestEmulatorLog(i int, since time.Time) string {
 	files, err := managedLogFiles(m.Root.LogsDir())
 	if err != nil {
 		return ""
@@ -550,7 +553,8 @@ func (m *Manager) newestEmulatorLog(i int) string {
 	prefix := fmt.Sprintf("mas_%d-", i)
 	best := logFile{}
 	for _, f := range files {
-		if strings.HasPrefix(f.name, prefix) && strings.HasSuffix(f.name, ".log") && f.mtime.After(best.mtime) {
+		if strings.HasPrefix(f.name, prefix) && strings.HasSuffix(f.name, ".log") && !f.mtime.Before(since) &&
+			f.mtime.After(best.mtime) {
 			best = f
 		}
 	}

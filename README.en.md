@@ -6,7 +6,7 @@
 
 The management program for [ModAVD](https://github.com/ModAVD/ModAVD): the graphical manager `ModAVD.exe`, and the CLI and MCP server `modavd.exe`. Written in Go, standard library only. It currently supports Windows x64 only; the platform-specific parts are already split into a platform layer. For the plans for other platforms, see [ModAVD#27](https://github.com/ModAVD/ModAVD/issues/27).
 
-> **Version note (`main` and Releases)**: This document describes the implementation on the repository's `main`. `main` is currently at version `0.3.0`, the latest standalone Release is `v0.1.0` (matching ModAVD `0.36.0`), and `v0.2.0` has been drafted but not published. The background initialization on create, the `update` command and exit code 9, all new in `0.2.0`, are not in the `v0.1.0` download package. If you use a published package, go by the notes of the matching Release and the version inside the package.
+> **Version note (`main` and Releases)**: This document describes the implementation on the repository's `main`, which may have changes that are not released yet. Published versions are on the [Releases](https://github.com/ModAVD/ModAVDManager/releases) page; if you use a published package, go by the notes of the matching Release and the version inside the package.
 
 Usage instructions and guidance for contributing are on the ModAVD documentation site: [The manager and the CLI](https://modavd.github.io/en/components/manager), [Development: the manager and the CLI](https://modavd.github.io/en/develop/manager).
 

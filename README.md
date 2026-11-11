@@ -6,7 +6,7 @@
 
 [ModAVD](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库。目前只支持 Windows x64，平台相关的部分已经拆成平台层，其他平台的安排见 [ModAVD#27](https://github.com/ModAVD/ModAVD/issues/27)。
 
-> **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写。当前 `main` 的版本是 `0.3.0`，最新独立 Release 是 `v0.1.0`（对应 ModAVD `0.36.0`），`v0.2.0` 已起草、还没发布；`0.2.0` 起的新建后台初始化、`update` 命令和退出码 9 都不在 `v0.1.0` 下载包里。使用已发布包时，请以对应 Release 的说明和包内版本为准。
+> **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写，可能比最新发布的版本多出还没发版的改动。已发布的版本见 [Releases](https://github.com/ModAVD/ModAVDManager/releases)；使用已发布包时，请以对应 Release 的说明和包内版本为准。
 
 使用说明和参与开发的说明在 ModAVD 文档站：[管理器和命令行](https://modavd.github.io/components/manager)、[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
