@@ -363,13 +363,15 @@ func TestCreateUpdateDeleteMatchPython(t *testing.T) {
 		{"op": "create", "index": 3, "cpu": 3, "created_at": "x", "same_error": true},
 		{"op": "create", "index": 3, "data_gb": 15, "created_at": "x", "same_error": true},
 		{"op": "create", "index": 3, "data_gb": 513, "created_at": "x", "same_error": true},
-		{"op": "create", "index": 3, "fps": 45, "created_at": "x", "same_error": true},
+		{"op": "create", "index": 3, "fps": 0, "created_at": "x", "same_error": true},
+		{"op": "create", "index": 3, "fps": 61, "created_at": "x", "same_error": true},
 		{"op": "list"},
 		{"op": "update", "index": 1, "changes": map[string]any{"memoryMb": 4096}},
 		{"op": "update", "index": 0, "changes": map[string]any{"cpu": 4, "fps": 30}},
 		{"op": "update", "index": 9, "changes": map[string]any{}},
 		{"op": "update", "index": 7, "changes": map[string]any{"cpu": 4}, "same_error": true},
-		{"op": "update", "index": 0, "changes": map[string]any{"fps": 45}, "same_error": true},
+		{"op": "update", "index": 0, "changes": map[string]any{"fps": 61}, "same_error": true},
+		{"op": "update", "index": 9, "changes": map[string]any{"fps": 45}},
 		{"op": "update", "index": 0, "changes": map[string]any{"cpu": 3}, "same_error": true},
 		{"op": "update", "index": 0, "changes": map[string]any{"memoryMb": 8192}, "same_error": true},
 		{"op": "apply_display", "index": 0},
@@ -748,13 +750,17 @@ func TestValidate(t *testing.T) {
 	if f, err := ValidateFPS(nil); err != nil || f != 60 {
 		t.Error("fps default")
 	}
-	if f, err := ValidateFPS(ip(30)); err != nil || f != 30 {
-		t.Error("fps 30")
+	for _, v := range []int{1, 15, 30, 45, 60} {
+		if f, err := ValidateFPS(ip(v)); err != nil || f != v {
+			t.Errorf("fps %d: %d %v", v, f, err)
+		}
 	}
-	_, err = ValidateFPS(ip(0))
-	wantCode(t, err, errs.InvalidArgument)
-	if err.Error() != "ModAVD 的帧率只能选 30 / 60" {
-		t.Errorf("fps message %q", err.Error())
+	for _, v := range []int{0, 61, -1} {
+		_, err = ValidateFPS(ip(v))
+		wantCode(t, err, errs.InvalidArgument)
+		if err.Error() != "帧率只能在 1–60 之间" {
+			t.Errorf("fps %d message %q", v, err.Error())
+		}
 	}
 }
 
@@ -834,9 +840,11 @@ func TestCreateRefusals(t *testing.T) {
 	_, err := Create(r, 0, CreateOptions{})
 	wantCode(t, err, errs.InvalidArgument)
 	bad := ok
-	bad.FPS = 45
-	_, err = Create(r, 0, bad)
-	wantCode(t, err, errs.InvalidArgument)
+	for _, fps := range []int{0, 61} { // 0 = unset in CreateOptions; Create never defaults it
+		bad.FPS = fps
+		_, err = Create(r, 0, bad)
+		wantCode(t, err, errs.InvalidArgument)
+	}
 	bad = ok
 	bad.Title = "two\nlines"
 	_, err = Create(r, 0, bad)

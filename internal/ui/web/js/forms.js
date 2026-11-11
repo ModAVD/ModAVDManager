@@ -9,7 +9,8 @@ import * as A from './actions.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
 const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
-const FPS = [[30, '30 Hz'], [60, '60 Hz']];
+const FPS_MIN = 1;
+const FPS_MAX = 60;
 const RESOLUTION = [[1080, '1080p'], [720, '720p']];
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MIN12 = '约 1⁠–⁠2 分钟';
@@ -27,6 +28,44 @@ function segRow(text, name, opts, value, ...more) {
   return [h('span', { class: 'f-label', id, text }),
     cell(h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': id },
       opts.map(([v, t]) => h('label', null, h('input', { type: 'radio', name, value: String(v), checked: v === value }), h('span', { text: t })))), ...more)];
+}
+
+// Frame rate 1–60 (ModAVD#180): a number box named fps (what the form sends) and a slider moving with it.
+// check() returns the value, or shows the error under the field and returns null.
+function fpsField(prefix, value) {
+  const id = prefix + '-fps';
+  const v0 = Number.isInteger(value) && value >= FPS_MIN && value <= FPS_MAX ? value : FPS_MAX;
+  const num = h('input', { class: 'input', id, name: 'fps', type: 'number', min: String(FPS_MIN), max: String(FPS_MAX), step: '1', value: String(v0), inputmode: 'numeric', 'aria-describedby': id + '-h' });
+  const range = h('input', { type: 'range', min: String(FPS_MIN), max: String(FPS_MAX), step: '1', value: String(v0), 'aria-label': '帧率', tabindex: '-1' });
+  const hintEl = hint(`${FPS_MIN}–${FPS_MAX} 的整数，越低越省资源`, id + '-h');
+  const err = h('p', { class: 'f-err', id: id + '-e', role: 'alert', hidden: true });
+  const clear = () => {
+    if (err.hidden) return;
+    err.hidden = true;
+    hintEl.hidden = false;
+    attr(num, 'aria-invalid', null);
+    attr(num, 'aria-describedby', id + '-h');
+  };
+  // the slider's input event bubbles to the form after this, so the settings drawer sees the new number
+  range.addEventListener('input', () => { num.value = range.value; clear(); });
+  num.addEventListener('input', () => {
+    const n = Number(num.value);
+    if (num.value.trim() && Number.isInteger(n) && n >= FPS_MIN && n <= FPS_MAX) range.value = String(n);
+    clear();
+  });
+  const check = () => {
+    const n = Number(num.value);
+    if (num.value.trim() && Number.isInteger(n) && n >= FPS_MIN && n <= FPS_MAX) return n;
+    err.replaceChildren(icon('alert'), h('span', { text: `要填 ${FPS_MIN}–${FPS_MAX} 之间的整数` }));
+    err.hidden = false;
+    hintEl.hidden = true;
+    attr(num, 'aria-invalid', true);
+    attr(num, 'aria-describedby', id + '-e');
+    num.focus();
+    return null;
+  };
+  const ctl = h('div', { class: 'fps-ctl' }, h('span', { class: 'with-suffix' }, num, h('span', { class: 'suffix', text: 'Hz' })), range);
+  return { rows: inputRow('帧率', ctl, hintEl, err), check };
 }
 
 export const errorBox = () => h('div', { class: 'form-error', role: 'alert', hidden: true });
@@ -92,6 +131,7 @@ export function openCreate() {
     attr(disk, 'aria-invalid', null);
     attr(disk, 'aria-describedby', 'c-disk-h');
   });
+  const fps = fpsField('c', 60);
   const box = errorBox();
   const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: '新建' }));
   const ctl = openDialog({
@@ -100,7 +140,7 @@ export function openCreate() {
       inputRow('名称', title, titleHint),
       segRow('内存', 'memory', MEM, 6144),
       segRow('CPU', 'cpu', CPU, 6),
-      segRow('帧率', 'fps', FPS, 60, hint('30 更省资源')),
+      fps.rows,
       segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
       inputRow('数据盘上限', h('span', { class: 'with-suffix' }, disk, h('span', { class: 'suffix', text: 'GB' })), diskHint, diskErr),
       inputRow('编号', idx, idxHint)), box),
@@ -117,11 +157,13 @@ export function openCreate() {
         disk.focus();
         return;
       }
+      const fpsValue = fps.check();
+      if (fpsValue === null) return;
       submit(ctl, ok, '正在新建…', box, async () => {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
         const job = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
-          fps: Number(f.fps.value), resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
+          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: n, index: idx.value === '' ? undefined : Number(idx.value),
         });
         A.onJob(job);
         S.watch.add(job.id);
@@ -143,6 +185,7 @@ export function openSettings(i, field) {
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
   const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率和分辨率在下次开机生效。诊断设置立即生效。' }));
   const kv = h('dl', { class: 'kv' });
+  const fps = fpsField('s', cfg.fps);
   const box = errorBox();
   const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: '保存' }));
   const del = btn('btn btn-danger-ghost left', [icon('trash'), '删除…'], () => { if (!instance(i).running) openDelete(i); });
@@ -156,7 +199,7 @@ export function openSettings(i, field) {
         inputRow('名称', title, hint(`不填就显示 ${inst0.name}`)),
         segRow('内存', 'memory', MEM, cfg.memory_mb),
         segRow('CPU', 'cpu', CPU, cfg.cpu),
-        segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源')),
+        fps.rows,
         segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
           hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h'))),
@@ -186,6 +229,7 @@ export function openSettings(i, field) {
 
   async function saveSettings() {
     if (ctl.busy || save.getAttribute('aria-disabled') === 'true') return;
+    if (fps.check() === null) return;
     const pending = changes();
     if (pending.diagnostics === false) {
       ctl.busy = true;
