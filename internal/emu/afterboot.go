@@ -138,8 +138,9 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			m.Log.Infof("实例 %d 磁盘缓存: %s；截图共享内存 %s: %s", i, orText(joinNonEmptyLines(wc.Out, " / "), "读不到"),
 				shmName(ports, i), shm)
 		},
-		// 3b) data partition raised by `set --data-gb`: the emulator grew the disk, grow the file system (online)
-		func() { m.growData(ctx, i) },
+		// 3b) data partition raised by `set --data-gb` or the automatic growth: the emulator grew the disk, grow the
+		//     file system (online); then record /data's free space for the next start's automatic growth (autogrow.go)
+		func() { m.checkDataSpace(ctx, i) },
 		// 4) shorter guest dirty writeback (less lost on a hard kill; not persistent, so every boot)
 		func() { m.setupGuestWriteback(ctx, i) },
 		// 5) free page reporting: binding the driver resets the order to pageblock_order, set it afterwards

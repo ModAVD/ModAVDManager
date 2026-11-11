@@ -171,6 +171,15 @@ Some games require GLES 3.2 in their manifest, and the Play store judges ModAVD 
 - `InstanceInfo.gles32` (bool): the record of the switch (`gles32` in `mas-avd.json`; the guest is not queried). The UI uses it to show "Turn on / off reporting GLES 3.2 (experimental)" under "More actions"; an instance whose `bridge` is `off` cannot turn it on (it answers `gles32_no_bridge`), but one that is already on can still be turned off.
 - Choosing files on the page works like installing an APK: `<input type="file">` (multiple selection allowed), one `file` field appended per file, sent as `multipart/form-data` with `FormData`.
 
+### Data partition space and automatic growth `InstanceInfo.data_space`
+
+`{"auto_grow","free_bytes","total_bytes","checked_at","low","state","from_gb","to_gb","message","advice"}`, the same as `data_space` in `modavd info` / `status --json`; read from `mas-avd.json` only, the guest is not queried.
+
+- After every boot the guest's `/data` free space is read once (`free_bytes` / `total_bytes`, `checked_at` is when); less than 5 GB or less than 10% free is `low`.
+- `auto_grow`: automatic growth is on (on by default; `modavd set <i> --auto-grow off` turns it off). When on, a `low` instance's data partition grows by 16 GB before its next boot, up to 256 GB; only when the host volume still has at least 20 GB left after the growth.
+- `state`: `""` (nothing to tell), `pending` (the next boot grows it to `to_gb`), `grown` (grown from `from_gb` to `to_gb` before the boot), `host_low` (not grown: too little space on the host volume), `at_max` (256 GB reached), `fs_behind` (the file system of a disk made by an old version cannot grow), `failed` (growing failed), `low` (automatic growth is off).
+- `message` and `advice` are a sentence for people (Chinese) and a suggestion with the command; empty when `state` is `""`. The card shows them as a note: `pending` and `grown` as information, the rest as a warning.
+
 ### Update `UpdateView`
 
 All the fields of `update.Status` (the same as the `data` of `modavd update --json`: `root`, `updatable`, `not_updatable_reason`, `current_version`, `current_build`, `source`, `cdk_set`, `checked`, `check_error`, `latest_version`, `latest_source`, `update_available`, `required_automas`, `release_url`, `phase`, `prepared_version`, `last_result`, `recovered`, `updated`, `message`, `notices`), plus `checking`, `checked_at` (RFC 3339, `""` if no check has been made since this start), `error` (the error object of the last check, `null` if none), `can_install` (`POST /api/update/apply` can be tried: the manager knows how to reopen itself), `install_by_cli` (the opposite of `can_install`: it can only be installed with the command line), and `handoff` (the result that the command line left after the last click on "Update" handed over to it, `{at, ok, updated, version, message, error: {code, message, advice} | null}`; `null` if this manager was not the one reopened by that run, or if the result is older than 30 minutes).
