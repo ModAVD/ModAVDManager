@@ -855,7 +855,7 @@ function validate(b, create) {
   if (b.memory_mb != null && !MEM.includes(b.memory_mb)) return ['invalid_argument', `内存只能选 3、4、5、6 GB（收到 ${b.memory_mb} MB）`, ''];
   if (b.cpu != null && ![2, 4, 6].includes(b.cpu)) return ['invalid_argument', `CPU 核数只能是 2、4 或 6（收到 ${b.cpu}）`, ''];
   if (b.resolution != null && ![1080, 720].includes(b.resolution)) return ['invalid_argument', '分辨率只能是 1080 或 720', ''];
-  if (b.fps != null && ![30, 60].includes(b.fps)) return ['invalid_argument', `帧率只能是 30 或 60（收到 ${b.fps}）`, ''];
+  if (b.fps != null && !(Number.isInteger(b.fps) && b.fps >= 1 && b.fps <= 60)) return ['invalid_argument', '帧率只能在 1–60 之间', ''];
   if (create && b.data_partition_gb != null && (!Number.isInteger(b.data_partition_gb) || b.data_partition_gb < 16 || b.data_partition_gb > 512)) {
     return ['invalid_argument', `数据盘上限只能是 16–512 GB 的整数（收到 ${b.data_partition_gb}）`, ''];
   }

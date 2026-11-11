@@ -65,7 +65,7 @@ var (
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
 	optDataGB        = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
-	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
+	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
 	optAutoGrow      = flagSpec{"auto-grow", kindString, "on|off", "数据盘快满时下次开机前自动扩容（默认开）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
@@ -169,7 +169,7 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 1-60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
