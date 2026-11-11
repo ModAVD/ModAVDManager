@@ -1,7 +1,9 @@
 // ModAVD is the desktop manager of one root. It runs ui's local server and opens
 // an Edge app window on Windows or the default browser on macOS (optionally Chrome
-// app mode). Closing the page ends it after running jobs finish. A second launch
-// on the same root reopens the page.
+// app mode). On Windows it also puts an icon in the tray and registers the instances'
+// boss keys; closing the page leaves it there until 退出 in the icon's menu. Elsewhere
+// closing the page ends it after running jobs finish. A second launch on the same
+// root reopens the page.
 //
 //	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
 //	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
@@ -177,6 +179,8 @@ func run(args []string) (code int) {
 		OpenWindow:   !*noWindow,
 		ChromeWindow: chromeWindow,
 		Dev:          *dev,
+		// the tray icon and the boss keys (Windows): closing the window leaves the manager in the tray
+		Tray: runtime.GOOS == "windows",
 		Ready: func(baseURL, token string) {
 			if err := inst.writeState(baseURL, token); err != nil {
 				log.Warnf("写不了管理器状态文件（再次打开时找不到这个管理器）: %v", err)

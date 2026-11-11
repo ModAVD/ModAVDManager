@@ -46,6 +46,9 @@ func MoveFileReplaceThrough(string, string) error { return errUnsupported }
 // SetEmulatorWindowsVisible finds the emulator window and calls ShowWindow on Windows.
 func SetEmulatorWindowsVisible(uint32, bool) (int, error) { return 0, errUnsupported }
 
+// EmulatorWindowsShown tells whether the emulator window is shown on Windows.
+func EmulatorWindowsShown(uint32) (bool, int, error) { return false, 0, errUnsupported }
+
 // GetConsoleWindow calls the Windows GetConsoleWindow API.
 func GetConsoleWindow() uintptr { return 0 }
 

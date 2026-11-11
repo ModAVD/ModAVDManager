@@ -53,6 +53,11 @@ type backend interface {
 	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
 	SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error)
 	ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error)
+	// The boss keys (emu/bosskey.go, bosskey.go here): which keys the instances use and which run with a window (no
+	// adb), a press of one key, and showing every hidden window (tray icon, exit).
+	BossKeyTargets(ctx context.Context) ([]emu.BossKeyTarget, error)
+	ToggleBossKey(ctx context.Context, key string) (*emu.BossKeyToggle, error)
+	ShowHiddenWindows(ctx context.Context) ([]int, error)
 }
 
 // managerBackend adapts *emu.Manager.

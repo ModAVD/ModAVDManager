@@ -210,6 +210,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.PlayStore, info.PlayStorePartial = store == playStoreInstalled, store == playStorePartial
 		info.GLES32 = gles32Record(meta)
 	}
+	info.BossKey = m.bossKeyOf(i)
 	info.Bridge = m.bridgeState(ctx, i, in.Config, info.Booted, info.Initialized)
 	return info
 }

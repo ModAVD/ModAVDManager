@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"modavd/internal/avd"
+	"modavd/internal/bosskey"
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
 	"modavd/internal/host"
@@ -210,6 +211,16 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	// legacy disk sizes or AUTO-MAS's automatic memory when the request only changes this switch.
 	applied := map[string]any{}
 	var err error
+	// checked before anything is written, so a bad key leaves the other settings of the same request unwritten too
+	var bossKey string
+	if req.BossKey != nil {
+		if err := requireWindows(); err != nil {
+			return nil, errs.Wrap(errs.Unsupported, err, "老板键只在 Windows 上有")
+		}
+		if bossKey, err = bosskey.Normalize(*req.BossKey); err != nil {
+			return nil, err
+		}
+	}
 	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil {
 		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
 			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
@@ -232,6 +243,12 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		}
 		warnings = col.Messages()
 		applied["diagnostics"] = *req.Diagnostics
+	}
+	if req.BossKey != nil {
+		if err := m.setBossKey(i, bossKey); err != nil {
+			return nil, err
+		}
+		applied["boss_key"] = bossKey
 	}
 	m.Log.Infof("已写入 ModAVD 实例 %d 的设置: %s", i, formatApplied(applied))
 	in, err := m.instance(i)

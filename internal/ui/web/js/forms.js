@@ -141,6 +141,7 @@ export function openSettings(i, field) {
   const initDiagnostics = inst0.diagnostics === true;
   const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: inst0.name });
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
+  const boss = bossKeyField(inst0.boss_key || '', () => dirty());
   const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率和分辨率在下次开机生效。诊断设置立即生效。' }));
   const kv = h('dl', { class: 'kv' });
   const box = errorBox();
@@ -159,7 +160,8 @@ export function openSettings(i, field) {
         segRow('帧率', 'fps', FPS, cfg.fps, hint('30 更省资源')),
         segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
-          hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h'))),
+          hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h')),
+        boss.row),
       box,
       h('h3', { class: 'sec-title', text: '实例信息' }), kv),
     actions: { left: del, ok: save },
@@ -172,6 +174,7 @@ export function openSettings(i, field) {
     const out = {};
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
     if (diagnostics.checked !== initDiagnostics) out.diagnostics = diagnostics.checked;
+    if (boss.changed()) out.boss_key = boss.value();
     for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
       const v = f[k].value === '' ? null : Number(f[k].value);
       if (v != null && v !== cfg[key]) out[key] = v;
@@ -215,6 +218,10 @@ export function openSettings(i, field) {
       const k = S.list.instances.findIndex((x) => x.index === i);
       if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
       if ('memory_mb' in pending) S.checkIndex = i;
+      if (r.boss_key_taken) {
+        // saved, but another program has the key: say so (the settings page marks it too)
+        return { tone: 'warn', title: '已保存，但老板键用不了', text: `${r.instance.boss_key} 被别的程序占了，在设置里换一个。` };
+      }
       if ('diagnostics' in pending) {
         let text = '诊断模式已开启，立即生效。';
         if (!pending.diagnostics) {
@@ -262,6 +269,88 @@ export function openSettings(i, field) {
   const un = subscribe(render);
   render();
   ctl.onClose.push(() => { if (confirmation) confirmation.close(); un(); settingsOpen.delete(i); });
+}
+
+// ---- boss key (ModAVD/ModAVD#101)
+// The key a KeyboardEvent.code stands for, as the manager writes it ("1", "A", "F5", "Num0", "PageUp"); '' when a boss
+// key cannot use it. The code is the key's place, not its character: Ctrl+Alt+Shift+1 stays "1" on any layout.
+const NAMED_KEYS = { Space: 'Space', PageUp: 'PageUp', PageDown: 'PageDown', End: 'End', Home: 'Home', Insert: 'Insert',
+  Delete: 'Delete', ArrowLeft: 'Left', ArrowUp: 'Up', ArrowRight: 'Right', ArrowDown: 'Down' };
+export function bossKeyName(code) {
+  let m;
+  if ((m = /^Digit([0-9])$/.exec(code))) return m[1];
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+  if ((m = /^F([1-9]|1[0-9]|2[0-4])$/.exec(code))) return 'F' + m[1];
+  if ((m = /^Numpad([0-9])$/.exec(code))) return 'Num' + m[1];
+  return NAMED_KEYS[code] || '';
+}
+
+// bossKeyOf is the key combination of a keydown: { key } ("Ctrl+Alt+Shift+1"), { partial } while only modifiers are
+// held, { error } for one a boss key cannot be, or null for keys the field lets through (Tab moves on).
+export function bossKeyOf(e) {
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean);
+  if (e.metaKey || e.key === 'Meta' || e.key === 'OS') return { error: 'Win 的组合 Windows 自己留着用，换一个' };
+  if (['Control', 'Alt', 'Shift', 'AltGraph'].includes(e.key)) return { partial: mods.join('+') };
+  if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) return null;
+  const name = bossKeyName(e.code);
+  if (!name) return { error: '这个键不能用：要数字、字母、F1–F24、小键盘数字或 Home / End 这类键' };
+  if (!mods.length) return { error: '至少要带 Ctrl、Alt、Shift 中的一个' };
+  return { key: [...mods, name].join('+') };
+}
+
+// bossKeyField is the 老板键 row of the settings drawer: click the field and press the combination; the × clears it.
+// A key is tried at once (POST /api/boss-keys/check) and marked when another program has it. Hidden when this
+// manager has no boss keys (not Windows).
+function bossKeyField(initial, onChange) {
+  let value = initial;
+  const input = h('input', { class: 'input', id: 's-bosskey', readonly: true, autocomplete: 'off', value: initial,
+    placeholder: '无', 'aria-describedby': 's-bosskey-h' });
+  const warn = h('span', { class: 'bk-warn', role: 'img', title: '这个键被别的程序占了，换一个', 'aria-label': '这个键被别的程序占了，换一个', hidden: true }, icon('alert'));
+  const clear = ibtn('x', '清空老板键（这台不要老板键）', () => set(''));
+  const err = h('p', { class: 'f-err', role: 'alert', hidden: true });
+  const help = hint('点一下输入框，再按想用的组合，至少带 Ctrl、Alt、Shift 中的一个。按一下藏起这台的窗口，再按一下叫回来；几台用同一个键就一起藏、一起显示。立即生效；关掉管理器窗口后留在托盘，照样能用。', 's-bosskey-h');
+  const label = h('label', { class: 'f-label', for: 's-bosskey', text: '老板键' });
+  const ctl = cell(h('span', { class: 'bosskey' }, input, clear, warn), err, help);
+  label.hidden = ctl.hidden = true;
+  let seq = 0;
+  const check = async (key) => {
+    const n = ++seq;
+    if (!key) { warn.hidden = true; return; }
+    try {
+      const r = await api.post('/api/boss-keys/check', { key });
+      if (n === seq) warn.hidden = !r.taken;
+    } catch { if (n === seq) warn.hidden = true; }
+  };
+  function set(key) {
+    err.hidden = true;
+    value = key;
+    input.value = key;
+    onChange();
+    check(key);
+  }
+  input.addEventListener('keydown', (e) => {
+    const k = bossKeyOf(e);
+    if (!k) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (k.partial !== undefined) { input.value = k.partial ? k.partial + '+…' : value; return; }
+    if (k.error) {
+      input.value = value;
+      err.replaceChildren(icon('alert'), h('span', { text: k.error }));
+      err.hidden = false;
+      return;
+    }
+    set(k.key);
+  });
+  // letting go of the modifiers without a key puts the value back
+  input.addEventListener('keyup', (e) => { if (!e.ctrlKey && !e.altKey && !e.shiftKey) input.value = value; });
+  input.addEventListener('blur', () => { input.value = value; });
+  api.get('/api/boss-keys').then((r) => {
+    if (!r || !r.supported) return;
+    label.hidden = ctl.hidden = false;
+    warn.hidden = !initial || !(r.taken || []).includes(initial);
+  }).catch(() => {});
+  return { row: [label, ctl], value: () => value, changed: () => value !== initial };
 }
 
 function infoRows(inst) {

@@ -752,19 +752,7 @@ func TestL3Parse(t *testing.T) {
 	}
 }
 
-var (
-	procGetPriorityClass = modkernel32.NewProc("GetPriorityClass")
-	procGetModuleHandleW = modkernel32.NewProc("GetModuleHandleW")
-	procRegisterClassExW = moduser32.NewProc("RegisterClassExW")
-	procUnregisterClassW = moduser32.NewProc("UnregisterClassW")
-	procCreateWindowExW  = moduser32.NewProc("CreateWindowExW")
-	procDestroyWindow    = moduser32.NewProc("DestroyWindow")
-	procDefWindowProcW   = moduser32.NewProc("DefWindowProcW")
-	procIsWindowVisible  = moduser32.NewProc("IsWindowVisible")
-	procPeekMessageW     = moduser32.NewProc("PeekMessageW")
-	procTranslateMessage = moduser32.NewProc("TranslateMessage")
-	procDispatchMessageW = moduser32.NewProc("DispatchMessageW")
-)
+var procGetPriorityClass = modkernel32.NewProc("GetPriorityClass")
 
 func TestPriorityAndAffinity(t *testing.T) {
 	p := startChild(t, StartOptions{}, "60")
@@ -807,31 +795,6 @@ func TestPriorityAndAffinity(t *testing.T) {
 	if _, err := GetAffinity(p); err == nil {
 		t.Error("GetAffinity on a killed process succeeded")
 	}
-}
-
-type wndClassEx struct {
-	Size       uint32
-	Style      uint32
-	WndProc    uintptr
-	ClsExtra   int32
-	WndExtra   int32
-	Instance   uintptr
-	Icon       uintptr
-	Cursor     uintptr
-	Background uintptr
-	MenuName   *uint16
-	ClassName  *uint16
-	IconSm     uintptr
-}
-
-type winMsg struct {
-	Hwnd    uintptr
-	Message uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	X, Y    int32
-	Private uint32
 }
 
 // testWindow is one window of testWindows; owned: the first window of the list owns it.

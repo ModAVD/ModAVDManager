@@ -812,6 +812,6 @@ func processesBlocked(verb string, uses []processUse) error {
 		}
 		parts = append(parts, s+"）")
 	}
-	return swapBlocked("还有程序在用模拟器或管理器的文件：%s。什么都没动，请先关掉所有实例、管理器窗口和 MCP 客户端再%s",
+	return swapBlocked("还有程序在用模拟器或管理器的文件：%s。什么都没动，请先关掉所有实例、管理器（包括托盘里的，在托盘图标的菜单里退出）和 MCP 客户端再%s",
 		strings.Join(parts, "、"), verb)
 }

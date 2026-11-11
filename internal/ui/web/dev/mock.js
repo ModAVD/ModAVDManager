@@ -942,6 +942,9 @@ async function handle(url, init) {
     return json(checkResult());
   }
   if (p === '/api/jobs') return json({ jobs: clone(db.jobs.slice(0, 50)) });
+  // boss keys: Ctrl+Alt+Shift+3 stands for a key another program holds
+  if (p === '/api/boss-keys') return json({ supported: true, taken: ['Ctrl+Alt+Shift+3'] });
+  if (p === '/api/boss-keys/check' && method === 'POST') return json({ key: body.key === 'none' ? '' : body.key, taken: body.key === 'Ctrl+Alt+Shift+3' });
   if (p === '/api/proxy/suggest') {
     await sleep(200);
     return json({ server: 'socks5://10.0.2.2:7890', notes: ['代理地址取自Windows 代理设置：127.0.0.1:7890', '实例里连宿主要用 10.0.2.2，代理地址记成 socks5://10.0.2.2:7890'] });
@@ -988,8 +991,10 @@ async function handle(url, init) {
         applied.resolution = body.resolution;
       }
       for (const k of ['memory_mb', 'cpu', 'fps']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
+      const out = {};
+      if (body.boss_key != null) { inst.boss_key = applied.boss_key = body.boss_key; out.boss_key_taken = body.boss_key === 'Ctrl+Alt+Shift+3'; }
       emit('instances', list());
-      return json({ instance: pub(inst), applied, applies_next_boot: inst.running });
+      return json({ instance: pub(inst), applied, applies_next_boot: inst.running && Object.keys(applied).some((k) => k !== 'boss_key'), ...out });
     }
     if (method === 'DELETE') {
       if (url.searchParams.get('confirm') !== '1') return errResp('usage', '删除要带 confirm=1');
