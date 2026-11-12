@@ -4,7 +4,7 @@ import { h, icon, btn, ibtn, showError, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, lastJob } from './store.js';
 import { openDialog, toast } from './ui.js';
-import { quoted, label, uptime, fmtBytes } from './format.js';
+import { quoted, label, ownTitle, defaultName, uptime, fmtBytes } from './format.js';
 import * as A from './actions.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
@@ -168,7 +168,7 @@ export function openCreate() {
   const base = S.list.port_base || 20000;
   const sync = () => {
     const i = idx.value === '' ? free[0] : Number(idx.value);
-    titleHint.textContent = `不填就显示 mas_${i}，以后可以随时改`;
+    titleHint.textContent = `不填就显示「${defaultName(i)}」，以后可以随时改`;
     idxHint.replaceChildren('编号决定端口，脚本连 ', h('b', { text: `127.0.0.1:${base + 1 + 10 * i}` }));
   };
   idx.addEventListener('change', sync);
@@ -214,9 +214,9 @@ export function openSettings(i, field) {
   const inst0 = instance(i);
   if (!inst0 || settingsOpen.has(i)) return;
   const cfg = inst0.config || {};
-  const initTitle = inst0.title && inst0.title !== inst0.name ? inst0.title : '';
+  const initTitle = ownTitle(inst0);
   const initDiagnostics = inst0.diagnostics === true;
-  const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: inst0.name });
+  const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: defaultName(i) });
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
   const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率、分辨率和数据盘在下次开机生效。诊断设置立即生效。' }));
@@ -236,7 +236,7 @@ export function openSettings(i, field) {
     body: h('div', { class: 'dlg-body' }, runNote,
       h('h3', { class: 'sec-title', text: '可以修改' }),
       h('div', { class: 'fields' },
-        inputRow('名称', title, hint(`不填就显示 ${inst0.name}`)),
+        inputRow('名称', title, hint(`不填就显示「${defaultName(i)}」`)),
         segRow('内存', 'memory', MEM, cfg.memory_mb),
         segRow('CPU', 'cpu', CPU, cfg.cpu),
         fps.rows,
@@ -305,7 +305,6 @@ export function openSettings(i, field) {
       const r = await api.patch(`/api/instances/${i}`, pending);
       const k = S.list.instances.findIndex((x) => x.index === i);
       if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
-      if ('memory_mb' in pending) S.checkIndex = i;
       if (r.boss_key_taken) {
         // saved, but another program has the key: say so (the settings page marks it too)
         return { tone: 'warn', title: '已保存，但老板键用不了', text: `${r.instance.boss_key} 被别的程序占了，在设置里换一个。` };

@@ -177,6 +177,51 @@ func TestCollectRunningInstancesRespectDefaultPlan(t *testing.T) {
 	}
 }
 
+// The memory section adds up processes of one name, sorts by commit, stops at topMemoryCount and leaves out
+// processes whose memory could not be read; without any readable one there is no section.
+func TestCollectTopMemory(t *testing.T) {
+	const mb = 1 << 20
+	procs := []Process{
+		{PID: 1, Name: "qemu-system-x86_64.exe", CommitBytes: 6144 * mb, WorkingSetBytes: 4096 * mb},
+		{PID: 2, Name: "browser.exe", CommitBytes: 4096 * mb, WorkingSetBytes: 1024 * mb},
+		{PID: 3, Name: "Browser.exe", CommitBytes: 4096 * mb, WorkingSetBytes: 1024 * mb},
+		{PID: 4, Name: "unreadable.exe"},
+	}
+	for k := 0; k < topMemoryCount; k++ {
+		procs = append(procs, Process{PID: uint32(10 + k), Name: fmt.Sprintf("small%02d.exe", k), CommitBytes: uint64(100-k) * mb})
+	}
+	h := portProcessHost{Host: &fakeHost{sc: &scenario{}}, processes: procs}
+	c := &collector{h: h}
+	if err := c.runningAndAdb(); err != nil {
+		t.Fatal(err)
+	}
+	out := strings.Join(c.lines, "\n")
+	_, sec, ok := strings.Cut(out, "占内存最多的程序")
+	if !ok {
+		t.Fatalf("no memory section:\n%s", out)
+	}
+	sec, _, _ = strings.Cut(sec, "\n\n")
+	lines := strings.Split(strings.TrimSpace(sec), "\n")[1:]
+	if len(lines) != topMemoryCount+1 ||
+		lines[0] != "browser.exe（2 个进程）：提交 8.00 GB，工作集 2.00 GB" ||
+		lines[1] != "qemu-system-x86_64.exe：提交 6.00 GB，工作集 4.00 GB" ||
+		!strings.HasPrefix(lines[2], "small00.exe：") || !strings.HasPrefix(lines[topMemoryCount-1], "small07.exe：") ||
+		!strings.HasPrefix(lines[topMemoryCount], "读得到的 12 个程序合计提交 ") {
+		t.Errorf("memory section:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(sec, "unreadable.exe") {
+		t.Error("lists a process without memory numbers")
+	}
+
+	c = &collector{h: portProcessHost{Host: &fakeHost{sc: &scenario{}}, processes: procs[3:4]}}
+	if err := c.runningAndAdb(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(c.lines, "\n"), "占内存最多的程序") {
+		t.Error("a memory section without numbers")
+	}
+}
+
 func TestCollectBridgeLogs(t *testing.T) {
 	r := testutil.TempDir(t)
 	dir := filepath.Join(r, root.LogsDir)

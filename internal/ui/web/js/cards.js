@@ -3,7 +3,7 @@
 
 import { h, icon, btn, ibtn, keyed, setText, attr } from './dom.js';
 import { S, lastJob, rootBlocked } from './store.js';
-import { label, uptime, stripInst, pct, cfgText } from './format.js';
+import { label, ownTitle, uptime, stripInst, pct, cfgText } from './format.js';
 import * as A from './actions.js';
 import { openMenu } from './ui.js';
 import { openSettings, openDelete } from './forms.js';
@@ -143,7 +143,7 @@ function makeCard(i) {
   c.pmark = btn('pmark', [icon('shield'), h('span', { text: '代理' })], () => openProxy(i), { hidden: true });
   c.sub = h('div', { class: 'card-sub' });
   c.lmsg = h('div', { class: 'card-sub card-lmsg' });
-  c.cfg = h('div', { class: 'card-cfg', title: '内存 · CPU 核数 · 帧率 · 数据盘（自动扩盘或指定大小，都按实际写入占电脑硬盘）' });
+  c.cfg = h('div', { class: 'card-cfg', title: '内存 · CPU 核数 · 帧率 · 数据盘（指定大小时）· 数据盘现在实际占的电脑硬盘' });
   c.pillText = h('span');
   c.pill = h('span', { class: 'pill' }, c.pillText);
   c.adb = h('span', { class: 'adb-addr' });
@@ -186,13 +186,13 @@ function updateCard(c, inst) {
   c.el.dataset.status = v.key;
   setText(c.title, (c.title.title = name));
   const sub = [];
-  if (inst.title && inst.title !== inst.name) sub.push(inst.name);
+  if (ownTitle(inst)) sub.push(inst.name);
   if (live && inst.started_at) sub.push(uptime(inst.started_at));
   const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
   const headless = inst.running && inst.window === false && v.key !== 'creating';
   setText(c.sub, subtitle + (headless ? ' · 无头' : '') + (inst.diagnostics ? ' · 诊断模式' : ''));
   c.sub.title = headless ? '命令行开的，没有窗口，可以在这里关机' : '';
-  setText(c.cfg, cfgText(inst.config));
+  setText(c.cfg, cfgText(inst.config, inst.data_space));
 
   let [pt, tone] = PILL[v.key];
   // create's setup: our own job's progress, else what the process doing it (CLI, AUTO-MAS) left in the instance

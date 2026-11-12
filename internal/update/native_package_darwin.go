@@ -81,7 +81,7 @@ func digestBytes(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToSt
 // Symlinks may contain '..', but every resolution step stays inside its move unit.
 func validateNativeManifest(m *nativeManifest) (Version, error) {
 	v, ok := ParseVersion(m.Version)
-	if !ok || m.Schema != 1 || m.Format != nativeFormat || m.Platform != root.CurrentPlatform().PackageSuffix || m.Build != v.Build || len(m.Files) == 0 || len(m.Files) > maxEntries || len(m.Units) > len(nativeAllowedUnits) {
+	if !ok || m.Schema != 1 || m.Format != nativeFormat || m.Platform != root.CurrentPlatform().PackageSuffix || m.Build <= 0 || len(m.Files) == 0 || len(m.Files) > maxEntries || len(m.Units) > len(nativeAllowedUnits) {
 		return Version{}, packageError("macOS 更新清单格式、平台或版本不正确")
 	}
 	units := map[string]bool{}
@@ -482,7 +482,7 @@ func verifyDarwinPackageAtContext(ctx context.Context, m *nativeManifest, target
 	if err := verifyNativeTreeAt(m, at); err != nil {
 		return err
 	}
-	if err := checkEmulator(at("sdk/emulator"), target); err != nil {
+	if err := checkEmulator(at("sdk/emulator"), m.Build, target); err != nil {
 		return err
 	}
 	required := append(managerPaths(), "sdk/emulator/"+root.CurrentPlatform().Emulator, "sdk/emulator/qemu/"+root.CurrentPlatform().QemuDir+"/"+root.CurrentPlatform().QEMU, "sdk/emulator/qemu/"+root.CurrentPlatform().QemuDir+"/"+root.CurrentPlatform().QEMUHeadless)

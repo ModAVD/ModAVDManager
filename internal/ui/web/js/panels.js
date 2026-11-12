@@ -2,10 +2,10 @@
 
 import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
-import { S, update, subscribe, instance, jobsSorted, runningCount, checkTarget, rootBlocked } from './store.js';
+import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
 import { openComponentFetch, activeJob, latestJob, progressText, loadDiagnostics, storeBox, fillStoreBox } from './diagnostics.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, defaultName, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -13,48 +13,22 @@ const folderBtn = (cls) => btn(cls, [icon('folder'), '打开目录'], () => A.op
 
 // ---- check
 let refreshAgain = false;
-let requestedKey = '';
-let activeKey = '';
-const targetKey = (t) => `${t.index ?? 'default'}:${t.memoryMB}`;
-const targetName = () => {
-  const t = checkTarget();
-  return t.instance ? `「${label(t.instance)}」的下次开机配置` : '新建实例的默认配置';
-};
 
-// A saved setting or an instance-list event can change the target while a check runs.
-export function syncCheckTarget() {
-  if (S.list && targetKey(checkTarget()) !== requestedKey) runCheck(false);
-}
-
+// The check is the host's and the root's, the same for every instance (host memory is not checked).
 // refresh: a new check, not the cached one. Asked while one runs (components just installed), it runs again after.
 export async function runCheck(refresh) {
-  const target = checkTarget();
-  const key = targetKey(target);
-  if (S.check && S.checkTargetKey !== key) {
-    S.check = null;
-    S.checkedAt = 0;
-    update();
-  }
   if (S.checking) {
-    if (refresh || key !== activeKey) refreshAgain = true;
+    if (refresh) refreshAgain = true;
     return;
   }
-  activeKey = requestedKey = key;
   S.checking = true;
   S.checkError = null;
   update();
   try {
-    const query = new URLSearchParams();
-    if (target.index != null) query.set('index', target.index);
-    if (refresh) query.set('refresh', '1');
-    const c = await api.get('/api/check' + (query.size ? '?' + query : ''));
-    if (key === targetKey(checkTarget())) {
-      S.check = c;
-      S.checkTargetKey = key;
-      S.checkedAt = Date.now();
-    }
+    S.check = await api.get('/api/check' + (refresh ? '?refresh=1' : ''));
+    S.checkedAt = Date.now();
   } catch (e) {
-    if (key === targetKey(checkTarget())) S.checkError = e;
+    S.checkError = e;
   }
   S.checking = false;
   update();
@@ -70,7 +44,7 @@ export function checkSummary(c) {
   const blockers = items.filter((x) => x.blocking && x.ok === false);
   const hints = items.filter((x) => (x.ok === false && !x.blocking) || x.ok == null);
   const tone = !c.ready || blockers.length ? 'err' : hints.length ? 'warn' : 'ok';
-  const text = tone === 'err' && c.root_ready === true ? '内存不足' : { err: '不能开机', warn: '有提示', ok: '就绪' }[tone];
+  const text = { err: '不能开机', warn: '有提示', ok: '就绪' }[tone];
   return { tone, text, blockers, hints, n: items.length };
 }
 
@@ -152,12 +126,6 @@ export function openCheck(opts) {
     return;
   }
   const sum = h('div', { class: 'check-sum' });
-  const target = h('select', { class: 'select', id: 'check-target' });
-  const targetHint = h('p', { class: 'f-hint' });
-  target.addEventListener('change', () => {
-    S.checkIndex = target.value === '' ? null : Number(target.value);
-    runCheck(false);
-  });
   const box = h('div', { class: 'form-error', role: 'alert', hidden: true });
   const list = h('ul', { class: 'check-list' });
   // when something did not pass, the passed items fold away under one line
@@ -173,9 +141,7 @@ export function openCheck(opts) {
   const again = btn('btn btn-secondary', null, () => runCheck(true));
   const ctl = openDialog({
     title: '电脑检查', sub: '开机前会自动检查这些项目，没通过的项目会说明原因和处理办法。', cls: 'dlg-check', light: true,
-    body: h('div', { class: 'dlg-body' },
-      h('div', { class: 'fields' }, h('label', { class: 'f-label', for: 'check-target', text: '检查对象' }),
-        h('div', { class: 'f-ctl' }, target, targetHint)), sum, box, list, passed, comps, store.el),
+    body: h('div', { class: 'dlg-body' }, sum, box, list, passed, comps, store.el),
     foot: h('footer', { class: 'dlg-foot' }, when, folderBtn('btn btn-ghost'), again),
   });
   checkCtl = ctl;
@@ -199,15 +165,6 @@ export function openCheck(opts) {
 
   const render = () => {
     const c = S.check;
-    const choices = [...(S.list?.instances || [])].sort((a, b) => a.index - b.index);
-    const choicesSig = JSON.stringify(choices.map((x) => [x.index, x.title, x.config?.memory_mb]));
-    if (target.sig !== choicesSig) {
-      target.sig = choicesSig;
-      target.replaceChildren(h('option', { value: '', text: '新建实例（默认 6 GB）' }),
-        ...choices.map((x) => h('option', { value: String(x.index), text: `${label(x)} · ${(x.config?.memory_mb || 6144) / 1024} GB` })));
-    }
-    target.value = checkTarget().index == null ? '' : String(checkTarget().index);
-    setText(targetHint, `按${targetName()}检查；每次开机前会重新检查可用内存。`);
     store.el.hidden = !(S.components && S.components.play_store);
     if (!store.el.hidden) fillStoreBox(store);
     showStore();
@@ -236,7 +193,7 @@ export function openCheck(opts) {
     }
     const s = checkSummary(c);
     const [head, line] = {
-      err: ['当前检查配置暂时不能开机', `${s.blockers.length} 项必需检查没通过，按下面的建议处理后再检查一次。`],
+      err: ['暂时不能开机', `${s.blockers.length} 项必需检查没通过，按下面的建议处理后再检查一次。`],
       warn: ['可以开机，有提示', `${s.hints.length} 项需要留意，不影响开机。`],
       ok: ['这台电脑可以开机', `${s.n} 项检查都通过了。`],
     }[s.tone];
@@ -275,7 +232,7 @@ export function openCheck(opts) {
 // ---- banner: the root cannot boot (a blocking check failed or components are missing)
 export function renderBanner(el) {
   const c = S.check;
-  const sig = c && !c.ready ? JSON.stringify([c.items, c.components, targetName()]) : '';
+  const sig = c && !c.ready ? JSON.stringify([c.items, c.components]) : '';
   if (el.sig === sig) return;
   el.sig = sig;
   el.hidden = !sig;
@@ -286,7 +243,7 @@ export function renderBanner(el) {
   el.replaceChildren(h('div', { class: 'banner', role: 'status' },
     h('span', { class: 'banner-ic' }, icon('alert')),
     h('div', { class: 'banner-main' },
-      h('h2', { text: rootBlocked() ? '这个目录现在还不能开机' : `${targetName()}暂不满足启动条件` }),
+      h('h2', { text: '这个目录现在还不能开机' }),
       first && h('p', { text: first.reason }),
       first && first.advice && advice(first.id === 'components'
         ? '请点下面的「补全组件」打开许可协议并下载，或运行 tools\\modavd.exe components fetch。'
@@ -375,7 +332,7 @@ function updateJob(r, j) {
   // components / collect-info belong to the root (index -1): no instance name
   const rootJob = j.index < 0;
   const inst = rootJob ? null : instance(j.index);
-  const name = rootJob ? '' : inst ? label(inst) : `实例 ${j.index}`;
+  const name = rootJob ? '' : inst ? label(inst) : defaultName(j.index);
   if (r.name !== name) {
     r.name = name;
     r.title.replaceChildren(...[rootJob ? KIND[j.kind] || j.kind : `${KIND[j.kind] || j.kind}「${name}」`,

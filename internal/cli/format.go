@@ -185,8 +185,8 @@ func formatList(w io.Writer, r *emu.ListResult) {
 	rows := [][]string{{"编号", "名称", "状态", "adb 地址", "内存", "核数", "帧率", "备注"}}
 	for _, in := range r.Instances {
 		title := in.Title
-		if title == "" {
-			title = in.Name
+		if title == "" || title == in.Name { // no title of its own: emu-N, as the manager shows it (mas_N is the file name)
+			title = fmt.Sprintf("emu-%d", in.Index)
 		}
 		rows = append(rows, []string{
 			strconv.Itoa(in.Index), title, statusLabel(in.Status, in.CreationProgress), in.AdbAddress,

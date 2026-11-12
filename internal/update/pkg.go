@@ -521,17 +521,17 @@ func hashFile(p string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// checkPackageManifest is AUTO-MAS check_package_manifest: version, build and platform match what is being installed.
+// checkPackageManifest is AUTO-MAS check_package_manifest: version and platform match what is being installed, and
+// "build" (the emulator build, not tied to the version since 0.41) is a positive integer when given.
 func checkPackageManifest(m *jsonord.Obj, target Version) error {
 	v, ok := ParseVersion(manifestString(m, "version"))
 	if !ok || v != target {
 		return packageError("包里清单的版本（%s）和要装的版本（%s）不一致", displayVersion(manifestString(m, "version")), target.Display())
 	}
 	if b := m.Get("build"); b.Kind() != jsonord.Null {
-		n, ok := b.Int()
-		if !ok || int(n) != target.Build {
+		if n, ok := b.Int(); !ok || n <= 0 {
 			lit, _ := b.NumberLiteral()
-			return packageError("包里清单的构建号（%s）和版本 %s 的构建号（%d）不一致", lit, target.Display(), target.Build)
+			return packageError("包里清单的构建号（%s）不对", lit)
 		}
 	}
 	p, ok := m.Get("platform").Str()
@@ -546,9 +546,20 @@ func checkPackageManifest(m *jsonord.Obj, target Version) error {
 
 var buildIDRe = regexp.MustCompile(`^mas-([0-9]+)$`)
 
-// checkEmulator is AUTO-MAS check_emulator: the package's sdk\emulator is complete, its Pkg.BuildId matches, and its
-// qemu is our own build (it knows the free-page-reporting balloon option).
-func checkEmulator(emu string, target Version) error {
+// packageBuild is the emulator build the package in pkg\ says it carries: its manifest's "build", else (a legacy
+// package without one) the target's minor number, as versions through 0.40 were numbered.
+func (l layout) packageBuild(target Version) int {
+	if m, ok := readManifest(l.pkgAt(manifestName)); ok {
+		if n, ok := m.Get("build").Int(); ok && n > 0 {
+			return int(n)
+		}
+	}
+	return target.Minor
+}
+
+// checkEmulator is AUTO-MAS check_emulator: the package's sdk\emulator is complete, its Pkg.BuildId is mas-<build>,
+// and its qemu is our own build (it knows the free-page-reporting balloon option).
+func checkEmulator(emu string, want int, target Version) error {
 	p := root.CurrentPlatform()
 	qemu := filepath.Join(emu, "qemu", p.QemuDir, p.QEMU)
 	if !isFile(filepath.Join(emu, p.Emulator)) || !isFile(qemu) {
@@ -566,8 +577,8 @@ func checkEmulator(emu string, target Version) error {
 			build = m[1]
 		}
 	}
-	if build != fmt.Sprint(target.Build) {
-		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %d）不一致", build, target.Display(), target.Build)
+	if build != fmt.Sprint(want) {
+		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %d）不一致", build, target.Display(), want)
 	}
 	if !fileContains(filepath.Join(emu, "qemu", p.QemuDir, p.QEMUHeadless), []byte("free-page-reporting")) {
 		return packageError("包里的模拟器不是 ModAVD 的自编版")
@@ -631,7 +642,7 @@ func (l layout) verifyPackage(target Version, tag string) (string, error) {
 		}
 		verified = "manifest"
 	}
-	if err := checkEmulator(l.pkgAt("sdk/emulator"), target); err != nil {
+	if err := checkEmulator(l.pkgAt("sdk/emulator"), l.packageBuild(target), target); err != nil {
 		return "", err
 	}
 	return verified, nil
@@ -639,7 +650,7 @@ func (l layout) verifyPackage(target Version, tag string) (string, error) {
 
 // buildStage moves pkg\sdk\emulator to .update\stage\emulator.
 func (l layout) buildStage(target Version) error {
-	if err := checkEmulator(l.pkgAt("sdk/emulator"), target); err != nil {
+	if err := checkEmulator(l.pkgAt("sdk/emulator"), l.packageBuild(target), target); err != nil {
 		return err
 	}
 	if err := removeTree(l.stage()); err != nil {

@@ -1016,30 +1016,58 @@ func ParseVersion(text string) (major, build, patch int, ok bool) {
 	return 0, 0, 0, false
 }
 
-// manifestVersion is modavd-manifest.json's "version", "" when the file is missing / unreadable / not an object or
-// the value is not a string. Read like readProperties (the updater replaces it).
-func (r *Root) manifestVersion() string {
+// LastCoupledBuild is the last emulator build whose ModAVD version was 0.<build>.<patch> (mas-40 = 0.40.x). Later
+// versions are numbered on their own; the package says its emulator build in modavd-manifest.json's "build".
+const LastCoupledBuild = 40
+
+// manifestInfo is modavd-manifest.json's "version" ("" when missing or not a string) and "build" (hasBuild=false when
+// missing or not an integer); both empty when the file is missing / unreadable / not an object. Read like
+// readProperties (the updater replaces it).
+func (r *Root) manifestInfo() (version string, build int, hasBuild bool) {
 	data, err := ReadFileShared(r.ManifestPath())
 	if err != nil {
-		return ""
+		return "", 0, false
 	}
+	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 	v, err := jsonord.Parse(data)
 	if err != nil {
-		return ""
+		return "", 0, false
 	}
-	s, _ := v.Obj().Get("version").Str()
-	return s
+	o := v.Obj()
+	version, _ = o.Get("version").Str()
+	if n, ok := o.Get("build").Int(); ok {
+		return version, int(n), true
+	}
+	return version, 0, false
 }
 
-// VersionText is the ModAVD version for people, "0.35.0": the manifest's version when its build matches ModBuild,
-// else 0.<ModBuild>.0; "" when ModBuild is unknown. Same rule as AUTO-MAS local_version_text.
+// InstalledVersion is the installed package's ModAVD version. It is the manifest's "version" when the manifest
+// belongs to the emulator in sdk\emulator: its "build" is ModBuild (a manifest without "build", from before the two
+// were separate: its minor number is ModBuild), or ModBuild is unknown. Otherwise, for an emulator up to
+// LastCoupledBuild (no manifest, or sdk\emulator replaced by hand) it is 0.<ModBuild>.0, as those were numbered;
+// else unknown.
+func (r *Root) InstalledVersion() (major, minor, patch int, ok bool) {
+	build, haveBuild := r.ModBuild()
+	text, declared, hasDeclared := r.manifestInfo()
+	if major, minor, patch, ok := ParseVersion(text); ok {
+		if !haveBuild || (hasDeclared && declared == build) || (!hasDeclared && minor == build) {
+			return major, minor, patch, true
+		}
+	}
+	if haveBuild && build <= LastCoupledBuild {
+		return 0, build, 0, true
+	}
+	return 0, 0, 0, false
+}
+
+// VersionText is the ModAVD version for people, "0.35.0" (InstalledVersion); "" when ModBuild or the version is
+// unknown.
 func (r *Root) VersionText() string {
-	build, ok := r.ModBuild()
-	if !ok {
+	if _, ok := r.ModBuild(); !ok {
 		return ""
 	}
-	if major, b, patch, ok := ParseVersion(r.manifestVersion()); ok && b == build {
-		return fmt.Sprintf("%d.%d.%d", major, b, patch)
+	if major, minor, patch, ok := r.InstalledVersion(); ok {
+		return fmt.Sprintf("%d.%d.%d", major, minor, patch)
 	}
-	return fmt.Sprintf("0.%d.0", build)
+	return ""
 }

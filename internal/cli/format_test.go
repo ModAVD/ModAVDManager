@@ -69,7 +69,7 @@ func TestFormatListTable(t *testing.T) {
 		!strings.Contains(table[1], "127.0.0.1:20001") || !strings.Contains(table[1], "6 GB") {
 		t.Errorf("row 0 = %q", table[1])
 	}
-	if !strings.Contains(table[2], "mas_3") || !strings.Contains(table[2], "开机中") ||
+	if strings.Contains(table[2], "mas_3") || !strings.Contains(table[2], "emu-3") || !strings.Contains(table[2], "开机中") ||
 		!strings.Contains(table[2], "正在开机，未初始化，软件渲染") || !strings.Contains(table[2], "4 GB") {
 		t.Errorf("row 1 = %q", table[2])
 	}

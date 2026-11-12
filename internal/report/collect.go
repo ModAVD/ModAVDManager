@@ -735,6 +735,62 @@ func otherRootsInstance(plan root.PortPlan, avd string, port int) bool {
 	return err == nil && port != plan.Console(i)
 }
 
+// topMemoryCount: how many programs topMemory lists.
+const topMemoryCount = 10
+
+// topMemory lists the programs that hold the most memory, processes of one name added up, by commit: when the
+// computer is short of memory the list says whether it is the emulator or something else. No section when no
+// process's memory could be read.
+func (c *collector) topMemory(procs []Process) {
+	type sum struct {
+		name               string
+		n                  int
+		commit, workingSet uint64
+	}
+	byName := map[string]*sum{}
+	var total uint64
+	for _, p := range procs {
+		if p.CommitBytes == 0 {
+			continue
+		}
+		key := strings.ToLower(p.Name)
+		s := byName[key]
+		if s == nil {
+			s = &sum{name: p.Name}
+			byName[key] = s
+		}
+		s.n++
+		s.commit += p.CommitBytes
+		s.workingSet += p.WorkingSetBytes
+		total += p.CommitBytes
+	}
+	if len(byName) == 0 {
+		return
+	}
+	sums := make([]*sum, 0, len(byName))
+	for _, s := range byName {
+		sums = append(sums, s)
+	}
+	sort.Slice(sums, func(a, b int) bool {
+		if sums[a].commit != sums[b].commit {
+			return sums[a].commit > sums[b].commit
+		}
+		return sums[a].name < sums[b].name
+	})
+	c.section(fmt.Sprintf("占内存最多的程序（按提交排，前 %d 个；同名进程合在一起）", topMemoryCount))
+	for k, s := range sums {
+		if k == topMemoryCount {
+			break
+		}
+		count := ""
+		if s.n > 1 {
+			count = fmt.Sprintf("（%d 个进程）", s.n)
+		}
+		c.L(fmt.Sprintf("%s%s：提交 %s，工作集 %s", s.name, count, formatSize(float64(s.commit)), formatSize(float64(s.workingSet))))
+	}
+	c.L(fmt.Sprintf("读得到的 %d 个程序合计提交 %s", len(sums), formatSize(float64(total))))
+}
+
 func (c *collector) runningAndAdb() error {
 	c.section("正在运行的 qemu-system 进程")
 	qs, err := c.h.Processes(func(name string) bool { return hasPrefixFold(name, "qemu-system") })
@@ -751,6 +807,10 @@ func (c *collector) runningAndAdb() error {
 			ct = q.Started.Local().Format("2006-01-02 15:04:05")
 		}
 		c.L(fmt.Sprintf("pid %d  启动于 %s", q.PID, ct))
+		if q.CommitBytes != 0 {
+			c.L(fmt.Sprintf("  内存：提交 %s，工作集 %s（隔 10 分钟的记录在 modavd-bootwatch.log）",
+				formatSize(float64(q.CommitBytes)), formatSize(float64(q.WorkingSetBytes))))
+		}
 		cmd := q.CommandLine
 		if cmd == "" {
 			c.L("  qemu 命令行读不到（多半是模拟器以管理员身份运行），现场按 adb 设备列表推算")
@@ -775,6 +835,9 @@ func (c *collector) runningAndAdb() error {
 		}
 	}
 	c.running = running
+	if all, err := c.h.Processes(func(string) bool { return true }); err == nil {
+		c.topMemory(all)
+	}
 
 	c.section("正在监听的 adb server")
 	ls, err := c.adbListeners()

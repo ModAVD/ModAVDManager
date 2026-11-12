@@ -17,7 +17,7 @@ async function harness() {
       return { id: 'j2', kind: 'stop', state: 'running', index: 3 };
     } } },
     'dom.js': Object.fromEntries(['h', 'icon', 'btn', 'ibtn', 'keyed', 'setText', 'attr'].map(k => [k, noop])),
-    'format.js': Object.fromEntries(['label', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
+    'format.js': Object.fromEntries(['label', 'ownTitle', 'defaultName', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
     'ui.js': { toast: noop, toastError: e => { throw e; }, copyText: noop, openMenu: noop },
     'forms.js': { openSettings: noop, openDelete: noop },
     'proxy.js': { openProxy: noop, markOf: noop },

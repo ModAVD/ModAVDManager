@@ -11,23 +11,24 @@ import (
 	"modavd/internal/root"
 )
 
-// Version is a ModAVD version: 0.<build>.<patch> (the first number is the stage, 0 while in beta). Ordered as
-// (Major, Build, Patch). AUTO-MAS update_source.ModAvdVersion.
-type Version struct{ Major, Build, Patch int }
+// Version is a ModAVD version: 0.<minor>.<patch> (the first number is the stage, 0 while in beta). Ordered as
+// (Major, Minor, Patch). Through 0.40 the minor number was the emulator build (Pkg.BuildId mas-N); later versions
+// are numbered on their own and the package says its emulator build in modavd-manifest.json's "build".
+type Version struct{ Major, Minor, Patch int }
 
 // String is the version's identity, vX.Y.Z: state.json, comparisons, MirrorChyan's current_version.
-func (v Version) String() string { return fmt.Sprintf("v%d.%d.%d", v.Major, v.Build, v.Patch) }
+func (v Version) String() string { return fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch) }
 
 // Display is X.Y.Z, for people.
-func (v Version) Display() string { return fmt.Sprintf("%d.%d.%d", v.Major, v.Build, v.Patch) }
+func (v Version) Display() string { return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch) }
 
-// Less orders versions as (Major, Build, Patch).
+// Less orders versions as (Major, Minor, Patch).
 func (v Version) Less(o Version) bool {
 	if v.Major != o.Major {
 		return v.Major < o.Major
 	}
-	if v.Build != o.Build {
-		return v.Build < o.Build
+	if v.Minor != o.Minor {
+		return v.Minor < o.Minor
 	}
 	return v.Patch < o.Patch
 }
@@ -65,18 +66,10 @@ func displayVersion(text string) string {
 	return text
 }
 
-// LocalVersion is the installed package's version: the root manifest's when its build matches sdk\emulator's
-// Pkg.BuildId (or that is unknown), else v0.<BuildId>.0 (sdk\emulator replaced by hand), else unknown.
+// LocalVersion is the installed package's version (root.InstalledVersion).
 func LocalVersion(r *root.Root) (Version, bool) {
-	build, haveBuild := r.ModBuild()
-	declared, haveDeclared := manifestVersion(r.Dir)
-	switch {
-	case haveDeclared && (!haveBuild || declared.Build == build):
-		return declared, true
-	case haveBuild:
-		return Version{0, build, 0}, true
-	}
-	return Version{}, false
+	major, minor, patch, ok := r.InstalledVersion()
+	return Version{major, minor, patch}, ok
 }
 
 func manifestVersion(dir string) (Version, bool) {

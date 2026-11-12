@@ -243,6 +243,22 @@ func (l layout) applyRootFiles(p rootPlan) error {
 	return nil
 }
 
+// rootFileInUse is the first root file the plan replaces or deletes that another process holds (fileInUse), "" when
+// none. The running program itself is left out: applyRootFiles renames it away first.
+func (l layout) rootFileInUse(p rootPlan) string {
+	self := selfExe()
+	for _, rel := range append(append([]string{}, p.replace...), p.delete...) {
+		dst := l.at(rel)
+		if inFold(p.created, rel) || (self != "" && strings.EqualFold(dst, self)) || !isFile(dst) {
+			continue
+		}
+		if fileInUse(dst) {
+			return rel
+		}
+	}
+	return ""
+}
+
 // restoreRootFiles undoes applyRootFiles from previous\root.
 func (l layout) restoreRootFiles(p rootPlan) error {
 	for _, rel := range p.created {
@@ -311,6 +327,13 @@ func (u *Updater) swapIn() (string, error) {
 	}
 	if err := l.backupRootFiles(plan); err != nil {
 		return "", err
+	}
+	// A root file another program holds (MAA loads extras\modavd_extras.dll and
+	// mumu-shim\shell\sdk\external_renderer_ipc.dll) cannot be replaced: found out after the renames, it would leave
+	// the root half swapped until that program exits. Checked while nothing has been changed yet.
+	if rel := l.rootFileInUse(plan); rel != "" {
+		l.backToStaged(st)
+		return "", swapBlocked("%s 正被别的程序占用（多半是 MAA 之类载入了它），什么都没动。请先关掉它再装", filepath.FromSlash(rel))
 	}
 	st.Set("phase", jsonord.NewString(phaseSwapping))
 	st.Set("plan", plan.value())

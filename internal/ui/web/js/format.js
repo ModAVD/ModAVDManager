@@ -14,14 +14,25 @@ export function fmtMem(mb) {
   return mb % 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb / 1024 + ' GB';
 }
 
-export function label(inst) {
-  if (!inst) return '';
-  return inst.title && inst.title.trim() ? inst.title : inst.name;
+// The instance's own title; '' when it has none (a new instance's avd.ini.displayname is its file name mas_N).
+export function ownTitle(inst) {
+  const t = inst && inst.title ? inst.title.trim() : '';
+  return t && t !== inst.name ? t : '';
 }
 
-// 「明日方舟」, or 「mas_0」 when the instance has no title of its own.
+// 「明日方舟」, or 「emu-0」 when the instance has no title of its own. mas_N is the file name, not shown as a name.
+export function defaultName(i) {
+  return `emu-${i}`;
+}
+
+export function label(inst) {
+  if (!inst) return '';
+  return ownTitle(inst) || defaultName(inst.index);
+}
+
+// 「明日方舟」, or 「emu-0」 when the instance has no title of its own.
 export function quoted(inst, i) {
-  return inst ? `「${label(inst)}」` : `「实例 ${i}」`;
+  return inst ? `「${label(inst)}」` : `「${defaultName(i)}」`;
 }
 
 export function parseTime(s) {
@@ -142,9 +153,12 @@ export function stopMethod(m) {
   return (STOP_METHOD[base] || `已关机（${base}）`) + (term ? '，最后强行结束了模拟器进程' : '');
 }
 
-// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB」 / 「… · 盘自动扩」 (自动扩盘): what each number is, without a hover
-export function cfgText(cfg) {
+// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB · 占 12.3 GB」: what each number is, without a hover. The disk size only for a
+// set size (自动扩盘 is the default, nothing to tell); 占 is what the data disk takes on the computer now
+// (space.host_bytes, only what was written), left out when unknown.
+export function cfgText(cfg, space) {
   cfg = cfg || {};
-  const disk = cfg.data_disk_mode === 'manual' ? `盘 ${cfg.data_partition_gb || '—'} GB` : '盘自动扩';
-  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz · ${disk}`;
+  const disk = cfg.data_disk_mode === 'manual' ? ` · 盘 ${cfg.data_partition_gb || '—'} GB` : '';
+  const used = space && space.host_bytes >= 0 ? ` · 占 ${fmtBytes(space.host_bytes)}` : '';
+  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz${disk}${used}`;
 }

@@ -7,7 +7,7 @@ import { initUI } from './ui.js';
 import { initGrid, renderGrid, viewState, setView } from './cards.js';
 import { openCreate, openSettings, openDelete } from './forms.js';
 import { openProxy } from './proxy.js';
-import { runCheck, syncCheckTarget, checkSummary, openCheck, openActivity, renderBanner } from './panels.js';
+import { runCheck, checkSummary, openCheck, openActivity, renderBanner } from './panels.js';
 import { openViewer, openLogs } from './viewer.js';
 import { loadUpdate, onUpdate, renderUpdateChip, openUpdate } from './update.js';
 import * as A from './actions.js';
@@ -84,7 +84,6 @@ let opened = false;
 
 // ---- render
 function render() {
-  syncCheckTarget();
   const root = (S.info && S.info.root) || S.list;
   const list = S.list;
   if (root) {
