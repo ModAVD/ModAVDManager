@@ -14,12 +14,19 @@ export function fmtMem(mb) {
   return mb % 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb / 1024 + ' GB';
 }
 
-export function label(inst) {
-  if (!inst) return '';
-  return inst.title && inst.title.trim() ? inst.title : inst.name;
+// The instance's own title; '' when it has none (a new instance's avd.ini.displayname is its file name mas_N).
+export function ownTitle(inst) {
+  const t = inst && inst.title ? inst.title.trim() : '';
+  return t && t !== inst.name ? t : '';
 }
 
-// 「明日方舟」, or 「mas_0」 when the instance has no title of its own.
+// 「明日方舟」, or 「实例 0」 when the instance has no title of its own. mas_N is the file name, not shown as a name.
+export function label(inst) {
+  if (!inst) return '';
+  return ownTitle(inst) || `实例 ${inst.index}`;
+}
+
+// 「明日方舟」, or 「实例 0」 when the instance has no title of its own.
 export function quoted(inst, i) {
   return inst ? `「${label(inst)}」` : `「实例 ${i}」`;
 }

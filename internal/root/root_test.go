@@ -992,6 +992,35 @@ func TestModBuildAndVersionText(t *testing.T) {
 			t.Errorf("manifest %q: %q want %q", content, got, want)
 		}
 	}
+	// The manifest's "build" (the emulator build) decides, not the version's minor number: from 0.41 they differ.
+	for content, want := range map[string]string{
+		`{"version": "v0.41.0", "build": 35}`: "0.41.0",
+		`{"version": "v0.35.2", "build": 35}`: "0.35.2",
+		`{"version": "v0.35.0", "build": 34}`: "0.35.0", // the manifest is another build's: emulator mas-35 is 0.35.0
+		`{"version": "v0.35.0", "build": "35"}`: "0.35.0", // not an integer: as a manifest without build
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("manifest %q: %q want %q", content, got, want)
+		}
+	}
+	// Past mas-40 there is no 0.<build>.0: only a manifest of that build gives the version.
+	writeFile(t, props, []byte("Pkg.BuildId=mas-41\n"))
+	for content, want := range map[string]string{
+		`{"version": "v0.42.0", "build": 41}`: "0.42.0",
+		`{"version": "v0.41.0"}`:              "0.41.0",
+		`{"version": "v0.42.0", "build": 40}`: "",
+		`{"version": "v0.42.0"}`:              "",
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("mas-41, manifest %q: %q want %q", content, got, want)
+		}
+	}
+	os.Remove(manifest)
+	if got := r.VersionText(); got != "" {
+		t.Errorf("mas-41 without manifest: %q", got)
+	}
 	writeFile(t, props, []byte("Pkg.BuildId=12345\n"))
 	writeFile(t, manifest, []byte(`{"version": "v0.35.0"}`))
 	if got := r.VersionText(); got != "" {

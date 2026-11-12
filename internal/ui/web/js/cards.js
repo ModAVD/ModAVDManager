@@ -186,7 +186,7 @@ function updateCard(c, inst) {
   c.el.dataset.status = v.key;
   setText(c.title, (c.title.title = name));
   const sub = [];
-  if (inst.title && inst.title !== inst.name) sub.push(inst.name);
+  sub.push(inst.name); // the file name mas_N, under the title or under 「实例 N」
   if (live && inst.started_at) sub.push(uptime(inst.started_at));
   const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
   const headless = inst.running && inst.window === false && v.key !== 'creating';
