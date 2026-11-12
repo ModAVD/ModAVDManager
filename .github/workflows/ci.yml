@@ -43,7 +43,7 @@ jobs:
       - name: display coordinate tests
         run: node --test scripts/test_display_tap.mjs
       - name: disk UI tests
-        run: node --test scripts/test_disk_info.mjs scripts/test_compact_format.mjs
+        run: node --test scripts/test_disk_info.mjs scripts/test_compact_format.mjs scripts/test_card_cfg.mjs
       - name: gofmt
         shell: pwsh
         run: |
