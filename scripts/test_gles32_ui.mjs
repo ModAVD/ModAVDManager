@@ -120,7 +120,7 @@ async function menuFor(inst, jobs = []) {
   const m = await load('cards.js', {
     'api.js': { api: {} },
     'dom.js': dom,
-    'format.js': Object.fromEntries(['label', 'ownTitle', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
+    'format.js': Object.fromEntries(['label', 'ownTitle', 'defaultName', 'uptime', 'stripInst', 'pct', 'cfgText', 'quoted', 'dur', 'diskInfoText', 'diskTrimText', 'diskCompactText', 'playStoreText', 'gles32Text'].map(k => [k, noop])),
     'ui.js': { toast: noop, toastError: noop, copyText: noop, openMenu: noop },
     'forms.js': { openSettings: noop, openDelete: noop },
     'proxy.js': { openProxy: noop, markOf: noop },

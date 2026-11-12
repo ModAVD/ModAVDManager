@@ -20,15 +20,19 @@ export function ownTitle(inst) {
   return t && t !== inst.name ? t : '';
 }
 
-// 「明日方舟」, or 「实例 0」 when the instance has no title of its own. mas_N is the file name, not shown as a name.
-export function label(inst) {
-  if (!inst) return '';
-  return ownTitle(inst) || `实例 ${inst.index}`;
+// 「明日方舟」, or 「emu-0」 when the instance has no title of its own. mas_N is the file name, not shown as a name.
+export function defaultName(i) {
+  return `emu-${i}`;
 }
 
-// 「明日方舟」, or 「实例 0」 when the instance has no title of its own.
+export function label(inst) {
+  if (!inst) return '';
+  return ownTitle(inst) || defaultName(inst.index);
+}
+
+// 「明日方舟」, or 「emu-0」 when the instance has no title of its own.
 export function quoted(inst, i) {
-  return inst ? `「${label(inst)}」` : `「实例 ${i}」`;
+  return inst ? `「${label(inst)}」` : `「${defaultName(i)}」`;
 }
 
 export function parseTime(s) {
@@ -149,9 +153,10 @@ export function stopMethod(m) {
   return (STOP_METHOD[base] || `已关机（${base}）`) + (term ? '，最后强行结束了模拟器进程' : '');
 }
 
-// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB」 / 「… · 盘自动扩」 (自动扩盘): what each number is, without a hover
+// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB」, and without the disk for 自动扩盘 (the default, nothing to tell): what each
+// number is, without a hover
 export function cfgText(cfg) {
   cfg = cfg || {};
-  const disk = cfg.data_disk_mode === 'manual' ? `盘 ${cfg.data_partition_gb || '—'} GB` : '盘自动扩';
-  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz · ${disk}`;
+  const disk = cfg.data_disk_mode === 'manual' ? ` · 盘 ${cfg.data_partition_gb || '—'} GB` : '';
+  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz${disk}`;
 }
