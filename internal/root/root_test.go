@@ -994,9 +994,9 @@ func TestModBuildAndVersionText(t *testing.T) {
 	}
 	// The manifest's "build" (the emulator build) decides, not the version's minor number: from 0.41 they differ.
 	for content, want := range map[string]string{
-		`{"version": "v0.41.0", "build": 35}`: "0.41.0",
-		`{"version": "v0.35.2", "build": 35}`: "0.35.2",
-		`{"version": "v0.35.0", "build": 34}`: "0.35.0", // the manifest is another build's: emulator mas-35 is 0.35.0
+		`{"version": "v0.41.0", "build": 35}`:   "0.41.0",
+		`{"version": "v0.35.2", "build": 35}`:   "0.35.2",
+		`{"version": "v0.35.0", "build": 34}`:   "0.35.0", // the manifest is another build's: emulator mas-35 is 0.35.0
 		`{"version": "v0.35.0", "build": "35"}`: "0.35.0", // not an integer: as a manifest without build
 	} {
 		writeFile(t, manifest, []byte(content))
