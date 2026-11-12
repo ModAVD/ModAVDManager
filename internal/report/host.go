@@ -143,6 +143,9 @@ type Process struct {
 	Started     time.Time // zero when unknown
 	CommandLine string    // "" when unreadable
 	ExePath     string    // "" when unreadable
+	// CommitBytes, WorkingSetBytes: private commit charge and working set; both 0 when unreadable.
+	CommitBytes     uint64
+	WorkingSetBytes uint64
 }
 
 type Listener struct {
