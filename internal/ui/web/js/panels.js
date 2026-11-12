@@ -5,7 +5,7 @@ import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
 import { openComponentFetch, activeJob, latestJob, progressText, loadDiagnostics, storeBox, fillStoreBox } from './diagnostics.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, defaultName, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -332,7 +332,7 @@ function updateJob(r, j) {
   // components / collect-info belong to the root (index -1): no instance name
   const rootJob = j.index < 0;
   const inst = rootJob ? null : instance(j.index);
-  const name = rootJob ? '' : inst ? label(inst) : `实例 ${j.index}`;
+  const name = rootJob ? '' : inst ? label(inst) : defaultName(j.index);
   if (r.name !== name) {
     r.name = name;
     r.title.replaceChildren(...[rootJob ? KIND[j.kind] || j.kind : `${KIND[j.kind] || j.kind}「${name}」`,
