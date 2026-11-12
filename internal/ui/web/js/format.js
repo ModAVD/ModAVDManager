@@ -153,10 +153,12 @@ export function stopMethod(m) {
   return (STOP_METHOD[base] || `已关机（${base}）`) + (term ? '，最后强行结束了模拟器进程' : '');
 }
 
-// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB」, and without the disk for 自动扩盘 (the default, nothing to tell): what each
-// number is, without a hover
-export function cfgText(cfg) {
+// 「内存 6 GB · 6 核 · 60 Hz · 盘 64 GB · 占 12.3 GB」: what each number is, without a hover. The disk size only for a
+// set size (自动扩盘 is the default, nothing to tell); 占 is what the data disk takes on the computer now
+// (space.host_bytes, only what was written), left out when unknown.
+export function cfgText(cfg, space) {
   cfg = cfg || {};
   const disk = cfg.data_disk_mode === 'manual' ? ` · 盘 ${cfg.data_partition_gb || '—'} GB` : '';
-  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz${disk}`;
+  const used = space && space.host_bytes >= 0 ? ` · 占 ${fmtBytes(space.host_bytes)}` : '';
+  return `内存 ${fmtMem(cfg.memory_mb)} · ${cfg.cpu || '—'} 核 · ${cfg.fps || '—'} Hz${disk}${used}`;
 }
