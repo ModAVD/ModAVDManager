@@ -3,7 +3,7 @@
 
 import { h, icon, btn, ibtn, keyed, setText, attr } from './dom.js';
 import { S, lastJob, rootBlocked } from './store.js';
-import { label, uptime, stripInst, pct, cfgText } from './format.js';
+import { label, ownTitle, uptime, stripInst, pct, cfgText } from './format.js';
 import * as A from './actions.js';
 import { openMenu } from './ui.js';
 import { openSettings, openDelete } from './forms.js';
@@ -186,7 +186,7 @@ function updateCard(c, inst) {
   c.el.dataset.status = v.key;
   setText(c.title, (c.title.title = name));
   const sub = [];
-  if (inst.title && inst.title !== inst.name) sub.push(inst.name);
+  if (ownTitle(inst)) sub.push(inst.name);
   if (live && inst.started_at) sub.push(uptime(inst.started_at));
   const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
   const headless = inst.running && inst.window === false && v.key !== 'creating';
