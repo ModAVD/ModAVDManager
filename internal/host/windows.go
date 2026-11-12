@@ -31,6 +31,18 @@ func FindProcess(pid uint32) (Process, bool) { return win.FindProcess(pid) }
 func ProcessName(pid uint32) string          { return win.ProcessName(pid) }
 func KillTree(p Process) error               { return win.KillTree(p) }
 
+// GetProcessMemory reads the memory counters of p; an error when p is gone or cannot be opened.
+func GetProcessMemory(p Process) (ProcessMemory, error) {
+	commit, peak, ws, err := p.Memory()
+	return ProcessMemory{Commit: commit, PeakCommit: peak, WorkingSet: ws}, err
+}
+
+// GetSystemMemory reads the computer's physical memory and commit charge.
+func GetSystemMemory() (SystemMemory, error) {
+	total, avail, limit, committed, err := win.SystemMemory()
+	return SystemMemory{TotalPhys: total, AvailPhys: avail, CommitLimit: limit, Committed: committed}, err
+}
+
 func StartDetached(exe string, args []string, opt StartOptions) (Process, error) {
 	return win.StartDetached(exe, args, opt)
 }

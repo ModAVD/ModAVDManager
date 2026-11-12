@@ -18,11 +18,15 @@ package emu
 // The watch never waits: while another start or a stop runs it looks again at the next tick, and a start that sets up
 // a boot writes its record, so a boot is never set up twice. Its messages go to <root>\logs\modavd-bootwatch.log (one
 // JSON object per line, as `--json` on stderr).
+//
+// Being the one process that lives as long as the emulator, the watch also writes the emulator's memory to that log
+// every bootWatchMemoryInterval (logMemory).
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -261,8 +265,10 @@ func RunBootWatch(args []string, w io.Writer) int {
 		}
 		cancel()
 	}()
+	watch.logMemory(time.Now())
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
+		watch.logMemory(time.Now())
 	}
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
@@ -277,6 +283,40 @@ type bootWatch struct {
 	// missingSince: since when the private server has not known the instance (zero: it did at the last look), or
 	// since the watch last registered it again (bootWatchReregisterAfter).
 	missingSince time.Time
+	// memoryAt: when logMemory wrote its last line (zero: not yet).
+	memoryAt time.Time
+}
+
+// bootWatchMemoryInterval: how often the watch writes the emulator's memory to its log.
+const bootWatchMemoryInterval = 10 * time.Minute
+
+// The memory counters behind logMemory; tests replace them.
+var (
+	processMemory = host.GetProcessMemory
+	systemMemory  = host.GetSystemMemory
+)
+
+// logMemory writes one line with the memory of qemu and of the computer, at the watch's start and then every
+// bootWatchMemoryInterval: a report that the computer got slow after hours of running can then be told apart into
+// the emulator's commit growing (a leak on the host side) and the computer simply being short of memory. Nothing
+// where the counters cannot be read.
+func (w *bootWatch) logMemory(now time.Time) {
+	if !w.memoryAt.IsZero() && now.Sub(w.memoryAt) < bootWatchMemoryInterval {
+		return
+	}
+	pm, err := processMemory(w.q)
+	if err != nil {
+		return
+	}
+	w.memoryAt = now
+	const mb = 1 << 20
+	msg := fmt.Sprintf("实例 %d 模拟器内存（qemu pid %d）：提交 %d MB（最高 %d MB），工作集 %d MB", w.i, w.q.PID,
+		pm.Commit/mb, pm.PeakCommit/mb, pm.WorkingSet/mb)
+	if sm, err := systemMemory(); err == nil {
+		msg += fmt.Sprintf("；电脑：物理内存可用 %d / %d MB，提交 %d / %d MB", sm.AvailPhys/mb, sm.TotalPhys/mb,
+			sm.Committed/mb, sm.CommitLimit/mb)
+	}
+	w.m.Log.Infof("%s", msg)
 }
 
 // tick is one look of the watch at now: nothing while a start or a stop of the instance runs, or while the record does

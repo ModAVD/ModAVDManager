@@ -31,6 +31,12 @@ func SetAffinity(Process, uint64) error { return errUnsupported }
 // GetAffinity calls GetProcessAffinityMask on Windows.
 func GetAffinity(Process) (uint64, error) { return 0, errUnsupported }
 
+// GetProcessMemory calls GetProcessMemoryInfo on Windows.
+func GetProcessMemory(Process) (ProcessMemory, error) { return ProcessMemory{}, errUnsupported }
+
+// GetSystemMemory calls GlobalMemoryStatusEx on Windows.
+func GetSystemMemory() (SystemMemory, error) { return SystemMemory{}, errUnsupported }
+
 // L3Groups lists the L3 caches of the host.
 func L3Groups() []L3Group { return nil }
 

@@ -480,6 +480,9 @@ func (h *winHost) Processes(match func(name string) bool) ([]Process, error) {
 		} else {
 			q.ExePath, _ = p.ImagePath()
 		}
+		if pm, err := host.GetProcessMemory(p); err == nil {
+			q.CommitBytes, q.WorkingSetBytes = pm.Commit, pm.WorkingSet
+		}
 		out = append(out, q)
 	}
 	return out, nil

@@ -751,6 +751,10 @@ func (c *collector) runningAndAdb() error {
 			ct = q.Started.Local().Format("2006-01-02 15:04:05")
 		}
 		c.L(fmt.Sprintf("pid %d  启动于 %s", q.PID, ct))
+		if q.CommitBytes != 0 {
+			c.L(fmt.Sprintf("  内存：提交 %s，工作集 %s（隔 10 分钟的记录在 modavd-bootwatch.log）",
+				formatSize(float64(q.CommitBytes)), formatSize(float64(q.WorkingSetBytes))))
+		}
 		cmd := q.CommandLine
 		if cmd == "" {
 			c.L("  qemu 命令行读不到（多半是模拟器以管理员身份运行），现场按 adb 设备列表推算")
