@@ -74,7 +74,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/diag/report-config` | | `{"text":"…"}` |
 | GET | `/api/boss-keys` | | `{"supported","taken"}`：`supported` 是这个管理器有老板键（Windows，托盘图标放成了）；`taken` 是已知被别的程序占着的键（注册或试注册没成），没有是 `[]` |
 | POST | `/api/boss-keys/check` | `{key}` | `{"key","taken"}`：`key` 是存下来的写法（`"Ctrl+Alt+Shift+1"`；`""`、`"none"` 是不要，回 `""`），`taken` 是现在试注册（注册上马上注销）没成；这个管理器自己为别的实例注册着的不算。键写得不对 400 `invalid_argument`，没有老板键 422 `unsupported` |
-| GET | `/api/check?index={i}&refresh=1` | 两个参数均可省略 | `CheckResult` 的原有字段，加 `instance_index`、`memory_mb`、`root_ready`（要几秒：硬件加速检查和 Vulkan 探测） |
+| GET | `/api/check?refresh=1` | `refresh` 可省略 | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
 | GET | `/api/jobs` | | `{"jobs":[Job]}`，新的在前，最多 50 个 |
 | GET | `/api/jobs/{id}` | | `Job` |
 | POST | `/api/jobs/{id}/cancel` | | `Job` |
@@ -90,7 +90,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 - 截图、输入、列应用、取 GSF ID 遇到实例没开机：409，code 是 `busy`。
 - `InstanceInfo` 带 `diagnostics: bool`，开启时带 `diagnostics_since`。PATCH 修改诊断时，`UpdateResult` 带 `diagnostics_cleanup: {files, bytes}`，只报实际删除量。关闭预览包含重新加入普通全根目录 1 GiB 池后需淘汰的其它普通实例旧日志；活跃文件不在预览和删除范围内。预览和提交之间现场可能变化，页面以提交结果为准。关闭部分失败时开关已保存为关，再次提交 `diagnostics: false` 会继续清理和客体恢复。
 - 诊断设置成功但宿主 logcat 由外部程序采集时，`UpdateResult.warnings` 说明未接管；不结束外部进程，也不等待它切换后才返回。前端显示该提示。
-- 电脑检查的 `index` 指定检查目标：读取该实例下次开机的 `config.memory_mb`，不存在回 404，`index` 为空、重复或编号无效时回 400 `invalid_argument`。不指定时按默认 6144 MB 检查，`instance_index` 为 `null`；指定时返回该编号。`memory_mb` 总是本次检查实际使用的内存。缓存按该内存值区分；修改实例内存后不会复用旧配置结果，`refresh=1` 同时重新执行硬件加速和图形检查。`ready` 包含本次内存检查，`root_ready` 只看内存以外的通用阻断项；macOS 无法确认的通用阻断项也视为未通过。某个检查目标内存不足不应禁用其他实例，开机时仍按目标实例实际内存重新预检。
+- 电脑检查查的是这台电脑和这个根目录，所有实例共用一份结果，不查内存（模拟器分不到内存时开机报 `insufficient_memory`）。结果会缓存，`refresh=1` 重新执行硬件加速和图形检查。`ready` 为 `false` 时所有实例都开不了机；macOS 无法确认的阻断项也视为未通过。
 
 ### Job
 

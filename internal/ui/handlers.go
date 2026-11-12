@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"modavd/internal/avd"
 	"modavd/internal/buildinfo"
 	"modavd/internal/components"
 	"modavd/internal/emu"
@@ -507,37 +506,9 @@ func (s *server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errs.New(errs.InvalidArgument, "检查参数不合法"))
 		return
 	}
+	// The check is the host's and the root's, the same for every instance: host memory is not checked.
 	refresh := query.Get("refresh") == "1"
-	var index *int
-	memoryMB := avd.DefaultMemoryMB
-	if values, provided := query["index"]; provided {
-		if len(values) != 1 {
-			writeError(w, errs.New(errs.InvalidArgument, "只能指定一个检查实例"))
-			return
-		}
-		i, err := parseIndex(values[0])
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		info, err := s.mgr.Info(r.Context(), i)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		index = &i
-		if info.Config.MemoryMB > 0 {
-			memoryMB = info.Config.MemoryMB
-		}
-	}
-	writeResult := func(res *emu.CheckResult) {
-		writeJSON(w, http.StatusOK, struct {
-			*emu.CheckResult
-			InstanceIndex *int `json:"instance_index"`
-			MemoryMB      int  `json:"memory_mb"`
-			RootReady     bool `json:"root_ready"`
-		}{res, index, memoryMB, res.RootReady()})
-	}
+	writeResult := func(res *emu.CheckResult) { writeJSON(w, http.StatusOK, res) }
 	asked := time.Now()
 	c := &s.check
 	if err := c.lock(r.Context()); err != nil {
@@ -548,22 +519,22 @@ func (s *server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	// A refresh may share a refresh that finished while it waited, but a normal
 	// check may have reused the hardware probes' caches.
 	c.mu.Lock()
-	cached, cachedAt, cachedMemoryMB := c.res, c.at, c.memoryMB
+	cached, cachedAt := c.res, c.at
 	cachedRefreshed := c.refreshed
 	generation := c.generation
 	c.mu.Unlock()
-	if cached != nil && cachedMemoryMB == memoryMB && (!refresh || (cachedRefreshed && cachedAt.After(asked))) {
+	if cached != nil && (!refresh || (cachedRefreshed && cachedAt.After(asked))) {
 		writeResult(cached)
 		return
 	}
-	res, err := s.mgr.Check(r.Context(), emu.CheckOptions{MemoryMB: memoryMB, Refresh: refresh})
+	res, err := s.mgr.Check(r.Context(), emu.CheckOptions{Refresh: refresh})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	c.mu.Lock()
 	if c.generation == generation {
-		c.res, c.at, c.memoryMB, c.refreshed = res, time.Now(), memoryMB, refresh
+		c.res, c.at, c.refreshed = res, time.Now(), refresh
 	}
 	c.mu.Unlock()
 	writeResult(res)
