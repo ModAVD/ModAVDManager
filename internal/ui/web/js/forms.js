@@ -305,7 +305,6 @@ export function openSettings(i, field) {
       const r = await api.patch(`/api/instances/${i}`, pending);
       const k = S.list.instances.findIndex((x) => x.index === i);
       if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
-      if ('memory_mb' in pending) S.checkIndex = i;
       if (r.boss_key_taken) {
         // saved, but another program has the key: say so (the settings page marks it too)
         return { tone: 'warn', title: '已保存，但老板键用不了', text: `${r.instance.boss_key} 被别的程序占了，在设置里换一个。` };

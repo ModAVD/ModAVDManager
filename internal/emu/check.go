@@ -79,20 +79,6 @@ func (m *Manager) Check(ctx context.Context, opt CheckOptions) (*CheckResult, er
 	return res, nil
 }
 
-// RootReady reports whether the checks shared by every instance passed. Memory
-// depends on the selected instance and is checked again before every launch.
-func (r *CheckResult) RootReady() bool {
-	for k, item := range r.Items {
-		if item.ID == "memory" {
-			continue
-		}
-		if _, failed := firstBlockingFailure(r.Items[k : k+1]); failed {
-			return false
-		}
-	}
-	return true
-}
-
 // ComponentStatuses is root's component list in the JSON shape of check's "components" (every field always present),
 // which `components status` returns too. Never nil.
 func ComponentStatuses(comps []root.ComponentStatus) []ComponentStatus {
