@@ -79,6 +79,8 @@ func TestMain(m *testing.M) {
 	case "client":
 		os.Exit(fakeAdbClientMain(os.Args[1:]))
 	}
+	// No test may reach the machine's default adb server (5037): boot watches registering there are faked.
+	shareDefaultAdbServer = func(context.Context, int) (bool, error) { return false, nil }
 	os.Exit(m.Run())
 }
 

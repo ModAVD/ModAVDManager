@@ -38,15 +38,15 @@ const (
 	testScriptPort = 20076
 )
 
-// testSDK is an SDK whose adb.exe the test may run (only run, never modified): $MODAVD_TEST_SDK, else the package's.
+// testSDK is an SDK whose adb.exe the test may run (only run, never modified): $MODAVD_TEST_SDK only. There is no
+// fallback to an installed root, so a plain `go test ./...` never reaches a real (production) root.
 func testSDK() string {
-	for _, sdk := range []string{os.Getenv("MODAVD_TEST_SDK"), `D:\ModAVD\sdk`} {
-		if sdk == "" {
-			continue
-		}
-		if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
-			return sdk
-		}
+	sdk := os.Getenv("MODAVD_TEST_SDK")
+	if sdk == "" {
+		return ""
+	}
+	if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
+		return sdk
 	}
 	return ""
 }
@@ -57,7 +57,7 @@ func realRoot(t *testing.T) (*root.Root, string) {
 	t.Helper()
 	sdk := testSDK()
 	if sdk == "" {
-		t.Skip("没有可用的 adb.exe（MODAVD_TEST_SDK / D:\\ModAVD\\sdk）")
+		t.Skip("没有可用的 adb.exe（设 MODAVD_TEST_SDK 指向一个 SDK 才跑）")
 	}
 	dir := tempDir(t)
 	meta, _ := json.Marshal(map[string]any{

@@ -116,8 +116,8 @@ func TestCallerSettingsOverride(t *testing.T) {
 		t.Fatalf("status: %+v", st)
 	}
 	st, err := u.Install(context.Background())
-	// every file changed between the two builds: GitHub's range path falls back to the whole package (second notice)
-	if err != nil || !st.Updated || len(st.Notices) != 2 || !strings.Contains(st.Notices[0], "填入的 CDK 错误") || !strings.Contains(st.Notices[1], "变了的文件太多") {
+	// The normal GitHub range threshold adds no notice; the bad CDK still does.
+	if err != nil || !st.Updated || len(st.Notices) != 1 || !strings.Contains(st.Notices[0], "填入的 CDK 错误") {
 		t.Fatalf("install: %+v %v", st, err)
 	}
 	if len(seen) == 0 || seen[len(seen)-1]["cdk"] != cdk {

@@ -808,7 +808,7 @@ func (c *collector) runningAndAdb() error {
 		}
 		c.L(fmt.Sprintf("pid %d  启动于 %s", q.PID, ct))
 		if q.CommitBytes != 0 {
-			c.L(fmt.Sprintf("  内存：提交 %s，工作集 %s（隔 10 分钟的记录在 modavd-bootwatch.log）",
+			c.L(fmt.Sprintf("  内存：提交 %s，工作集 %s（每分钟采样，变化超过 256 MiB 或满 10 分钟时记录，退出汇总见 modavd-bootwatch.log）",
 				formatSize(float64(q.CommitBytes)), formatSize(float64(q.WorkingSetBytes))))
 		}
 		cmd := q.CommandLine

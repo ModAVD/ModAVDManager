@@ -6,11 +6,12 @@ package update
 // unpacking the whole package would leave it. The manifest check that follows is the same as for a full download.
 //
 // archive/zip reads the package through remoteZip, an io.ReaderAt that holds only the pieces fetched so far. Anything
-// that goes wrong on the way (the server ignores Range, too much changed, a fetched entry fails its CRC, the result
-// fails the manifest) is a *rangeUnavailable: the caller drops pkg\ and downloads the whole package instead.
+// that makes the range result unusable (unsupported ranges, too much changed, a bad CRC or manifest) returns a
+// *rangeUnavailable: the caller drops pkg\ and downloads the whole package instead. Local creation, write and close errors stop the update.
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -44,19 +45,22 @@ const (
 	rangeMaxDirectory = 32 << 20
 )
 
-// rangeUnavailable: this update cannot be done by range; download the whole package. The reason goes into the notices.
-type rangeUnavailable struct{ reason string }
+// rangeUnavailable: download the whole package. Only failed attempts, not normal threshold decisions, add a notice.
+type rangeUnavailable struct {
+	reason string
+	normal bool // a threshold decision, not a failed range attempt
+}
 
 func (e *rangeUnavailable) Error() string { return e.reason }
 
 func unavailable(format string, args ...any) *rangeUnavailable {
-	return &rangeUnavailable{fmt.Sprintf(format, args...)}
+	return &rangeUnavailable{reason: fmt.Sprintf(format, args...)}
 }
 
 // segment is a piece of the remote package that has been fetched.
 type segment struct {
-	start int64
-	data  []byte
+	start, length int64
+	reader        io.ReaderAt
 }
 
 // remoteZip is the remote package as an io.ReaderAt for archive/zip: reads are served from the fetched segments. While
@@ -76,7 +80,7 @@ var errNotFetched = errors.New("读到了没取回的位置")
 func (r *remoteZip) find(pos int64) *segment {
 	for k := range r.segs {
 		s := &r.segs[k]
-		if s.start <= pos && pos < s.start+int64(len(s.data)) {
+		if s.start <= pos && pos < s.start+s.length {
 			return s
 		}
 	}
@@ -95,7 +99,7 @@ func (r *remoteZip) gapEnd(pos int64) int64 {
 }
 
 func (r *remoteZip) add(start int64, data []byte) {
-	r.segs = append(r.segs, segment{start, data})
+	r.segs = append(r.segs, segment{start, int64(len(data)), bytes.NewReader(data)})
 }
 
 func (r *remoteZip) drop(start int64) {
@@ -133,7 +137,15 @@ func (r *remoteZip) ReadAt(p []byte, off int64) (int, error) {
 			r.add(pos, data)
 			continue
 		}
-		n += copy(p[n:], s.data[pos-s.start:])
+		want := min(int64(len(p)-n), s.length-(pos-s.start))
+		got, err := s.reader.ReadAt(p[n:n+int(want)], pos-s.start)
+		n += got
+		if err != nil {
+			return n, err
+		}
+		if int64(got) != want {
+			return n, io.ErrUnexpectedEOF
+		}
 	}
 	return n, nil
 }
@@ -178,21 +190,34 @@ func (l layout) sameAsLocal(e zipEntry) bool {
 	return h.Sum32() == e.f.CRC32
 }
 
-// rangeRead reads one range of r's package, retried like a download (but not when the server cannot serve ranges).
+// rangeRead is bounded by rangeMaxDirectory for metadata and rangeMaxGroup for small entry groups.
 func (u *Updater) rangeRead(ctx context.Context, r *release, off, n int64, what string) ([]byte, error) {
 	d := download.Client{HTTP: u.client(), StallTimeout: u.stallTimeout}
+	var data []byte
+	err := u.rangeRetry(ctx, off, n, what, func() (err error) {
+		data, err = d.Range(ctx, r.url, off, n, r.size, what)
+		return err
+	})
+	return data, err
+}
+
+// rangeRetry retries only transport failures. Local writer, seek and truncate errors stop immediately.
+func (u *Updater) rangeRetry(ctx context.Context, off, n int64, what string, fetch func() error) error {
 	var last error
 	for attempt := 1; attempt <= downloadAttempts; attempt++ {
-		b, err := d.Range(ctx, r.url, off, n, r.size, what)
+		err := fetch()
 		if err == nil {
-			return b, nil
+			return nil
 		}
 		if ctx.Err() != nil {
-			return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+			return errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+		}
+		var de *download.Error
+		if !errors.As(err, &de) {
+			return err
 		}
 		last = err
-		var de *download.Error
-		if errors.As(err, &de) && (de.Kind == download.NoRange || de.Kind == download.Size) {
+		if de.Kind == download.NoRange || de.Kind == download.Size {
 			break
 		}
 		u.Log.Warnf("%s 第 %d 次没取到: %v", what, attempt, err)
@@ -200,11 +225,11 @@ func (u *Updater) rangeRead(ctx context.Context, r *release, off, n int64, what 
 			select {
 			case <-time.After(time.Duration(attempt) * time.Second):
 			case <-ctx.Done():
-				return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+				return errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 			}
 		}
 	}
-	return nil, unavailable("按区间取 %d-%d 没成（%v）", off, off+n-1, last)
+	return unavailable("按区间取 %d-%d 没成（%v）", off, off+n-1, last)
 }
 
 // planRange reads the package's central directory and compares it with the root: which entries to fetch, which to
@@ -239,7 +264,7 @@ func (u *Updater) planRange(ctx context.Context, r *release) (*rangePlan, error)
 		if ctx.Err() != nil {
 			return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 		}
-		if u.l.sameAsLocal(e) {
+		if !strings.EqualFold(e.rel, manifestName) && u.l.sameAsLocal(e) {
 			plan.copy = append(plan.copy, e)
 			continue
 		}
@@ -251,8 +276,8 @@ func (u *Updater) planRange(ctx context.Context, r *release) (*rangePlan, error)
 		plan.fetch = append(plan.fetch, rangeEntry{e, start, length})
 	}
 	if fetched := plan.fetchBytes(); rangeTooMuch(len(plan.fetch), fetched, r.size) {
-		return nil, unavailable("变了的文件太多（%d 个、约 %s，超过整包的 %.0f%% 或 %d 个文件）", len(plan.fetch), mib(fetched),
-			rangeMaxFetchRatio*100, rangeMaxFetchEntries)
+		return nil, &rangeUnavailable{reason: fmt.Sprintf("变了的文件太多（%d 个、约 %s，超过整包的 %.0f%% 或 %d 个文件）",
+			len(plan.fetch), mib(fetched), rangeMaxFetchRatio*100, rangeMaxFetchEntries), normal: true}
 	}
 	return plan, nil
 }
@@ -327,19 +352,10 @@ func (u *Updater) stageByRange(ctx context.Context, r *release) (int, string, er
 	var fetched int64
 	u.progress("downloading", label, 0, 0, total)
 	for _, g := range groups {
-		data, err := u.rangeRead(ctx, r, g.start, g.length, r.assetName)
-		if err != nil {
+		if err := u.stageRangeGroup(ctx, r, g, plan.remote); err != nil {
 			return 0, "", err
 		}
-		plan.remote.add(g.start, data)
-		for _, e := range g.members {
-			if err := extractEntry(e.zipEntry, u.l.pkgAt(e.rel)); err != nil {
-				plan.remote.drop(g.start)
-				return 0, "", unavailable("取回的 %s 不对: %v", e.rel, errs.As(err).Message)
-			}
-		}
-		plan.remote.drop(g.start)
-		fetched += int64(len(data))
+		fetched += g.length
 		u.progress("downloading", label, min(float64(fetched)*100/float64(max(total, 1)), 100), min(fetched, total), total)
 	}
 	u.step("extracting", "正在拼新版（没变的文件从本地复制）")
@@ -348,7 +364,7 @@ func (u *Updater) stageByRange(ctx context.Context, r *release) (int, string, er
 			return 0, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 		}
 		if err := copyFile(u.l.at(e.rel), u.l.pkgAt(e.rel)); err != nil {
-			return 0, "", unavailable("复制本地的 %s 没成: %v", e.rel, err)
+			return 0, "", err
 		}
 		if k%200 == 0 || k == len(plan.copy)-1 {
 			u.progress("extracting", "正在拼新版（没变的文件从本地复制）", float64(k+1)*100/float64(len(plan.copy)), 0, 0)
@@ -364,6 +380,60 @@ func (u *Updater) stageByRange(ctx context.Context, r *release) (int, string, er
 	}
 	u.Log.Infof("按区间取回 %s（整包 %s），%d 个文件按清单核对通过", mib(fetched), mib(r.size), len(plan.fetch)+len(plan.copy))
 	return len(plan.fetch) + len(plan.copy), verified, nil
+}
+
+// stageRangeGroup keeps small groups in memory. A large entry uses a private file under pkg so an interrupted
+// staging attempt is cleaned by the existing staging recovery. Drop the ReaderAt segment before closing the file.
+func (u *Updater) stageRangeGroup(ctx context.Context, r *release, g rangeGroup, remote *remoteZip) (err error) {
+	if g.length <= rangeMaxGroup {
+		data, err := u.rangeRead(ctx, r, g.start, g.length, r.assetName)
+		if err != nil {
+			return err
+		}
+		remote.add(g.start, data)
+	} else {
+		f, createErr := os.CreateTemp(u.l.pkg(), ".range-*")
+		if createErr != nil {
+			return createErr
+		}
+		defer func() {
+			// A local cleanup failure must also stop the update instead of starting a full download.
+			cerr := f.Close()
+			rerr := os.Remove(f.Name())
+			if cerr != nil {
+				err = cerr
+			}
+			if rerr != nil {
+				err = rerr
+			}
+		}()
+		d := download.Client{HTTP: u.client(), StallTimeout: u.stallTimeout}
+		if err := u.rangeRetry(ctx, g.start, g.length, r.assetName, func() error {
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			if err := f.Truncate(0); err != nil {
+				return err
+			}
+			return d.RangeTo(ctx, r.url, g.start, g.length, r.size, r.assetName, f)
+		}); err != nil {
+			return err
+		}
+		remote.segs = append(remote.segs, segment{g.start, g.length, f})
+	}
+	defer remote.drop(g.start)
+	for _, e := range g.members {
+		if ctx.Err() != nil {
+			return errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+		}
+		if err := extractEntry(e.zipEntry, u.l.pkgAt(e.rel)); err != nil {
+			if errs.CodeOf(err) != errs.UpdateRejected {
+				return err
+			}
+			return unavailable("取回的 %s 不对: %v", e.rel, errs.As(err).Message)
+		}
+	}
+	return nil
 }
 
 // rangeAllowed: GitHub's full package of a version that carries a manifest (the range path cannot check the package's

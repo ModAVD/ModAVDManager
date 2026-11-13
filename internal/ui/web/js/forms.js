@@ -158,21 +158,10 @@ export function openCreate() {
     toast({ tone: 'info', title: '已经有 9 台实例了', text: '最多 9 台（编号 0–9，5 除外）。删掉不用的实例再新建。' });
     return;
   }
-  const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: '比如：明日方舟 · 主号' });
-  const titleHint = hint('');
+  const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: '明日方舟 · 主号' });
+  // the number is always picked by the server (the first free one); the dialog no longer offers a choice
+  const titleHint = hint(`不填就显示「${defaultName(free[0])}」，以后可以随时改`);
   const disk = diskField('c', 'auto', 64, 16);
-  const idx = h('select', { class: 'select', id: 'c-index' }, h('option', { value: '', text: `自动（编号 ${free[0]}）` }),
-    free.map((i) => h('option', { value: String(i), text: `编号 ${i}` })));
-  const idxHint = hint('');
-  // the root's port plan (mas-avd.json portBase); a manager without port_base only knows 20000
-  const base = S.list.port_base || 20000;
-  const sync = () => {
-    const i = idx.value === '' ? free[0] : Number(idx.value);
-    titleHint.textContent = `不填就显示「${defaultName(i)}」，以后可以随时改`;
-    idxHint.replaceChildren('编号决定端口，脚本连 ', h('b', { text: `127.0.0.1:${base + 1 + 10 * i}` }));
-  };
-  idx.addEventListener('change', sync);
-  sync();
   const fps = fpsField('c', 60);
   const box = errorBox();
   const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: '新建' }));
@@ -184,8 +173,7 @@ export function openCreate() {
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
       segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
-      disk.rows,
-      inputRow('编号', idx, idxHint)), box),
+      disk.rows), box),
     actions: { ok },
     onSubmit() {
       const f = ctl.form.elements;
@@ -198,7 +186,7 @@ export function openCreate() {
         const job = await api.post('/api/instances', {
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           // no size: 自动扩盘
-          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb, index: idx.value === '' ? undefined : Number(idx.value),
+          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb,
         });
         A.onJob(job);
         S.watch.add(job.id);

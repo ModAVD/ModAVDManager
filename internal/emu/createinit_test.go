@@ -257,7 +257,7 @@ func TestStatusCreatingThroughGetprop(t *testing.T) {
 	savedScan, savedBooted := qemuScan, statusBooted
 	t.Cleanup(func() { qemuScan, statusBooted = savedScan, savedBooted })
 	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{6: {PID: 4242}} }
-	statusBooted = func(m *Manager, _ context.Context, i int) bool {
+	statusBooted = func(m *Manager, _ context.Context, i int) (bool, bool) {
 		// the setup is over while the guest shuts down
 		m.removeCreateProgress(i)
 		if err := m.setCreation(i, "", "", ""); err != nil {
@@ -265,7 +265,7 @@ func TestStatusCreatingThroughGetprop(t *testing.T) {
 		}
 		l.Unlock()
 		unlocked = true
-		return false
+		return false, false
 	}
 	info, err := m.Info(ctx, 6)
 	if err != nil || !info.Running || info.Status != StatusCreating || info.Busy != "creating" || info.CreationProgress != 88 {
