@@ -28,18 +28,26 @@ type Tray struct {
 	ownIcon bool
 	hotkeys map[int]bool
 
+	// Only the window thread changes click state. KillTimer leaves queued WM_TIMER messages, so ids are not reused.
+	clickTimer, nextTimer uintptr
+	skipButtonUp          bool
+
 	calls     chan func()
 	done      chan struct{}
 	closeOnce sync.Once
+	eventMu   sync.Mutex
+	events    []func()
+	eventWake chan struct{}
 }
 
-// TrayEvents are called on their own goroutine, never on the window's thread, so they may take their time and call
-// back into the Tray.
+// TrayEvents run in delivery order on a worker goroutine, never on the window thread. They may call back into
+// Tray, including Close. Close drops queued events and does not wait for a callback already running.
 type TrayEvents struct {
-	HotKey func(id int) // a registered hot key was pressed
-	Click  func()       // the icon was clicked (left button)
-	Open   func()       // menu: 打开管理器
-	Exit   func()       // menu: 退出
+	HotKey      func(id int) // a registered hot key was pressed
+	Click       func()       // a single left click, after the system double-click interval
+	DoubleClick func()       // a double left click; neither button-up also fires Click
+	Open        func()       // menu: 打开管理器
+	Exit        func()       // menu: 退出
 }
 
 // TrayOptions of StartTray.
@@ -60,14 +68,17 @@ const (
 	// tryHotKeyID is the id of TryHotKey's register-and-release; ids of applications are 0x0000–0xBFFF.
 	tryHotKeyID = 0xBFFF
 
-	wmNull       = 0x0000
-	wmDestroy    = 0x0002
-	wmHotKey     = 0x0312
-	wmLButtonUp  = 0x0202
-	wmRButtonUp  = 0x0205
-	wmApp        = 0x8000
-	wmTrayNotify = wmApp + 1 // the icon's callback message
-	wmTrayCall   = wmApp + 2 // run the queued calls
+	wmNull          = 0x0000
+	wmDestroy       = 0x0002
+	wmHotKey        = 0x0312
+	wmTimer         = 0x0113
+	wmLButtonDblClk = 0x0203
+	csDblClks       = 0x0008
+	wmLButtonUp     = 0x0202
+	wmRButtonUp     = 0x0205
+	wmApp           = 0x8000
+	wmTrayNotify    = wmApp + 1 // the icon's callback message
+	wmTrayCall      = wmApp + 2 // run the queued calls
 
 	nimAdd, nimDelete                 = 0, 2
 	nifMessage, nifIcon, nifTip       = 0x1, 0x2, 0x4
@@ -142,7 +153,7 @@ func StartTray(opt TrayOptions) (*Tray, error) {
 		return nil, errors.New("托盘窗口已经开着")
 	}
 	t := &Tray{ev: opt.Events, noIcon: opt.NoIcon, hotkeys: map[int]bool{}, calls: make(chan func(), 64),
-		done: make(chan struct{})}
+		done: make(chan struct{}), eventWake: make(chan struct{}, 1)}
 	tip, _ := syscall.UTF16FromString(opt.Tip)
 	copy(t.tip[:len(t.tip)-1], tip)
 	ready := make(chan error, 1)
@@ -150,6 +161,7 @@ func StartTray(opt TrayOptions) (*Tray, error) {
 	if err := <-ready; err != nil {
 		return nil, err
 	}
+	go t.eventLoop()
 	return t, nil
 }
 
@@ -159,7 +171,7 @@ func (t *Tray) loop(ready chan<- error) {
 	runtime.LockOSThread()
 	inst, _, _ := procGetModuleHandleW.Call(0)
 	cls, _ := syscall.UTF16PtrFromString(trayClassName)
-	wc := wndClassEx{WndProc: trayProcCb(), Instance: inst, ClassName: cls}
+	wc := wndClassEx{Style: csDblClks, WndProc: trayProcCb(), Instance: inst, ClassName: cls}
 	wc.Size = uint32(unsafe.Sizeof(wc))
 	if r, err := call(procRegisterClassExW, uintptr(unsafe.Pointer(&wc))); r == 0 && !errors.Is(err, errorClassAlreadyExists) {
 		ready <- errors.New("注册托盘窗口类失败: " + err.Error())
@@ -234,16 +246,26 @@ func trayProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch m := uint32(msg); {
 	case m == wmHotKey:
 		if f := t.ev.HotKey; f != nil {
-			go f(int(wparam))
+			t.dispatch(func() { f(int(wparam)) })
 		}
 		return 0
 	case m == wmTrayNotify:
 		switch uint32(lparam) & 0xFFFF {
 		case wmLButtonUp:
-			if f := t.ev.Click; f != nil {
-				go f()
+			if t.skipButtonUp {
+				t.skipButtonUp = false
+			} else {
+				t.deferClick()
+			}
+		case wmLButtonDblClk:
+			t.cancelClick()
+			t.skipButtonUp = true // the final button-up belongs to this double click
+			if f := t.ev.DoubleClick; f != nil {
+				t.dispatch(f)
 			}
 		case wmRButtonUp:
+			t.cancelClick()
+			t.skipButtonUp = false
 			var f func()
 			switch t.menu() {
 			case menuOpen:
@@ -252,7 +274,15 @@ func trayProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 				f = t.ev.Exit
 			}
 			if f != nil {
-				go f()
+				t.dispatch(f)
+			}
+		}
+		return 0
+	case m == wmTimer:
+		if t.clickTimer != 0 && wparam == t.clickTimer {
+			t.cancelClick()
+			if f := t.ev.Click; f != nil {
+				t.dispatch(f)
 			}
 		}
 		return 0
@@ -265,11 +295,72 @@ func trayProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case m == wmDestroy:
+		t.cancelClick()
 		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
 	return r
+}
+
+// dispatch never waits for a handler: it may itself be waiting for a call on the window thread.
+func (t *Tray) dispatch(f func()) {
+	t.eventMu.Lock()
+	t.events = append(t.events, f)
+	t.eventMu.Unlock()
+	select {
+	case t.eventWake <- struct{}{}:
+	default:
+	}
+}
+
+func (t *Tray) eventLoop() {
+	defer func() { t.eventMu.Lock(); t.events = nil; t.eventMu.Unlock() }()
+	for {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+		t.eventMu.Lock()
+		var f func()
+		if len(t.events) > 0 {
+			f = t.events[0]
+			t.events[0] = nil
+			t.events = t.events[1:]
+		}
+		t.eventMu.Unlock()
+		if f != nil {
+			f()
+			continue
+		}
+		select {
+		case <-t.done:
+			return
+		case <-t.eventWake:
+		}
+	}
+}
+
+// deferClick keeps cancellation and delivery on the window thread. If SetTimer fails, drop this click rather than
+// accidentally turn a double click into an instance restore.
+func (t *Tray) deferClick() {
+	t.cancelClick()
+	if t.ev.Click == nil {
+		return
+	}
+	t.nextTimer++
+	ms, _, _ := procGetDoubleClickTime.Call()
+	if r, _, _ := procSetTimer.Call(t.hwnd, t.nextTimer, ms+1, 0); r != 0 {
+		t.clickTimer = t.nextTimer
+	}
+}
+
+func (t *Tray) cancelClick() {
+	if t.clickTimer != 0 {
+		procKillTimer.Call(t.hwnd, t.clickTimer)
+		t.clickTimer = 0
+	}
 }
 
 // menu shows the right-click menu at the cursor and returns the chosen item (0: none). The window comes to the
@@ -376,6 +467,7 @@ func (t *Tray) TryHotKey(modifiers, vk uint32) error {
 func (t *Tray) Close() {
 	t.closeOnce.Do(func() {
 		t.call(func() {
+			t.cancelClick()
 			for id := range t.hotkeys {
 				procUnregisterHotKey.Call(t.hwnd, uintptr(id))
 			}
