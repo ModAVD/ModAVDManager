@@ -280,10 +280,18 @@ func RunBootWatch(args []string, w io.Writer) int {
 		defer ticker.Stop()
 		watch.watchMemory(ctx, ticker.C)
 	}()
+	shareDone := make(chan struct{})
+	go func() {
+		defer close(shareDone)
+		ticker := time.NewTicker(bootWatchShareInterval)
+		defer ticker.Stop()
+		watch.shareDefaultAdb(ctx, ticker.C)
+	}()
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
 	}
 	cancel()
+	<-shareDone
 	<-memoryDone // write the summary before releasing the watch lock or ending the log
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
@@ -300,6 +308,8 @@ type bootWatch struct {
 	missingSince time.Time
 	// Owned only by watchMemory, independently of guest reboot setup in tick.
 	memory bootWatchMemory
+	// shareFailing: the last registration with the default adb server failed (warned once). Owned by shareDefaultAdb.
+	shareFailing bool
 }
 
 const (
@@ -399,6 +409,55 @@ func (w *bootWatch) logMemorySummary() {
 		msg += fmt.Sprintf("；最近读取失败：%v", m.readErr)
 	}
 	w.m.Log.Infof("%s；精确退出峰值未知", msg)
+}
+
+// bootWatchShareInterval: how often the watch makes sure the default adb server (5037) knows the instance. A tool that
+// starts that server finds the instance at most this long after.
+var bootWatchShareInterval = 30 * time.Second
+
+// shareDefaultAdbServer is adb.ShareWithDefaultServer; tests replace it.
+var shareDefaultAdbServer = adb.ShareWithDefaultServer
+
+// shareDefaultAdb registers the instance with the default adb server now and at every tick, until ctx ends (qemu
+// exited). Its own goroutine: tick may block for minutes in a guest reboot setup. Skipped while a stop runs, before a
+// start has finished on q, and when mas-avd.json turns it off; a failure is logged once until it works again.
+func (w *bootWatch) shareDefaultAdb(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		w.shareDefaultAdbOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+	}
+}
+
+// shareDefaultAdbOnce is one look of shareDefaultAdb; it reports whether it asked the default server.
+func (w *bootWatch) shareDefaultAdbOnce(ctx context.Context) bool {
+	m, i := w.m, w.i
+	rec, ok := m.readBootRecord(i)
+	if !ok || !rec.names(w.q) || m.stopping(i) || !m.Root.ShareDefaultAdbServer() {
+		return false
+	}
+	console := m.Root.Ports().Console(i)
+	registered, err := shareDefaultAdbServer(ctx, console)
+	switch {
+	case err != nil:
+		if !w.shareFailing && ctx.Err() == nil {
+			m.Log.Warnf("实例 %d 没能登记到默认的 adb server（端口 %d），别的工具里可能看不到它: %v", i,
+				adb.DefaultServerPort, err)
+		}
+		w.shareFailing = true
+	case registered:
+		m.Log.Infof("实例 %d 已登记到默认的 adb server（端口 %d），那边是 emulator-%d", i, adb.DefaultServerPort, console)
+		w.shareFailing = false
+	default:
+		w.shareFailing = false
+	}
+	return true
 }
 
 // tick is one look of the watch at now: nothing while a start or a stop of the instance runs, or while the record does
