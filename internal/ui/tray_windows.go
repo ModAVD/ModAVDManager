@@ -8,7 +8,7 @@ import (
 // realNewTray is the manager's win.Tray.
 func realNewTray(tip string, ev trayEvents) (trayHost, error) {
 	t, err := win.StartTray(win.TrayOptions{Tip: tip, Events: win.TrayEvents{HotKey: ev.hotKey, Click: ev.click,
-		Open: ev.open, Exit: ev.exit}})
+		DoubleClick: ev.doubleClick, Open: ev.open, Exit: ev.exit}})
 	if err != nil {
 		return nil, err
 	}

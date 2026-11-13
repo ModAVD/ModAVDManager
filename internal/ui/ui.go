@@ -149,8 +149,11 @@ type server struct {
 	bossKick     chan struct{}
 	trayExit     chan struct{} // closed by 退出 in the icon's menu
 	trayExitOnce sync.Once
-	toggleMu     sync.Mutex // one boss key press or tray click at a time
+	toggleMu     sync.Mutex // one tray action or exit cleanup at a time
 	base         string     // "http://127.0.0.1:<port>/", set once before serving
+
+	trayStopped    bool                                      // protected by toggleMu
+	managerWindows func(toggle bool) (found bool, err error) // queries the Edge profile, never a launch PID
 }
 
 func newServer(opt Options) (*server, error) {
@@ -217,6 +220,8 @@ func newServer(opt Options) (*server, error) {
 		proxyEvery: proxyEvery,
 		hub:        newHub(),
 		marks:      newProxyMarks(),
+
+		managerWindows: changeManagerWindows,
 	}
 	if s.openPath == nil {
 		s.openPath = shellOpen
