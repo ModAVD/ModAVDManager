@@ -112,24 +112,61 @@ func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartRes
 	// The execution bridge (bridge.go): an instance this start launches gets its boot marker first (bridgeMarker).
 	bridge := opt.watchQemu == nil && !opt.NoBridge && m.bridgeWanted(i, inst.Config)
 	opt.bridgeMarker = bridge
+	// A launch that is known to be followed by the bridge's install and cold boots only prepares the instance: it is
+	// headless, and the window comes with the last boot (afterStartBridge).
+	opt.launchHeadless = bridgePrepLaunch(opt, bridge, regularFile(bridgeMarker(m.Root, i)))
 	res, err := mm.start(ctx, inst, opt, t0)
 	if err != nil {
 		return nil, err
 	}
 	res.Warnings = col.Messages()
+	return m.afterStartBridge(ctx, i, opt, bridge, res)
+}
+
+// bridgePrepLaunch: a launch of this start (opt; bridge: Start wants the execution bridge; marker: its boot marker is
+// there already) is headless although the caller asked for a window, because the bridge is surely installed after it,
+// with a cold boot or two: the marker is not there yet (the instance never had the bridge: this launch places it), or
+// the caller knows (bridgePrep). With the marker there, whether the guest has the bridge is only known once it runs,
+// so that launch has the window as asked.
+func bridgePrepLaunch(opt StartOptions, bridge, marker bool) bool {
+	return bridge && opt.Window && (opt.bridgePrep || !marker)
+}
+
+// afterStartBridge is the end of Start (res: its boot, set up): the execution bridge's install or update, and the
+// last boot with the window asked for when the instance runs headless after them.
+func (m *Manager) afterStartBridge(ctx context.Context, i int, opt StartOptions, bridge bool,
+	res *StartResult) (*StartResult, error) {
+	var err error
+	switch {
 	// The execution bridge (bridge.go): its marker is there and the guest still runs the stock translator. After the
 	// whole setup, because installing takes a cold boot or two; and only on a boot this start launched, never on a
 	// running instance it adopted (someone may be playing on it: the install restarts adbd and boots it cold).
-	if bridge && res.Launched && m.bridgePending(ctx, i) {
+	case bridge && res.Launched && m.bridgePending(ctx, i):
 		if opt.bridgeLocked {
-			return m.installBridge(ctx, i, opt, res)
+			res, err = m.installBridge(ctx, i, opt, res)
+		} else {
+			res, err = m.finishBridge(ctx, i, opt, res)
 		}
-		return m.finishBridge(ctx, i, opt, res)
-	}
 	// The bridge is installed: its files are updated when they are not this package's payload (the package was updated
 	// since), also only on a boot this start launched. `modavd bridge <i> install` (bridgeLocked) updates by itself.
-	if bridge && res.Launched && !opt.bridgeLocked {
-		return m.updateBridge(ctx, i, opt, res)
+	case bridge && res.Launched && !opt.bridgeLocked:
+		res, err = m.updateBridge(ctx, i, opt, res)
+	}
+	if err != nil || res == nil {
+		return res, err
+	}
+	// Asked for the window, and the instance runs headless after the prep boots (or after a prep launch with nothing
+	// to install after all): one more cold boot, after a normal shutdown, gives it the window. A running instance
+	// does not switch (StartOptions.Window), so this is never an adopt.
+	if opt.Window && res.Launched && !res.launchWindow {
+		m.Log.Infof("ModAVD 实例 %d 准备阶段无头开机已做完，关机后按要求带窗口开机", i)
+		r, err := m.bridgeRestart(ctx, i, StartOptions{Window: true, Timeout: opt.Timeout, Progress: opt.Progress,
+			creating: opt.creating})
+		if err != nil {
+			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 准备完以后带窗口开机失败: %v", i, err))
+		}
+		r.Warnings = append(append([]string{}, res.Warnings...), r.Warnings...)
+		res = r
 	}
 	return res, nil
 }
@@ -280,7 +317,11 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 					m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
 				}
 			}
-			plan, err := m.prepareLaunch(ctx, inst, opt.Window)
+			launchWindow := opt.Window && !opt.launchHeadless
+			if opt.launchHeadless {
+				m.Log.Infof("ModAVD 实例 %d 开机后要装 arm64 执行桥（要冷启动一到两次）：准备阶段无头开机，装好后再带窗口开机", i)
+			}
+			plan, err := m.prepareLaunch(ctx, inst, launchWindow)
 			if err != nil {
 				return nil, err
 			}
@@ -301,6 +342,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			launchedAt = time.Now()
 			emulator = &p
 			res.Launched = true
+			res.launchWindow = launchWindow
 			mode = setupLaunched
 			res.LogFile = plan.logPath
 			// written before qemu shows up (a cancel may come first): until then it names qemu by its parent

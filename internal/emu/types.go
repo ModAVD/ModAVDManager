@@ -197,6 +197,9 @@ type StartOptions struct {
 	// Window: boot with the emulator window (default headless, like AUTO-MAS silent mode). Headless: the caller wants
 	// it headless. An instance already running the other way is not adopted: errs.Busy, shut it down first (switching
 	// would take a restart). With neither, a running instance is adopted as it runs and a launch is headless.
+	// Window is how the instance comes back at the end: the boots that only prepare it (the execution bridge's install
+	// and its cold boots, bridge.go) are headless, and the last one, a cold boot after a normal shutdown, has the
+	// window.
 	Window   bool
 	Headless bool
 	// Timeout for Android to finish booting; 0 = DefaultBootTimeout.
@@ -217,6 +220,11 @@ type StartOptions struct {
 	creating bool
 	// bridgeMarker: Start wants the execution bridge on this instance, so a launch places its boot marker first.
 	bridgeMarker bool
+	// bridgePrep: the caller (Bridge) knows this launch installs the execution bridge, so it is headless even with
+	// Window (the install's last cold boot gets the window). Start also decides it by itself (bridgePrepLaunch).
+	bridgePrep bool
+	// launchHeadless: set by Start for start: a launch is headless whatever Window says (a bridge prep boot).
+	launchHeadless bool
 }
 
 type Progress struct {
@@ -252,6 +260,11 @@ type StartResult struct {
 	SetupPending bool     `json:"setup_pending"`
 	Warnings     []string `json:"warnings"` // never null; setup steps that failed (none of them stop the boot)
 	HostIME      bool     `json:"host_ime"`
+
+	// launchWindow: the qemu this call launched has the emulator window (false for a headless launch, and when it
+	// launched nothing). A start asked for a window launches headless while the execution bridge is still to be
+	// installed (bridgePrepLaunch); its last boot gets the window.
+	launchWindow bool
 }
 
 type StopOptions struct {

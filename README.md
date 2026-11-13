@@ -66,7 +66,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb auto\|N] [--diagnostics on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
-| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
+| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装；装桥要冷启动一两次，带 `--window` 时这几次准备用的开机都无头，装好后正常关机，最后一次才带窗口开机（实例还没有开机标记、一定要装桥时，第一次开机就无头；有标记的要开起来才知道装没装，第一次照样带窗口）。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
 | `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `playstore <i> install\|uninstall\|status` | 给实例补全、移除、查看 Google Play 商店（见下） |
@@ -106,7 +106,7 @@ Apple Silicon macOS 使用 SDK 中原生的 `qemu-img`。磁盘占用按宿主�
 - modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次；已经有桥、但桥的文件和这个包里的不一样（更新过 ModAVD 包），就同样在设置做完后换上新的，再冷启动一次。只在这次是它拉起的模拟器时装或更新；接管已经在运行的实例时不动。更新要冷启动，所以开机后的设置做完时已经有应用在前台、或者正在装 APK，这次就先不更新。装不上、更新不上都只是警告，实例照常运行，下次开机再试。AUTO-MAS 自己开机的实例不经过这一步：要换新文件，先关掉实例，再用 ModAVD.exe 或 `modavd start` 开一次机，或者跑 `bridge <i> install`。
 - 搬根目录前，先在原位置用新版管理器或 `modavd start` 给每台已装桥的实例冷启动一次，再关机。把整个根目录一起搬走，包括实例目录里的 `modavd-bridge-backings.json`。下次开机发现旧路径失效时，管理器会用记录的大小和 SHA-256 核对新 SDK 里的 system / vendor 镜像。老实例已经搬走且没有记录时，请保留覆盖层，将原镜像和根目录恢复到原位置，再按上述步骤搬迁。
 - 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` 的 `--no-bridge` 只管这一次。
-- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉；开着的，中间冷启动后照原来的方式开回来，带窗口的还带窗口，无头的还无头。`verify`：只读核对，实例要开着。
+- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉；开着的，最后照原来的方式开回来，带窗口的还带窗口，无头的还无头；中间只做准备的开机（装桥时装好之前的几次，卸桥时后面还要再冷启动的那次）都无头。`verify`：只读核对，实例要开着。
 - `info` / `list` / `status` 的 `bridge`：`off`（记了不要桥）、`pending`（下次由 modavd 拉起的开机会装）、`installed`（开着的客体里桥在）、`unknown`。只问已经开完机的客体；关着或还在开机的实例，开机标记在桥装好后一直留着，装失败时也在，所以首次开机做过、标记也在时是 `unknown`，要知道确切结果就开机后再查。
 - 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
