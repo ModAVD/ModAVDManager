@@ -94,8 +94,7 @@ func finalImagePath(path string) string {
 	if n == 0 || n >= uintptr(len(name)) {
 		return ""
 	}
-	// Both APIs return the resolved NT device path. This also covers directory
-	// links and avoids resolving every module's DOS path through the filesystem.
+	// Resolve directory links and 8.3 names into the same NT device path.
 	return syscall.UTF16ToString(name[:n])
 }
 
@@ -143,6 +142,11 @@ func processHasImage(pid uint32, target string) bool {
 			}
 			image := syscall.UTF16ToString(name[:n])
 			if strings.EqualFold(image, target) {
+				return true
+			}
+			// A mapped name can retain an 8.3 component such as RUNNER~1 even
+			// though the target's final name is expanded. Resolve both sides.
+			if strings.EqualFold(finalImagePath(`\\?\GLOBALROOT`+image), target) {
 				return true
 			}
 		}

@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"modavd/internal/errs"
 	"modavd/internal/testutil"
@@ -359,19 +359,40 @@ func TestRootBusyDeleteSharedReadOnlyFile(t *testing.T) {
 }
 
 func TestRootBusyExternalReadOnlyDLL(t *testing.T) {
-	for _, deep := range []bool{false, true} {
-		t.Run(fmt.Sprint("deep=", deep), func(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		deep, short bool
+	}{{"deep=false", false, false}, {"deep=true", true, false}, {"short name", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			dir := testutil.TempDir(t)
 			dll := filepath.Join(dir, "external.dll")
-			if deep {
+			if tc.deep {
 				dll = filepath.Join(dir, strings.Repeat("nested-", 14), strings.Repeat("nested-", 14), "external.dll")
 			}
-			free := loadDLL(t, dll)
-			free()
+			if err := copyFile(filepath.Join(os.Getenv("SystemRoot"), "System32", "msimg32.dll"), dll); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Chmod(dll, 0o444); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { os.Chmod(dll, 0o666) })
+			loadPath := dll
+			if tc.short {
+				ptr, err := syscall.UTF16PtrFromString(dll)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var short [32768]uint16
+				proc := syscall.NewLazyDLL("kernel32.dll").NewProc("GetShortPathNameW")
+				n, _, err := proc.Call(uintptr(unsafe.Pointer(ptr)), uintptr(unsafe.Pointer(&short[0])), uintptr(len(short)))
+				if n == 0 || n >= uintptr(len(short)) {
+					t.Fatalf("GetShortPathName: %v", err)
+				}
+				loadPath = syscall.UTF16ToString(short[:n])
+				if strings.EqualFold(loadPath, dll) {
+					t.Skip("test volume does not create 8.3 names")
+				}
+			}
 			ready := filepath.Join(dir, "ready")
 			self, err := os.Executable()
 			if err != nil {
@@ -380,7 +401,7 @@ func TestRootBusyExternalReadOnlyDLL(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, self, "-test.run=^TestRootBusyDLLChild$")
-			cmd.Env = append(os.Environ(), "MODAVD_ROOT_BUSY_DLL="+dll, "MODAVD_ROOT_BUSY_READY="+ready)
+			cmd.Env = append(os.Environ(), "MODAVD_ROOT_BUSY_DLL="+loadPath, "MODAVD_ROOT_BUSY_READY="+ready)
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 			var output bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &output, &output
