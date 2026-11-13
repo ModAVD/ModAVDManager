@@ -170,7 +170,9 @@ On Apple Silicon macOS, downloads and imports use Android 15 Google Play `arm64-
 
 **Conventions** (the same as AUTO-MAS):
 
-- adb only uses the root folder's private server (`adbServerPort` in `mas-avd.json`, default 20050) and never touches 5037.
+- modavd's own adb commands only use the root folder's private server (`adbServerPort` in `mas-avd.json`, default 20050).
+  - While an instance runs, its boot guardian looks at the default adb server (5037) every 30 seconds. When something runs that server and it does not know the instance, the guardian registers the instance there, where it shows as `emulator-<console port>`. Tools that find devices with `adb devices` (MAA's auto-detection, for example) then see ModAVD's instances too (ModAVD/ModAVD#196).
+  - Nothing happens while no server runs on 5037: the guardian never starts one. To turn the registration off, write `"shareDefaultAdbServer": false` in `mas-avd.json`.
 - Ports: the console port of instance i is 20000 + 10 × i, adb is 1 more and gRPC 2 more; the index is 0–9 without 5.
   - A root folder for development or testing can move to its own port range with `"portBase": 21000` in `mas-avd.json` (a key of modavd's own; AUTO-MAS does not know it). Its instances then do not fight over ports with the instances of the same index in the root folder in daily use on the same computer (for example the one AUTO-MAS manages), and are not taken for them.
   - `portBase` must be a multiple of 100 between 1100 and 49000, excluding 5500. Other adb servers scan the 5500 range automatically; ranges at 49100 and above overlap Windows' default ephemeral ports. Existing configurations in those ranges still support status and shutdown, but block new starts. Shut down all instances before changing the range. The default remains 20000. With another range, both `adbServerPort` and `scriptAdbServerPort` must be set, and neither can be 20049 or 20050 or fall on an instance port of the 20000 range.

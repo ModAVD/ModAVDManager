@@ -703,6 +703,18 @@ func (r *Root) ScriptAdbServerPort() int {
 	return scriptAdbServerPort(r.runtimeMetadata())
 }
 
+// ShareDefaultAdbServer: also register running instances with the default adb server (port 5037) when one runs, so
+// tools that look there (`adb devices`) find them (ModAVD/ModAVD#196). On unless mas-avd.json has
+// "shareDefaultAdbServer": false.
+func (r *Root) ShareDefaultAdbServer() bool {
+	v := r.runtimeMetadata().Get("shareDefaultAdbServer")
+	if v.Kind() != jsonord.Bool {
+		return true
+	}
+	b, _ := v.BoolVal()
+	return b
+}
+
 func adbServerPort(o *jsonord.Obj) int {
 	if port, ok := metadataPort(o, "adbServerPort"); ok {
 		return port
