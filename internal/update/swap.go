@@ -224,7 +224,7 @@ func (l layout) applyRootFiles(p rootPlan) error {
 			continue
 		}
 		dst := l.at(rel)
-		if self != "" && strings.EqualFold(dst, self) && isFile(dst) {
+		if self != "" && strings.EqualFold(realOrSame(dst), self) && isFile(dst) {
 			if err := l.toTrash(dst); err != nil {
 				return err
 			}
@@ -249,7 +249,7 @@ func (l layout) rootFileInUse(p rootPlan) string {
 	self := selfExe()
 	for _, rel := range append(append([]string{}, p.replace...), p.delete...) {
 		dst := l.at(rel)
-		if inFold(p.created, rel) || (self != "" && strings.EqualFold(dst, self)) || !isFile(dst) {
+		if inFold(p.created, rel) || (self != "" && strings.EqualFold(realOrSame(dst), self)) || !isFile(dst) {
 			continue
 		}
 		if fileInUse(dst) {
@@ -272,7 +272,7 @@ func (l layout) restoreRootFiles(p rootPlan) error {
 			continue
 		}
 		dst := l.at(rel)
-		if self != "" && strings.EqualFold(dst, self) && isFile(dst) {
+		if self != "" && strings.EqualFold(realOrSame(dst), self) && isFile(dst) {
 			if err := l.toTrash(dst); err != nil {
 				return err
 			}
@@ -289,10 +289,7 @@ func selfExe() string {
 	if err != nil {
 		return ""
 	}
-	if real, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = real
-	}
-	return exe
+	return realOrSame(exe)
 }
 
 // ---- swap
@@ -325,15 +322,15 @@ func (u *Updater) swapIn() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := l.backupRootFiles(plan); err != nil {
-		return "", err
-	}
 	// A root file another program holds (MAA loads extras\modavd_extras.dll and
 	// mumu-shim\shell\sdk\external_renderer_ipc.dll) cannot be replaced: found out after the renames, it would leave
 	// the root half swapped until that program exits. Checked while nothing has been changed yet.
 	if rel := l.rootFileInUse(plan); rel != "" {
 		l.backToStaged(st)
 		return "", swapBlocked("%s 正被别的程序占用（多半是 MAA 之类载入了它），什么都没动。请先关掉它再装", filepath.FromSlash(rel))
+	}
+	if err := l.backupRootFiles(plan); err != nil {
+		return "", err
 	}
 	st.Set("phase", jsonord.NewString(phaseSwapping))
 	st.Set("plan", plan.value())
