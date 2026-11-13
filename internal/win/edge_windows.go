@@ -65,11 +65,14 @@ func (w EdgeWindow) SetVisible(visible bool) error {
 	return nil
 }
 
-// Foreground requests activation. Windows may refuse to steal focus from another application.
-func (w EdgeWindow) Foreground() {
-	if w.valid() {
-		procSetForegroundWindow.Call(w.hwnd)
+// Foreground reports whether Windows accepted the activation request. Activation of Edge's input queue may
+// complete asynchronously. A background caller without foreground permission gets false; showing still works.
+func (w EdgeWindow) Foreground() bool {
+	if !w.valid() {
+		return false
 	}
+	r, _, _ := procSetForegroundWindow.Call(w.hwnd)
+	return r != 0
 }
 
 var (
