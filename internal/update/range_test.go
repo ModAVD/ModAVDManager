@@ -290,8 +290,15 @@ func TestRangeFallsBack(t *testing.T) {
 			u := f.updater(r)
 			ctx := context.Background()
 			st, err := u.Prepare(ctx)
-			if err != nil || st.Phase != phaseStaged || stagedMode(u) != "full" || len(st.Notices) != 1 ||
-				!strings.Contains(st.Notices[0], tc.notice) || !strings.Contains(st.Notices[0], "改下整包") {
+			if err != nil || st.Phase != phaseStaged || stagedMode(u) != "full" {
+				t.Fatalf("prepare: %+v %v (mode %q)", st, err, stagedMode(u))
+			}
+			wantNotices := 1
+			if tc.name == "too much changed" {
+				wantNotices = 0
+			}
+			if len(st.Notices) != wantNotices || (wantNotices > 0 &&
+				(!strings.Contains(st.Notices[0], tc.notice) || !strings.Contains(st.Notices[0], "改下整包"))) {
 				t.Fatalf("prepare: %+v %v (mode %q)", st, err, stagedMode(u))
 			}
 			if log.fullGets() != 1 {

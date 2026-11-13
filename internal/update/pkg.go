@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -167,6 +168,9 @@ func extractEntry(e zipEntry, dst string) error {
 	}
 	rc, err := e.f.Open()
 	if err != nil {
+		if isDiskError(err) {
+			return err
+		}
 		return packageError("包里的 %s 打不开: %v", e.rel, err)
 	}
 	defer rc.Close()
@@ -189,8 +193,8 @@ func extractEntry(e zipEntry, dst string) error {
 }
 
 func isDiskError(err error) bool {
-	_, ok := err.(*os.PathError)
-	return ok
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr)
 }
 
 // extractPackage unpacks a full package into pkg\; the entry count.
