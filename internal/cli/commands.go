@@ -187,7 +187,7 @@ func init() {
 			name: "status", args: "<i>", summary: "一台实例的状态",
 			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
 				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它，它自己在关（关了窗口、安卓里关机）也报 stopping；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},

@@ -57,7 +57,8 @@ type InstanceInfo struct {
 	Window bool `json:"window"`
 	// Busy: "starting" / "stopping" / "bridging" while some modavd process holds that lock of the instance (AUTO-MAS's
 	// updater must not swap sdk\emulator then); "" otherwise. "bridging" covers the whole bridge install, including the
-	// stops and cold boots in it; callers that do not know a value treat it as busy.
+	// stops and cold boots in it; callers that do not know a value treat it as busy. "stopping" also when no lock is
+	// held but the instance is going down by itself (window closed, Android powered off; see closingItself).
 	Busy string `json:"busy"`
 	// Bridge (the arm64 execution bridge): "off" (instances.<i>.bridge is false), "pending" (the next start modavd
 	// launches installs it), "installed" (the booted guest runs it) or "unknown". Only a booted guest is asked; an
