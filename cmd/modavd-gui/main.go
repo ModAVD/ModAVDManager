@@ -42,6 +42,7 @@ import (
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/ui"
+	"modavd/internal/update"
 )
 
 func main() {
@@ -82,6 +83,9 @@ func helpText(fs *flag.FlagSet) string {
 	b.WriteString(usage + "\n")
 	fs.VisitAll(func(f *flag.Flag) {
 		name := "--" + f.Name
+		if name == update.HandoffArg {
+			return
+		}
 		if v := flagValueNames[f.Name]; v != "" {
 			name += " " + v
 		}
@@ -128,6 +132,7 @@ func run(args []string) (code int) {
 		fs.BoolVar(&chromeWindow, "chrome-window", false, "用独立 Chrome 应用窗口打开（默认使用系统浏览器）")
 	}
 	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
+	handoffArg := fs.String(strings.TrimPrefix(update.HandoffArg, "--"), "", "更新交接 ID")
 	if err := fs.Parse(args); err != nil {
 		// --help / -h / -help ask for the usage: an information box and exit code 0, not an error (ModAVD/ModAVD#115).
 		if errors.Is(err, flag.ErrHelp) {
@@ -144,6 +149,15 @@ func run(args []string) (code int) {
 	if *port < 0 || *port > 65535 {
 		fatal(fmt.Sprintf("端口 %d 不对（0–65535，0 = 随机）", *port))
 		return 2
+	}
+	var handoffID update.HandoffID
+	if *handoffArg != "" {
+		var err error
+		handoffID, err = update.ParseHandoffID(*handoffArg)
+		if err != nil {
+			fatal(err.Error())
+			return 2
+		}
 	}
 	r, err := root.Resolve(*rootFlag)
 	if err != nil {
@@ -166,7 +180,7 @@ func run(args []string) (code int) {
 		return 1
 	}
 	if inst == nil {
-		return reopen(r, *noWindow, chromeWindow, log)
+		return reopen(r, *noWindow, chromeWindow, log, handoffID)
 	}
 	defer inst.release()
 
@@ -179,6 +193,7 @@ func run(args []string) (code int) {
 		OpenWindow:   !*noWindow,
 		ChromeWindow: chromeWindow,
 		Dev:          *dev,
+		HandoffID:    handoffID,
 		// the tray icon and the boss keys (Windows): closing the window leaves the manager in the tray
 		Tray: runtime.GOOS == "windows",
 		Ready: func(baseURL, token string) {
@@ -224,7 +239,11 @@ func reopenArgs(r *root.Root, port int, noWindow, dev bool, log *logx.Logger) *u
 }
 
 // reopen is the second launch on a root: the running manager gets a new window.
-func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger) int {
+func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger, id update.HandoffID) int {
+	if id != "" {
+		// A failed delivery must not leave this result for a later launch.
+		defer update.TakeHandoff(r, id, time.Now())
+	}
 	st, err := readStateWait(r, 5*time.Second)
 	if err != nil {
 		log.Errorf("已有管理器在运行，但读不到它的地址: %v", err)
@@ -234,6 +253,11 @@ func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger) int {
 		}
 		fatal("这个根目录的 ModAVD 管理器已经在运行，但找不到它的地址。\n\n" + advice + "\n\n根目录：" + r.Dir)
 		return 1
+	}
+	if id != "" {
+		if err := forwardHandoff(st, id); err != nil {
+			log.Warnf("把本次更新结果交给已运行的管理器失败: %v", err)
+		}
 	}
 	if noWindow {
 		return 0

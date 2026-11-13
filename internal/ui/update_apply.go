@@ -234,8 +234,12 @@ func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version s
 // handOff starts the CLI that swaps once we are gone and starts us again; it is not our descendant (host.StartOrphan),
 // so nothing that ends this process can end it. alive tells whether it still runs.
 func (s *server) handOff(lg *logx.Logger) (alive func() bool, err error) {
+	id, err := update.NewHandoffID()
+	if err != nil {
+		return nil, err
+	}
 	args := []string{"--root", s.root.Dir, "--json", "update", "install",
-		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", s.reopen.Exe}
+		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", s.reopen.Exe, "--handoff-id", string(id)}
 	for _, a := range s.reopen.Args {
 		args = append(args, "--reopen-arg", a)
 	}
