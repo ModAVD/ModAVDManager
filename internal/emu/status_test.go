@@ -85,8 +85,12 @@ func TestPollTakesGuestArchFromListedConfig(t *testing.T) {
 		if err != nil || len(list.Instances) != 1 {
 			t.Fatalf("%s: list: %+v %v", label, list, err)
 		}
-		a, _ := json.Marshal(info)
-		b, _ := json.Marshal(list.Instances[0])
+		// host_free_bytes is the host disk's free space at that moment: anything writing to the disk between two
+		// reads changes it (CI failed on it), and it has nothing to do with what this test compares
+		in, li := *info, list.Instances[0]
+		in.DataSpace.HostFreeBytes, li.DataSpace.HostFreeBytes = 0, 0
+		a, _ := json.Marshal(in)
+		b, _ := json.Marshal(li)
 		if string(a) != string(b) {
 			t.Fatalf("%s: info and list differ:\n%s\n%s", label, a, b)
 		}
