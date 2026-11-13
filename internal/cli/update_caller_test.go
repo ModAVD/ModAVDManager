@@ -138,8 +138,11 @@ func TestUpdateCallerSettingsPassed(t *testing.T) {
 	h.reopen = func(exe string, args []string) error { reopened = args; return nil }
 	if res := h.run(t, nil, "update", "install", "--reopen", `C:\M\ModAVD.exe`, "--reopen-arg", "--root",
 		"--reopen-arg", `C:\M`, "--reopen-arg", "--source", "--json"); res.code != 0 ||
-		strings.Join(reopened, " ") != `--root C:\M --source` {
+		len(reopened) != 5 || strings.Join(reopened[:4], " ") != `--root C:\M --source --update-handoff` {
 		t.Fatalf("--reopen-arg --root: exit %d: %s %v", res.code, res.stdout, reopened)
+	}
+	if _, err := update.ParseHandoffID(reopened[4]); err != nil {
+		t.Fatal(err)
 	}
 	h, opts, _ = updateHarness(t)
 	if res := h.run(t, nil, "update", "install", "--source", "github", "--json"); res.code != 0 {

@@ -236,9 +236,16 @@ func (m *Manager) findQemu(i int) (host.Process, bool, error) {
 // bootCompleted: `getprop sys.boot_completed` says 1. reregister=false while the instance is booting (it has not
 // registered with the private server yet, which is normal then).
 func (m *Manager) bootCompleted(ctx context.Context, i int, timeout time.Duration, reregister bool) bool {
+	booted, _ := m.bootProbe(ctx, i, timeout, reregister)
+	return booted
+}
+
+// bootProbe is bootCompleted plus answered: the getprop ran in the guest at all (adb exit 0), so the device was
+// reachable even when it printed nothing.
+func (m *Manager) bootProbe(ctx context.Context, i int, timeout time.Duration, reregister bool) (booted, answered bool) {
 	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: timeout, Reregister: reregister},
 		"shell", "getprop", "sys.boot_completed")
-	return res.Code == 0 && strings.TrimSpace(res.Out) == "1"
+	return res.Code == 0 && strings.TrimSpace(res.Out) == "1", res.Code == 0
 }
 
 // ---- guest commands ----------------------------------------------------------------------------------------------

@@ -23,9 +23,25 @@ import (
 // depend on what runs on the machine either.
 var qemuScan func(indexes []int) map[int]host.Process
 
-// statusBooted is the getprop of instanceInfo; a test replaces it.
-var statusBooted = func(m *Manager, ctx context.Context, i int) bool {
-	return m.bootCompleted(ctx, i, statusAdbTimeout, true)
+// statusBooted is the getprop of instanceInfo; a test replaces it. answered: adb reached the guest at all (the
+// getprop ran, whatever it printed); false when the device is offline or unknown to the server.
+var statusBooted = func(m *Manager, ctx context.Context, i int) (booted, answered bool) {
+	return m.bootProbe(ctx, i, statusAdbTimeout, true)
+}
+
+// closingItself: a running, not booted instance that no modavd is starting, stopping or bridging is going down by
+// itself (its window was closed, Android was powered off inside): no unfinished modavd boot of this qemu (setup
+// marker; a start in progress holds the start lock anyway) and adb no longer reaches the guest. Measured 11-13 on a
+// windowed instance: after WM_CLOSE the guest says sys.powerctl=shutdown, adb loses it at ~3 s and qemu exits at
+// ~7.5 s; that gap read as "starting" (开机中). A guest reboot reads the same until its adbd is back (seconds), then
+// "starting" again; so does a qemu launched outside modavd until its adbd is up.
+func (m *Manager) closingItself(i int, p host.Process, answered bool, now time.Time) bool {
+	if answered {
+		return false
+	}
+	mk, ok := m.readSetupMarker(i)
+	use, _ := setupMarkerUse(mk, ok, p, now)
+	return !use
 }
 
 // qemus is the process scan of the queries: qemuScan when a test set it, else m.scanQemu.
@@ -161,6 +177,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	if info.Creation == creationCreating {
 		info.CreationProgress = m.createPercent(i)
 	}
+	closing := false
 	if p != nil {
 		info.Running = true
 		info.Window, _ = qemuWindowed(*p)
@@ -169,17 +186,22 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 			info.StartedAt = t.Format(time.RFC3339)
 			info.StartedAtMS = t.UnixMilli()
 		}
+		answered := true
 		if booted != nil {
 			info.Booted = *booted
 		} else {
-			info.Booted = statusBooted(m, ctx, i)
+			info.Booted, answered = statusBooted(m, ctx, i)
 		}
+		closing = !info.Booted && m.closingItself(i, *p, answered, time.Now())
 		// Only for a running instance: the name is per console port, not per root, so an offline instance would
 		// report another root's mapping on the same port.
 		info.Screencap.ShmReady = host.SharedMemoryExists(info.Screencap.Shm)
 	}
 	info.Status = statusOf(info.Running, info.Booted)
 	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
+	if info.Busy == "" && closing {
+		info.Busy = "stopping"
+	}
 	// "creating" overrides what the boots of that setup look like from outside
 	switch info.Creation {
 	case creationCreating:

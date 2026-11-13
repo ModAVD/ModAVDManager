@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -167,6 +168,9 @@ func extractEntry(e zipEntry, dst string) error {
 	}
 	rc, err := e.f.Open()
 	if err != nil {
+		if isDiskError(err) {
+			return err
+		}
 		return packageError("包里的 %s 打不开: %v", e.rel, err)
 	}
 	defer rc.Close()
@@ -174,10 +178,7 @@ func extractEntry(e zipEntry, dst string) error {
 	if err != nil {
 		return err
 	}
-	_, cerr := io.Copy(out, rc)
-	if err := out.Close(); cerr == nil {
-		cerr = err
-	}
+	cerr := copyEntryContents(out, rc)
 	if cerr != nil {
 		os.Remove(dst)
 		if os.IsPermission(cerr) || isDiskError(cerr) {
@@ -188,9 +189,18 @@ func extractEntry(e zipEntry, dst string) error {
 	return nil
 }
 
+// copyEntryContents owns the output handle, including when reading the ZIP entry fails.
+func copyEntryContents(out io.WriteCloser, source io.Reader) error {
+	_, err := io.Copy(out, source)
+	if closeErr := out.Close(); closeErr != nil {
+		return closeErr
+	}
+	return err
+}
+
 func isDiskError(err error) bool {
-	_, ok := err.(*os.PathError)
-	return ok
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr)
 }
 
 // extractPackage unpacks a full package into pkg\; the entry count.
@@ -421,16 +431,41 @@ func (l layout) buildPatchedPackage(r *root.Root, archive string, base Version) 
 
 // ---- the manifest
 
-func readManifest(path string) (*jsonord.Obj, bool) {
-	b, err := root.ReadFileShared(path)
+// regularPackageFile distinguishes an absent or wrong-shaped package entry from a local metadata error.
+func regularPackageFile(path string) (bool, error) {
+	st, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return nil, false
+		return false, err
+	}
+	return st.Mode().IsRegular(), nil
+}
+
+// readManifest is a best-effort installed-version probe. Staging callers use loadManifest to retain I/O errors.
+func readManifest(path string) (*jsonord.Obj, bool) {
+	m, ok, _ := loadManifest(path)
+	return m, ok
+}
+
+func loadManifest(path string) (*jsonord.Obj, bool, error) {
+	regular, err := regularPackageFile(path)
+	if err != nil || !regular {
+		return nil, false, err
+	}
+	b, err := root.ReadFileShared(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	v, err := jsonord.Parse(trimBOM(b))
 	if err != nil || v.Kind() != jsonord.Object || v.Obj().Len() == 0 {
-		return nil, false
+		return nil, false, nil
 	}
-	return v.Obj(), true
+	return v.Obj(), true, nil
 }
 
 func manifestString(m *jsonord.Obj, key string) string {
@@ -475,9 +510,10 @@ func verifyTree(tree string, files map[string]fileSpec) ([]string, error) {
 		want[strings.ToLower(rel)] = rel
 	}
 	var problems []string
+	var readErr error
 	seen := map[string]bool{}
 	err := walkFiles(tree, func(rel string, info os.FileInfo) {
-		if strings.EqualFold(rel, manifestName) {
+		if readErr != nil || strings.EqualFold(rel, manifestName) {
 			return
 		}
 		key := strings.ToLower(rel)
@@ -492,12 +528,20 @@ func verifyTree(tree string, files map[string]fileSpec) ([]string, error) {
 			problems = append(problems, rel+" 大小不对")
 			return
 		}
-		if sum, err := hashFile(filepath.Join(tree, filepath.FromSlash(rel))); err != nil || sum != spec.sha256 {
+		sum, err := hashFile(filepath.Join(tree, filepath.FromSlash(rel)))
+		if err != nil {
+			readErr = err
+			return
+		}
+		if sum != spec.sha256 {
 			problems = append(problems, rel+" 内容与清单不符")
 		}
 	})
 	if err != nil {
 		return nil, err
+	}
+	if readErr != nil {
+		return nil, readErr
 	}
 	for key, rel := range want {
 		if !seen[key] {
@@ -546,10 +590,9 @@ func checkPackageManifest(m *jsonord.Obj, target Version) error {
 
 var buildIDRe = regexp.MustCompile(`^mas-([0-9]+)$`)
 
-// packageBuild is the emulator build the package in pkg\ says it carries: its manifest's "build", else (a legacy
-// package without one) the target's minor number, as versions through 0.40 were numbered.
-func (l layout) packageBuild(target Version) int {
-	if m, ok := readManifest(l.pkgAt(manifestName)); ok {
+// manifestBuild is the emulator build from the already-read manifest, or the minor version for legacy packages.
+func manifestBuild(m *jsonord.Obj, target Version) int {
+	if m != nil {
 		if n, ok := m.Get("build").Int(); ok && n > 0 {
 			return int(n)
 		}
@@ -561,12 +604,22 @@ func (l layout) packageBuild(target Version) int {
 // and its qemu is our own build (it knows the free-page-reporting balloon option).
 func checkEmulator(emu string, want int, target Version) error {
 	p := root.CurrentPlatform()
-	qemu := filepath.Join(emu, "qemu", p.QemuDir, p.QEMU)
-	if !isFile(filepath.Join(emu, p.Emulator)) || !isFile(qemu) {
-		return packageError(`包里的 sdk\emulator 不完整（缺 emulator.exe 或 qemu）`)
+	for _, rel := range []string{p.Emulator, filepath.Join("qemu", p.QemuDir, p.QEMU),
+		"source.properties", filepath.Join("qemu", p.QemuDir, p.QEMUHeadless)} {
+		regular, err := regularPackageFile(filepath.Join(emu, rel))
+		if err != nil {
+			return err
+		}
+		if !regular {
+			return packageError("包里的 sdk/emulator/%s 不存在或不是普通文件", filepath.ToSlash(rel))
+		}
 	}
 	build := "读不到"
-	if b, err := os.ReadFile(filepath.Join(emu, "source.properties")); err == nil {
+	b, err := os.ReadFile(filepath.Join(emu, "source.properties"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
 		id := ""
 		for _, line := range strings.Split(string(b), "\n") {
 			if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "Pkg.BuildId" {
@@ -580,26 +633,36 @@ func checkEmulator(emu string, want int, target Version) error {
 	if build != fmt.Sprint(want) {
 		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %d）不一致", build, target.Display(), want)
 	}
-	if !fileContains(filepath.Join(emu, "qemu", p.QemuDir, p.QEMUHeadless), []byte("free-page-reporting")) {
+	ours, err := fileContains(filepath.Join(emu, "qemu", p.QemuDir, p.QEMUHeadless), []byte("free-page-reporting"))
+	if err != nil {
+		return err
+	}
+	if !ours {
 		return packageError("包里的模拟器不是 ModAVD 的自编版")
 	}
 	return nil
 }
 
-// fileContains scans p in 4 MiB chunks (with overlap) for needle; false when unreadable.
-func fileContains(p string, needle []byte) bool {
+// fileContains scans p in 4 MiB chunks (with overlap) for needle. A missing file has no match; other I/O errors propagate.
+func fileContains(p string, needle []byte) (bool, error) {
 	f, err := os.Open(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer f.Close()
 	buf := make([]byte, 4<<20)
 	carry := []byte{}
 	for {
 		n, err := f.Read(buf)
+		if err != nil && err != io.EOF {
+			return false, err
+		}
 		chunk := append(carry, buf[:n]...)
 		if bytes.Contains(chunk, needle) {
-			return true
+			return true, nil
 		}
 		if len(chunk) >= len(needle) {
 			carry = append([]byte{}, chunk[len(chunk)-len(needle)+1:]...)
@@ -607,7 +670,7 @@ func fileContains(p string, needle []byte) bool {
 			carry = chunk
 		}
 		if err != nil {
-			return false
+			return false, nil
 		}
 	}
 }
@@ -615,7 +678,10 @@ func fileContains(p string, needle []byte) bool {
 // verifyPackage is AUTO-MAS verify_package: "manifest" when pkg\ matches its manifest, "zip" for a legacy package
 // without one (only its zip CRC and download hash vouch for it).
 func (l layout) verifyPackage(target Version, tag string) (string, error) {
-	m, ok := readManifest(l.pkgAt(manifestName))
+	m, ok, err := loadManifest(l.pkgAt(manifestName))
+	if err != nil {
+		return "", err
+	}
 	verified := "zip"
 	switch {
 	case !ok && requiresManifest(tag):
@@ -642,7 +708,7 @@ func (l layout) verifyPackage(target Version, tag string) (string, error) {
 		}
 		verified = "manifest"
 	}
-	if err := checkEmulator(l.pkgAt("sdk/emulator"), l.packageBuild(target), target); err != nil {
+	if err := checkEmulator(l.pkgAt("sdk/emulator"), manifestBuild(m, target), target); err != nil {
 		return "", err
 	}
 	return verified, nil
@@ -650,7 +716,11 @@ func (l layout) verifyPackage(target Version, tag string) (string, error) {
 
 // buildStage moves pkg\sdk\emulator to .update\stage\emulator.
 func (l layout) buildStage(target Version) error {
-	if err := checkEmulator(l.pkgAt("sdk/emulator"), l.packageBuild(target), target); err != nil {
+	m, _, err := loadManifest(l.pkgAt(manifestName))
+	if err != nil {
+		return err
+	}
+	if err := checkEmulator(l.pkgAt("sdk/emulator"), manifestBuild(m, target), target); err != nil {
 		return err
 	}
 	if err := removeTree(l.stage()); err != nil {

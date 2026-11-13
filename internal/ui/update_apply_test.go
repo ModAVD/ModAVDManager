@@ -156,7 +156,7 @@ func TestUpdateApplyHandsOff(t *testing.T) {
 	}
 	root := h.s.root.Dir
 	want := []string{filepath.Join(root, "tools", "modavd.exe"), "--root", root, "--json", "update", "install",
-		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", reopenExe,
+		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", reopenExe, "--handoff-id", sp[0][11],
 		"--reopen-arg", "--root", "--reopen-arg", root, "--reopen-arg", "--no-window",
 		filepath.Join(root, "logs", updateLogName)}
 	if !slices.Equal(sp[0], want) {
@@ -324,7 +324,8 @@ func TestUpdateApplyRunsAlone(t *testing.T) {
 func TestUpdateHandoffShownAfterRestart(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", testutil.TempDir(t))
 	h := newHarness(t, func(o *Options) {
-		res := update.NewHandoffResult(&update.Status{Updated: true, CurrentVersion: "v0.40.0", Message: "已更新到 0.40.0"}, nil, time.Now())
+		o.HandoffID = uiHandoffID
+		res := update.NewHandoffResult(uiHandoffID, &update.Status{Updated: true, CurrentVersion: "v0.40.0", Message: "已更新到 0.40.0"}, nil, time.Now())
 		if err := update.SaveHandoff(o.Root, res); err != nil {
 			t.Fatal(err)
 		}
@@ -335,7 +336,7 @@ func TestUpdateHandoffShownAfterRestart(t *testing.T) {
 	if hv == nil || hv["ok"] != true || hv["message"] != "已更新到 0.40.0" || hv["version"] != "v0.40.0" {
 		t.Fatalf("handoff %v", v["handoff"])
 	}
-	if update.TakeHandoff(h.s.root, time.Now()) != nil {
+	if update.TakeHandoff(h.s.root, uiHandoffID, time.Now()) != nil {
 		t.Error("the file was left for the next start")
 	}
 }

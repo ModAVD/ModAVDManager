@@ -27,7 +27,7 @@ type updateView struct {
 	InstallByCLI bool       `json:"install_by_cli"` // 更新 is not offered here (CanInstall false): only the CLI installs
 	CanInstall   bool       `json:"can_install"`    // POST /api/update/apply may be tried
 	// Handoff is what the CLI reported after the last 更新 handed to it (the swap and the manager's restart); null when
-	// this manager was not started by such a hand-off, or the report is older than update.HandoffFresh.
+	// no matching hand-off was delivered, or a window has already claimed the notification.
 	Handoff *update.HandoffResult `json:"handoff"`
 }
 
@@ -37,7 +37,7 @@ type updatePanel struct {
 	checked  *update.Status // the last successful check
 	at       time.Time
 	err      *errorBody
-	handoff  *update.HandoffResult // taken from .update when the manager started
+	handoff  *update.HandoffResult // matching result received at startup or from a later CLI restart
 }
 
 func (p *updatePanel) busy() bool {
@@ -79,6 +79,64 @@ func (s *server) canInstall() bool { return s.reopen != nil && root.CurrentPlatf
 
 func (s *server) handleUpdateGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.updateView())
+}
+
+// The page claims a notification before showing it. Every window shares this claim, so opening another window
+// or reconnecting an event stream cannot show the same result again.
+func (s *server) handleUpdateHandoffTake(w http.ResponseWriter, r *http.Request) {
+	id, ok := decodeHandoffID(w, r)
+	if !ok {
+		return
+	}
+	p := s.upd
+	p.mu.Lock()
+	var res *update.HandoffResult
+	if p.handoff != nil && p.handoff.ID == id {
+		if p.handoff.Fresh(time.Now()) {
+			res = p.handoff
+		}
+		p.handoff = nil
+	}
+	p.mu.Unlock()
+	s.hub.broadcast("update", s.updateView())
+	writeJSON(w, http.StatusOK, res)
+}
+
+// A CLI restart can encounter an already running manager. That launch forwards only its own ID here, before
+// opening the existing window. The ordinary launcher never asks this endpoint to read a file.
+func (s *server) handleUpdateHandoffReceive(w http.ResponseWriter, r *http.Request) {
+	id, ok := decodeHandoffID(w, r)
+	if !ok {
+		return
+	}
+	p := s.upd
+	p.mu.Lock()
+	res := update.TakeHandoff(s.root, id, time.Now())
+	if res != nil {
+		p.handoff = res
+	}
+	p.mu.Unlock()
+	if res != nil {
+		s.hub.broadcast("update", s.updateView())
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Received bool `json:"received"`
+	}{res != nil})
+}
+
+func decodeHandoffID(w http.ResponseWriter, r *http.Request) (update.HandoffID, bool) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !decode(w, r, &body) {
+		return "", false
+	}
+	id, err := update.ParseHandoffID(body.ID)
+	if err != nil {
+		writeError(w, err)
+		return "", false
+	}
+	return id, true
 }
 
 func (s *server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {

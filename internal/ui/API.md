@@ -43,7 +43,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
-| POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
+| POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
 | POST | `/api/instances/{i}/stop` | `{force?: bool, cancel_create?: bool}` | 202 `Job`；新建中默认 busy，显式 `cancel_create: true` 才取消；`force` 只管是否跳过 Android 正常关机。被取消的新建在结果里标记 `interrupted_create: true` |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
 | POST | `/api/instances/{i}/disk-info` | `{}` | 202 `Job`（`kind` 是 `disk-info`）：数据盘的占用，随时可以查（开机时 `allocated_bytes`、`reclaimable_bytes` 不返回，`needs_shutdown` 为 `true`）；结果是 emu 的 `DiskInfoResult`。整理中或锁不可用时返回可读取的文件信息及 `warnings`，不运行 qemu-img；读不到宿主占用时省略 `on_disk_bytes` |
@@ -82,6 +82,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/update` | | `UpdateView`，见下（不联网） |
 | POST | `/api/update/check` | `{}` | `UpdateView`：按设置的更新源查最新版本（不带 CDK）；检查进行中回 409 `busy` |
 | POST | `/api/update/settings` | `{source?: "github"\|"mirrorchyan", cdk?: string}` | `UpdateView`；`cdk` 为 `""` 时清除，CDK 加密保存，从不返回 |
+| POST | `/api/update/handoff/take` | `{id}` | 200 本次交接的 `HandoffResult`，全管理器只领取一次；已领走或 ID 不匹配是 `null` |
+| POST | `/api/update/handoff/receive` | `{id}` | 200 `{received}`，供重开启动把本次交接结果转交给已运行的管理器 |
 | POST | `/api/update/apply` | `{}` | 202 `Job`（`kind` 是 `update`，根任务，`index` 为 `-1`）：更新这个根目录，见下「更新」；结果是 `{handoff, version, stopped, message}` |
 
 `{i}` 是实例编号（0–9，5 除外）。
@@ -184,14 +186,14 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 
 ### 更新 `UpdateView`
 
-`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{at, ok, updated, version, message, error: {code, message, advice} | null}`；这个管理器不是那次重新打开的、或者结果超过 30 分钟，是 `null`）。
+`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{id, at, ok, updated, version, message, error: {code, message, advice} | null}`；没有收到本次交接 ID、结果已被任一窗口领取、或者结果超过 30 分钟，是 `null`）。
 
 - 只有点「检查更新」或「更新」才联网；没有自动检查。
 - 更新源和 CDK 是当前系统用户的设置，管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
 - 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
-  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。
+  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
   2. 先查会让换包失败的情况，有就一台实例都不关、任务失败：别的进程在跑这个根目录的 `ModAVD.exe` 或 `tools\modavd.exe`（比如 `modavd mcp`）；有实例正在新建；暂存的版本不比装着的新（这时算已经是最新）。然后正常关掉所有在运行的实例（同 `stop --all`，但不取消正在新建的）。
-  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。半秒后它还在跑，任务才算成功，结果 `{handoff: true, version, stopped, message}`；从这时起别的任务一律回 409，约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；新管理器启动时读走这份结果，放进 `handoff`。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
+  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。半秒后它还在跑，任务才算成功，结果 `{handoff: true, version, stopped, message}`；从这时起别的任务一律回 409，约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；命令行通过 `--update-handoff <ID>` 传递本次 ID，新管理器只读走对应的结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID，再打开已有窗口。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示；已领取的结果从服务端清掉。普通启动不读取无 ID 的旧版结果文件。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
 - 管理器装的时候不带 AUTO-MAS 的版本检查（和人用命令行装一样），页面在 `required_automas` 不为空时提示用 AUTO-MAS 的先更新 AUTO-MAS。
 - 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。有别的任务在跑时回 409 `busy`；更新任务在跑时，别的任务也回 409。
 - macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
@@ -220,7 +222,7 @@ ModAVD/ModAVD#101，只有 Windows。
 - 每台实例一个老板键：`InstanceInfo.boss_key`（`"Ctrl+Alt+Shift+1"`，`""` 是不要），存在 `mas-avd.json` 的 `instances.<i>.bossKey`；没写过时编号 0–9 是 Ctrl+Alt+Shift+编号（主键盘那排数字），超过 9 没有。至少带 Ctrl、Alt、Shift 中的一个，不收 Win；按键可以是数字、字母、F1–F24、Num0–Num9、Space、Insert、Delete、Home、End、PageUp、PageDown、方向键。
 - 由管理器统一 `RegisterHotKey`：同一个键只注册一次，只在用它的实例里有带窗口运行着的时候注册，都关了或都是无头的就注销。每 3 秒按进程和实例文件对一遍（不走 adb），改了设置马上对一遍。注册不上的键进 `taken`，之后每轮再试，别的程序放了就注册上。
 - 按下时，这个键管的实例里带窗口运行着的：有一台的窗口显示着就全部藏起来，全都藏着就全部显示（同 `modavd window <i> show|hide`，按窗口现在显不显示，不管是谁藏的）。藏着照旧渲染、照旧能截图，任务栏上没有按钮，位置大小不变。
-- 托盘图标：左键点一下把藏着的窗口都显示出来；右键菜单「打开管理器」「退出」。退出前（任何方式退出都一样）先把藏着的窗口都显示出来，再注销全部老板键、去掉图标。
+- 托盘图标：左键单击等系统双击间隔过去后恢复藏着的实例窗口。双击切换管理器窗口的隐藏和显示，保留页面状态；双击不会恢复实例窗口。同一独立 Edge 配置的所有管理器窗口一起切换，没有窗口时打开一个。右键「打开管理器」优先显示已有窗口，默认浏览器回退时双击只打开管理器。任何正常退出路径（托盘「退出」、取消运行、交给命令行更新）都先恢复藏着的管理器和实例窗口，再注销老板键、去掉图标。
 - 设置页的老板键一项：点一下输入框再按组合；改了先 `POST /api/boss-keys/check` 当场试一次，保存时 `PATCH` 再试一次；打开设置时按 `GET /api/boss-keys` 的 `taken` 在被占的键旁边标警告图标。`supported` 为 `false` 时不显示这一项。
 
 `resolution` 只接受 1080 和 720。新建默认 1080，分别联动 1920×1080 / DPI 280 与 1280×720 / DPI 240；修改保留方向，下次开机生效。`InstanceInfo.config.resolution` 是按当前配置宽高识别的档位，运行中修改后表示下次开机的设置。

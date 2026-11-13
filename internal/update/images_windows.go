@@ -68,7 +68,7 @@ func (u *Updater) lockSDKImages() (release func(), err error) {
 		} else if err != nil {
 			return nil, swapBlocked("无法检查模拟器目录 %s（%v），什么都没动", dir, err)
 		}
-		resolved, err := filepath.EvalSymlinks(dir)
+		resolved, err := resolvePath(dir)
 		if err != nil {
 			return nil, swapBlocked("无法确认模拟器目录 %s（%v），什么都没动", dir, err)
 		}

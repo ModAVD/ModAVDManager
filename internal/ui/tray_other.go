@@ -8,3 +8,5 @@ import "modavd/internal/errs"
 func realNewTray(string, trayEvents) (trayHost, error) {
 	return nil, errs.New(errs.Unsupported, "当前平台没有托盘图标和老板键")
 }
+
+func changeManagerWindows(bool) (bool, error) { return false, nil }
