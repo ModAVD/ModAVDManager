@@ -29,10 +29,10 @@ type trayHost interface {
 	Close()
 }
 
-// trayEvents are the tray's callbacks, each on a goroutine of its own.
+// trayEvents are delivered in order off the native window thread.
 type trayEvents struct {
-	hotKey            func(id int)
-	click, open, exit func()
+	hotKey                         func(id int)
+	click, doubleClick, open, exit func()
 }
 
 type newTrayFunc func(tip string, ev trayEvents) (trayHost, error)
@@ -164,7 +164,7 @@ func (b *bossKeys) close() {
 // manager then runs as before (it exits with its window) and has no boss keys.
 func (s *server) startTray(newTray newTrayFunc) {
 	tip := "ModAVD 管理器 · " + s.root.Dir
-	host, err := newTray(tip, trayEvents{hotKey: s.onHotKey, click: s.onTrayClick, open: s.onTrayOpen, exit: s.onTrayExit})
+	host, err := newTray(tip, trayEvents{hotKey: s.onHotKey, click: s.onTrayClick, doubleClick: s.onTrayDoubleClick, open: s.onTrayOpen, exit: s.onTrayExit})
 	if err != nil {
 		s.log.Warnf("放不了托盘图标，老板键也用不了；关掉窗口管理器就退出: %v", err)
 		return
@@ -226,6 +226,9 @@ func (s *server) onHotKey(id int) {
 	}
 	s.toggleMu.Lock()
 	defer s.toggleMu.Unlock()
+	if s.trayStopped {
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 	if _, err := s.mgr.ToggleBossKey(ctx, key); err != nil && s.ctx.Err() == nil {
@@ -237,6 +240,9 @@ func (s *server) onHotKey(id int) {
 func (s *server) onTrayClick() {
 	s.toggleMu.Lock()
 	defer s.toggleMu.Unlock()
+	if s.trayStopped {
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 	if _, err := s.mgr.ShowHiddenWindows(ctx); err != nil && s.ctx.Err() == nil {
@@ -244,9 +250,22 @@ func (s *server) onTrayClick() {
 	}
 }
 
-// onTrayOpen opens a manager window, like a second launch does.
-func (s *server) onTrayOpen() {
-	if s.base == "" {
+// onTrayDoubleClick toggles every manager Edge window, or opens one when none exists.
+func (s *server) onTrayDoubleClick() { s.trayManagerWindow(true) }
+
+// onTrayOpen restores existing manager windows before opening a new one.
+func (s *server) onTrayOpen() { s.trayManagerWindow(false) }
+
+func (s *server) trayManagerWindow(toggle bool) {
+	s.toggleMu.Lock()
+	defer s.toggleMu.Unlock()
+	if s.trayStopped || s.base == "" {
+		return
+	}
+	if found, err := s.managerWindows(toggle); err != nil {
+		s.log.Warnf("没能切换管理器窗口: %v", err)
+		return
+	} else if found {
 		return
 	}
 	if _, err := s.launch(s.base + "?t=" + s.token); err != nil {
@@ -269,6 +288,15 @@ func (s *server) stopTray() {
 		return
 	}
 	s.toggleMu.Lock()
+	if s.trayStopped {
+		s.toggleMu.Unlock()
+		return
+	}
+	// Already-dispatched callbacks may arrive after Close. None may hide windows again after cleanup.
+	s.trayStopped = true
+	if _, err := s.managerWindows(false); err != nil {
+		s.log.Warnf("退出前没能显示管理器窗口: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	if shown, err := s.mgr.ShowHiddenWindows(ctx); err != nil {
 		s.log.Warnf("退出前没能显示藏起来的窗口: %s", errs.As(err).Message)

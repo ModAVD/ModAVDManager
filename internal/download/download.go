@@ -354,50 +354,79 @@ func (c *Client) File(ctx context.Context, o FileOptions) error {
 	return nil
 }
 
-// Range reads bytes [offset, offset+length) of a file of total bytes with one range request. The answer must be 206
-// with exactly that Content-Range; anything else (a server that ignores Range answers 200 with the whole file) is an
-// Error of Kind NoRange, and its body is not read.
+// Range reads a small range into memory. Use RangeTo for entries that can be large.
 func (c *Client) Range(ctx context.Context, rawURL string, offset, length, total int64, what string) ([]byte, error) {
-	if offset < 0 || length <= 0 || offset+length > total {
-		return nil, &Error{Message: fmt.Sprintf("要的区间不对（%d+%d / %d）", offset, length, total)}
+	var b bytes.Buffer
+	if err := c.RangeTo(ctx, rawURL, offset, length, total, what, &b); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// RangeTo writes bytes [offset, offset+length) to dst using a fixed-size buffer. The answer must be 206 with exactly
+// that Content-Range and byte count. Rejected headers leave dst untouched. A failed transfer may leave a prefix;
+// the caller must reset dst before retrying. Writer errors are returned unchanged and must not be retried as network errors.
+func (c *Client) RangeTo(ctx context.Context, rawURL string, offset, length, total int64, what string, dst io.Writer) error {
+	if offset < 0 || length <= 0 || offset > total || length > total-offset {
+		return &Error{Message: fmt.Sprintf("要的区间不对（%d+%d / %d）", offset, length, total)}
 	}
 	end := offset + length - 1
 	resp, err := c.get(ctx, rawURL, fmt.Sprintf("bytes=%d-%d", offset, end), what)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.close()
 	want := fmt.Sprintf("bytes %d-%d/%d", offset, end, total)
 	if got := resp.Header.Get("Content-Range"); resp.StatusCode != http.StatusPartialContent || got != want {
-		return nil, &Error{Message: fmt.Sprintf("服务器没按区间回（HTTP %d，Content-Range: %q，要的是 %s）", resp.StatusCode, got, want),
+		return &Error{Message: fmt.Sprintf("服务器没按区间回（HTTP %d，Content-Range: %q，要的是 %s）", resp.StatusCode, got, want),
 			Kind: NoRange, Status: resp.StatusCode}
 	}
 	if resp.ContentLength >= 0 && resp.ContentLength != length {
-		return nil, sizeError("区间大小和预期不符（服务器给 %d 字节，应为 %d 字节）", resp.ContentLength, length)
+		return sizeError("区间大小和预期不符（服务器给 %d 字节，应为 %d 字节）", resp.ContentLength, length)
 	}
-	buf := make([]byte, length+1) // one more to notice a longer body
-	done := 0
+	buf := make([]byte, 64<<10)
+	var done int64
 	for {
-		n, rerr := resp.read(buf[done:], c.stallTimeout())
-		done += n
-		if done > int(length) {
-			return nil, sizeError("区间大小和预期不符（收到的比 %d 字节多）", length)
+		if ctx.Err() != nil {
+			return canceled(ctx)
+		}
+		// One extra byte detects a chunked response that runs past the requested range, without writing it.
+		next := int64(len(buf))
+		if length-done < next {
+			next = length - done + 1
+		}
+		n, rerr := resp.read(buf[:next], c.stallTimeout())
+		if int64(n) > length-done {
+			return sizeError("区间大小和预期不符（收到的比 %d 字节多）", length)
+		}
+		if n > 0 {
+			written, werr := dst.Write(buf[:n])
+			if werr != nil {
+				return werr
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
+			done += int64(n)
 		}
 		if rerr == io.EOF {
 			break
 		}
 		if rerr != nil {
 			if ctx.Err() != nil {
-				return nil, canceled(ctx)
+				return canceled(ctx)
 			}
 			if resp.fired.Load() {
-				return nil, timeoutError("超时：%s（收数据，已收 %d 字节），%s 秒内没有进展", what, done, seconds(c.stallTimeout()))
+				return timeoutError("超时：%s（收数据，已收 %d 字节），%s 秒内没有进展", what, done, seconds(c.stallTimeout()))
 			}
-			return nil, &Error{Message: "收数据出错：" + NetError(rerr, "")}
+			return &Error{Message: "收数据出错：" + NetError(rerr, "")}
 		}
 	}
-	if done != int(length) {
-		return nil, &Error{Message: fmt.Sprintf("区间没收全：应为 %d 字节，实际 %d 字节", length, done)}
+	if ctx.Err() != nil {
+		return canceled(ctx)
 	}
-	return buf[:length], nil
+	if done != length {
+		return &Error{Message: fmt.Sprintf("区间没收全：应为 %d 字节，实际 %d 字节", length, done)}
+	}
+	return nil
 }

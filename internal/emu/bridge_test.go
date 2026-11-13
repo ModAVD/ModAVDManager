@@ -170,9 +170,10 @@ func TestBridgeLockExcludes(t *testing.T) {
 	}
 }
 
-// TestBridgeKeepsWindowMode: every cold boot of modavd bridge (the install's on an instance without the bridge, the one
-// after an update, both of an uninstall) brings a running instance back the way it ran, with its window or headless;
-// an instance that was off is started headless.
+// TestBridgeKeepsWindowMode: modavd bridge brings a running instance back the way it ran, with its window or headless
+// (the install's start on an instance without the bridge, the cold boot after an update, the uninstall's last one);
+// the boots that only prepare are headless (the uninstall's first cold boot when a second follows; the install's start
+// is marked bridgePrep, Start then launches headless); an instance that was off is started headless.
 func TestBridgeKeepsWindowMode(t *testing.T) {
 	m, i := opsTestInstance(t)
 	windowed, _ := startSleeper(t) // a readable command line without -no-window
@@ -235,9 +236,19 @@ func TestBridgeKeepsWindowMode(t *testing.T) {
 				t.Errorf("%s, %s: %d starts, want %d", c.name, run.mode, len(starts), want)
 			}
 			for k, opt := range starts {
-				if opt.Window != run.window || opt.Headless {
+				want := run.window
+				if c.action == "uninstall" && run.qemu != nil && k == 0 {
+					// the cold boot between the uninstall's two script runs only prepares: headless
+					want = false
+				}
+				if opt.Window != want || opt.Headless {
 					t.Errorf("%s, %s: start %d has Window %v Headless %v, want Window %v", c.name, run.mode, k+1,
-						opt.Window, opt.Headless, run.window)
+						opt.Window, opt.Headless, want)
+				}
+				// the install's start on an instance without the bridge prepares it (Start boots it headless and
+				// gives the window back on its last boot)
+				if prep := c.action == "install" && !c.installed && run.qemu != nil; opt.bridgePrep != prep {
+					t.Errorf("%s, %s: start %d has bridgePrep %v, want %v", c.name, run.mode, k+1, opt.bridgePrep, prep)
 				}
 			}
 		}

@@ -480,17 +480,48 @@ func TestPropertiesMatchPython(t *testing.T) {
 	compareWithPython(t, setup, []refOp{{"op": "list"}})
 }
 
-// TestMatchesProductionInstance: an instance created here with the options of D:\ModAVD's mas_1 (made by AUTO-MAS
-// on 10-16; read only) is the same bytes. The template has changed once since: hw.mainKeys no -> yes (ModAVD #1).
-// New instances default to 1080p since ModAVD #100; mas_1 is 720p, so its resolution is passed like the others.
+// prodMas1Config is config.ini of a production mas_1 as AUTO-MAS created it on 10-16 (CRLF, no BOM). It is a
+// snapshot: tests never read a real root.
+var prodMas1Config = strings.Join([]string{
+	"PlayStore.enabled=no", "abi.type=x86_64", "avd.ini.encoding=UTF-8", "disk.cachePartition=yes",
+	"disk.cachePartition.size=66MB", "fastboot.forceColdBoot=yes", "fastboot.forceFastBoot=no",
+	"hw.accelerometer=yes", "hw.arc=false", "hw.audioInput=no", "hw.audioOutput=no", "hw.battery=yes",
+	"hw.camera.back=none", "hw.camera.front=none", "hw.cpu.arch=x86_64", "hw.dPad=no", "hw.gps=no",
+	"hw.gpu.enabled=yes", "hw.gpu.mode=host", "hw.gsmModem=yes", "hw.gyroscope=yes",
+	"hw.initialOrientation=landscape", "hw.keyboard=yes", "hw.keyboard.lid=yes", "hw.lcd.depth=32",
+	"hw.lcd.vsync=30", "hw.mainKeys=no", "hw.sdCard=no", "hw.sensors.orientation=yes", "hw.sensors.proximity=no",
+	"hw.trackBall=no", "hw.useext4=yes", "showDeviceFrame=no", "tag.display=Google APIs", "tag.id=google_apis",
+	"target=android-34", "vm.heapSize=192M", "avd.id=mas_1", "avd.name=mas_1", "avd.ini.displayname=二号",
+	"disk.dataPartition.size=256G", "hw.cpu.ncore=4", "hw.ramSize=4096M", "hw.lcd.width=1280",
+	"hw.lcd.height=720", "hw.lcd.density=240", `image.sysdir.1=system-images\android-34\google_apis\x86_64\`, "",
+}, "\r\n")
+
+// prodMas1Ini is the matching avd\mas_1.ini; path= is filled in with the snapshot root's instance directory.
+const prodMas1Ini = "avd.ini.encoding=UTF-8\r\npath=%s\r\npath.rel=avd\\mas_1.avd\r\ntarget=android-34\r\n"
+
+// TestMatchesProductionInstance: an instance created here with the options of a production mas_1 (made by AUTO-MAS
+// on 10-16, kept above as a snapshot in a temp root) is the same bytes. The template has changed once since:
+// hw.mainKeys no -> yes (ModAVD #1). New instances default to 1080p since ModAVD #100; mas_1 is 720p, so its
+// resolution is passed like the others.
 func TestMatchesProductionInstance(t *testing.T) {
-	const prod = `D:\ModAVD`
-	prodIni, err1 := os.ReadFile(prod + `\avd\mas_1.ini`)
-	prodCfg, err2 := os.ReadFile(prod + `\avd\mas_1.avd\config.ini`)
-	if err1 != nil || err2 != nil {
-		t.Skip("no production instance mas_1")
+	pr := newRoot(t)
+	prodCfg := []byte(prodMas1Config)
+	prodIni := []byte(fmt.Sprintf(prodMas1Ini, Dir(pr, 1)))
+	for path, data := range map[string][]byte{
+		ConfigPath(pr, 1): prodCfg,
+		IniPath(pr, 1):    prodIni,
+		// Production's instances.1 as created (later keys trimmed).
+		filepath.Join(pr.Dir, root.MetadataFile): []byte(`{"instances": {"1": {"memoryMb": 4096, "initialized": true, ` +
+			`"createdAt": "2026-10-16T07:41:39", "initializedAt": "2026-10-16T07:42:57"}}}`),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	pr, err := root.New(prod)
+	pr, err := root.New(pr.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +549,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	if got := readFile(t, ConfigPath(r, 1)); !bytes.Equal(got, wantCfg) {
 		t.Errorf("config.ini differs\n got %q\nwant %q", got, wantCfg)
 	}
-	wantIni := bytes.Replace(prodIni, []byte(`path=D:\ModAVD\avd\mas_1.avd`), []byte(`path=`+Dir(r, 1)), 1)
+	wantIni := []byte(fmt.Sprintf(prodMas1Ini, Dir(r, 1)))
 	if got := readFile(t, IniPath(r, 1)); !bytes.Equal(got, wantIni) {
 		t.Errorf("mas_1.ini differs\n got %q\nwant %q", got, wantIni)
 	}

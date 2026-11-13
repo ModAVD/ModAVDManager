@@ -122,9 +122,9 @@ func TestStopTargetsIncludesOnlyActiveCreationsAndQemu(t *testing.T) {
 		}
 		return map[int]win.Process{2: {PID: 4242}, 3: {PID: 4243}, 9: {PID: 4249}}
 	}
-	statusBooted = func(*Manager, context.Context, int) bool {
+	statusBooted = func(*Manager, context.Context, int) (bool, bool) {
 		t.Fatal("stop target discovery called adb")
-		return false
+		return false, false
 	}
 	targets, err := m.StopTargets(context.Background())
 	if err != nil || !slices.Equal(targets, []int{1, 2, 3}) || scans != 1 {

@@ -105,8 +105,9 @@ var (
 	optNoBridge      = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
 	optAutoMAS       = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
 	optAfterPID      = flagSpec{"after-pid", kindInt, "PID", "管理器用：先等这个进程退出（最多 60 秒）再装，只和 install 一起用"}
-	optReopen        = flagSpec{"reopen", kindString, "程序", "管理器用：装完（成不成都）把结果写进 .update\\manager-result.json，再启动这个程序（完整路径），只和 install 一起用"}
+	optReopen        = flagSpec{"reopen", kindString, "程序", "管理器用：装完（成不成都）保存本次交接结果，再启动这个程序（完整路径），只和 install 一起用"}
 	optReopenArg     = flagSpec{"reopen-arg", kindStrings, "参数", "管理器用：启动 --reopen 的程序时带的参数，按顺序，可以给多次"}
+	optHandoffID     = flagSpec{"handoff-id", kindString, "ID", "管理器用：本次交接的关联 ID，只和 --reopen 一起用；不给就生成"}
 	optUpdateSource  = flagSpec{"source", kindString, "github|mirrorchyan", "这次用的更新源，盖过「设置」里的，不保存；recover 不用"}
 	optCDKDPAPI      = flagSpec{"cdk-dpapi", kindString, "BASE64",
 		"这次用的 Mirror 酱 CDK，不保存：调用方用 Windows DPAPI（CryptProtectData，不带 entropy）加密 UTF-8 的 CDK 后的 base64；" +
@@ -187,7 +188,7 @@ func init() {
 			name: "status", args: "<i>", summary: "一台实例的状态",
 			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
 				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它，它自己在关（关了窗口、安卓里关机）也报 stopping；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},
@@ -383,7 +384,7 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
-			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--package ZIP --sha256 HEX] [--after-pid PID --reopen 程序 [--reopen-arg 参数]...]",
+			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--package ZIP --sha256 HEX] [--after-pid PID --reopen 程序 [--reopen-arg 参数]... [--handoff-id ID]]",
 			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
 			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）；" +
 				"调用方有自己的设置时用 --source 和 --cdk-dpapi 传这一次的，只盖过「设置」、不保存，status 里的 source、cdk_set 是这次生效的。" +
@@ -393,7 +394,7 @@ func init() {
 				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器（包括托盘里的）和 MCP 客户端；" +
 				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
 				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
-				"--after-pid、--reopen、--reopen-arg 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
+				"--after-pid、--reopen、--reopen-arg、--handoff-id 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
 				"命令等它退出再换上新版，然后重新打开管理器。" +
 				"macOS 可用 --package ZIP --sha256 HEX 准备或安装本地完整签名包；摘要需从可信来源独立取得。" +
 				"--json 时每个进度在 stderr 的日志行里多一个 progress 对象（checking、extracting、verifying、installing 开始时各一行，percent 为 -1；" +
@@ -404,7 +405,7 @@ func init() {
 			flags: []flagSpec{optUpdateSource, optCDKDPAPI, optAutoMAS,
 				{name: "package", kind: kindString, arg: "ZIP", help: "macOS 本地完整更新包"},
 				{name: "sha256", kind: kindString, arg: "HEX", help: "本地更新包的独立可信 SHA-256"},
-				optAfterPID, optReopen, optReopenArg}, final: true,
+				optAfterPID, optReopen, optReopenArg, optHandoffID}, final: true,
 			run: runUpdate, human: humanOf(formatUpdateStatus),
 		},
 		{
@@ -1498,10 +1499,11 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return nil, errs.New(errs.Usage, "--package 和 --sha256 只用于 update prepare 或 install")
 	}
 	afterPID, reopen, reopenArgs := c.inv.intOpt("after-pid"), c.inv.strOpt("reopen"), c.inv.strsOpt("reopen-arg")
-	handoff := afterPID != 0 || reopen != "" || len(reopenArgs) > 0
+	idArg := c.inv.strOpt("handoff-id")
+	handoff := afterPID != 0 || reopen != "" || len(reopenArgs) > 0 || idArg != ""
 	switch {
 	case handoff && action != "install":
-		return nil, errs.New(errs.Usage, "--after-pid、--reopen、--reopen-arg 只能和 install 一起用").
+		return nil, errs.New(errs.Usage, "--after-pid、--reopen、--reopen-arg、--handoff-id 只能和 install 一起用").
 			WithAdvice(findCommand("update").usageAdvice())
 	case afterPID < 0:
 		return nil, errs.Newf(errs.Usage, "--after-pid 要给进程号，收到 %d", afterPID)
@@ -1509,6 +1511,20 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return nil, errs.New(errs.Usage, "--reopen-arg 要和 --reopen 一起用")
 	case reopen != "" && !filepath.IsAbs(reopen):
 		return nil, errs.Newf(errs.Usage, "--reopen 要给程序的完整路径，收到「%s」", reopen)
+	case idArg != "" && reopen == "":
+		return nil, errs.New(errs.Usage, "--handoff-id 要和 --reopen 一起用")
+	}
+	var id update.HandoffID
+	if reopen != "" {
+		var err error
+		if idArg != "" {
+			id, err = update.ParseHandoffID(idArg)
+		} else {
+			id, err = update.NewHandoffID()
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	opt := update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
 		PackagePath: c.inv.strOpt("package"), PackageSHA256: c.inv.strOpt("sha256")}
@@ -1541,7 +1557,7 @@ func runUpdate(c *cmdCtx) (any, error) {
 		return u.Prepare(c.ctx)
 	case "install":
 		if handoff {
-			return installHandoff(c, r, u, afterPID, reopen, reopenArgs)
+			return installHandoff(c, r, u, afterPID, reopen, reopenArgs, id)
 		}
 		return c.deps.updateInstall(c.ctx, u)
 	case "recover":
@@ -1577,7 +1593,7 @@ func updateCallerSettings(inv *invocation, action string, opt *update.Options) e
 // installHandoff is `update install` for the manager's 更新 (update/handoff.go): wait for the manager (afterPID) to exit,
 // install, then, with reopen, leave the result for the manager and start it again whatever happened, so the user is
 // never left without a manager.
-func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, reopen string, args []string) (*update.Status, error) {
+func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, reopen string, args []string, id update.HandoffID) (*update.Status, error) {
 	var st *update.Status
 	var err error
 	if afterPID > 0 {
@@ -1592,10 +1608,12 @@ func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, re
 		st, err = c.deps.updateInstall(c.ctx, u)
 	}
 	if reopen != "" {
-		if serr := update.SaveHandoff(r, update.NewHandoffResult(st, err, time.Now())); serr != nil {
+		if serr := update.SaveHandoff(r, update.NewHandoffResult(id, st, err, time.Now())); serr != nil {
 			c.log.Warnf("写不了给管理器的更新结果: %v", serr)
 		}
+		args = append(args, update.HandoffArg, string(id))
 		if rerr := c.deps.reopen(reopen, args); rerr != nil {
+			update.TakeHandoff(r, id, time.Now())
 			c.log.Warnf("重新打开管理器（%s）失败: %v", reopen, rerr)
 		} else {
 			c.log.Infof("已重新打开管理器")

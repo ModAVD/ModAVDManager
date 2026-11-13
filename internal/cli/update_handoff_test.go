@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"modavd/internal/root"
 	"modavd/internal/update"
 )
+
+const cliHandoffID update.HandoffID = "0123456789abcdef0123456789abcdef"
 
 // handoffHarness: a root in a temp dir, and recording fakes for the three hand-off steps.
 func handoffHarness(t *testing.T) (*harness, *root.Root, *[]string) {
@@ -36,13 +39,77 @@ func handoffHarness(t *testing.T) (*harness, *root.Root, *[]string) {
 	return h, r, &calls
 }
 
+func TestUpdateHandoffRejectsInvalidIDBeforeInstall(t *testing.T) {
+	for _, args := range [][]string{
+		{"update", "install", "--handoff-id", string(cliHandoffID)},
+		{"update", "check", "--handoff-id", string(cliHandoffID)},
+		{"update", "install", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", "../bad"},
+	} {
+		h, _, calls := handoffHarness(t)
+		if res := h.run(t, nil, args...); res.code != 2 || len(*calls) != 0 {
+			t.Fatalf("args %v: code %d, calls %v", args, res.code, *calls)
+		}
+	}
+}
+
+func TestUpdateHandoffReopenFailureDiscardsOnlyOwnResult(t *testing.T) {
+	h, r, _ := handoffHarness(t)
+	other, err := update.NewHandoffID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := update.SaveHandoff(r, update.NewHandoffResult(other, nil, nil, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	h.reopen = func(string, []string) error { return errors.New("cannot start") }
+	res := h.run(t, nil, "update", "install", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID))
+	if res.code != 0 || !strings.Contains(res.stderr, "cannot start") {
+		t.Fatalf("install result changed: %+v", res)
+	}
+	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
+		t.Fatal("failed restart left a result")
+	}
+	if update.TakeHandoff(r, other, time.Now()) == nil {
+		t.Fatal("failed restart discarded another result")
+	}
+}
+
+func TestUpdateHandoffGeneratesDistinctIDsForRetries(t *testing.T) {
+	h, r, _ := handoffHarness(t)
+	var ids []update.HandoffID
+	h.reopen = func(_ string, args []string) error {
+		if len(args) != 3 || args[0] != "--no-window" || args[1] != update.HandoffArg {
+			t.Fatalf("restart args: %q", args)
+		}
+		id, err := update.ParseHandoffID(args[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+		return nil
+	}
+	for range 2 {
+		if res := h.run(t, nil, "update", "install", "--reopen", `C:\ModAVD\ModAVD.exe`, "--reopen-arg", "--no-window"); res.code != 0 {
+			t.Fatalf("exit %d", res.code)
+		}
+	}
+	if ids[0] == ids[1] {
+		t.Fatal("retry reused the previous handoff ID")
+	}
+	for _, id := range ids {
+		if result := update.TakeHandoff(r, id, time.Now()); result == nil || result.ID != id {
+			t.Fatalf("missing matching result for %s: %+v", id, result)
+		}
+	}
+}
+
 func TestUpdateHandoffOptionsOnlyWithInstall(t *testing.T) {
 	for _, args := range [][]string{
 		{"update", "check", "--after-pid", "5"},
-		{"update", "--reopen", `C:\x\ModAVD.exe`},
+		{"update", "--handoff-id", string(cliHandoffID), "--reopen", `C:\x\ModAVD.exe`},
 		{"update", "prepare", "--reopen-arg", "--no-window"},
 		{"update", "install", "--reopen-arg", "--no-window"},
-		{"update", "install", "--reopen", `ModAVD.exe`},
+		{"update", "install", "--handoff-id", string(cliHandoffID), "--reopen", `ModAVD.exe`},
 		{"update", "install", "--after-pid", "-1"},
 	} {
 		h, _, calls := handoffHarness(t)
@@ -56,23 +123,23 @@ func TestUpdateHandoffOptionsOnlyWithInstall(t *testing.T) {
 func TestUpdateHandoffWaitsInstallsThenReopens(t *testing.T) {
 	h, r, calls := handoffHarness(t)
 	exe := `C:\ModAVD\ModAVD.exe`
-	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", exe,
+	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--handoff-id", string(cliHandoffID), "--reopen", exe,
 		"--reopen-arg", "--root", "--reopen-arg", `C:\ModAVD`, "--reopen-arg", "--no-window", "--json")
 	if res.code != 0 {
 		t.Fatalf("exit %d: %s %s", res.code, res.stdout, res.stderr)
 	}
-	want := []string{"wait 4242 " + update.AfterPIDWait.String(), "install", "reopen " + exe + ` --root C:\ModAVD --no-window`}
+	want := []string{"wait 4242 " + update.AfterPIDWait.String(), "install", "reopen " + exe + ` --root C:\ModAVD --no-window --update-handoff ` + string(cliHandoffID)}
 	if !slices.Equal(*calls, want) {
 		t.Fatalf("calls %v, want %v", *calls, want)
 	}
 	if d := envelope(t, res.stdout)["data"].(map[string]any); d["updated"] != true || d["current_version"] != "v0.40.0" {
 		t.Errorf("data %v", d)
 	}
-	got := update.TakeHandoff(r, time.Now())
+	got := update.TakeHandoff(r, cliHandoffID, time.Now())
 	if got == nil || !got.OK || !got.Updated || got.Version != "v0.40.0" || got.Message != "已更新到 0.40.0" || got.Error != nil {
 		t.Fatalf("handoff %+v", got)
 	}
-	if update.TakeHandoff(r, time.Now()) != nil {
+	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
 		t.Error("the result was not removed when taken")
 	}
 }
@@ -85,14 +152,14 @@ func TestUpdateHandoffManagerStillRunning(t *testing.T) {
 		*calls = append(*calls, "wait")
 		return false
 	}
-	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--json")
+	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--handoff-id", string(cliHandoffID), "--reopen", `C:\ModAVD\ModAVD.exe`, "--json")
 	if res.code != errs.ExitCode(errs.New(errs.Busy, "")) {
 		t.Fatalf("exit %d: %s", res.code, res.stdout)
 	}
-	if !slices.Equal(*calls, []string{"wait", `reopen C:\ModAVD\ModAVD.exe `}) {
+	if !slices.Equal(*calls, []string{"wait", `reopen C:\ModAVD\ModAVD.exe --update-handoff ` + string(cliHandoffID)}) {
 		t.Fatalf("calls %v", *calls)
 	}
-	got := update.TakeHandoff(r, time.Now())
+	got := update.TakeHandoff(r, cliHandoffID, time.Now())
 	if got == nil || got.OK || got.Error == nil || got.Error.Code != errs.Busy || !strings.Contains(got.Message, "4242") {
 		t.Fatalf("handoff %+v", got)
 	}
@@ -105,14 +172,14 @@ func TestUpdateHandoffInstallFailsStillReopens(t *testing.T) {
 		return &update.Status{CurrentVersion: "v0.39.0", Notices: []string{}},
 			errs.New(errs.Busy, "0.40.0 已下载并核对好，但现在不能换上").WithAdvice("关掉实例再装")
 	}
-	res := h.run(t, nil, "update", "install", "--after-pid", "7", "--reopen", `C:\ModAVD\ModAVD.exe`, "--json")
+	res := h.run(t, nil, "update", "install", "--after-pid", "7", "--handoff-id", string(cliHandoffID), "--reopen", `C:\ModAVD\ModAVD.exe`, "--json")
 	if res.code != 5 {
 		t.Fatalf("exit %d", res.code)
 	}
-	if len(*calls) != 3 || (*calls)[2] != `reopen C:\ModAVD\ModAVD.exe ` {
+	if len(*calls) != 3 || (*calls)[2] != `reopen C:\ModAVD\ModAVD.exe --update-handoff `+string(cliHandoffID) {
 		t.Fatalf("calls %v", *calls)
 	}
-	got := update.TakeHandoff(r, time.Now())
+	got := update.TakeHandoff(r, cliHandoffID, time.Now())
 	if got == nil || got.OK || got.Updated || got.Version != "v0.39.0" || got.Error.Advice != "关掉实例再装" ||
 		got.Message != "0.40.0 已下载并核对好，但现在不能换上" {
 		t.Fatalf("handoff %+v", got)
@@ -135,7 +202,7 @@ func TestUpdateInstallWithoutReopen(t *testing.T) {
 	if !slices.Equal(*calls, []string{"install"}) {
 		t.Fatalf("calls %v", *calls)
 	}
-	if update.TakeHandoff(r, time.Now()) != nil {
+	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
 		t.Error("a result was left without --reopen")
 	}
 }

@@ -516,7 +516,9 @@ func (u *Updater) stage(ctx context.Context, r *release, st *Status) (err error)
 		case errors.As(err, &ru):
 			note := rangeNotice(err)
 			u.Log.Infof("%s", note)
-			st.Notices = append(st.Notices, note)
+			if !ru.normal {
+				st.Notices = append(st.Notices, note)
+			}
 		default:
 			return err
 		}

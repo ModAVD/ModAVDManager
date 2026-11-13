@@ -148,7 +148,7 @@ func (m *Manager) bridgePending(ctx context.Context, i int) bool {
 	if !regularFile(bridgeMarker(m.Root, i)) {
 		return false
 	}
-	b := m.guestBridge(ctx, i)
+	b := bridgeGuest(m, ctx, i)
 	return b != "" && b != bridgeProp
 }
 
@@ -331,8 +331,10 @@ func (m *Manager) runBridgeScript(ctx context.Context, i int, action string, reb
 }
 
 // finishBridge is the last step of a start that launched the instance, when the marker is there and the bridge is not:
-// the script's install, and a cold boot (same window and timeout, without this step) whenever the bridge has not taken
-// effect yet. A script that fails is only a warning: the instance keeps running, arm64 apps on the stock translator,
+// the script's install, and a cold boot (same timeout, without this step) whenever the bridge has not taken effect
+// yet. The cold boots that only prepare (the system not writable yet) are headless; the one after the install, which
+// should load the bridge, has the window when the start asked for one (and Start's afterStartBridge boots once more
+// with it when the instance is left headless). A script that fails is only a warning: the instance keeps running, arm64 apps on the stock translator,
 // and the next start tries again. A cold boot that fails is the start's error (the instance is off or half up then).
 // Returns the result of the last start. Start calls it only when bridgeWanted, which already leaves arm64 guests out.
 func (m *Manager) finishBridge(ctx context.Context, i int, opt StartOptions, res *StartResult) (*StartResult, error) {
@@ -366,7 +368,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 			opt.Progress(Progress{Step: "bridge", Message: fmt.Sprintf("实例 %d 装 arm64 执行桥（第 %d 轮）", i, round),
 				Done: 0, Total: progressTotal})
 		}
-		run, err := mm.runBridgeScript(ctx, i, "install", false)
+		run, err := bridgeScript(mm, ctx, i, "install", false)
 		if err != nil && errs.As(err).Code == errs.Canceled {
 			res.Warnings = append(res.Warnings, col.Messages()...)
 			return nil, err
@@ -380,7 +382,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 			mm.Log.Warnf("实例 %d 没装上执行桥（退出码 %d：%s），下次开机再试；日志 %s", i, run.Code, run.Last, run.LogFile)
 			break
 		}
-		if mm.guestBridge(ctx, i) == bridgeProp {
+		if bridgeGuest(mm, ctx, i) == bridgeProp {
 			break
 		}
 		// a second "not writable" in a row: another cold boot will not change that (an emulator without the marker
@@ -393,7 +395,13 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 		} else {
 			notWritable = 0
 		}
-		r2, err := m.bridgeRestart(ctx, i, opt)
+		// The script installed (0): this cold boot loads the bridge and should be the last one, so it comes back the
+		// way the start was asked for. Not writable yet (3): another round follows, and this boot only prepares,
+		// headless. Should the bridge still be missing after a last boot with the window, the next round's boot is
+		// headless again, and Start gives the window back at the end (afterStartBridge).
+		bopt := opt
+		bopt.Window = opt.Window && run.Code == 0
+		r2, err := m.bridgeRestart(ctx, i, bopt)
 		if err != nil {
 			res.Warnings = append(res.Warnings, col.Messages()...)
 			return nil, errs.Wrap(errs.As(err).Code, err, fmt.Sprintf("实例 %d 装执行桥时关机再开机失败: %v", i, err))
@@ -401,7 +409,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 		r2.Warnings = append(res.Warnings, r2.Warnings...)
 		res = r2
 	}
-	if mm.guestBridge(ctx, i) == bridgeProp {
+	if bridgeGuest(mm, ctx, i) == bridgeProp {
 		mm.Log.Infof("实例 %d 已装好执行桥", i)
 	} else {
 		mm.Log.Warnf("实例 %d 没装上执行桥，下次开机再试；日志见 logs 里的 modavd-bridge-%d-*.log", i, i)
@@ -414,7 +422,7 @@ func (m *Manager) installBridge(ctx context.Context, i int, opt StartOptions, re
 // step had nothing to do). When the guest's files are not the package's payload (bridgeOutdated: the package was
 // updated since), the script's install replaces the files that differ (each is pushed under a temporary name, checked
 // against the payload's hash and renamed into place), and one cold boot (same window and timeout, without the bridge
-// step) loads them. Decided under the bridge lock: another modavd holding it is installing or updating already.
+// step: it is the start's last boot) loads them. Decided under the bridge lock: another modavd holding it is installing or updating already.
 //
 // The files the guest has keep working, so the update waits for a later start while an install holds the guest lock
 // or an app is in the foreground once the setup is done (someone began to use the instance meanwhile; the update
@@ -564,7 +572,9 @@ func init() { bridgeStart = (*Manager).Start }
 
 // Bridge installs, uninstalls or verifies the execution bridge on instance i. Restarts are cold boots: a running
 // instance comes back the way it ran, with its window or headless (a start never switches, StartOptions.Window;
-// headless when that cannot be told), and one that was off boots headless.
+// headless when that cannot be told), and one that was off boots headless. The boots in between that only prepare
+// (the install's start and its cold boots up to the one that loads the bridge, the uninstall's first cold boot when a
+// second follows) are headless; only the last one has the window.
 //   - install: places the marker; a running instance without the bridge is restarted, an off one started, and the
 //     start installs (finishBridge). An instance that already has the bridge gets the script's install anyway, which
 //     only updates a payload that differs from this package's; then it is restarted so the new one is loaded.
@@ -641,8 +651,9 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			res.Restarted = true
 		}
 		if !wasRunning || res.Restarted {
-			// this start installs (installBridge, under the lock held above; its cold boots keep the window)
-			sr, err := bridgeStart(m, ctx, i, StartOptions{Window: windowed, bridgeLocked: true})
+			// this start installs (installBridge, under the lock held above): it boots headless while it prepares, and
+			// its last boot comes back the way the instance ran (bridgePrep: it was running without the bridge)
+			sr, err := bridgeStart(m, ctx, i, StartOptions{Window: windowed, bridgeLocked: true, bridgePrep: res.Restarted})
 			if err != nil {
 				return nil, err
 			}
@@ -704,9 +715,13 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 		if err != nil {
 			return res, err
 		}
+		// headless: a boot that only prepares, with another cold boot after it (an installed bridge is taken off by one);
+		// should that one not come, the instance gets its window back below
+		headless := false
 		if run.Code == 3 {
 			// the first remount of this instance only turned verity off: boot cold and run it again
-			sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: windowed})
+			headless = windowed && installed
+			sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: windowed && !headless})
 			if err != nil {
 				return res, err
 			}
@@ -726,6 +741,13 @@ func (m *Manager) Bridge(ctx context.Context, i int, action string) (*BridgeResu
 			}
 			res.Warnings = append(res.Warnings, sr.Warnings...)
 			res.Restarted = true
+		} else if headless {
+			// the second cold boot did not come (the script did not take it off): back the way it ran
+			sr, err := m.bridgeRestart(ctx, i, StartOptions{Window: true})
+			if err != nil {
+				return res, err
+			}
+			res.Warnings = append(res.Warnings, sr.Warnings...)
 		}
 		res.Installed = bridgeGuest(m, ctx, i) == bridgeProp
 		// An instance whose bridge was never installed (created by modavd, never booted by it) keeps the marker when
