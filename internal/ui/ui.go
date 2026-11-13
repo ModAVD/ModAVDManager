@@ -59,6 +59,8 @@ type Options struct {
 	// Reopen is how the CLI starts this manager again after 设置 → 更新 swapped the new version in (update_apply.go);
 	// nil: the manager cannot update itself (更新 is refused, checking still works).
 	Reopen *Reopen
+	// HandoffID is set only by the CLI's restart after one update.
+	HandoffID update.HandoffID
 	// Tray puts the manager's icon in the notification area and registers the instances' boss keys (bosskey.go;
 	// Windows only, ignored elsewhere). The manager then stays after its window closed, in the tray, until 退出 in the
 	// icon's menu (or the process is told to end).
@@ -238,7 +240,7 @@ func newServer(opt Options) (*server, error) {
 	if opt.proxyEvery > 0 {
 		s.proxyEvery = opt.proxyEvery
 	}
-	s.upd = &updatePanel{handoff: update.TakeHandoff(opt.Root, time.Now())}
+	s.upd = &updatePanel{handoff: update.TakeHandoff(opt.Root, opt.HandoffID, time.Now())}
 	if h := s.upd.handoff; h != nil {
 		lg.Infof("上次在设置里点的更新：%s", h.Message)
 	}
@@ -251,7 +253,7 @@ func newServer(opt Options) (*server, error) {
 	if s.prepareUpdate == nil {
 		r := opt.Root
 		s.prepareUpdate = func(ctx context.Context, l *logx.Logger, progress func(update.Progress)) (*update.Status, error) {
-			return update.New(r, l, update.Options{Progress: progress}).Prepare(ctx)
+			return update.New(r, l, update.Options{Progress: progress}).PrepareHandoff(ctx)
 		}
 	}
 	if s.cliVersion == nil {

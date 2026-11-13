@@ -29,13 +29,19 @@ export function onUpdate(v) {
   update();
 }
 
-// What the CLI did after the last 更新 (this manager is the one it started again): told once per page.
-let handoffShown = '';
-function showHandoff(x) {
-  if (!x || handoffShown === x.at) return;
-  handoffShown = x.at;
-  if (x.ok) toast({ title: x.updated ? `已更新到 ${ver(x.version)}` : (x.message || '已经是最新版本'), timeout: 9000 });
-  else toast({ tone: 'err', title: '新版没有换上', text: (x.error && x.error.message) || x.message, advice: x.error && x.error.advice, timeout: 15000 });
+// The server grants the notification to one page across all manager windows.
+const handoffClaims = new Set();
+async function showHandoff(x) {
+  if (!x || !x.id || handoffClaims.has(x.id)) return;
+  handoffClaims.add(x.id);
+  try {
+    const claimed = await api.post('/api/update/handoff/take', { id: x.id });
+    if (!claimed) return;
+    if (claimed.ok) toast({ title: claimed.updated ? `已更新到 ${ver(claimed.version)}` : (claimed.message || '已经是最新版本'), timeout: 9000 });
+    else toast({ tone: 'err', title: '新版没有换上', text: (claimed.error && claimed.error.message) || claimed.message, advice: claimed.error && claimed.error.advice, timeout: 15000 });
+  } catch {
+    handoffClaims.delete(x.id);
+  }
 }
 
 // 更新 may be clicked: this manager can come back after the swap, the root can be updated, a check found a newer
