@@ -709,7 +709,7 @@ func l2abs(p string) string {
 }
 
 func realOrSame(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	if r, err := resolvePath(p); err == nil {
 		return r
 	}
 	return l2abs(p)
