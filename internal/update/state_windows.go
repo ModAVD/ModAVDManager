@@ -77,25 +77,38 @@ func loadedImageInUse(path string) bool {
 	return false
 }
 
+// resolvePath returns an extended DOS path suitable for both comparisons and I/O.
+// Handle queries resolve junctions and short names without EvalSymlinks.
+func resolvePath(path string) (string, error) {
+	return finalPath(path, 0)
+}
+
 func finalImagePath(path string) string {
+	const volumeNameNT = 2
+	name, _ := finalPath(path, volumeNameNT)
+	return name
+}
+
+func finalPath(path string, flags uint32) (string, error) {
 	ptr, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	h, err := syscall.CreateFile(ptr, 0, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil, syscall.OPEN_EXISTING, 0, 0)
+		nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var name [32768]uint16
-	const volumeNameNT = 2
-	n, _, _ := getFinalPathNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)), volumeNameNT)
+	n, _, err := getFinalPathNameW.Call(uintptr(h), uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)), uintptr(flags))
 	syscall.CloseHandle(h)
-	if n == 0 || n >= uintptr(len(name)) {
-		return ""
+	if n == 0 {
+		return "", err
 	}
-	// Resolve directory links and 8.3 names into the same NT device path.
-	return syscall.UTF16ToString(name[:n])
+	if n >= uintptr(len(name)) {
+		return "", syscall.ERROR_INSUFFICIENT_BUFFER
+	}
+	return syscall.UTF16ToString(name[:n]), nil
 }
 
 func processHasImage(pid uint32, target string) bool {
