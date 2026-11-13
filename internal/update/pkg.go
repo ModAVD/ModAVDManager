@@ -431,6 +431,18 @@ func (l layout) buildPatchedPackage(r *root.Root, archive string, base Version) 
 
 // ---- the manifest
 
+// regularPackageFile distinguishes an absent or wrong-shaped package entry from a local metadata error.
+func regularPackageFile(path string) (bool, error) {
+	st, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return st.Mode().IsRegular(), nil
+}
+
 // readManifest is a best-effort installed-version probe. Staging callers use loadManifest to retain I/O errors.
 func readManifest(path string) (*jsonord.Obj, bool) {
 	m, ok, _ := loadManifest(path)
@@ -438,6 +450,10 @@ func readManifest(path string) (*jsonord.Obj, bool) {
 }
 
 func loadManifest(path string) (*jsonord.Obj, bool, error) {
+	regular, err := regularPackageFile(path)
+	if err != nil || !regular {
+		return nil, false, err
+	}
 	b, err := root.ReadFileShared(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
@@ -588,14 +604,14 @@ func manifestBuild(m *jsonord.Obj, target Version) int {
 // and its qemu is our own build (it knows the free-page-reporting balloon option).
 func checkEmulator(emu string, want int, target Version) error {
 	p := root.CurrentPlatform()
-	qemu := filepath.Join(emu, "qemu", p.QemuDir, p.QEMU)
-	for _, path := range []string{filepath.Join(emu, p.Emulator), qemu} {
-		st, err := os.Stat(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, rel := range []string{p.Emulator, filepath.Join("qemu", p.QemuDir, p.QEMU),
+		"source.properties", filepath.Join("qemu", p.QemuDir, p.QEMUHeadless)} {
+		regular, err := regularPackageFile(filepath.Join(emu, rel))
+		if err != nil {
 			return err
 		}
-		if err != nil || !st.Mode().IsRegular() {
-			return packageError(`包里的 sdk\emulator 不完整（缺 emulator.exe 或 qemu）`)
+		if !regular {
+			return packageError("包里的 sdk/emulator/%s 不存在或不是普通文件", filepath.ToSlash(rel))
 		}
 	}
 	build := "读不到"
