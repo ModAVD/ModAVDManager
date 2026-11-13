@@ -3,7 +3,7 @@
 
 import { h, icon, btn, ibtn, keyed, setText, attr } from './dom.js';
 import { S, lastJob, rootBlocked } from './store.js';
-import { label, ownTitle, uptime, stripInst, pct, cfgText } from './format.js';
+import { label, ownTitle, stripInst, pct, cfgText } from './format.js';
 import * as A from './actions.js';
 import { openMenu } from './ui.js';
 import { openSettings, openDelete } from './forms.js';
@@ -187,7 +187,6 @@ function updateCard(c, inst) {
   setText(c.title, (c.title.title = name));
   const sub = [];
   if (ownTitle(inst)) sub.push(inst.name);
-  if (live && inst.started_at) sub.push(uptime(inst.started_at));
   const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
   const headless = inst.running && inst.window === false && v.key !== 'creating';
   setText(c.sub, subtitle + (headless ? ' · 无头' : '') + (inst.diagnostics ? ' · 诊断模式' : ''));
