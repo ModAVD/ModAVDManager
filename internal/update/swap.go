@@ -214,8 +214,9 @@ func (l layout) backupRootFiles(p rootPlan) error {
 }
 
 // applyRootFiles moves every file still in pkg\ over the root's and deletes the plan's deletions; re-runnable. A
-// target that is the running program itself (tools\modavd.exe running this update) cannot be replaced in place: it
-// is renamed into the trash first (a running image can be renamed), its copy in previous\root still restores it.
+// target that is the running program itself, or ModAVD.exe held by the image
+// gate, cannot be replaced in place. Rename it into the trash first; its copy in
+// previous\root still restores it. The image handles follow both renames.
 func (l layout) applyRootFiles(p rootPlan) error {
 	self := selfExe()
 	for _, rel := range p.replace {
@@ -224,7 +225,7 @@ func (l layout) applyRootFiles(p rootPlan) error {
 			continue
 		}
 		dst := l.at(rel)
-		if self != "" && strings.EqualFold(realOrSame(dst), self) && isFile(dst) {
+		if isFile(dst) && (strings.EqualFold(rel, "ModAVD.exe") || self != "" && strings.EqualFold(realOrSame(dst), self)) {
 			if err := l.toTrash(dst); err != nil {
 				return err
 			}
@@ -272,7 +273,7 @@ func (l layout) restoreRootFiles(p rootPlan) error {
 			continue
 		}
 		dst := l.at(rel)
-		if self != "" && strings.EqualFold(realOrSame(dst), self) && isFile(dst) {
+		if isFile(dst) && (strings.EqualFold(rel, "ModAVD.exe") || self != "" && strings.EqualFold(realOrSame(dst), self)) {
 			if err := l.toTrash(dst); err != nil {
 				return err
 			}
@@ -332,6 +333,11 @@ func (u *Updater) swapIn() (string, error) {
 	if err := l.backupRootFiles(plan); err != nil {
 		return "", err
 	}
+	unlockBackup, err := u.lockManagerBackupImage()
+	if err != nil {
+		return "", err
+	}
+	defer unlockBackup()
 	st.Set("phase", jsonord.NewString(phaseSwapping))
 	st.Set("plan", plan.value())
 	st.Set("swap", stepVal(stepBegin))

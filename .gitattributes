@@ -4,3 +4,4 @@
 *.syso -text
 *.ico -text
 *.png -text
+*.dex -text

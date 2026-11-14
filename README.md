@@ -214,6 +214,27 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
 
 AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。
 
+## 语言和时区（Windows）
+
+新实例的语言按 Windows 当前用户的界面语言设置一次。时区默认每次冷启动跟随宿主。之后在安卓里改过语言，普通开机、首次初始化重试和恢复创建都保留。
+
+实例设置里的「语言」「时区」也能指定固定值。命令行示例：
+
+```powershell
+modavd create --language host --timezone host
+modavd set 0 --language en-US --timezone Asia/Shanghai
+modavd set 0 --language host --timezone host
+modavd regional 0 --json
+```
+
+语言接受 `zh-CN`、`en-US` 等语言标识；`host` 重新按此时的宿主语言设置一次，`preserve` 保持安卓语言并取消待应用请求。时区接受 IANA 名称；`UTC` 会转换为模拟器接受的 `Etc/UTC`。`host` 在每次冷启动重新解析，固定值不随宿主变化。运行中保存的改动等下次冷启动生效，不会为语言额外重启安卓。
+
+旧实例没有 `instances.<i>.regional` 时，语言和模拟器原来的时区检测都不变，包括尚未初始化完成的实例。显式选择语言或时区才改变对应项；时区的 `preserve` 恢复原检测行为。切换时区可能影响游戏的每日刷新时间。
+
+Windows 时区使用 `GetDynamicTimeZoneInformation` 的稳定键名，按 [CLDR 49 的 world defaults](https://github.com/unicode-org/cldr/blob/release-49/common/supplemental/windowsZones.xml) 转为 IANA。无法识别时记录警告，并沿用模拟器原检测。新建或显式选 `host` 时读不出宿主界面语言，会在写实例之前报错；可以重试或选 `preserve`。
+
+`regional` 和实例设置将配置、上次设置的语言、待应用语言与安卓当前值分开显示。关机、忙碌或客体无法访问时不把配置当成当前值。语言助手调用 Android 14 的持久配置接口，确认后单独记录完成；后续初始化失败或主机确认记录丢失时不反复覆盖语言。
+
 ## 诊断模式
 
 在实例设置里打开「诊断模式」，或运行 `modavd set <i> --diagnostics on`。默认关，只存本机，不自动上传。日志和现场截图可能包含账号信息。`info`、`list` 显示开关，JSON 带 `diagnostics`，开启时另带 `diagnostics_since`。设置和首次开启时间存在 `mas-avd.json` 的 `instances.<i>.diagnostics`、`diagnosticsSince`；重复打开保留原时间。
@@ -309,7 +330,7 @@ Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目�
   - `checking`、`extracting`、`verifying`、`installing` 开始时各一行，`percent` 为 -1、字节数为 0。
   - `downloading` 没有这样的一行：进入下载阶段的第一行就带真实的 `percent` 和字节数，之后约 2 秒一行，下完那行一定有。
   - `--quiet` 时不出（进度是 info 级）。不带 `--json` 时照旧是人看的文字。stdout 仍然只有最后一行结果。
-- 管理器「设置」里点「更新」：管理器先下载、核对、暂存好（这时实例照常用）；有别的程序在跑这个根目录的 modavd（比如 `modavd mcp`）或有实例正在新建，就一台都不关、提示先处理；再正常关掉所有在运行的实例，然后启动 `tools\modavd.exe update install --after-pid <管理器 pid> --reopen <管理器程序> [--reopen-arg 参数]...` 并退出。命令行等管理器退出、换上新版，把结果写进 `.update\manager-result.json`，再按原来的参数重新打开管理器，新管理器打开时提示更新结果。换不上也照样重新打开，下载好的新版留着，下次不用重下。命令行的输出在 `logs\modavd-update.log`。`--after-pid`、`--reopen`、`--reopen-arg` 只和 `install` 一起用，是给管理器用的。
+- 管理器「设置」里点「更新」：先下载、核对、暂存，期间可以开机、关机和新建。准备完成后不再接收实例操作；还有任务或设置修改没做完、有实例正在新建，或者其他程序在用这个根目录的 modavd 时，一台实例都不关，保留暂存、提示处理后重试。全部通过才正常关掉运行中的实例，交给 `tools\modavd.exe update install --after-pid <管理器 pid> --reopen <管理器程序> [--reopen-arg 参数]...`，确认命令行接手后管理器退出。交接期间再次打开会提示正在更新并退出；异常退出留下的交接记录不会挡住下次启动。命令行重新核对较新暂存后直接换包，不重复查远端，再按原来的参数打开管理器。本次结果存进 `.update\manager-results\<ID>.json`，只交给对应启动的管理器、提示一次。换不上也重新打开，有效暂存留着，下次不用重下。命令行输出在 `logs\modavd-update.log`。`--after-pid`、`--reopen`、`--reopen-arg`、`--handoff-id` 只和 `install` 一起用，是给管理器用的。
 - macOS 的更新设置和组件下载源分别保存在 `~/Library/Application Support/ModAVD/update-settings.json` 和 `components-settings.json`。CDK 使用 AES-GCM 加密，随机包装密钥留在当前用户的 Keychain；钥匙串锁定或未授权时保存失败，不会降级为明文存储。复制设置文件到其他用户或设备不会同时转移密钥。
 - Apple Silicon 原生构建可用 `modavd update prepare --package /path/update.zip --sha256 <可信渠道取得的64位摘要>` 暂存本地包，再用 `modavd update install` 离线安装；`recover` 也可离线补完或恢复。包须符合 [macOS 更新包协议](internal/update/MACOS.md)，核对 ARM64 Mach-O、代码签名完整性、模式和符号链接，并保留至少 20 GiB 可用空间。签名核对不代表发布者身份可信，SHA256 必须独立取得。原生事务与 Windows/AUTO-MAS 状态隔离；尚无符合协议的 macOS 发布资产时，远端检查返回 `update_unavailable`。发布打包流程由后续阶段接入。
 - 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
@@ -369,6 +390,10 @@ go test ./...
 - 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`，`MODAVD_TEST_SDK` 另指一个带 `platform-tools\adb.exe` 的 SDK，`MODAVD_TEST_VKLIBS` 指向放着原版和打过补丁的 `libvulkan_enc.so` 的目录（Vulkan 修复的逐字节对照），`MODAVD_TEST_NDKLIBS` 指向放着镜像原版 `libndk_translation.so` 和补丁版 `libndk_translation.hintnop1.so` 的目录（ARM 转译层补丁的逐字节对照）。
 - CI（`.github/workflows/ci.yml`）在 `windows-2025` 上跑格式检查、`go vet`、`go test`、`build.ps1`、隐私扫描和作者检查；只在 PR 或手动触发时运行。
 
+语言/时区的真实客体验收用 `python scripts/test_regional_guest.py --root <本工作树/out/全新测试根> --legacy-cli <旧版命令行> --lock <共享验收锁文件>`。测试根须复制独立 SDK，并明确设置 `portBase: 34100`、`adbServerPort: 34198`、`scriptAdbServerPort: 34199`、`shareDefaultAdbServer: false`。脚本验证这些条件；测试持有独占句柄直到正常关机和清理完成。英文宿主及宿主时区变化采用注入输入，不代替两种真实 Windows 的验收。
+
+`internal/guest/regional/Regional.java` 的 4 KiB 客体助手随源码附带 DEX。普通构建不用 Java 或 Android SDK；修改助手后，用本地 JDK 和指定 D8 重建，并核对字节：`python internal/guest/regional/generate.py --r8 <r8-8.3.37.jar> --check`。脚本记录下载地址和 SHA-256。CLDR 表用 `python internal/regional/generate.py <windowsZones.xml>` 从固定版本重建。
+
 ## 单独下载与哈希
 
 - 每个版本的 GitHub Release 附 `ModAVDManager-<版本>-win-x64.zip` 和 `SHA256SUMS.txt`，后者和仓库里的 `release/<版本>.SHA256SUMS.txt` 是同一份。v0.1.0 是第一个独立版本，两个 exe 和 ModAVD 0.36.0 包里的逐字节相同。
@@ -393,6 +418,7 @@ go test ./...
 - 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)。Copyright 2026 qiyinxi。
 - 分发本程序（改没改都算），或者把改过的版本放到网上给别人用，都要按同样的许可证提供对应源码。别的程序只是调用 `modavd.exe`、MCP 服务或管理器的本地接口，不受影响。
 - 例外见 [NOTICE](NOTICE)：
+  - Windows 时区对照来自 Unicode CLDR 49，按 Unicode-3.0 许可，完整许可随 NOTICE 分发；
   - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是 ModAVD 自己的图标，不在本仓库的许可范围内；
   - `internal/avd/testdata/instances_ref.py` 复制自 AUTO-MAS（AGPL-3.0-or-later），只供测试、在单独的进程里运行，不编进程序。
 - 编出的 exe 含 Go 标准库和运行时（BSD-3-Clause）。

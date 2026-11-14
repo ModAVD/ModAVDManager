@@ -7,6 +7,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/appproxy"
 	"modavd/internal/emu"
+	"modavd/internal/root"
 )
 
 // backend is the part of emu.Manager the server uses; tests inject a fake. One backend is built per job (its
@@ -14,6 +15,7 @@ import (
 type backend interface {
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
+	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
 	// FreeIndex is the index Create picks when none is given.
 	FreeIndex() (int, error)
@@ -84,6 +86,7 @@ func (managerBackend) ProbeAppProxy(ctx context.Context, server string, withUDP 
 func (b managerBackend) RootInfo() emu.RootInfo {
 	r := b.Root
 	info := emu.RootInfo{
+		RegionalSupported:   root.CurrentPlatform().Windows(),
 		Root:                r.Dir,
 		SDK:                 r.RuntimeSDK(),
 		LocalSDK:            r.LocalSDKRoot() != "",

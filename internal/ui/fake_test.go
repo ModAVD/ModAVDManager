@@ -151,6 +151,13 @@ func (b fakeBackend) Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	return &in, nil
 }
 
+func (b fakeBackend) Regional(ctx context.Context, i int) (*emu.RegionalResult, error) {
+	if _, err := b.Info(ctx, i); err != nil {
+		return nil, err
+	}
+	return &emu.RegionalResult{Index: i, Supported: true, Config: emu.RegionalConfig{Language: "preserve", TimeZone: "preserve"}}, nil
+}
+
 func (b fakeBackend) Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
 	b.f.mu.Lock()
 	b.f.created = append(b.f.created, req)

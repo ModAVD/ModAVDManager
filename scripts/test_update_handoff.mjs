@@ -9,19 +9,26 @@ import vm from 'node:vm';
 const source = await readFile(new URL('../internal/ui/web/js/update.js', import.meta.url), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-async function page(post) {
+async function page(post, instances = []) {
   const notices = [];
+  const dialogs = [];
   const noop = () => {};
   const stubs = {
-    './dom.js': Object.fromEntries(['h', 'icon', 'btn', 'attr', 'setText', 'showError'].map(k => [k, noop])),
-    './store.js': { S: {}, update: noop, subscribe: noop },
+    './dom.js': { h: (tag, attrs, ...kids) => ({ tag, attrs, kids }), icon: noop,
+      btn: (_cls, label, run) => ({ label, run }), attr: noop, setText: noop, showError: noop },
+    './store.js': { S: { list: { instances }, jobs: new Map(), watch: new Set() }, update: noop, subscribe: noop },
     './api.js': { api: { post } },
-    './ui.js': { openDialog: noop, toast: value => notices.push(value), toastError: noop },
+    './ui.js': { openDialog: options => {
+      const dialog = { ...options, close() { this.closed = true; } };
+      dialogs.push(dialog);
+      return dialog;
+    }, toast: value => notices.push(value), toastError: noop },
     './diagnostics.js': { openDiagnostics: noop, activeJob: noop, progressText: noop },
     './actions.js': { onJob: noop, notifyJob: noop },
+    './format.js': { quoted: x => `「${x.title}」` },
   };
   const context = vm.createContext({});
-  const module = new vm.SourceTextModule(source, { context });
+  const module = new vm.SourceTextModule(source + '\nexport { confirmInstall };', { context });
   await module.link(specifier => {
     const values = stubs[specifier];
     return new vm.SyntheticModule(Object.keys(values), function() {
@@ -29,7 +36,8 @@ async function page(post) {
     }, { context });
   });
   await module.evaluate();
-  return { update: value => module.namespace.onUpdate({ handoff: value }), notices };
+  return { update: value => module.namespace.onUpdate({ handoff: value }),
+    confirm: value => module.namespace.confirmInstall(value), notices, dialogs };
 }
 
 test('two windows claim once, then repeated events and reloads stay silent', async () => {
@@ -89,4 +97,44 @@ test('a failed request retries on the next update without showing unclaimed data
   await settle();
   assert.equal(calls, 2);
   assert.equal(p.notices.length, 1);
+});
+
+test('updating with running instances keeps the named shutdown confirmation', async () => {
+  const requests = [];
+  const p = await page(async (path, body) => {
+    requests.push({ path, body });
+    return { id: 'j1', kind: 'update', state: 'running' };
+  }, [{ index: 3, title: '甲', running: true }, { index: 4, title: '乙', running: true }]);
+  p.confirm({ latest_version: 'v0.40.0' });
+  p.dialogs[0].actions.ok.run();
+  assert.equal(requests.length, 0);
+  assert.equal(p.dialogs[1].title, '要关掉 2 台实例');
+  assert.match(JSON.stringify(p.dialogs[1].body), /「甲」「乙」/);
+  p.dialogs[1].actions.ok.run();
+  await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/api/update/apply');
+  // the server stops only these: one started during the download makes it ask again
+  assert.equal(JSON.stringify(requests[0].body), '{"confirmed":[3,4]}');
+});
+
+test('updating with nothing running confirms an empty list', async () => {
+  const requests = [];
+  const p = await page(async (path, body) => { requests.push({ path, body }); return { id: 'j1', kind: 'update', state: 'running' }; },
+    [{ index: 3, title: '甲', running: false }]);
+  p.confirm({ latest_version: 'v0.40.0' });
+  p.dialogs[0].actions.ok.run();
+  await settle();
+  assert.equal(p.dialogs.length, 1);
+  assert.equal(JSON.stringify(requests[0].body), '{"confirmed":[]}');
+});
+
+test('dismissing the shutdown confirmation never starts an update', async () => {
+  let requests = 0;
+  const p = await page(async () => { requests++; }, [{ index: 3, title: '甲', running: true }]);
+  p.confirm({ latest_version: 'v0.40.0' });
+  p.dialogs[0].actions.ok.run();
+  p.dialogs[1].close();
+  await settle();
+  assert.equal(requests, 0);
 });

@@ -39,8 +39,9 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
+| GET | `/api/instances/{i}/regional` | | `RegionalResult` |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, language?: string, time_zone?: string}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string, language?: string, time_zone?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
@@ -84,7 +85,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | POST | `/api/update/settings` | `{source?: "github"\|"mirrorchyan", cdk?: string}` | `UpdateView`；`cdk` 为 `""` 时清除，CDK 加密保存，从不返回 |
 | POST | `/api/update/handoff/take` | `{id}` | 200 本次交接的 `HandoffResult`，全管理器只领取一次；已领走或 ID 不匹配是 `null` |
 | POST | `/api/update/handoff/receive` | `{id}` | 200 `{received}`，供重开启动把本次交接结果转交给已运行的管理器 |
-| POST | `/api/update/apply` | `{}` | 202 `Job`（`kind` 是 `update`，根任务，`index` 为 `-1`）：更新这个根目录，见下「更新」；结果是 `{handoff, version, stopped, message}` |
+| POST | `/api/update/apply` | `{confirmed?}` | 202 `Job`（`kind` 是 `update`，根任务，`index` 为 `-1`）：更新这个根目录，见下「更新」；结果是 `{handoff, version, stopped, message}` |
 
 `{i}` 是实例编号（0–9，5 除外）。
 
@@ -184,6 +185,16 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
   - `state`：`""`（没什么要说的）、`low`（数据盘快满）、`host_low`（自动扩盘、电脑硬盘剩余不到 20 GB）。
   - `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条警告。
 
+### 语言和时区（Windows）`RegionalResult`
+
+`RootInfo.regional_supported` 在支持这组设置时为 `true`，否则可省略。Windows 的 `InstanceInfo.regional` 是只读配置概要：`{language, time_zone, pending_language?, last_language?, error?}`。缺少 `instances.<i>.regional` 的旧实例返回两个 `preserve`，普通开机不会替它补默认值。
+
+新建、修改接口接受 `language` 和 `time_zone`。语言是 `host`、`preserve` 或 `zh-CN`、`en-US` 等语言标识；时区是 `host`、`preserve` 或 IANA 名称，`UTC` 归一为 `Etc/UTC`。Windows 新建默认两项 `host`。语言每次显式选择只生成一次请求；之后不覆盖安卓里的更改。`preserve` 取消待应用语言。时区 `host` 每次冷启动解析，`preserve` 沿用原来的模拟器检测。运行中修改等下次冷启动生效，接管运行中的实例不会应用刚保存的语言。
+
+`RegionalResult` 是 `{index, supported, config, host_language?, host_time_zone?, host_errors?, guest, guest_error?}`。`config` 是上述概要，`last_language` 只表示上次请求设置的语言。`guest` 是从安卓框架读取的 `{language, time_zone}`；关机、忙碌或不可访问时为 `null`。页面按需读一次，不加入实例状态的轮询。宿主时区无法映射时，启动日志警告并回退原检测；读取宿主语言失败则在写入新建/修改前返回 `not_ready`。
+
+开机结果的可选 `language_pending: true` 表示本次语言请求失败、后续 `start` 可重试；原有 `setup_pending` 仍只表示待处理的客体库补丁。两个状态都保留本次开机的设置标记。
+
 ### 更新 `UpdateView`
 
 `update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{id, at, ok, updated, version, message, error: {code, message, advice} | null}`；没有收到本次交接 ID、结果已被任一窗口领取、或者结果超过 30 分钟，是 `null`）。
@@ -191,11 +202,13 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 - 只有点「检查更新」或「更新」才联网；没有自动检查。
 - 更新源和 CDK 是当前系统用户的设置，管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
 - 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
-  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
-  2. 先查会让换包失败的情况，有就一台实例都不关、任务失败：别的进程在跑这个根目录的 `ModAVD.exe` 或 `tools\modavd.exe`（比如 `modavd mcp`）；有实例正在新建；暂存的版本不比装着的新（这时算已经是最新）。然后正常关掉所有在运行的实例（同 `stop --all`，但不取消正在新建的）。
-  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。半秒后它还在跑，任务才算成功，结果 `{handoff: true, version, stopped, message}`；从这时起别的任务一律回 409，约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；命令行通过 `--update-handoff <ID>` 传递本次 ID，新管理器只读走对应的结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID，再打开已有窗口。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示；已领取的结果从服务端清掉。普通启动不读取无 ID 的旧版结果文件。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
+  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版。这个阶段可以开机、关机、新建和操作实例，但与其他根任务互斥。已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
+  2. 准备完成后，在任务锁内切换到独占，同时检查已接收的实例任务和同步修改。还有操作没做完时，更新失败并保留暂存，一台实例都不关，也不取消已有操作；做完后可重试。独占期间不再接收新的实例操作。然后检查其他根程序占用和正在新建的实例，全部通过才正常关掉所有在运行的实例（同 `stop --all`，不取消新建）。请求带了 `confirmed`（用户确认过要关的实例编号，页面总是带，没有实例在跑时是空数组）时，在跑的实例里有不在这份名单上的（下载期间新开的），更新失败并保留暂存，一台实例都不关，页面再点「更新」重新确认；不带时在跑的都关。已经在路上的一次输入不拦这一步。暂存不比已安装版本新时，算已经是最新。
+  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --handoff-id <ID> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。命令行先持有 `.update\manager-handoff.lock`，发布带本次 ID、PID、进程创建时间和根目录身份的交接记录。管理器等它存活半秒且确认持锁（最多等 30 秒）后，任务才成功，结果 `{handoff: true, version, stopped, message}`，约 1.5 秒后管理器退出。确认交接前可以取消，命令行撤销等待并释放锁；确认后不能再取消。取消标记按本次 ID 写在结果文件旁，命令行在等管理器退出的前后都会查，管理器先取消并退出、命令行才启动时也不会换包；留下没人读的标记，超过 10 分钟的在下次正常启动时清掉。命令行等旧管理器退出，重新核对暂存指纹和版本；已有较新暂存时直接换上，不重复查远端。启动锁覆盖等待、换包和恢复，重复打开的管理器提示「正在更新」后退出（提示用 `WTSSendMessage` 交给会话里的系统进程显示，15 秒自动关，管理器不起子进程）；换包时程序映像锁还会阻止新的映射。进程异常退出后系统释放锁，遗留交接记录不阻挡下次启动。
+
+     命令行把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，释放启动锁，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器，通过 `--update-handoff <ID>` 传递本次 ID。新管理器只读对应结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示，随后从服务端清掉。普通启动不读取无 ID 的旧版结果。换不上也照样重新打开，仍有效的暂存留着，下次不用重下。失败和取消会释放任务独占，允许再次操作实例。
 - 管理器装的时候不带 AUTO-MAS 的版本检查（和人用命令行装一样），页面在 `required_automas` 不为空时提示用 AUTO-MAS 的先更新 AUTO-MAS。
-- 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。有别的任务在跑时回 409 `busy`；更新任务在跑时，别的任务也回 409。
+- 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。与其他根任务冲突时回 409 `busy`；更新进入独占后，实例操作也回 409。
 - macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
 
 

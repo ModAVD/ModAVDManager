@@ -9,6 +9,7 @@ import { api } from './api.js';
 import { openDialog, toast, toastError } from './ui.js';
 import { openDiagnostics, activeJob, progressText } from './diagnostics.js';
 import { onJob, notifyJob } from './actions.js';
+import { quoted } from './format.js';
 
 const clock = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
 const ver = (v) => (v ? v.replace(/^v/, '') : '');
@@ -58,15 +59,17 @@ function installTitle(v) {
   return '';
 }
 
-// The confirmation, then the update job (its end: actions.js notify, which closes this window on a hand-off).
+// The confirmation, then the update job (its end: actions.js notify, which closes this window on a hand-off). With
+// instances running, a second confirmation names them: the update shuts them all down normally (as 关机 does).
 function confirmInstall(v) {
   const target = ver(v.prepared_version || v.latest_version);
-  const running = ((S.list && S.list.instances) || []).filter((x) => x.running).length;
+  const runningList = ((S.list && S.list.instances) || []).filter((x) => x.running);
+  const running = runningList.length;
   const stops = running ? `正常关掉正在运行的 ${running} 台实例（安卓正常关机）` : '（现在没有实例在运行）';
-  const go = btn('btn btn-primary', [icon('download'), '更新'], async () => {
-    dlg.close();
+  const apply = async () => {
     try {
-      const j = await api.post('/api/update/apply', {});
+      // what the user just agreed to shut down: one started while the download runs makes the update stop and ask again
+      const j = await api.post('/api/update/apply', { confirmed: runningList.map((x) => x.index) });
       const seen = S.jobs.get(j.id);
       if (seen && seen.state !== 'running') notifyJob(seen);
       else {
@@ -74,14 +77,26 @@ function confirmInstall(v) {
         onJob(j);
       }
     } catch (e) { toastError(e); }
+  };
+  const confirmStop = () => {
+    const names = runningList.map((x) => quoted(x, x.index)).join('');
+    const stop = btn('btn btn-primary', [icon('stop'), '关机并更新'], () => { second.close(); apply(); });
+    const second = openDialog({
+      title: `要关掉 ${running} 台实例`, light: true,
+      body: h('div', { class: 'dlg-body' },
+        h('p', { text: `更新会正常关掉${names}，和点「关机」一样。实例里正在跑的游戏和任务会中断，更新完要自己再开机。` })),
+      actions: { ok: stop },
+    });
+  };
+  const go = btn('btn btn-primary', [icon('download'), '更新'], () => {
+    dlg.close();
+    if (running) confirmStop();
+    else apply();
   });
   const dlg = openDialog({
     title: `更新到 ${target}`, sub: 'ModAVD 整包：模拟器、组件、脚本和管理器', light: true,
     body: h('div', { class: 'dlg-body' },
       h('p', { text: `先下载并核对新版，这时实例照常用；然后${stops}，管理器关闭、换上新版，换好后自动重新打开管理器。` }),
-      // the manager installs as a person does, without the AUTO-MAS check the CLI does for AUTO-MAS
-      v.required_automas && h('div', { class: 'note-box tone-warn', role: 'status' }, icon('alert'),
-        h('span', { text: `这一版要求 AUTO-MAS ${v.required_automas} 或更新。用 AUTO-MAS 的，先把 AUTO-MAS 更新到这个版本，再更新这里。` })),
       h('p', { class: 'f-hint', text: '实例的数据（avd 文件夹）和设置都不动。正在新建的实例要先等它建完；用 modavd mcp 的 AI 助手等程序也要先关掉。' })),
     actions: { ok: go },
   });
