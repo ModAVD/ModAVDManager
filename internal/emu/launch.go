@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,11 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 
 	headless := !window
 	args := buildLaunchArgs(inst.Name, port, memoryMB, headless, m.syncIOQemuArgs(inst)...)
+	regionalArgs, err := m.regionalLaunch(i)
+	if err != nil {
+		return nil, err
+	}
+	args = slices.Insert(args, slices.Index(args, "-qemu"), regionalArgs...)
 	m.pruneLogs(i)
 	logPath, err := emulatorLogPath(m.Root.LogsDir(), inst.Name)
 	if err != nil {

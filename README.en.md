@@ -208,6 +208,27 @@ Two display presets are available: 1080p is 1920×1080 / DPI 280; 720p is 1280×
 
 AUTO-MAS currently prefers the packaged CLI, which preserves the selected preset. Old roots without a usable CLI fall back to the Python launch path, which still forces 720p. Update the packaged CLI before using 1080p there. AUTO-MAS creation and display settings still need matching two-preset support; use the ModAVD manager to set the preset meanwhile.
 
+## Language and time zone on Windows
+
+A new instance takes the current Windows user's UI language once. Its time zone follows the host at each cold launch. Later language changes in Android survive ordinary boots, first-boot retries, and resumed creation.
+
+The instance settings also accept fixed language and time-zone values. For example:
+
+```powershell
+modavd create --language host --timezone host
+modavd set 0 --language en-US --timezone Asia/Shanghai
+modavd set 0 --language host --timezone host
+modavd regional 0 --json
+```
+
+Language accepts tags such as `zh-CN` and `en-US`. `host` requests a one-time change to the host's current UI language. `preserve` keeps the Android language and cancels a pending request. Time zone accepts IANA names; `UTC` becomes the emulator-compatible `Etc/UTC`. `host` resolves it at each cold launch. Fixed values do not change with the host. Changes saved while running wait for the next cold launch. Setting the language does not add an Android reboot.
+
+An old instance without `instances.<i>.regional` keeps its language and the emulator's original time-zone detection, including when initial setup is incomplete. An explicit language or time-zone choice changes only that setting. For time zone, `preserve` restores the original detection behavior. Changing the time zone can affect a game's daily reset time.
+
+The manager reads the stable key from `GetDynamicTimeZoneInformation` and maps it using [CLDR 49 world defaults](https://github.com/unicode-org/cldr/blob/release-49/common/supplemental/windowsZones.xml). An unknown host time zone produces a warning and falls back to the emulator's original detection. If the host UI language cannot be read for a new instance or an explicit `host` choice, the operation fails before writing the instance. Retry or choose `preserve`.
+
+`regional` and the settings drawer distinguish configuration, the last requested language, pending changes, and current Android values. They do not present configuration as a live observation when the guest is offline, busy, or unreachable. The language helper calls Android 14's persistent configuration interface and records completion separately. Retrying later setup or recovering a lost host acknowledgement does not repeatedly overwrite the language.
+
 ## Diagnostic mode
 
 Enable diagnostic mode in the instance settings, or run `modavd set <i> --diagnostics on`. It defaults to off. Files stay on this computer and are not uploaded automatically. Logs and screenshots can contain account information. `info` and `list` show the switch; JSON includes `diagnostics` and, while enabled, `diagnostics_since`. The switch and first enable time are stored as `instances.<i>.diagnostics` and `diagnosticsSince` in `mas-avd.json`. Enabling again preserves that time.
@@ -367,6 +388,10 @@ Tests run on Windows only. Optional environment variables:
 - A few tests only read existing files under `D:\ModAVD` on this machine (`mas-avd.json`, instance configs, component APKs) and are skipped if they are absent. `MODAVD_TEST_METADATA` can point to a different `mas-avd.json`, `MODAVD_TEST_SDK` to a different SDK that has `platform-tools\adb.exe`, and `MODAVD_TEST_VKLIBS` to a folder holding the original and the patched `libvulkan_enc.so` (the byte-for-byte comparison for the Vulkan fix), and `MODAVD_TEST_NDKLIBS` to a folder holding the image's `libndk_translation.so` and the patched `libndk_translation.hintnop1.so` (the same for the ARM translation layer patch).
 - CI (`.github/workflows/ci.yml`) runs on `windows-2025`: format check, `go vet`, `go test`, `build.ps1`, the privacy scan and the author check. It runs only on PRs or when triggered manually.
 
+The native regional check is `python scripts/test_regional_guest.py --root <this-checkout/out/fresh-test-root> --legacy-cli <old-cli> --lock <shared-acceptance-lock>`. Copy an independent SDK into the test root and explicitly set `portBase: 34100`, `adbServerPort: 34198`, `scriptAdbServerPort: 34199`, and `shareDefaultAdbServer: false`. The runner validates these conditions. The test holds an exclusive handle through normal shutdown and cleanup. English-host inputs and host time-zone changes are injected; they do not replace acceptance on two real Windows display-language environments.
+
+The 4 KiB guest helper in `internal/guest/regional/Regional.java` includes its compiled DEX. Normal builds need neither Java nor an Android SDK. After changing the helper, rebuild and compare its bytes using a local JDK and the pinned D8: `python internal/guest/regional/generate.py --r8 <r8-8.3.37.jar> --check`. The script records the download URL and SHA-256. Regenerate the CLDR table with `python internal/regional/generate.py <windowsZones.xml>` using the pinned input.
+
 ## Standalone download and hashes
 
 - Each version's GitHub Release attaches `ModAVDManager-<version>-win-x64.zip` and `SHA256SUMS.txt`; the latter is the same file as `release/<version>.SHA256SUMS.txt` in the repository. v0.1.0 is the first standalone version, and its two exes are byte-identical to those in the ModAVD 0.36.0 package.
@@ -391,6 +416,7 @@ Tests run on Windows only. Optional environment variables:
 - The code is released under the GNU Affero General Public License, version 3 or later (AGPL-3.0-or-later); see [LICENSE](LICENSE). Copyright 2026 qiyinxi.
 - If you distribute this program (modified or not), or put a modified version online for others to use, you must provide the corresponding source under the same license. Other programs that merely call `modavd.exe`, the MCP server or the manager's local interface are not affected.
 - The exceptions are in [NOTICE](NOTICE):
+  - The Windows time-zone mapping comes from Unicode CLDR 49 under Unicode-3.0. The full license is distributed in NOTICE;
   - The program icons (`cmd/modavd-gui/modavd.ico`, `cmd/modavd-gui/rsrc_windows_amd64.syso`, and the images under `internal/ui/web/assets/`) are ModAVD's own icon and are outside this repository's license;
   - `internal/avd/testdata/instances_ref.py` is copied from AUTO-MAS (AGPL-3.0-or-later), is used only for tests, runs in a separate process, and is not compiled into the program.
 - The built exes contain the Go standard library and runtime (BSD-3-Clause).

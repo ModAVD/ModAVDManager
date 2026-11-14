@@ -125,6 +125,7 @@ import (
 type manager interface {
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
+	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)

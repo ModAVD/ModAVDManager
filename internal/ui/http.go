@@ -27,6 +27,7 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/instances", s.handleList)
 	m.HandleFunc("POST /api/instances", s.handleCreate)
 	m.HandleFunc("GET /api/instances/{i}", s.handleGet)
+	m.HandleFunc("GET /api/instances/{i}/regional", s.handleRegional)
 	m.HandleFunc("PATCH /api/instances/{i}", s.handleUpdate)
 	m.HandleFunc("GET /api/instances/{i}/diagnostics/preview", s.handleDiagnosticsPreview)
 	m.HandleFunc("DELETE /api/instances/{i}", s.handleDelete)

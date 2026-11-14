@@ -93,6 +93,11 @@ func (f *fakeManager) Info(ctx context.Context, i int) (*emu.InstanceInfo, error
 	return &in, nil
 }
 
+func (f *fakeManager) Regional(ctx context.Context, i int) (*emu.RegionalResult, error) {
+	f.record("regional " + itoa(i))
+	return &emu.RegionalResult{Index: i, Supported: true, Config: emu.RegionalConfig{Language: "preserve", TimeZone: "preserve"}}, nil
+}
+
 func (f *fakeManager) Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
 	f.record("create")
 	if f.create != nil {

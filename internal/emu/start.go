@@ -412,9 +412,9 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	}
 	qemu, gone := qemuAfterSetup(qemu, now, found)
 	// The setup is over (done, or its boot is gone), unless a guest library fix was left out because an app was in the
-	// foreground or an install was running: the marker then stays, so a start after that (before its deadline) still
-	// mounts it.
-	if gone || !ab.SetupPending {
+	// foreground or an install was running, or a language request still needs confirmation: the marker stays so
+	// a later start of this boot can finish the work.
+	if gone || !ab.SetupPending && !ab.LanguagePending {
 		m.removeSetupMarker(i)
 	}
 	if gone {
@@ -429,6 +429,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		m.Log.Warnf("实例 %d 开机后 /sdcard 在 %.0f 秒内一直写不进文件；先返回，稍后再写", i, sdcardMountWait.Seconds())
 	}
 	res.SetupPending = ab.SetupPending
+	res.LanguagePending = ab.LanguagePending
 	// The boot read before the setup, so a guest that rebooted during it is set up again by the watch. Unknown (adb
 	// failed): the old record stays, which at worst makes the watch set this boot up once more.
 	if bootID != "" {

@@ -55,6 +55,8 @@ func (s *server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		Language        *string `json:"language"`
+		TimeZone        *string `json:"time_zone"`
 		Title           *string `json:"title"`
 		Index           *int    `json:"index"`
 		MemoryMB        *int    `json:"memory_mb"`
@@ -67,6 +69,7 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := emu.CreateRequest{Index: body.Index, MemoryMB: body.MemoryMB, CPU: body.CPU,
+		Language: body.Language, TimeZone: body.TimeZone,
 		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution}
 	if body.Title != nil {
 		req.Title = *body.Title
@@ -116,6 +119,8 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Language        *string `json:"language"`
+		TimeZone        *string `json:"time_zone"`
 		Title           *string `json:"title"`
 		Diagnostics     *bool   `json:"diagnostics"`
 		MemoryMB        *int    `json:"memory_mb"`
@@ -130,11 +135,12 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil &&
-		!body.DataDiskAuto && body.Diagnostics == nil && body.BossKey == nil {
-		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、diagnostics、boss_key 中的一项"))
+		!body.DataDiskAuto && body.Diagnostics == nil && body.BossKey == nil && body.Language == nil && body.TimeZone == nil {
+		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、boss_key 中的一项"))
 		return
 	}
 	res, err := s.mgr.Update(detached(r), i, emu.UpdateRequest{Title: body.Title, MemoryMB: body.MemoryMB, CPU: body.CPU,
+		Language: body.Language, TimeZone: body.TimeZone,
 		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB, DataDiskAuto: body.DataDiskAuto,
 		Diagnostics: body.Diagnostics, BossKey: body.BossKey})
 	if err != nil {

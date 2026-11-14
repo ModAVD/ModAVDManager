@@ -468,6 +468,13 @@ func (m *Manager) recordCreationFailure(i int, err error, logFile string) {
 // checkCreated: what the setup's boot was for is all there, read from the running guest before it shuts down.
 func (m *Manager) checkCreated(ctx context.Context, i int, bridge bool, sr *StartResult) error {
 	var missing []string
+	if root.CurrentPlatform().Windows() {
+		if settings, err := m.readRegional(i); err != nil {
+			missing = append(missing, "语言/时区配置: "+err.Error())
+		} else if settings != nil && settings.LocaleRequest != nil {
+			missing = append(missing, "语言设置")
+		}
+	}
 	if meta := m.Root.InstanceMeta(i); meta == nil || !metaTruthy(meta.Get("initialized")) {
 		missing = append(missing, "首次初始化")
 	}
