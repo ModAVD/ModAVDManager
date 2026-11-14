@@ -558,6 +558,17 @@ func (u *Updater) stage(ctx context.Context, r *release, st *Status) (err error)
 // Install brings the root to the latest version: prepares it when it is newer and not staged yet, then swaps it in
 // (every instance off, no other program of the root running). Nothing newer and nothing staged: up to date.
 func (u *Updater) Install(ctx context.Context) (*Status, error) {
+	return u.install(ctx, false)
+}
+
+// InstallHandoff reuses a newer staged Windows package without asking a remote
+// source again. The stage and installed version are still checked under the
+// update lock, and swapIn retains all occupancy, image and recovery checks.
+func (u *Updater) InstallHandoff(ctx context.Context) (*Status, error) {
+	return u.install(ctx, root.CurrentPlatform().Windows())
+}
+
+func (u *Updater) install(ctx context.Context, handoff bool) (*Status, error) {
 	if u.nativeUpdates() || u.Opt.PackagePath != "" || u.Opt.PackageSHA256 != "" {
 		return u.nativeUpdate(ctx, true)
 	}
@@ -573,8 +584,17 @@ func (u *Updater) Install(ctx context.Context) (*Status, error) {
 		return st, err
 	}
 	defer lock.Unlock()
-	perr := u.prepare(ctx, st)
+	var perr error
 	staged, haveStaged := u.l.stagedVersion()
+	local, haveLocal := LocalVersion(u.Root)
+	if handoff && u.Opt.AutoMASVersion == "" && haveStaged && haveLocal && local.Less(staged) {
+		if err := u.l.checkStaged(u.l.readState()); err != nil {
+			return u.finish(st), err
+		}
+	} else {
+		perr = u.prepare(ctx, st)
+	}
+	staged, haveStaged = u.l.stagedVersion()
 	if perr != nil && !haveStaged {
 		return u.finish(st), perr
 	}
@@ -594,6 +614,9 @@ func (u *Updater) Install(ctx context.Context) (*Status, error) {
 		out := u.finish(st)
 		out.Message = "已经是最新版本（" + local.Display() + "）"
 		return out, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return u.finish(st), errs.Wrap(errs.Canceled, err, "已取消")
 	}
 	u.step("installing", "正在换上新版")
 	version, err := u.swapIn()

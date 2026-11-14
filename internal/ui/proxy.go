@@ -332,6 +332,12 @@ func (s *server) handleProxyPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 enabled、server、apps 中的一项"))
 		return
 	}
+	release, err := s.beginInstanceAction(kindSettings, i)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer release()
 	ctx := detached(r)
 	res, err := s.mgr.SetAppProxy(ctx, i, appproxy.Change{Enabled: body.Enabled, Server: body.Server, Apps: body.Apps})
 	if err != nil {

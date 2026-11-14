@@ -173,7 +173,23 @@ func run(args []string) (code int) {
 	logFile := openLogFile(r.LogsDir())
 	log = logx.New(logFile.sink(minLevel))
 
+	releaseStart, updating, err := update.ManagerStart(r)
+	if err != nil {
+		fatalErr("检查更新交接失败", err)
+		return errs.ExitCode(err)
+	}
+	if updating {
+		log.Infof("%s", update.UpdatingMessage)
+		if !*noWindow {
+			if err := updatingNotice(); err != nil {
+				log.Warnf("显示更新提示失败: %v", err)
+			}
+		}
+		logFile.Close()
+		return 0
+	}
 	inst, err := lockInstance(r)
+	releaseStart()
 	if err != nil {
 		log.Errorf("%v", err)
 		fatalErr("管理器启动失败", err)

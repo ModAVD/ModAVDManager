@@ -22,6 +22,9 @@ const (
 	kindCreate     = "create"
 	kindComponents = "components"
 	kindCollect    = "collect-info"
+	kindSettings   = "instance-settings"
+	kindDelete     = "delete"
+	kindInput      = "input"
 	rootJobIndex   = -1
 
 	kindDiskInfo    = "disk-info"
@@ -61,6 +64,12 @@ func kindLabel(kind string) string {
 		return "补全组件"
 	case kindCollect:
 		return "收集问题信息"
+	case kindSettings:
+		return "修改设置"
+	case kindDelete:
+		return "删除"
+	case kindInput:
+		return "发送操作"
 	case kindDiskInfo:
 		return "查看磁盘占用"
 	case kindDiskTrim:
@@ -127,12 +136,28 @@ type job struct {
 	progressAt    time.Time
 	progressStage string
 	progressName  string
+	updatePhase   updateAdmission // guarded by jobTable.mu
+}
+
+type updateAdmission uint8
+
+const (
+	updatePreparing updateAdmission = iota
+	updateExclusive
+)
+
+// instanceAction covers synchronous mutations too: an update cannot pass its
+// admission check while a delete or settings write is still using the root.
+type instanceAction struct {
+	kind  string
+	index int
 }
 
 type jobTable struct {
-	mu   sync.Mutex
-	seq  int
-	list []*job // oldest first
+	mu      sync.Mutex
+	seq     int
+	list    []*job // oldest first
+	actions map[*instanceAction]struct{}
 }
 
 // snapshot copies the view (caller holds mu).
@@ -201,8 +226,92 @@ func busyError(o *job) error {
 func (s *server) checkFree(kind string, i int) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
+	return s.admissionError(kind, i)
+}
+
+// admissionError is called with jobs.mu held, for both preflight and admission.
+func (s *server) admissionError(kind string, i int) error {
+	if err := s.updateAdmissionError(i); err != nil {
+		return err
+	}
+	for a := range s.jobs.actions {
+		if a.kind == kindDelete && a.index == i {
+			return errs.Newf(errs.Busy, "实例 %d 正在%s，等它做完再试", i, kindLabel(a.kind))
+		}
+	}
+	for _, o := range s.jobs.list {
+		if o.view.State != stateRunning {
+			continue
+		}
+		if kind == kindUpdate && o.view.Index == rootJobIndex {
+			return errs.Newf(errs.Busy, "%s还没做完（任务 %s），等它做完再更新", kindLabel(o.view.Kind), o.view.ID)
+		}
+		if (sdkJob(kind) && o.view.Index != rootJobIndex && bootJob(o.view.Kind)) ||
+			(i != rootJobIndex && sdkJob(o.view.Kind) && bootJob(kind)) {
+			return errs.Newf(errs.Busy, "任务 %s 正在运行（任务 %s），等它做完再试", kindLabel(o.view.Kind), o.view.ID)
+		}
+	}
 	if o := s.jobs.busyWith(kind, i); o != nil {
 		return busyError(o)
+	}
+	return nil
+}
+
+func (s *server) updateAdmissionError(i int) error {
+	if s.handingOff.Load() {
+		return errs.New(errs.Busy, "正在交给命令行换上新版，管理器马上关闭，换好后会自动重新打开")
+	}
+	for _, o := range s.jobs.list {
+		if o.view.State != stateRunning {
+			continue
+		}
+		if o.view.Kind == kindUpdate && (i == rootJobIndex || o.updatePhase == updateExclusive) {
+			return errs.Newf(errs.Busy, "正在整包更新（任务 %s），等它做完再试", o.view.ID)
+		}
+	}
+	return nil
+}
+
+func (s *server) beginInstanceAction(kind string, i int) (func(), error) {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	err := s.updateAdmissionError(i)
+	if kind == kindDelete {
+		err = s.admissionError(kind, i)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.jobs.actions == nil {
+		s.jobs.actions = make(map[*instanceAction]struct{})
+	}
+	a := &instanceAction{kind: kind, index: i}
+	s.jobs.actions[a] = struct{}{}
+	return func() {
+		s.jobs.mu.Lock()
+		delete(s.jobs.actions, a)
+		s.jobs.mu.Unlock()
+	}, nil
+}
+
+// enterUpdateExclusive closes admission atomically with checking existing work.
+// Already admitted work is left alone. A retry can use the downloaded stage.
+func (s *server) enterUpdateExclusive(ctx context.Context, j *job, version string) error {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return errs.Wrap(errs.Canceled, err, "已取消")
+	}
+	j.updatePhase = updateExclusive
+	advice := version + " 已下载并核对好；等它做完再点「更新」，不用重新下载"
+	for _, o := range s.jobs.list {
+		if o != j && o.view.State == stateRunning {
+			return errs.Newf(errs.Busy, "%s正在%s（任务 %s），一台实例都没关", strings.TrimSpace(jobTarget(o.view.Index)),
+				kindLabel(o.view.Kind), o.view.ID).WithAdvice(advice)
+		}
+	}
+	for a := range s.jobs.actions {
+		return errs.Newf(errs.Busy, "实例 %d 正在%s，一台实例都没关", a.index, kindLabel(a.kind)).WithAdvice(advice)
 	}
 	return nil
 }
@@ -229,31 +338,9 @@ type jobFunc func(ctx context.Context, j *job, b backend) (any, error)
 // job (file log with the job id, log events, warnings). errs.Busy when the instance has a conflicting job.
 func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Lock()
-	if s.handingOff.Load() {
+	if err := s.admissionError(kind, i); err != nil {
 		s.jobs.mu.Unlock()
-		return jobView{}, errs.New(errs.Busy, "正在交给命令行换上新版，管理器马上关闭，换好后会自动重新打开")
-	}
-	for _, o := range s.jobs.list {
-		if o.view.State != stateRunning {
-			continue
-		}
-		// 设置 → 更新 stops every instance and replaces the whole package: it runs alone
-		if kind == kindUpdate || o.view.Kind == kindUpdate {
-			s.jobs.mu.Unlock()
-			if kind == kindUpdate {
-				return jobView{}, errs.Newf(errs.Busy, "%s%s还没做完（任务 %s），等它做完再更新", jobTarget(o.view.Index), kindLabel(o.view.Kind), o.view.ID)
-			}
-			return jobView{}, errs.Newf(errs.Busy, "正在整包更新（任务 %s），等它做完再试", o.view.ID)
-		}
-		if (sdkJob(kind) && o.view.Index != rootJobIndex && bootJob(o.view.Kind)) ||
-			(i != rootJobIndex && sdkJob(o.view.Kind) && bootJob(kind)) {
-			s.jobs.mu.Unlock()
-			return jobView{}, errs.Newf(errs.Busy, "任务 %s 正在运行（任务 %s），等它做完再试", kindLabel(o.view.Kind), o.view.ID)
-		}
-	}
-	if o := s.jobs.busyWith(kind, i); o != nil {
-		s.jobs.mu.Unlock()
-		return jobView{}, busyError(o)
+		return jobView{}, err
 	}
 	s.jobs.seq++
 	ctx, cancel := context.WithCancel(s.jobCtx)
@@ -451,10 +538,16 @@ func (s *server) cancelJob(id string) (jobView, error) {
 	}
 	s.jobs.mu.Lock()
 	running := j.view.State == stateRunning
+	if running && j.view.Kind == kindUpdate && s.handingOff.Load() {
+		s.jobs.mu.Unlock()
+		return jobView{}, errs.New(errs.Busy, "已经交给命令行换上新版，换好后会自动重新打开管理器")
+	}
+	if running {
+		j.cancel()
+	}
 	s.jobs.mu.Unlock()
 	if running {
 		s.log.Infof("[%s] 请求取消", id)
-		j.cancel()
 	}
 	return s.jobView(j), nil
 }

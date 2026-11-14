@@ -38,6 +38,7 @@ const (
 	cliVersionTimeout = 15 * time.Second
 	// handoffAliveCheck: how long after starting the CLI we look whether it still runs.
 	handoffAliveCheck = 500 * time.Millisecond
+	handoffReadyWait  = 5 * time.Second
 	// updateLogName: the CLI's output during the hand-off, under logs\ (appended).
 	updateLogName = "modavd-update.log"
 )
@@ -114,6 +115,9 @@ func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) 
 		return &updateResult{Stopped: []int{}, Message: msg}, nil
 	}
 	shown := strings.TrimPrefix(st.PreparedVersion, "v")
+	if err := s.enterUpdateExclusive(ctx, j, shown); err != nil {
+		return nil, err
+	}
 	if err := s.beforeStopping(ctx, b, shown); err != nil {
 		return nil, err
 	}
@@ -123,7 +127,15 @@ func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) 
 	}
 	s.setProgress(j, jobProgress{Step: "handoff", Message: "正在交给命令行换上 " + shown})
 	cliAdvice := shown + ` 已下载并核对好；关掉管理器后运行 tools\modavd.exe update install，不用重新下载`
-	alive, err := s.handOff(lg)
+	id, alive, err := s.handOff(lg)
+	committed := false
+	defer func() {
+		if !committed && id != "" {
+			if err := update.CancelHandoff(s.root, id); err != nil {
+				lg.Warnf("取消更新交接失败: %v", err)
+			}
+		}
+	}()
 	if err != nil {
 		return nil, errs.Wrap(errs.LaunchFailed, err, `启动不了 tools\modavd.exe 来换上新版：`+errs.As(err).Message).
 			WithAdvice(cliAdvice)
@@ -133,14 +145,38 @@ func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) 
 	select {
 	case <-time.After(handoffAliveCheck):
 	case <-ctx.Done():
-		// we stay: the CLI gives up after update.AfterPIDWait, swaps nothing and only brings our window back
 		return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 	}
 	if !alive() {
 		return nil, errs.New(errs.LaunchFailed, `tools\modavd.exe 启动后马上退出了，新版没有换上`).
 			WithAdvice(cliAdvice + `；原因看 logs\` + updateLogName)
 	}
+	deadline := time.NewTimer(handoffReadyWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for !s.handoffReady(id) {
+		select {
+		case <-ctx.Done():
+			return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+		case <-deadline.C:
+			return nil, errs.New(errs.LaunchFailed, "命令行没有确认接手更新，管理器保持打开，新版没有换上").WithAdvice(cliAdvice)
+		case <-tick.C:
+			if !alive() {
+				return nil, errs.New(errs.LaunchFailed, "命令行在接手更新前退出了，新版没有换上").WithAdvice(cliAdvice)
+			}
+		}
+	}
+	// Cancellation and the commit to hand-off use the same mutex. After commit,
+	// cancelJob must leave the CLI's swap alone.
+	s.jobs.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.jobs.mu.Unlock()
+		return nil, errs.Wrap(errs.Canceled, err, "已取消")
+	}
 	s.handingOff.Store(true)
+	s.jobs.mu.Unlock()
+	committed = true
 	go s.handoffExit(j)
 	return &updateResult{Handoff: true, Version: st.PreparedVersion, Stopped: stopped,
 		Message: "管理器会关闭，换上 " + shown + " 后自动重新打开"}, nil
@@ -233,10 +269,10 @@ func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version s
 
 // handOff starts the CLI that swaps once we are gone and starts us again; it is not our descendant (host.StartOrphan),
 // so nothing that ends this process can end it. alive tells whether it still runs.
-func (s *server) handOff(lg *logx.Logger) (alive func() bool, err error) {
+func (s *server) handOff(lg *logx.Logger) (update.HandoffID, func() bool, error) {
 	id, err := update.NewHandoffID()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	args := []string{"--root", s.root.Dir, "--json", "update", "install",
 		"--after-pid", strconv.Itoa(os.Getpid()), "--reopen", s.reopen.Exe, "--handoff-id", string(id)}
@@ -245,7 +281,8 @@ func (s *server) handOff(lg *logx.Logger) (alive func() bool, err error) {
 	}
 	logPath := filepath.Join(s.root.LogsDir(), updateLogName)
 	lg.Infof("交给命令行换上新版：%s %s（输出在 %s）", s.updateCLI(), strings.Join(args, " "), logPath)
-	return s.spawn(s.updateCLI(), args, logPath)
+	alive, err := s.spawn(s.updateCLI(), args, logPath)
+	return id, alive, err
 }
 
 // handoffExit ends the manager once the job's end has been sent (the CLI waits for us to exit).

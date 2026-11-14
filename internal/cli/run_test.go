@@ -266,7 +266,7 @@ type harness struct {
 	stdin    string
 	terminal bool // stdin is a console (components fetch may ask for a source); false like a pipe
 	// update install --after-pid / --reopen (the manager's 更新)
-	waitExit      func(pid int, timeout time.Duration) bool
+	waitExit      func(ctx context.Context, pid int, timeout time.Duration) bool
 	updateInstall func(ctx context.Context, u *update.Updater) (*update.Status, error)
 	reopen        func(exe string, args []string) error
 }
@@ -297,6 +297,7 @@ func (h *harness) run(t *testing.T, ctx context.Context, args ...string) result 
 		stdinTerminal:   func(io.Reader) bool { return h.terminal },
 		waitExit:        h.waitExit,
 		updateInstall:   h.updateInstall,
+		updateHandoff:   h.updateInstall,
 		reopen:          h.reopen,
 	}
 	if d.resolveRoot == nil {
