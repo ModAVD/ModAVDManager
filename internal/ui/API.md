@@ -191,11 +191,13 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 - 只有点「检查更新」或「更新」才联网；没有自动检查。
 - 更新源和 CDK 是当前系统用户的设置，管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
 - 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
-  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版（同 `modavd update prepare`，实例照常开着）；已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
-  2. 先查会让换包失败的情况，有就一台实例都不关、任务失败：别的进程在跑这个根目录的 `ModAVD.exe` 或 `tools\modavd.exe`（比如 `modavd mcp`）；有实例正在新建；暂存的版本不比装着的新（这时算已经是最新）。然后正常关掉所有在运行的实例（同 `stop --all`，但不取消正在新建的）。
-  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。半秒后它还在跑，任务才算成功，结果 `{handoff: true, version, stopped, message}`；从这时起别的任务一律回 409，约 1.5 秒后管理器退出。命令行等管理器退出，换上新版，把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器；命令行通过 `--update-handoff <ID>` 传递本次 ID，新管理器只读走对应的结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID，再打开已有窗口。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示；已领取的结果从服务端清掉。普通启动不读取无 ID 的旧版结果文件。换不上（有程序占着等）也照样重新打开，暂存的新版留着，下次不用重下。
+  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版。这个阶段可以开机、关机、新建和操作实例，但与其他根任务互斥。已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
+  2. 准备完成后，在任务锁内切换到独占，同时检查已接收的实例任务和同步修改。还有操作没做完时，更新失败并保留暂存，一台实例都不关，也不取消已有操作；做完后可重试。独占期间不再接收新的实例操作。然后检查其他根程序占用和正在新建的实例，全部通过才正常关掉所有在运行的实例（同 `stop --all`，不取消新建）。暂存不比已安装版本新时，算已经是最新。
+  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --handoff-id <ID> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。命令行先持有 `.update\manager-handoff.lock`，发布带本次 ID、PID、进程创建时间和根目录身份的交接记录。管理器等它存活半秒且确认持锁后，任务才成功，结果 `{handoff: true, version, stopped, message}`，约 1.5 秒后管理器退出。确认交接前可以取消，命令行撤销等待并释放锁；确认后不能再取消。命令行等旧管理器退出，重新核对暂存指纹和版本；已有较新暂存时直接换上，不重复查远端。启动锁覆盖等待、换包和恢复，重复打开的管理器提示「正在更新」后退出；换包时程序映像锁还会阻止新的映射。进程异常退出后系统释放锁，遗留交接记录不阻挡下次启动。
+
+     命令行把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，释放启动锁，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器，通过 `--update-handoff <ID>` 传递本次 ID。新管理器只读对应结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示，随后从服务端清掉。普通启动不读取无 ID 的旧版结果。换不上也照样重新打开，仍有效的暂存留着，下次不用重下。失败和取消会释放任务独占，允许再次操作实例。
 - 管理器装的时候不带 AUTO-MAS 的版本检查（和人用命令行装一样），页面在 `required_automas` 不为空时提示用 AUTO-MAS 的先更新 AUTO-MAS。
-- 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。有别的任务在跑时回 409 `busy`；更新任务在跑时，别的任务也回 409。
+- 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。与其他根任务冲突时回 409 `busy`；更新进入独占后，实例操作也回 409。
 - macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
 
 

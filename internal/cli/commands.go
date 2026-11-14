@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -1596,21 +1597,44 @@ func updateCallerSettings(inv *invocation, action string, opt *update.Options) e
 func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, reopen string, args []string, id update.HandoffID) (*update.Status, error) {
 	var st *update.Status
 	var err error
+	waitCtx := c.ctx
+	var guard *update.HandoffGuard
+	if reopen != "" {
+		guard, err = update.BeginHandoff(r, id)
+		if err != nil {
+			// Another owner must not get an extra restart or result from us.
+			return u.Status(), err
+		}
+		defer guard.Close()
+		var cancel context.CancelFunc
+		waitCtx, cancel = guard.WaitContext(c.ctx)
+		defer cancel()
+	}
 	if afterPID > 0 {
 		c.log.Infof("等管理器（pid %d）退出", afterPID)
-		if !c.deps.waitExit(afterPID, update.AfterPIDWait) {
+		if !c.deps.waitExit(waitCtx, afterPID, update.AfterPIDWait) {
 			st = u.Status()
 			err = errs.Newf(errs.Busy, "管理器（pid %d）%d 秒内没有退出，新版没有换上", afterPID, int(update.AfterPIDWait/time.Second)).
 				WithAdvice("关掉管理器窗口后再在「设置」里点「更新」；下载好的新版留着，不用重新下载")
 		}
 	}
+	if waitCtx.Err() != nil {
+		// The manager stayed and canceled its own hand-off. Nothing was swapped,
+		// and no restart should reopen a window or publish an obsolete result.
+		return u.Status(), errs.Wrap(errs.Canceled, waitCtx.Err(), "已取消更新交接，新版没有换上")
+	}
 	if err == nil {
-		st, err = c.deps.updateInstall(c.ctx, u)
+		if reopen != "" {
+			st, err = c.deps.updateHandoff(c.ctx, u)
+		} else {
+			st, err = c.deps.updateInstall(c.ctx, u)
+		}
 	}
 	if reopen != "" {
 		if serr := update.SaveHandoff(r, update.NewHandoffResult(id, st, err, time.Now())); serr != nil {
 			c.log.Warnf("写不了给管理器的更新结果: %v", serr)
 		}
+		guard.Close() // a restart can take the gate, including result forwarding
 		args = append(args, update.HandoffArg, string(id))
 		if rerr := c.deps.reopen(reopen, args); rerr != nil {
 			update.TakeHandoff(r, id, time.Now())

@@ -74,6 +74,7 @@ func applyHarness(t *testing.T, a *applyFakes) *harness {
 			return a.prepared, a.prepErr
 		}
 		o.cliVersion = func(exe string) (string, error) { return a.version, a.verErr }
+		o.handoffReady = func(update.HandoffID) bool { return true }
 		o.programsInUse = func() ([]string, error) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
@@ -90,6 +91,9 @@ func applyHarness(t *testing.T, a *applyFakes) *harness {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(o.Root.Dir, "tools", "modavd.exe"), []byte("cli"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(o.Root.MetadataPath(), []byte(`{"portBase":34000,"adbServerPort":34098,"scriptAdbServerPort":34099,"shareDefaultAdbServer":false}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -294,30 +298,32 @@ func TestUpdateApplyRefusedUpFront(t *testing.T) {
 	}
 }
 
-// The update runs alone: not while another job runs, and no other job while it runs.
-func TestUpdateApplyRunsAlone(t *testing.T) {
+// Preparation excludes other root jobs but lets instance jobs run, in either
+// admission order. Canceling it never cancels those independent instance jobs.
+func TestUpdateApplyPreparationAllowsInstanceJobs(t *testing.T) {
 	a := &applyFakes{prepared: preparedStatus(), prepGate: make(chan struct{})}
 	h := applyHarness(t, a)
-	j := h.apply()
-	expectError(t, h.do("POST", "/api/instances/3/start", `{}`), 409, errs.Busy)
-	expectError(t, h.do("POST", "/api/update/apply", `{}`), 409, errs.Busy)
-	expect(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", nil), http.StatusOK, nil)
-	h.waitJob(j.ID, func(v jobView) bool { return v.State == stateCanceled })
-	if len(a.spawned()) != 0 || h.exited(2*handoffExitDelay) {
-		t.Fatal("a cancelled update handed off or exited")
-	}
-
-	h.f.mu.Lock()
 	h.f.startGate = make(chan struct{})
-	h.f.mu.Unlock()
 	var sj jobView
 	expect(t, h.do("POST", "/api/instances/3/start", `{}`), http.StatusAccepted, &sj)
-	e := expectError(t, h.do("POST", "/api/update/apply", `{}`), 409, errs.Busy)
-	if !strings.Contains(e.Message, "开机") {
-		t.Errorf("%+v", e)
+	j := h.apply()
+	h.f.put(4, emu.StatusOnline)
+	var stop, create jobView
+	expect(t, h.do("POST", "/api/instances/4/stop", `{}`), http.StatusAccepted, &stop)
+	expect(t, h.do("POST", "/api/instances", `{"index":6}`), http.StatusAccepted, &create)
+	expectError(t, h.do("POST", "/api/update/apply", `{}`), 409, errs.Busy)
+	if _, err := h.s.startRootJob(kindCollect, func(context.Context, *job, backend) (any, error) { return nil, nil }); errs.CodeOf(err) != errs.Busy {
+		t.Fatalf("conflicting root job: %v", err)
+	}
+	expect(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", nil), http.StatusOK, nil)
+	h.waitJob(j.ID, func(v jobView) bool { return v.State == stateCanceled })
+	if len(a.spawned()) != 0 || h.s.handingOff.Load() {
+		t.Fatal("a cancelled update handed off or exited")
 	}
 	close(h.f.startGate)
 	h.waitJob(sj.ID, func(v jobView) bool { return v.State != stateRunning })
+	h.waitJob(stop.ID, stateIs(stateDone))
+	h.waitJob(create.ID, stateIs(stateDone))
 }
 
 // What the CLI left after the swap is shown by the manager it started, once.
