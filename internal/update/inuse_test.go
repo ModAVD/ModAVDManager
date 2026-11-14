@@ -20,6 +20,8 @@ func TestShutdownHelperOwnershipAndArguments(t *testing.T) {
 	cli := u.l.at("tools/modavd.exe")
 	watchdog := []string{emulator, "-kill", "123", "-sleep", "20"}
 	watch := []string{cli, "__bootwatch", u.l.root, "0", "123", "456"}
+	logcat := []string{cli, "__logcat", u.l.root, "0", "123", "456"}
+	logcatToken := append(append([]string{}, logcat...), "eyJ0b2tlbiI6MX0")
 	change := func(args []string, i int, s string) []string {
 		out := append([]string{}, args...)
 		out[i] = s
@@ -53,6 +55,19 @@ func TestShutdownHelperOwnershipAndArguments(t *testing.T) {
 		{"zero sleep", emulator, change(watchdog, 4, "0"), false},
 		{"negative sleep", emulator, change(watchdog, 4, "-1"), false},
 		{"nonnumeric sleep", emulator, change(watchdog, 4, "forever"), false},
+		{"logcat capture", cli, logcat, true},
+		{"logcat capture with runtime token", cli, logcatToken, true},
+		{"logcat capture, case insensitive root", cli, change(logcat, 2, strings.ToUpper(u.l.root)), true},
+		{"logcat capture of another root", cli, change(logcat, 2, other), false},
+		{"logcat capture from another manager", filepath.Join(other, "tools", "modavd.exe"), logcat, false},
+		{"logcat capture from the gui program", u.l.at("ModAVD.exe"), change(logcat, 0, u.l.at("ModAVD.exe")), false},
+		{"logcat capture, relative root", cli, change(logcat, 2, "."), false},
+		{"logcat capture, missing arg", cli, logcat[:5], false},
+		{"logcat capture, extra arg", cli, append(append([]string{}, logcatToken...), "extra"), false},
+		{"logcat capture, reserved instance", cli, change(logcat, 3, "5"), false},
+		{"logcat capture, zero PID", cli, change(logcat, 4, "0"), false},
+		{"logcat capture, zero creation time", cli, change(logcat, 5, "0"), false},
+		{"bootwatch with a seventh arg", cli, append(append([]string{}, watch...), "eyJ0b2tlbiI6MX0"), false},
 		{"normal manager", cli, []string{cli, "mcp"}, false},
 		{"other internal helper", cli, change(watch, 1, "__orphan"), false},
 		{"missing watch arg", cli, watch[:5], false},

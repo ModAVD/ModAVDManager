@@ -775,8 +775,12 @@ func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 	return release, nil
 }
 
-// shutdownHelper recognizes only the two short-lived helpers whose executable belongs to this root.
-// A name alone, unreadable argv, a different bootwatch root, or additional arguments never grants a wait.
+// shutdownHelper recognizes only the helpers whose executable belongs to this root and that end by themselves
+// once their emulator is gone: the emulator's shutdown watchdog, the boot guardian (__bootwatch) and the host
+// logcat capture (__logcat, emu/logcat.go: it polls its emulator every 2 seconds and exits when it is gone).
+// Every running instance has a guardian and a capture, so counting them as programs in use would refuse every
+// update asked for while an instance runs. A name alone, unreadable argv, a different root, or additional
+// arguments never grants a wait.
 func (u *Updater) shutdownHelper(image string, args []string) bool {
 	same := func(a, b string) bool { return strings.EqualFold(realOrSame(a), realOrSame(b)) }
 	positive := func(s string, bits int) bool {
@@ -790,7 +794,14 @@ func (u *Updater) shutdownHelper(image string, args []string) bool {
 	if !same(image, u.l.at("tools/modavd.exe")) && !same(image, u.l.at("ModAVD.exe")) {
 		return false
 	}
-	if len(args) != 6 || args[1] != "__bootwatch" || !filepath.IsAbs(args[2]) || !same(args[2], u.l.root) {
+	switch {
+	case len(args) == 6 && args[1] == "__bootwatch":
+	// the capture is only ever started from tools\modavd.exe; its seventh argument is the runtime token
+	case (len(args) == 6 || len(args) == 7) && args[1] == "__logcat" && same(image, u.l.at("tools/modavd.exe")):
+	default:
+		return false
+	}
+	if !filepath.IsAbs(args[2]) || !same(args[2], u.l.root) {
 		return false
 	}
 	i, err := strconv.Atoi(args[3])
