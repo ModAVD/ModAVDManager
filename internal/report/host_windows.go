@@ -488,6 +488,19 @@ func (h *winHost) Processes(match func(name string) bool) ([]Process, error) {
 	return out, nil
 }
 
+// ScreenshotShm is shmReporter: whether the named mapping exists, and the other processes holding it.
+func (h *winHost) ScreenshotShm(name string) (bool, []Process, error) {
+	if !host.SharedMemoryExists(name) {
+		return false, nil, nil
+	}
+	ps, err := host.SharedMemoryHolders(name)
+	out := make([]Process, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, Process{PID: p.PID, Name: p.Name})
+	}
+	return true, out, err
+}
+
 type unicodeString struct {
 	Length        uint16
 	MaximumLength uint16

@@ -321,6 +321,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			if opt.launchHeadless {
 				m.Log.Infof("ModAVD 实例 %d 开机后要装 arm64 执行桥（要冷启动一到两次）：准备阶段无头开机，装好后再带窗口开机", i)
 			}
+			m.warnStaleScreenshotShm(i)
 			plan, err := m.prepareLaunch(ctx, inst, launchWindow)
 			if err != nil {
 				return nil, err
