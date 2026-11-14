@@ -151,6 +151,13 @@ func TestRegionalGuest(t *testing.T) {
 		if v["language"] != language || v["time_zone"] != zone {
 			t.Fatalf("guest %d: %v, want %s / %s", i, v, language, zone)
 		}
+		live, err := m.Regional(ctx, i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if live.Guest == nil || live.Guest.Language != language || live.Guest.TimeZone != zone || live.GuestError != "" {
+			t.Fatalf("property read differs from Android framework: %+v", live)
+		}
 		res := m.shell(ctx, i, "getprop ro.build.version.release; getprop persist.sys.locale; getprop persist.sys.timezone; am get-config", 0)
 		if res.Code != 0 || !strings.Contains(res.Out, "14") {
 			t.Fatalf("Android evidence: %+v", res)

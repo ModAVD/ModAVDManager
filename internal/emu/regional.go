@@ -287,11 +287,16 @@ func (m *Manager) Regional(ctx context.Context, i int) (*RegionalResult, error) 
 		result.HostErrors = append(result.HostErrors, err.Error())
 	}
 	if in.Booted && in.Busy == "" {
-		values, err := m.regionalCommand(ctx, i, nil)
-		if err != nil {
-			result.GuestError = err.Error()
-		} else {
-			result.Guest = &RegionalGuest{Language: values["language"], TimeZone: values["time_zone"]}
+		// Unchanged Android 14 guests may only have ro.product.locale. Reading properties needs no helper or root.
+		res := m.shell(ctx, i, `getprop persist.sys.locale "$(getprop ro.product.locale)"; getprop persist.sys.timezone`, statusAdbTimeout)
+		values := outputLines(res.Out)
+		switch {
+		case res.Code != 0:
+			result.GuestError = "客体语言/时区读取失败: " + tail(res.Out, 400)
+		case len(values) != 2:
+			result.GuestError = "客体语言/时区读回不完整"
+		default:
+			result.Guest = &RegionalGuest{Language: values[0], TimeZone: values[1]}
 		}
 	}
 	return result, nil
