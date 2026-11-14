@@ -53,15 +53,15 @@ func imageFileID(handle syscall.Handle) (imageID, error) {
 // would itself prevent directory renames, even with FILE_SHARE_DELETE.
 func (u *Updater) lockSDKImages() (release func(), err error) {
 	return lockUpdateImages([]imageTarget{
-		{u.l.emulator(), false}, {u.l.stageEmulator(), false}, {u.l.previousEmulator(), false},
-		{u.l.at("ModAVD.exe"), true}, {u.l.pkgAt("ModAVD.exe"), true}, {u.l.prevAt("ModAVD.exe"), true},
+		{u.l.emulator(), false, false}, {u.l.stageEmulator(), false, false}, {u.l.previousEmulator(), false, false},
+		{u.l.at("ModAVD.exe"), true, true}, {u.l.pkgAt("ModAVD.exe"), true, false}, {u.l.prevAt("ModAVD.exe"), true, false},
 	})
 }
 
 // backupRootFiles creates this image after lockForSwap. Gate its new identity
 // before recording swapping, so immediate rollback cannot publish an ungated copy.
 func (u *Updater) lockManagerBackupImage() (func(), error) {
-	return lockUpdateImages([]imageTarget{{u.l.prevAt("ModAVD.exe"), true}})
+	return lockUpdateImages([]imageTarget{{u.l.prevAt("ModAVD.exe"), true, false}})
 }
 
 // errManagerOpen: a root ModAVD.exe is mapped by a running manager (a sharing violation that outlasted the retries).
@@ -70,6 +70,9 @@ var errManagerOpen = errors.New("manager image in use")
 type imageTarget struct {
 	path        string
 	rootProgram bool
+	// installed: the root's own ModAVD.exe, the only one a running manager maps. A sharing violation on the staged or
+	// backed-up copy is some other program (an antivirus scan) and keeps the general message.
+	installed bool
 }
 
 func lockUpdateImages(paths []imageTarget) (release func(), err error) {
@@ -162,7 +165,7 @@ func lockUpdateImages(paths []imageTarget) (release func(), err error) {
 				// message box in its process. Give that brief mapping time to end.
 				time.Sleep(50 * time.Millisecond)
 			}
-			if syscall.Handle(h) == syscall.InvalidHandle && managerImage && errors.Is(openErr, syscall.Errno(32)) {
+			if syscall.Handle(h) == syscall.InvalidHandle && target.installed && errors.Is(openErr, syscall.Errno(32)) {
 				return errManagerOpen
 			}
 			if syscall.Handle(h) == syscall.InvalidHandle {
@@ -180,7 +183,7 @@ func lockUpdateImages(paths []imageTarget) (release func(), err error) {
 			return nil
 		})
 		if errors.Is(err, errManagerOpen) {
-			return nil, swapBlocked("管理器（ModAVD.exe）还开着，什么都没动").
+			return nil, swapBlocked("根目录的 ModAVD.exe 正被占用（多半是管理器还开着），什么都没动").
 				WithAdvice(`关掉这个根目录的所有管理器窗口（托盘里的也退出），再运行 tools\modavd.exe update install；上次换到一半的，运行 tools\modavd.exe update recover`)
 		}
 		if err != nil {
