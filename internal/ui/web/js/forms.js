@@ -6,6 +6,7 @@ import { S, update, subscribe, instance, lastJob } from './store.js';
 import { openDialog, toast } from './ui.js';
 import { quoted, label, ownTitle, defaultName, uptime, fmtBytes } from './format.js';
 import * as A from './actions.js';
+import { regionalFields, guestRegionalText } from './regional.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
 const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
@@ -163,6 +164,7 @@ export function openCreate() {
   const titleHint = hint(`不填就显示「${defaultName(free[0])}」，以后可以随时改`);
   const disk = diskField('c', 'auto', 64, 16);
   const fps = fpsField('c', 60);
+  const regional = S.list.regional_supported ? regionalFields('c', null, true) : null;
   const box = errorBox();
   const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: '新建' }));
   const ctl = openDialog({
@@ -173,7 +175,7 @@ export function openCreate() {
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
       segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
-      disk.rows), box),
+      disk.rows, regional && regional.rows), box),
     actions: { ok },
     onSubmit() {
       const f = ctl.form.elements;
@@ -184,6 +186,7 @@ export function openCreate() {
       submit(ctl, ok, '正在新建…', box, async () => {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
         const job = await api.post('/api/instances', {
+          ...(regional ? regional.values() : {}),
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           // no size: 自动扩盘
           fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb,
@@ -214,6 +217,8 @@ export function openSettings(i, field) {
   const diskGB0 = cfg.data_partition_gb || 16;
   // the size can only grow
   const disk = diskField('s', cfg.data_disk_mode, diskGB0, Math.max(16, diskGB0));
+  const regional = inst0.regional ? regionalFields('s', inst0.regional) : null;
+  const regionalNow = h('p', { class: 'f-hint', text: '正在读取安卓当前值…' });
   const box = errorBox();
   const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: '保存' }));
   const del = btn('btn btn-danger-ghost left', [icon('trash'), '删除…'], () => { if (!instance(i).running) openDelete(i); });
@@ -232,7 +237,9 @@ export function openSettings(i, field) {
         disk.rows,
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
           hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h')),
-        boss.row),
+        boss.row,
+        regional && regional.rows,
+        regional && [h('span', { class: 'f-label', text: '安卓当前' }), cell(regionalNow)]),
       box,
       h('h3', { class: 'sec-title', text: '实例信息' }), kv),
     actions: { left: del, ok: save },
@@ -246,6 +253,7 @@ export function openSettings(i, field) {
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
     if (diagnostics.checked !== initDiagnostics) out.diagnostics = diagnostics.checked;
     if (boss.changed()) out.boss_key = boss.value();
+    if (regional) Object.assign(out, regional.changes());
     for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
       const v = f[k].value === '' ? null : Number(f[k].value);
       if (v != null && v !== cfg[key]) out[key] = v;
@@ -261,6 +269,15 @@ export function openSettings(i, field) {
   }
   ctl.form.addEventListener('input', dirty);
   ctl.form.addEventListener('change', dirty);
+  if (regional) {
+    if (inst0.regional.error) showError(box, { message: `语言/时区配置无效：${inst0.regional.error}`, advice: '修正 mas-avd.json 的 regional 设置后重试。' });
+    runNote.querySelector('span').textContent = '实例运行中，语言、时区和硬件设置在下次开机生效。诊断设置立即生效。';
+    api.get(`/api/instances/${i}/regional`).then((r) => {
+      if (ctl.closed) return;
+      regionalNow.textContent = guestRegionalText(r);
+      if (r.guest_error) regionalNow.title = r.guest_error;
+    }).catch((e) => { if (!ctl.closed) { regionalNow.textContent = '读取失败'; regionalNow.title = e.message; } });
+  }
 
   async function saveSettings() {
     if (ctl.busy || save.getAttribute('aria-disabled') === 'true') return;

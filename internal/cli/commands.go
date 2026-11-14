@@ -21,6 +21,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
+	"modavd/internal/regional"
 	"modavd/internal/report"
 	"modavd/internal/root"
 	"modavd/internal/update"
@@ -90,6 +91,8 @@ var (
 	optDataGB        = flagSpec{"data-gb", kindString, "auto|N", "数据盘：auto 自动扩盘（默认），或指定大小 16–512 GB"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
+	optLanguage      = flagSpec{"language", kindString, "host|preserve|语言", "Windows：host 按宿主界面语言设置一次，preserve 保持安卓语言，或指定 zh-CN、en-US 等语言"}
+	optTimeZone      = flagSpec{"timezone", kindString, "host|preserve|IANA", "Windows：host 每次冷启动跟随宿主，preserve 沿用原行为，或指定 Asia/Shanghai、Etc/UTC 等 IANA 时区"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
 	optBossKey       = flagSpec{"boss-key", kindString, "组合", "老板键，比如 Ctrl+Alt+Shift+1（Ctrl、Alt、Shift 至少带一个，不收 Win）；none 是不要（只有 Windows）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
@@ -194,7 +197,7 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘自动扩盘、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				dataDiskHelp +
@@ -203,21 +206,27 @@ func init() {
 				"之后第一次开机和平常一样快。新建的实例不带 Google Play 商店，要的话建好后用 playstore <i> install 补全。" +
 				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
 				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
-			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optNoBridge, optCreateTimeout, optResume},
+			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
 			final: true,
 			run:   runCreate, human: humanOf(formatCreate),
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb auto|N] [--diagnostics on|off] [--boss-key 组合|none]",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--boss-key 组合|none]",
 			summary: "修改实例设置、诊断模式和老板键",
 			details: "至少给一个选项。诊断模式和老板键立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				dataDiskHelp + "数据盘只能改大，游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
 				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
 				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optDiagnostics, optBossKey},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optLanguage, optTimeZone, optDiagnostics, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
+		},
+		{
+			name: "regional", args: "<i>", summary: "查看实例语言和时区（Windows）",
+			details:  "分别显示管理器设置、宿主值和安卓当前值。关机或读不到客体时，当前值留空。语言只在显式设置或新建时设置一次，时区在冷启动时生效。",
+			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
+			run: runRegional, human: humanOf(formatRegional),
 		},
 		proxyCommand(),
 		{
@@ -563,6 +572,11 @@ type ComponentsSourceResult struct {
 
 func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 	req := emu.CreateRequest{Title: inv.strOpt("title")}
+	var err error
+	req.Language, req.TimeZone, err = regionalOptions(inv)
+	if err != nil {
+		return req, err
+	}
 	if inv.isSet("index") {
 		i, err := parseIndex(inv.strOpt("index"))
 		if err != nil {
@@ -595,7 +609,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.Timeout = time.Duration(n) * time.Second
 	}
 	if inv.isSet("resume") {
-		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "no-bridge"} {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "language", "timezone", "no-bridge"} {
 			if inv.isSet(o) {
 				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
 			}
@@ -612,6 +626,11 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 
 func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	var req emu.UpdateRequest
+	var err error
+	req.Language, req.TimeZone, err = regionalOptions(inv)
+	if err != nil {
+		return req, err
+	}
 	if inv.isSet("title") {
 		t := inv.strOpt("title")
 		req.Title = &t
@@ -644,11 +663,31 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		req.BossKey = &k
 	}
 	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
-		!req.DataDiskAuto && req.Diagnostics == nil && req.BossKey == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--diagnostics、--boss-key 中的一个").
+		!req.DataDiskAuto && req.Diagnostics == nil && req.BossKey == nil && req.Language == nil && req.TimeZone == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--language、--timezone、--diagnostics、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil
+}
+
+func regionalOptions(inv *invocation) (language, zone *string, err error) {
+	if inv.isSet("language") {
+		var value string
+		value, err = regional.Language(inv.strOpt("language"))
+		if err != nil {
+			return
+		}
+		language = &value
+	}
+	if inv.isSet("timezone") {
+		var value string
+		value, err = regional.TimeZone(inv.strOpt("timezone"))
+		if err != nil {
+			return
+		}
+		zone = &value
+	}
+	return
 }
 
 func buildStartOptions(inv *invocation) (emu.StartOptions, error) {

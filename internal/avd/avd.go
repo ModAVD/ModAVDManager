@@ -19,6 +19,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/regional"
 	"modavd/internal/root"
 )
 
@@ -585,7 +586,8 @@ func validateTitle(title string) error {
 // ---- create / update / delete ------------------------------------------------------------------------------------
 
 type CreateOptions struct {
-	Title           string // "" = the AVD name
+	Regional        *regional.Settings // already resolved by emu; stored before the instance becomes visible
+	Title           string             // "" = the AVD name
 	MemoryMB        int
 	CPU             int
 	DataPartitionGB int
@@ -711,6 +713,9 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		meta.Set("memoryMb", jsonord.NewInt(int64(memory)))
 		meta.Set("initialized", jsonord.NewBool(false))
 		meta.Set("createdAt", jsonord.NewString(createdAt))
+		if opt.Regional != nil {
+			opt.Regional.Set(meta)
+		}
 		mode := DataDiskAuto
 		if opt.DataDiskManual {
 			mode = DataDiskManual

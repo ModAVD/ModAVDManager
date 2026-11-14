@@ -46,12 +46,13 @@ type InstanceConfig struct {
 }
 
 type InstanceInfo struct {
-	Index   int    `json:"index"`
-	Name    string `json:"name"`  // mas_<i>
-	Title   string `json:"title"` // display name (avd.ini.displayname)
-	Status  Status `json:"status"`
-	Running bool   `json:"running"` // qemu process exists (MuMuManager is_process_started)
-	Booted  bool   `json:"booted"`  // Android finished booting (MuMuManager is_android_started)
+	Regional *RegionalConfig `json:"regional,omitempty"`
+	Index    int             `json:"index"`
+	Name     string          `json:"name"`  // mas_<i>
+	Title    string          `json:"title"` // display name (avd.ini.displayname)
+	Status   Status          `json:"status"`
+	Running  bool            `json:"running"` // qemu process exists (MuMuManager is_process_started)
+	Booted   bool            `json:"booted"`  // Android finished booting (MuMuManager is_android_started)
 	// Window: it runs with the emulator window (started with --window); false when headless or not running. The way it
 	// runs cannot change until it is shut down (StartOptions.Window).
 	Window bool `json:"window"`
@@ -114,6 +115,7 @@ type InstanceInfo struct {
 
 // RootInfo describes the root a command worked on.
 type RootInfo struct {
+	RegionalSupported   bool   `json:"regional_supported,omitempty"`
 	Root                string `json:"root"`
 	SDK                 string `json:"sdk"`       // the SDK actually used (sdkRoot or <root>\sdk)
 	LocalSDK            bool   `json:"local_sdk"` // mas-avd.json sets sdkRoot
@@ -131,7 +133,9 @@ type ListResult struct {
 }
 
 type CreateRequest struct {
-	Index    *int // nil = the smallest free index whose ports are free
+	Language *string // Windows: host (default), preserve, or a BCP 47 tag. Applied once.
+	TimeZone *string // Windows: host (default), preserve, or an IANA name. Applied at cold launch.
+	Index    *int    // nil = the smallest free index whose ports are free
 	Title    string
 	MemoryMB *int
 	CPU      *int
@@ -153,6 +157,8 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
+	Language    *string // An explicit one-time change on the next cold launch; preserve cancels a pending request.
+	TimeZone    *string
 	Diagnostics *bool
 	// BossKey: the instance's boss key ("Ctrl+Alt+Shift+1"; "" or "none" = no boss key). Takes effect at once in a
 	// running manager. Windows only.
@@ -244,7 +250,9 @@ func (p Progress) Percent() int {
 }
 
 type StartResult struct {
-	Instance InstanceInfo `json:"instance"`
+	// LanguagePending: this boot's one-time language request failed; a later start can retry it.
+	LanguagePending bool         `json:"language_pending,omitempty"`
+	Instance        InstanceInfo `json:"instance"`
 	// Launched: this call started qemu. false = it was already running; the per-boot setup ran again where safe.
 	Launched     bool    `json:"launched"`
 	BootSeconds  float64 `json:"boot_seconds"`  // from launch to sys.boot_completed (0 when already running)

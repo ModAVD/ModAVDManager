@@ -25,6 +25,7 @@ import (
 	"modavd/internal/guest"
 	"modavd/internal/host"
 	"modavd/internal/logx"
+	"modavd/internal/regional"
 	"modavd/internal/root"
 )
 
@@ -76,13 +77,16 @@ type Manager struct {
 	Log              *logx.Logger
 	ADB              *adb.Client
 	diagnosticReader *operationalDiagnostics
+	hostLanguage     func() (string, error)
+	hostTimeZone     func() (string, error)
 }
 
 func New(r *root.Root, log *logx.Logger) *Manager {
 	if log == nil {
 		log = logx.Nop()
 	}
-	m := &Manager{Root: r, Log: log, ADB: adb.New(r, log), diagnosticReader: &operationalDiagnostics{}}
+	m := &Manager{Root: r, Log: log, ADB: adb.New(r, log), diagnosticReader: &operationalDiagnostics{},
+		hostLanguage: regional.HostLanguage, hostTimeZone: regional.HostTimeZone}
 	m.ADB.Booting = func(serial string) bool {
 		port, ok := consolePortOfSerial(serial)
 		if !ok {
@@ -384,6 +388,7 @@ func (m *Manager) removeLockFiles(i int) {
 	os.Remove(m.createProgressPath(i))
 	os.Remove(m.createCancelPath(i))
 	os.Remove(m.guestLockPath(i))
+	os.Remove(m.localeBootPath(i))
 	m.removeBootRecord(i)
 }
 
@@ -398,6 +403,7 @@ func (m *Manager) instance(i int) (*avd.Instance, error) {
 
 func (m *Manager) rootInfo() RootInfo {
 	info := RootInfo{
+		RegionalSupported:   root.CurrentPlatform().Windows(),
 		Root:                m.Root.Dir,
 		SDK:                 m.Root.RuntimeSDK(),
 		LocalSDK:            m.Root.LocalSDKRoot() != "",

@@ -219,6 +219,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	}
 	cfg.Width, cfg.Height, cfg.DPI = in.Display()
 	meta := m.Root.InstanceMeta(i)
+	info.Regional = regionalConfig(meta)
 	cfg.DataDiskMode = avd.DataDiskManual
 	if avd.DataDiskAutoMeta(meta) {
 		cfg.DataDiskMode = avd.DataDiskAuto

@@ -39,8 +39,9 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
+| GET | `/api/instances/{i}/regional` | | `RegionalResult` |
+| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, language?: string, time_zone?: string}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install` |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, boss_key?: string, language?: string, time_zone?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
@@ -183,6 +184,16 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
   - `host_bytes`：数据盘文件在电脑上实际占的字节（稀疏文件，只算写进去的）；`host_free_bytes`：它所在的盘的剩余。读不到是 `-1`。
   - `state`：`""`（没什么要说的）、`low`（数据盘快满）、`host_low`（自动扩盘、电脑硬盘剩余不到 20 GB）。
   - `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条警告。
+
+### 语言和时区（Windows）`RegionalResult`
+
+`RootInfo.regional_supported` 在支持这组设置时为 `true`，否则可省略。Windows 的 `InstanceInfo.regional` 是只读配置概要：`{language, time_zone, pending_language?, last_language?, error?}`。缺少 `instances.<i>.regional` 的旧实例返回两个 `preserve`，普通开机不会替它补默认值。
+
+新建、修改接口接受 `language` 和 `time_zone`。语言是 `host`、`preserve` 或 `zh-CN`、`en-US` 等语言标识；时区是 `host`、`preserve` 或 IANA 名称，`UTC` 归一为 `Etc/UTC`。Windows 新建默认两项 `host`。语言每次显式选择只生成一次请求；之后不覆盖安卓里的更改。`preserve` 取消待应用语言。时区 `host` 每次冷启动解析，`preserve` 沿用原来的模拟器检测。运行中修改等下次冷启动生效，接管运行中的实例不会应用刚保存的语言。
+
+`RegionalResult` 是 `{index, supported, config, host_language?, host_time_zone?, host_errors?, guest, guest_error?}`。`config` 是上述概要，`last_language` 只表示上次请求设置的语言。`guest` 是从安卓框架读取的 `{language, time_zone}`；关机、忙碌或不可访问时为 `null`。页面按需读一次，不加入实例状态的轮询。宿主时区无法映射时，启动日志警告并回退原检测；读取宿主语言失败则在写入新建/修改前返回 `not_ready`。
+
+开机结果的可选 `language_pending: true` 表示本次语言请求失败、后续 `start` 可重试；原有 `setup_pending` 仍只表示待处理的客体库补丁。两个状态都保留本次开机的设置标记。
 
 ### 更新 `UpdateView`
 
