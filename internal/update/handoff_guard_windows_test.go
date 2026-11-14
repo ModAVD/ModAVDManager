@@ -272,3 +272,96 @@ func TestHandoffGuardUsesTheSameRootThroughJunction(t *testing.T) {
 	}
 	release()
 }
+
+// The manager canceled and was gone before the CLI got to its wait: the cancel is seen without relying on the watcher.
+func TestHandoffCanceledBeforeWaitIsSeenAtOnce(t *testing.T) {
+	r := isolatedHandoffRoot(t)
+	if err := CancelHandoff(r, testHandoffID); err != nil {
+		t.Fatal(err)
+	}
+	g, err := BeginHandoff(r, testHandoffID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if !g.Canceled() {
+		t.Fatal("cancel mark not seen")
+	}
+	ctx, cancel := g.WaitContext(context.Background())
+	defer cancel()
+	if ctx.Err() == nil {
+		t.Fatal("the wait context of a canceled hand-off was still live when returned")
+	}
+}
+
+func TestHandoffNotCanceledByAnotherID(t *testing.T) {
+	r := isolatedHandoffRoot(t)
+	if err := CancelHandoff(r, HandoffID(strings.Repeat("b", 32))); err != nil {
+		t.Fatal(err)
+	}
+	g, err := BeginHandoff(r, testHandoffID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	ctx, cancel := g.WaitContext(context.Background())
+	defer cancel()
+	if g.Canceled() || ctx.Err() != nil {
+		t.Fatal("another hand-off's cancel mark canceled this one")
+	}
+}
+
+// A cancel mark nobody reads any more goes at the next ordinary start; a fresh one (its CLI may still be starting) stays.
+func TestManagerStartRemovesOnlyOldCancelMarks(t *testing.T) {
+	r := isolatedHandoffRoot(t)
+	oldID, newID := HandoffID(strings.Repeat("c", 32)), HandoffID(strings.Repeat("d", 32))
+	for _, id := range []HandoffID{oldID, newID} {
+		if err := CancelHandoff(r, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-staleCancelAge - time.Minute)
+	if err := os.Chtimes(cancelPath(r, oldID), past, past); err != nil {
+		t.Fatal(err)
+	}
+	result := handoffPath(r, oldID)
+	if err := os.WriteFile(result, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(result, past, past); err != nil {
+		t.Fatal(err)
+	}
+	release, updating, err := ManagerStart(r)
+	if err != nil || updating {
+		t.Fatalf("start: %v %v", updating, err)
+	}
+	release()
+	if _, err := os.Stat(cancelPath(r, oldID)); !os.IsNotExist(err) {
+		t.Fatalf("old cancel mark stayed: %v", err)
+	}
+	if _, err := os.Stat(cancelPath(r, newID)); err != nil {
+		t.Fatalf("fresh cancel mark removed: %v", err)
+	}
+	if _, err := os.Stat(result); err != nil {
+		t.Fatalf("a result file was removed: %v", err)
+	}
+}
+
+// The gate held for a moment by a probe or an ordinary launch is not another hand-off.
+func TestBeginHandoffRetriesWhileGateIsBrieflyHeld(t *testing.T) {
+	r := isolatedHandoffRoot(t)
+	if err := os.MkdirAll(filepath.Dir(launchLockPath(r)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock, free, err := host.TryLock(launchLockPath(r))
+	if err != nil || !free {
+		t.Fatalf("lock: %v %v", free, err)
+	}
+	time.AfterFunc(300*time.Millisecond, lock.Unlock)
+	started := time.Now()
+	g, err := BeginHandoff(r, testHandoffID)
+	if err != nil {
+		t.Fatalf("a briefly held gate failed the hand-off after %v: %v", time.Since(started), err)
+	}
+	g.Close()
+}

@@ -1657,10 +1657,10 @@ func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, re
 				WithAdvice("关掉管理器窗口后再在「设置」里点「更新」；下载好的新版留着，不用重新下载")
 		}
 	}
-	if waitCtx.Err() != nil {
+	if waitCtx.Err() != nil || guard != nil && guard.Canceled() {
 		// The manager stayed and canceled its own hand-off. Nothing was swapped,
 		// and no restart should reopen a window or publish an obsolete result.
-		return u.Status(), errs.Wrap(errs.Canceled, waitCtx.Err(), "已取消更新交接，新版没有换上")
+		return u.Status(), errs.Wrap(errs.Canceled, context.Canceled, "已取消更新交接，新版没有换上")
 	}
 	if err == nil {
 		if reopen != "" {

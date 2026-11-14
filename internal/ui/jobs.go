@@ -311,6 +311,11 @@ func (s *server) enterUpdateExclusive(ctx context.Context, j *job, version strin
 		}
 	}
 	for a := range s.jobs.actions {
+		// One tap or key already on its way ends by itself in a moment and changes nothing a shutdown cares about;
+		// new ones are refused from here on (updateAdmissionError).
+		if a.kind == kindInput {
+			continue
+		}
 		return errs.Newf(errs.Busy, "实例 %d 正在%s，一台实例都没关", a.index, kindLabel(a.kind)).WithAdvice(advice)
 	}
 	return nil

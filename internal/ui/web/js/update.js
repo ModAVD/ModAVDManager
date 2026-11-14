@@ -68,7 +68,8 @@ function confirmInstall(v) {
   const stops = running ? `正常关掉正在运行的 ${running} 台实例（安卓正常关机）` : '（现在没有实例在运行）';
   const apply = async () => {
     try {
-      const j = await api.post('/api/update/apply', {});
+      // what the user just agreed to shut down: one started while the download runs makes the update stop and ask again
+      const j = await api.post('/api/update/apply', { confirmed: runningList.map((x) => x.index) });
       const seen = S.jobs.get(j.id);
       if (seen && seen.state !== 'running') notifyJob(seen);
       else {

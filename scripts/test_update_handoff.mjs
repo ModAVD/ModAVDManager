@@ -114,6 +114,19 @@ test('updating with running instances keeps the named shutdown confirmation', as
   await settle();
   assert.equal(requests.length, 1);
   assert.equal(requests[0].path, '/api/update/apply');
+  // the server stops only these: one started during the download makes it ask again
+  assert.equal(JSON.stringify(requests[0].body), '{"confirmed":[3,4]}');
+});
+
+test('updating with nothing running confirms an empty list', async () => {
+  const requests = [];
+  const p = await page(async (path, body) => { requests.push({ path, body }); return { id: 'j1', kind: 'update', state: 'running' }; },
+    [{ index: 3, title: '甲', running: false }]);
+  p.confirm({ latest_version: 'v0.40.0' });
+  p.dialogs[0].actions.ok.run();
+  await settle();
+  assert.equal(p.dialogs.length, 1);
+  assert.equal(JSON.stringify(requests[0].body), '{"confirmed":[]}');
 });
 
 test('dismissing the shutdown confirmation never starts an update', async () => {

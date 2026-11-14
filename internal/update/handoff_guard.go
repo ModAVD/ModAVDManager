@@ -18,6 +18,13 @@ import (
 
 const UpdatingMessage = "正在更新，换好后会自动打开管理器。"
 
+const (
+	// beginHandoffWait: how long the CLI retries the launch gate while nobody owns a hand-off.
+	beginHandoffWait = 3 * time.Second
+	// staleCancelAge: well past AfterPIDWait, the longest a CLI can still be about to read its cancel mark.
+	staleCancelAge = 10 * time.Minute
+)
+
 type handoffOwner struct {
 	ID      HandoffID `json:"id"`
 	PID     uint32    `json:"pid"`
@@ -47,6 +54,7 @@ func ManagerStart(r *root.Root) (release func(), updating bool, err error) {
 		if free {
 			// Stale metadata cannot strand a root, including a reused PID or broken JSON.
 			os.Remove(ownerPath(r))
+			removeStaleCancels(r, time.Now())
 			return lock.Unlock, false, nil
 		}
 		if _, ok := liveHandoffOwner(r); ok {
@@ -77,12 +85,23 @@ func BeginHandoff(r *root.Root, id HandoffID) (*HandoffGuard, error) {
 	if !root.CurrentPlatform().Windows() {
 		return g, nil
 	}
-	lock, free, err := host.TryLock(launchLockPath(r))
-	if err != nil {
-		return nil, err
-	}
-	if !free {
-		return nil, errs.New(errs.Busy, UpdatingMessage)
+	// The manager that started us probes the gate every 50 ms (HandoffReady), and an ordinary launch holds it for a
+	// moment: neither is another hand-off, so try again briefly. A live owner is one, and ends this at once.
+	deadline := time.Now().Add(beginHandoffWait)
+	var lock *host.FileLock
+	for {
+		l, free, err := host.TryLock(launchLockPath(r))
+		if err != nil {
+			return nil, err
+		}
+		if free {
+			lock = l
+			break
+		}
+		if _, ok := liveHandoffOwner(r); ok || time.Now().After(deadline) {
+			return nil, errs.New(errs.Busy, UpdatingMessage)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	g.lock = lock
 	p, ok := host.FindProcess(uint32(os.Getpid()))
@@ -157,11 +176,46 @@ func CancelHandoff(r *root.Root, id HandoffID) error {
 	return os.WriteFile(path, nil, 0o600)
 }
 
+// Canceled: the manager took this hand-off back (CancelHandoff). Read where the
+// answer decides something: the watcher of WaitContext may not have run yet when
+// the manager canceled and exited before this process got here.
+func (g *HandoffGuard) Canceled() bool {
+	if g.lock == nil {
+		return false
+	}
+	_, err := os.Stat(cancelPath(g.root, g.id))
+	return err == nil
+}
+
+// removeStaleCancels deletes cancel marks nobody will read any more: of a CLI
+// that never started, ended at once, or had finished already. Called with the
+// launch gate held, so no hand-off is under way; the age leaves alone a mark
+// whose CLI is still starting (it waits for its manager for AfterPIDWait).
+func removeStaleCancels(r *root.Root, now time.Time) {
+	dir := filepath.Dir(handoffPath(r, ""))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json.cancel") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > staleCancelAge {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
 // WaitContext ends on cancellation by the still-running manager as well as CLI
 // cancellation. Once the old manager exits the install owns the outcome.
 func (g *HandoffGuard) WaitContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	if g.lock == nil {
+		return ctx, cancel
+	}
+	if g.Canceled() {
+		cancel()
 		return ctx, cancel
 	}
 	go func() {

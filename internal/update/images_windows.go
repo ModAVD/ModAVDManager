@@ -64,6 +64,9 @@ func (u *Updater) lockManagerBackupImage() (func(), error) {
 	return lockUpdateImages([]imageTarget{{u.l.prevAt("ModAVD.exe"), true}})
 }
 
+// errManagerOpen: a root ModAVD.exe is mapped by a running manager (a sharing violation that outlasted the retries).
+var errManagerOpen = errors.New("manager image in use")
+
 type imageTarget struct {
 	path        string
 	rootProgram bool
@@ -159,6 +162,9 @@ func lockUpdateImages(paths []imageTarget) (release func(), err error) {
 				// message box in its process. Give that brief mapping time to end.
 				time.Sleep(50 * time.Millisecond)
 			}
+			if syscall.Handle(h) == syscall.InvalidHandle && managerImage && errors.Is(openErr, syscall.Errno(32)) {
+				return errManagerOpen
+			}
 			if syscall.Handle(h) == syscall.InvalidHandle {
 				if errors.Is(openErr, syscall.Errno(1)) || errors.Is(openErr, syscall.Errno(50)) || errors.Is(openErr, syscall.Errno(87)) {
 					return errs.Newf(errs.NotReady, "文件系统不支持按身份锁定模拟器程序，无法安全更新: %s（%v）", path, openErr)
@@ -173,6 +179,10 @@ func lockUpdateImages(paths []imageTarget) (release func(), err error) {
 			seen[id] = true
 			return nil
 		})
+		if errors.Is(err, errManagerOpen) {
+			return nil, swapBlocked("管理器（ModAVD.exe）还开着，什么都没动").
+				WithAdvice(`关掉这个根目录的所有管理器窗口（托盘里的也退出），再运行 tools\modavd.exe update install；上次换到一半的，运行 tools\modavd.exe update recover`)
+		}
 		if err != nil {
 			if errs.CodeOf(err) == errs.NotReady {
 				return nil, err
