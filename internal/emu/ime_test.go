@@ -605,7 +605,7 @@ func TestSetupHostImeSkips(t *testing.T) {
 	writeBuild("mas-34")
 	lines = nil
 	if m.setupHostIme(t.Context(), 0, false, "", nil) || len(lines) != 1 || lines[0].level != logx.Debug ||
-		lines[0].msg != "实例 0 宿主输入法跳过: 内测包 mas-34 低于 mas-35" {
+		lines[0].msg != "实例 0 宿主输入法跳过: 内测包 0.34.0 低于 0.35.0" {
 		t.Errorf("old emulator: %v", lines)
 	}
 	// channel known (build): an unreadable APK is a warning
@@ -642,6 +642,9 @@ func TestHostImeChannel(t *testing.T) {
 		{"mas-34", false, logWith, false}, // adopted: the log is not ours to judge
 		{"mas-34", true, logWith, true},   // a dev SDK whose build id lags behind
 		{"mas-34", true, logWithout, false},
+		{"0.42.0", false, "", true}, // the version form, from 0.42 on
+		{"0.35.0", false, "", true},
+		{"0.34.9", false, "", false},
 		{"", true, logWith, true},
 		{"", false, "", false},
 	}

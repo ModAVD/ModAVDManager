@@ -6,7 +6,7 @@ package emu
 //
 //   - path: no non-ASCII characters in the root (emulator and qemu are unreliable there); spaces are fine. Blocking.
 //   - components: platform tools and the system image (fetched by the manager's “补全组件” action or components fetch). Blocking.
-//   - emulator: only our own build from the ModAVD package, with Pkg.BuildId=mas-N >= MinModBuild. Blocking.
+//   - emulator: only our own build from the ModAVD package, with Pkg.BuildId (legacy mas-N, or the version X.Y.Z) >= MinEmulatorBuild. Blocking.
 //   - acceleration: emulator -accel-check (WHPX). Blocking.
 //   - disk: free space on the instances' volume >= 8 GB (data disks are sparse and grow). Blocking.
 //   - vulkan: a child process loads vulkan-1.dll and lists the devices. Only a warning: without hardware Vulkan the
@@ -274,12 +274,11 @@ func (m *Manager) missingAdvice(missing []string) string {
 
 // emulatorFacts is what emulatorItem judges.
 type emulatorFacts struct {
-	Present   bool   // the key files are there (any build)
-	SelfBuilt bool   // our own qemu (root.SelfBuiltMark)
-	Version   string // Pkg.Revision, "" when unknown
-	Shown     string // the ModAVD version for people ("0.35.0"), "" when unknown
-	Build     int    // N of Pkg.BuildId=mas-N
-	HasBuild  bool
+	Present   bool          // the key files are there (any build)
+	SelfBuilt bool          // our own qemu (root.SelfBuiltMark)
+	Version   string        // Pkg.Revision, "" when unknown
+	Shown     string        // the ModAVD version for people ("0.35.0"), "" when unknown
+	Build     root.EmuBuild // Pkg.BuildId (mas-N or X.Y.Z); zero when unknown
 }
 
 func (m *Manager) emulatorFacts() emulatorFacts {
@@ -289,7 +288,7 @@ func (m *Manager) emulatorFacts() emulatorFacts {
 		Version:   m.Root.EmulatorVersion(),
 		Shown:     m.Root.VersionText(),
 	}
-	f.Build, f.HasBuild = m.Root.ModBuild()
+	f.Build, _ = m.Root.EmulatorBuild()
 	return f
 }
 
@@ -331,7 +330,7 @@ func emulatorItem(f emulatorFacts) CheckItem {
 			Advice: platformPackageAdvice(),
 		}
 	}
-	if f.HasBuild && f.Build >= root.MinModBuild {
+	if f.Build.AtLeast(root.MinEmulatorBuild) {
 		return CheckItem{
 			ID: "emulator", Title: title, OK: checkOK(true), Blocking: true,
 			Reason: fmt.Sprintf("内测包 %s（%s）", f.Shown, version),
@@ -344,7 +343,7 @@ func emulatorItem(f emulatorFacts) CheckItem {
 	return CheckItem{
 		ID: "emulator", Title: title, OK: checkOK(false), Blocking: true,
 		Reason: fmt.Sprintf("内测包版本过旧（%s）", shown),
-		Advice: fmt.Sprintf("请把 ModAVD 更新到 0.%d.0 或更新的版本，实例和游戏数据不受影响", root.MinModBuild),
+		Advice: fmt.Sprintf("请把 ModAVD 更新到 %s 或更新的版本，实例和游戏数据不受影响", root.MinEmulatorBuild.VersionText()),
 	}
 }
 

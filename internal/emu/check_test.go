@@ -3,6 +3,7 @@
 package emu
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -142,13 +143,27 @@ func TestEmulatorItem(t *testing.T) {
 	if !strings.Contains(it.Reason, "（版本未知）") {
 		t.Fatalf("unknown version = %+v", it)
 	}
-	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.35.0", Build: 35, HasBuild: true})
+	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.35.0", Build: root.LegacyEmuBuild(35)})
 	if it.OK == nil || !*it.OK || it.Reason != "内测包 0.35.0（37.2.10）" {
 		t.Fatalf("ok = %+v", it)
 	}
-	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.24.0", Build: 24, HasBuild: true})
+	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.24.0", Build: root.LegacyEmuBuild(24)})
 	if it.OK == nil || *it.OK || it.Reason != "内测包版本过旧（0.24.0）" || !strings.Contains(it.Advice, "0.25.0") {
 		t.Fatalf("too old = %+v", it)
+	}
+	// The version form (from 0.42 on) is judged by the same minimum, 0.25.0.
+	for id, ok := range map[string]bool{"0.42.0": true, "0.25.0": true, "1.0.0": true, "0.24.9": false, "0.9.0": false} {
+		b, parsed := root.ParseEmuBuild(id)
+		if !parsed {
+			t.Fatalf("parse %s", id)
+		}
+		it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: id, Build: b})
+		if it.OK == nil || *it.OK != ok {
+			t.Fatalf("build %s = %+v", id, it)
+		}
+		if !ok && (it.Advice != "请把 ModAVD 更新到 0.25.0 或更新的版本，实例和游戏数据不受影响" || strings.Contains(it.Advice, "mas")) {
+			t.Fatalf("build %s advice = %q", id, it.Advice)
+		}
 	}
 	if strings.Contains(it.Advice, "「") {
 		t.Fatalf("advice must not point at AUTO-MAS buttons: %q", it.Advice)
@@ -229,5 +244,26 @@ func TestPrecheckSummary(t *testing.T) {
 	}
 	if itemMessage(CheckItem{Reason: "r"}) != "r" || itemMessage(CheckItem{Reason: "r", Advice: "a"}) != "r。a" {
 		t.Fatal("itemMessage")
+	}
+}
+
+func TestRootInfoSetBuild(t *testing.T) {
+	var info RootInfo
+	info.SetBuild(root.LegacyEmuBuild(41))
+	if info.BuildID != "mas-41" || info.Build != 41 {
+		t.Fatalf("mas-41: %+v", info)
+	}
+	b, _ := root.ParseEmuBuild("0.42.0")
+	info.SetBuild(b)
+	if info.BuildID != "0.42.0" || info.Build != 0 {
+		t.Fatalf("0.42.0: %+v", info)
+	}
+	info.SetBuild(root.EmuBuild{})
+	if info.BuildID != "" || info.Build != 0 {
+		t.Fatalf("unknown: %+v", info)
+	}
+	out, _ := json.Marshal(info)
+	if strings.Contains(string(out), "build_id") || !strings.Contains(string(out), `"build":0`) {
+		t.Fatalf("unknown JSON: %s", out)
 	}
 }

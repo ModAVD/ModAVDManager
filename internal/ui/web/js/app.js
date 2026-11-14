@@ -90,7 +90,7 @@ function render() {
     const ver = root.version;
     $('ver').hidden = !ver;
     setText($('ver'), ver);
-    $('ver').title = `模拟器 ${ver || '版本未知'}${root.build ? `（mas-${root.build}）` : ''}${S.info ? ` · 管理器 ${S.info.version}` : ''}`;
+    $('ver').title = `模拟器 ${ver || '版本未知'}${root.build_id && root.build_id !== ver ? `（${root.build_id}）` : ''}${S.info ? ` · 管理器 ${S.info.version}` : ''}`;
     if (changed('root', root.root)) {
       setText($('rootPath'), root.root);
       $('rootChip').title = `在资源管理器里打开 ${root.root}`;

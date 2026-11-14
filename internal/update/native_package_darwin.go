@@ -37,7 +37,7 @@ type nativeManifest struct {
 	Schema   int                   `json:"schema"`
 	Format   string                `json:"format"`
 	Version  string                `json:"version"`
-	Build    int                   `json:"build"`
+	Build    root.EmuBuild         `json:"build"` // N (legacy mas-N, up to 0.41) or "X.Y.Z"
 	Platform string                `json:"platform"`
 	Units    []string              `json:"units"`
 	Files    map[string]nativeFile `json:"files"`
@@ -81,7 +81,7 @@ func digestBytes(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToSt
 // Symlinks may contain '..', but every resolution step stays inside its move unit.
 func validateNativeManifest(m *nativeManifest) (Version, error) {
 	v, ok := ParseVersion(m.Version)
-	if !ok || m.Schema != 1 || m.Format != nativeFormat || m.Platform != root.CurrentPlatform().PackageSuffix || m.Build <= 0 || len(m.Files) == 0 || len(m.Files) > maxEntries || len(m.Units) > len(nativeAllowedUnits) {
+	if !ok || m.Schema != 1 || m.Format != nativeFormat || m.Platform != root.CurrentPlatform().PackageSuffix || m.Build.IsZero() || len(m.Files) == 0 || len(m.Files) > maxEntries || len(m.Units) > len(nativeAllowedUnits) {
 		return Version{}, packageError("macOS 更新清单格式、平台或版本不正确")
 	}
 	units := map[string]bool{}

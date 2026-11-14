@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"modavd/internal/errs"
+	"modavd/internal/root"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -140,7 +141,7 @@ func TestEmulatorVerificationReadErrorsStayLocal(t *testing.T) {
 			}
 			defer syscall.CloseHandle(held)
 			version, _ := ParseVersion("v0.37.0")
-			err = checkEmulator(filepath.Join(r.Dir, "sdk", "emulator"), 37, version)
+			err = checkEmulator(filepath.Join(r.Dir, "sdk", "emulator"), root.LegacyEmuBuild(37), version)
 			var pathErr *os.PathError
 			if !errors.As(err, &pathErr) || errs.CodeOf(err) == errs.UpdateRejected {
 				t.Fatalf("local emulator read: %v", err)

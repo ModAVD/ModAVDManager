@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"modavd/internal/host"
+	"modavd/internal/root"
 )
 
 // The result types below are the machine-readable contract (CLI --json "data", MCP structuredContent). Field names
@@ -124,7 +125,18 @@ type RootInfo struct {
 	ScriptAdbServerPort int    `json:"script_adb_server_port"` // the server scripts should use for these instances
 	PortBase            int    `json:"port_base"`              // console port of instance i = PortBase + 10*i (portBase)
 	Version             string `json:"version"`                // "0.35.0"; "" when the emulator's build is unknown
-	Build               int    `json:"build"`                  // N of mas-N; 0 when unknown
+	// BuildID is the emulator's build ID (Pkg.BuildId): "mas-41" (legacy, up to 0.41) or the version it was built
+	// for, "0.42.0"; omitted when unknown.
+	BuildID string `json:"build_id,omitempty"`
+	// Build is N of a legacy mas-N build, kept for older readers; 0 when unknown or when the build is a version
+	// (read BuildID instead).
+	Build int `json:"build"`
+}
+
+// SetBuild fills BuildID and Build from the emulator's build (zero = unknown).
+func (i *RootInfo) SetBuild(b root.EmuBuild) {
+	i.BuildID = b.String()
+	i.Build, _ = b.LegacyNumber()
 }
 
 type ListResult struct {
