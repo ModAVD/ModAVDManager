@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +39,9 @@ const (
 	cliVersionTimeout = 15 * time.Second
 	// handoffAliveCheck: how long after starting the CLI we look whether it still runs.
 	handoffAliveCheck = 500 * time.Millisecond
-	handoffReadyWait  = 5 * time.Second
+	// handoffReadyWait: how long the CLI has to take the launch gate. The instances are already stopped by then, so
+	// a slow cold start (an antivirus scanning modavd.exe) must not make that for nothing.
+	handoffReadyWait = 30 * time.Second
 	// updateLogName: the CLI's output during the hand-off, under logs\ (appended).
 	updateLogName = "modavd-update.log"
 )
@@ -84,18 +87,25 @@ func (s *server) applyReady() error {
 }
 
 func (s *server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
-	if !decode(w, r, &struct{}{}) {
+	// Confirmed: the running instances the user agreed to have shut down (the page's second confirmation). Absent:
+	// whatever runs when the download is done is stopped, as before.
+	var body struct {
+		Confirmed *[]int `json:"confirmed"`
+	}
+	if !decode(w, r, &body) {
 		return
 	}
 	if err := s.applyReady(); err != nil {
 		writeError(w, err)
 		return
 	}
-	s.respondJob(w)(s.startRootJob(kindUpdate, s.updateJob))
+	s.respondJob(w)(s.startRootJob(kindUpdate, func(ctx context.Context, j *job, b backend) (any, error) {
+		return s.updateJob(ctx, j, b, body.Confirmed)
+	}))
 }
 
 // updateJob: prepare, stop the instances, hand off; then the manager exits (handoffExit).
-func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) {
+func (s *server) updateJob(ctx context.Context, j *job, b backend, confirmed *[]int) (any, error) {
 	lg := logx.New(s.jobLogSink(j))
 	st, err := s.prepareUpdate(ctx, lg, func(p update.Progress) { s.setDiagProgress(j, updateProgress(p)) })
 	if st != nil && st.Checked {
@@ -121,7 +131,7 @@ func (s *server) updateJob(ctx context.Context, j *job, b backend) (any, error) 
 	if err := s.beforeStopping(ctx, b, shown); err != nil {
 		return nil, err
 	}
-	stopped, err := s.stopForUpdate(ctx, j, b, shown)
+	stopped, err := s.stopForUpdate(ctx, j, b, shown, confirmed)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +238,10 @@ func updateProgress(p update.Progress) DiagProgress {
 
 // stopForUpdate stops every running instance of the root at once, the way `modavd stop --all` does, but never one
 // still being created (that stop fails, and so does the update: the user finishes or cancels the creation first).
-func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version string) ([]int, error) {
+//
+// confirmed (not nil) is what the user agreed to: an instance started while the new version was downloading is not
+// in it, and then nothing is stopped; the user confirms again with the stage kept.
+func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version string, confirmed *[]int) ([]int, error) {
 	targets, err := b.StopTargets(ctx)
 	if err != nil {
 		return nil, err
@@ -239,6 +252,18 @@ func (s *server) stopForUpdate(ctx context.Context, j *job, b backend, version s
 	names := make([]string, len(targets))
 	for k, i := range targets {
 		names[k] = strconv.Itoa(i)
+	}
+	if confirmed != nil {
+		var extra []string
+		for _, i := range targets {
+			if !slices.Contains(*confirmed, i) {
+				extra = append(extra, strconv.Itoa(i))
+			}
+		}
+		if len(extra) > 0 {
+			return []int{}, errs.Newf(errs.Busy, "下载新版期间又开了实例 %s，没有确认过要关它，一台实例都没关", strings.Join(extra, "、")).
+				WithAdvice(version + " 已下载并核对好；再点一次「更新」确认要关的实例，不用重新下载")
+		}
 	}
 	s.setProgress(j, jobProgress{Step: "stopping", Message: "正在正常关掉实例 " + strings.Join(names, "、")})
 	fails := make([]error, len(targets))

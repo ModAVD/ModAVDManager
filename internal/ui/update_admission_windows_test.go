@@ -159,3 +159,71 @@ func TestUpdateHandoffRequiresOwnershipAndRemainsCancelable(t *testing.T) {
 		unlock()
 	}
 }
+
+// An instance started while the new version downloads was never confirmed: nothing is stopped, the stage stays, and
+// the next 更新 (which names it) goes through.
+func TestUpdateStopsOnlyConfirmedInstances(t *testing.T) {
+	a := &applyFakes{prepared: preparedStatus(), prepGate: make(chan struct{})}
+	h := applyHarness(t, a)
+	h.f.put(3, emu.StatusOnline)
+	var j jobView
+	expect(t, h.do("POST", "/api/update/apply", `{"confirmed":[3]}`), http.StatusAccepted, &j)
+	h.f.put(4, emu.StatusOnline)
+	close(a.prepGate)
+	done := h.waitJob(j.ID, stateIs(stateFailed))
+	if done.Error == nil || done.Error.Code != errs.Busy || !strings.Contains(done.Error.Message, "又开了实例 4") ||
+		!strings.Contains(done.Error.Message, "一台实例都没关") || !strings.Contains(done.Error.Advice, "不用重新下载") {
+		t.Fatalf("update: %+v", done)
+	}
+	h.f.mu.Lock()
+	stops := len(h.f.stops)
+	h.f.mu.Unlock()
+	if stops != 0 || len(a.spawned()) != 0 {
+		t.Fatalf("unconfirmed instance: %d stops, %d hand-offs", stops, len(a.spawned()))
+	}
+	a.mu.Lock()
+	a.prepGate = nil
+	a.mu.Unlock()
+	expect(t, h.do("POST", "/api/update/apply", `{"confirmed":[4,3]}`), http.StatusAccepted, &j)
+	h.waitJob(j.ID, stateIs(stateDone))
+	h.f.mu.Lock()
+	stops = len(h.f.stops)
+	h.f.mu.Unlock()
+	if stops != 2 || len(a.spawned()) != 1 {
+		t.Fatalf("confirmed instances: %d stops, %d hand-offs", stops, len(a.spawned()))
+	}
+}
+
+// Without the list (the API before it existed, other callers) whatever runs is stopped, as before.
+func TestUpdateWithoutConfirmedListStopsWhatRuns(t *testing.T) {
+	a := &applyFakes{prepared: preparedStatus()}
+	h := applyHarness(t, a)
+	h.f.put(3, emu.StatusOnline)
+	h.waitJob(h.apply().ID, stateIs(stateDone))
+	h.f.mu.Lock()
+	stops := len(h.f.stops)
+	h.f.mu.Unlock()
+	if stops != 1 || len(a.spawned()) != 1 {
+		t.Fatalf("%d stops, %d hand-offs", stops, len(a.spawned()))
+	}
+}
+
+// One tap still on its way does not fail the update; new ones are refused once it is exclusive.
+func TestUpdateExclusiveIgnoresInputInFlight(t *testing.T) {
+	a := &applyFakes{prepared: preparedStatus(), prepGate: make(chan struct{})}
+	h := applyHarness(t, a)
+	release, err := h.s.beginInstanceAction(kindInput, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	j := h.apply()
+	close(a.prepGate)
+	h.waitJob(j.ID, stateIs(stateDone))
+	if len(a.spawned()) != 1 {
+		t.Fatal("an input in flight stopped the hand-off")
+	}
+	if _, err := h.s.beginInstanceAction(kindInput, 3); errs.CodeOf(err) != errs.Busy {
+		t.Fatalf("input admitted during the hand-off: %v", err)
+	}
+}

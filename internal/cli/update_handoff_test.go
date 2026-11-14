@@ -284,3 +284,23 @@ func TestCompetingHandoffDoesNotInstallRestartOrClearOwner(t *testing.T) {
 		t.Fatalf("competing owner disturbed: %+v %v", res, *calls)
 	}
 }
+
+// The manager canceled and exited before this command started: its exit must not read as "go ahead".
+func TestUpdateHandoffCanceledBeforeStartNeverInstalls(t *testing.T) {
+	h, r, calls := handoffHarness(t)
+	if err := update.CancelHandoff(r, cliHandoffID); err != nil {
+		t.Fatal(err)
+	}
+	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID))
+	if res.code != errs.ExitCode(errs.New(errs.Canceled, "")) {
+		t.Fatalf("cancel: %+v", res)
+	}
+	for _, c := range *calls {
+		if c == "install" || strings.HasPrefix(c, "reopen") {
+			t.Fatalf("canceled hand-off had side effects: %v", *calls)
+		}
+	}
+	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
+		t.Fatal("canceled hand-off left a result")
+	}
+}
