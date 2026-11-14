@@ -24,7 +24,7 @@ func handoffHarness(t *testing.T) (*harness, *root.Root, *[]string) {
 	h := newHarness()
 	h.resolve = func(string) (*root.Root, error) { return r, nil }
 	var calls []string
-	h.waitExit = func(pid int, timeout time.Duration) bool {
+	h.waitExit = func(ctx context.Context, pid int, timeout time.Duration) bool {
 		calls = append(calls, "wait "+itoa(pid)+" "+timeout.String())
 		return true
 	}
@@ -148,7 +148,7 @@ func TestUpdateHandoffWaitsInstallsThenReopens(t *testing.T) {
 // launch only brings up the running one's window), so the user is never left without one.
 func TestUpdateHandoffManagerStillRunning(t *testing.T) {
 	h, r, calls := handoffHarness(t)
-	h.waitExit = func(pid int, timeout time.Duration) bool {
+	h.waitExit = func(ctx context.Context, pid int, timeout time.Duration) bool {
 		*calls = append(*calls, "wait")
 		return false
 	}
@@ -204,5 +204,103 @@ func TestUpdateInstallWithoutReopen(t *testing.T) {
 	}
 	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
 		t.Error("a result was left without --reopen")
+	}
+}
+
+func TestUpdateHandoffGateIsOwnedBeforeWaitAndReleasedBeforeRestart(t *testing.T) {
+	h, r, _ := handoffHarness(t)
+	h.waitExit = func(context.Context, int, time.Duration) bool {
+		if !update.HandoffReady(r, cliHandoffID) {
+			t.Fatal("wait began without ownership")
+		}
+		return true
+	}
+	h.updateInstall = func(context.Context, *update.Updater) (*update.Status, error) {
+		if !update.HandoffReady(r, cliHandoffID) {
+			t.Fatal("install lost ownership")
+		}
+		return &update.Status{Updated: true}, nil
+	}
+	h.reopen = func(string, []string) error {
+		release, updating, err := update.ManagerStart(r)
+		if err != nil || updating {
+			t.Fatalf("restart gate not released: %v %v", updating, err)
+		}
+		release()
+		if update.TakeHandoff(r, cliHandoffID, time.Now()) == nil {
+			t.Fatal("restart did not find its own result")
+		}
+		return nil
+	}
+	if res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID)); res.code != 0 {
+		t.Fatalf("handoff: %+v", res)
+	}
+}
+
+func TestUpdateHandoffCancellationReleasesGateWithoutInstallingOrReopening(t *testing.T) {
+	h, r, calls := handoffHarness(t)
+	waiting := make(chan struct{})
+	h.waitExit = func(ctx context.Context, _ int, _ time.Duration) bool { close(waiting); <-ctx.Done(); return false }
+	done := make(chan result, 1)
+	go func() {
+		done <- h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID))
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("no wait")
+	}
+	if err := update.CancelHandoff(r, cliHandoffID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case res := <-done:
+		if res.code != errs.ExitCode(errs.New(errs.Canceled, "")) {
+			t.Fatalf("cancel: %+v", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel did not end wait")
+	}
+	if len(*calls) != 0 || update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
+		t.Fatalf("canceled handoff had side effects: %v", *calls)
+	}
+	release, updating, err := update.ManagerStart(r)
+	if err != nil || updating {
+		t.Fatalf("canceled gate remained: %v %v", updating, err)
+	}
+	release()
+}
+
+func TestCompetingHandoffDoesNotInstallRestartOrClearOwner(t *testing.T) {
+	h, r, calls := handoffHarness(t)
+	other := update.HandoffID(strings.Repeat("b", 32))
+	g, err := update.BeginHandoff(r, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID))
+	if res.code != errs.ExitCode(errs.New(errs.Busy, "")) || len(*calls) != 0 || !update.HandoffReady(r, other) {
+		t.Fatalf("competing owner disturbed: %+v %v", res, *calls)
+	}
+}
+
+// The manager canceled and exited before this command started: its exit must not read as "go ahead".
+func TestUpdateHandoffCanceledBeforeStartNeverInstalls(t *testing.T) {
+	h, r, calls := handoffHarness(t)
+	if err := update.CancelHandoff(r, cliHandoffID); err != nil {
+		t.Fatal(err)
+	}
+	res := h.run(t, nil, "update", "install", "--after-pid", "4242", "--reopen", `C:\ModAVD\ModAVD.exe`, "--handoff-id", string(cliHandoffID))
+	if res.code != errs.ExitCode(errs.New(errs.Canceled, "")) {
+		t.Fatalf("cancel: %+v", res)
+	}
+	for _, c := range *calls {
+		if c == "install" || strings.HasPrefix(c, "reopen") {
+			t.Fatalf("canceled hand-off had side effects: %v", *calls)
+		}
+	}
+	if update.TakeHandoff(r, cliHandoffID, time.Now()) != nil {
+		t.Fatal("canceled hand-off left a result")
 	}
 }

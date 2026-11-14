@@ -39,6 +39,10 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	if req.Resume {
 		return m.resumeCreate(ctx, req)
 	}
+	regionalSettings, err := m.newRegional(req.Language, req.TimeZone)
+	if err != nil {
+		return nil, err
+	}
 	// no size given: 自动扩盘 (autogrow.go)
 	manualDisk := req.DataPartitionGB != nil
 	memory, cpu, dataGB, err := avd.ValidateOptions(req.MemoryMB, req.CPU, req.DataPartitionGB)
@@ -103,6 +107,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
 		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, DataDiskManual: manualDisk, FPS: fps, Resolution: resolution,
 		Creating: !req.filesOnly,
+		Regional: regionalSettings,
 	})
 	if err != nil {
 		lock.Unlock()
@@ -215,10 +220,13 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if err := m.notCreated(i, "不能修改"); err != nil {
 		return nil, err
 	}
+	language, zone, localeRequest, err := m.regionalChoices(req.Language, req.TimeZone)
+	if err != nil {
+		return nil, err
+	}
 	// Diagnostics is an immediate logging policy, not an AVD hardware edit. Do not validate or rewrite unrelated
 	// legacy disk sizes or AUTO-MAS's automatic memory when the request only changes this switch.
 	applied := map[string]any{}
-	var err error
 	// checked before anything is written, so a bad key leaves the other settings of the same request unwritten too
 	var bossKey string
 	if req.BossKey != nil {
@@ -241,6 +249,17 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	}
 	if applied == nil {
 		applied = map[string]any{}
+	}
+	if language != nil || zone != nil {
+		if err := m.saveRegional(i, language, zone, localeRequest); err != nil {
+			return nil, err
+		}
+		if language != nil {
+			applied["language"] = *language
+		}
+		if zone != nil {
+			applied["time_zone"] = *zone
+		}
 	}
 	nextBoot := len(applied) > 0
 	var cleanup *DiagnosticsCleanup

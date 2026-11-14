@@ -72,6 +72,7 @@ type Options struct {
 	cliVersion     func(exe string) (string, error)
 	programsInUse  func() ([]string, error)
 	spawn          func(exe string, args []string, logPath string) (alive func() bool, err error)
+	handoffReady   func(id update.HandoffID) bool
 	newBackend     func(log *logx.Logger) backend
 	newDiagBackend func(log *logx.Logger) diagBackend
 	token          string
@@ -140,6 +141,7 @@ type server struct {
 	cliVersion    func(exe string) (string, error)
 	programsInUse func() ([]string, error)
 	spawn         func(exe string, args []string, logPath string) (alive func() bool, err error)
+	handoffReady  func(id update.HandoffID) bool
 	exitReq       chan struct{}
 	exitOnce      sync.Once
 	// handingOff: the CLI has taken the swap; no job may start any more (startJob), the manager is about to exit
@@ -261,6 +263,10 @@ func newServer(opt Options) (*server, error) {
 	}
 	if s.spawn == nil {
 		s.spawn = realSpawn
+	}
+	s.handoffReady = opt.handoffReady
+	if s.handoffReady == nil {
+		s.handoffReady = func(id update.HandoffID) bool { return update.HandoffReady(opt.Root, id) }
 	}
 	s.exitReq = make(chan struct{})
 	s.bossKick = make(chan struct{}, 1)

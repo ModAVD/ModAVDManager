@@ -49,6 +49,7 @@ type afterBootResult struct {
 	HostIME         bool
 	ZygoteRestarted bool
 	LogcatFile      string
+	LanguagePending bool
 	// SetupPending: a guest library fix this boot still needs was left out (an app was in the foreground or an install
 	// was running, see ensureGuestFixes); the setup marker has to stay so that a later start mounts it.
 	SetupPending bool
@@ -100,6 +101,12 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	}
 
 	steps := []func(){
+		func() {
+			if err := m.applyRegional(ctx, i, mode); err != nil {
+				m.Log.Warnf("实例 %d 语言设置未完成，下次继续: %v", i, err)
+				r.LanguagePending = true
+			}
+		},
 		// 0) per-app proxy (appproxy.go): first, so the listed apps meet its rules from their first connection
 		func() { m.setupAppProxy(ctx, i) },
 		func() {

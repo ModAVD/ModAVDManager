@@ -845,6 +845,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 24px; row-gap: 16px; align-items: start; }
 .f-label { padding-top: 6px; color: var(--text-2); font-size: 14px; font-weight: 400; white-space: nowrap; }
 .f-ctl { min-width: 0; }
+.regional-choice { display: grid; gap: 8px; }
 .f-hint { margin-top: 6px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .f-hint b { color: var(--text); font-weight: 400; font-variant-numeric: tabular-nums; }
 .f-err { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--err); font-size: 12px; line-height: 1.5; }

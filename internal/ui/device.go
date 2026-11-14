@@ -221,6 +221,12 @@ func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, err := s.beginInstanceAction(kindInput, i)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer release()
 	in, err := s.instanceNow(r.Context(), i)
 	if err != nil {
 		writeError(w, err)

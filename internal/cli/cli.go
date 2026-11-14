@@ -125,6 +125,7 @@ import (
 type manager interface {
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
+	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
@@ -168,8 +169,9 @@ type deps struct {
 	fetchComponents func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
 	stdinTerminal   func(io.Reader) bool
 	// the manager's update hand-off (update install --after-pid / --reopen)
-	waitExit      func(pid int, timeout time.Duration) bool // true when pid is gone
+	waitExit      func(ctx context.Context, pid int, timeout time.Duration) bool // true when pid is gone
 	updateInstall func(ctx context.Context, u *update.Updater) (*update.Status, error)
+	updateHandoff func(ctx context.Context, u *update.Updater) (*update.Status, error)
 	reopen        func(exe string, args []string) error
 }
 
@@ -186,11 +188,21 @@ func defaultDeps() deps {
 		serveMCP:        mcp.Serve,
 		fetchComponents: components.Fetch,
 		stdinTerminal:   readerIsTerminal,
-		waitExit: func(pid int, timeout time.Duration) bool {
+		waitExit: func(ctx context.Context, pid int, timeout time.Duration) bool {
 			p, ok := host.FindProcess(uint32(pid))
-			return !ok || p.Wait(timeout)
+			if !ok {
+				return true
+			}
+			deadline := time.Now().Add(timeout)
+			for ctx.Err() == nil && time.Now().Before(deadline) {
+				if p.Wait(min(100*time.Millisecond, time.Until(deadline))) {
+					return true
+				}
+			}
+			return false
 		},
 		updateInstall: func(ctx context.Context, u *update.Updater) (*update.Status, error) { return u.Install(ctx) },
+		updateHandoff: func(ctx context.Context, u *update.Updater) (*update.Status, error) { return u.InstallHandoff(ctx) },
 		reopen: func(exe string, args []string) error {
 			_, err := host.StartDetached(exe, args, host.StartOptions{Dir: filepath.Dir(exe)})
 			return err
