@@ -86,7 +86,6 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	i := inst.Index
 	ports := m.Root.Ports()
 	port := ports.Console(i)
-	var imeDefault bool
 	cores, ok := inst.CPU()
 	if !ok || cores <= 0 {
 		cores = avd.DefaultCPU
@@ -101,6 +100,18 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	}
 
 	steps := []func(){
+		func() {
+			// 0a) the guest library fixes (Vulkan driver, ARM translation layer). A launched boot of an initialized
+			//     instance has mounted them during the boot animation already (earlyGuestFixes): this only finds them
+			//     mounted. Otherwise mounting them restarts zygote, system_server and every app, so it comes first:
+			//     everything below then runs on the framework that stays, and a change the package manager writes
+			//     with a delay (the stock launcher removed by the first-boot setup) is not lost with the restart.
+			//     The progress step keeps its name vulkan_fix (API, GUI, create)
+			prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 客体库补丁（Vulkan 驱动、ARM 转译层）", i), progressVulkanFix)
+			restarted, pending := m.ensureGuestFixes(ctx, inst, mode, until)
+			r.SetupPending = pending
+			r.ZygoteRestarted = restarted
+		},
 		func() {
 			if err := m.applyRegional(ctx, i, mode); err != nil {
 				m.Log.Warnf("实例 %d 语言设置未完成，下次继续: %v", i, err)
@@ -169,7 +180,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		func() {
 			// 7b) NetworkWatchlistService hashes every APK in full once a day has passed since the last boot (about
 			//     4 GB into the page cache, the whole guest RAM then stays resident on the host). Read when
-			//     system_server starts: effective from the next boot, also after the zygote restart of step 11
+			//     system_server starts: effective from the next boot
 			res := m.shell(ctx, i, "settings put global network_watchlist_enabled 0", 0)
 			if res.Code != 0 {
 				m.Log.Warnf("实例 %d 关闭 NetworkWatchlistService 失败（下次开机仍会把安装包整个读一遍）: %s",
@@ -189,7 +200,7 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		},
 		// 7d) host input method: install, enable, make it the default by the rules (every boot)
 		// (logPath is this boot's emulator log unless the instance was simply adopted)
-		func() { imeDefault = m.setupHostIme(ctx, i, mode != setupAdopted, logPath, prog) },
+		func() { r.HostIME = m.setupHostIme(ctx, i, mode != setupAdopted, logPath, prog) },
 		// 8) network: Wi-Fi always on (games then skip "not on Wi-Fi" prompts); fastpath sends bulk traffic over
 		//    eth0 (the virtual Wi-Fi alone does about 6 MB/s). The Wi-Fi switch persists in /data: set every boot
 		func() { m.setupNetwork(ctx, i) },
@@ -207,35 +218,19 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 				prog.emit("first_boot", fmt.Sprintf("实例 %d 首次开机初始化", i), progressFirstBoot)
 				m.firstBootInit(ctx, i)
 				r.FirstBoot = true
+				return
+			}
+			// 9b) the stock launcher stays removed (pixellauncher.go): an older start lost its removal to a restart
+			if mode != setupAdopted {
+				m.ensurePixelLauncherRemoved(ctx, i)
 			}
 		},
 		// 10) orientation: the display stays landscape (persistent; set every boot so old instances get it)
 		func() { m.setupOrientation(ctx, i) },
-		// 10b) hand the clusters the guest freed back to the host, at most once a day (best effort, see autotrim.go);
-		//      before the guest library fixes, whose zygote restart is deliberately the last step
+		// 10b) hand the clusters the guest freed back to the host, at most once a day (best effort, see autotrim.go)
 		func() { m.autoTrim(ctx, i, mode) },
-		func() {
-			// 11) the guest library fixes (Vulkan driver, ARM translation layer). Must be last: mounting them restarts
-			//     zygote, system_server and every app. The progress step keeps its name vulkan_fix (API, GUI, create)
-			prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 客体库补丁（Vulkan 驱动、ARM 转译层）", i), progressVulkanFix)
-			restarted, pending := m.ensureGuestFixes(ctx, inst, mode, until)
-			r.SetupPending = pending
-			if !restarted {
-				return
-			}
-			r.ZygoteRestarted = true
-			if ctx.Err() != nil {
-				return
-			}
-			// the letterbox education switch lives in system_server's memory and went with the restart
-			m.setupOrientation(ctx, i)
-			// the default input method lives in settings and should survive; it was ours after 7d, so check it
-			if imeDefault {
-				m.recheckHostIme(i, m.guestIO(ctx, i))
-			}
-		},
-		// 12) download disks (dldisk.go). After 11: the framework restart there remounts the shared storage, and a
-		//     disk mounted on it before would be gone with it
+		// 12) download disks (dldisk.go). After the guest library fixes (0a): the framework restart there remounts the
+		//     shared storage, and a disk mounted on it before would be gone with it
 		func() { m.setupDownloadDisk(ctx, i) },
 		// 13) the guest's clock source into the log, its kernel log's clock lines saved when an x86_64 guest is not on
 		//     tsc (clocksource.go, ModAVD#110). Last: the later the one read, the more of a fallback during boot it sees
@@ -247,7 +242,6 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		}
 		step()
 	}
-	r.HostIME = imeDefault
 	return r, ctxErr(ctx)
 }
 

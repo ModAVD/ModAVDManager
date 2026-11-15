@@ -541,15 +541,20 @@ func TestCreateCanceledReportsFinalShutdown(t *testing.T) {
 }
 
 // oneBoot is what Start reports for one boot of the setup: the boot wait (polled by the clock), then the steps after
-// it. firstBoot adds the first-boot setup.
+// it, the guest library fixes first. firstBoot adds the first-boot setup; a later boot mounts the fixes during the
+// boot wait already (earlyGuestFixes), and the step after it only finds them mounted.
 func oneBoot(firstBoot bool) []Progress {
-	evs := []Progress{{Step: "launch", Done: progressLaunch}, {Step: "boot", Done: 150}, {Step: "boot", Done: 200},
-		{Step: "boot", Done: progressBooted}, {Step: "tune", Done: progressTune}, {Step: "ime", Done: progressIme}}
+	evs := []Progress{{Step: "launch", Done: progressLaunch}, {Step: "boot", Done: 150}}
+	if !firstBoot {
+		evs = append(evs, Progress{Step: "vulkan_fix", Done: 151})
+	}
+	evs = append(evs, Progress{Step: "boot", Done: 200}, Progress{Step: "boot", Done: progressBooted},
+		Progress{Step: "vulkan_fix", Done: progressVulkanFix}, Progress{Step: "tune", Done: progressTune},
+		Progress{Step: "ime", Done: progressIme})
 	if firstBoot {
 		evs = append(evs, Progress{Step: "first_boot", Done: progressFirstBoot})
 	}
-	return append(evs, Progress{Step: "vulkan_fix", Done: progressVulkanFix},
-		Progress{Step: "done", Message: "实例 6 已就绪（共 45.7 秒）", Done: progressTotal})
+	return append(evs, Progress{Step: "done", Message: "实例 6 已就绪（共 45.7 秒）", Done: progressTotal})
 }
 
 // runCreateProgress feeds a setup's events into a createProgress with plan and returns what it sent. bridgeRounds
@@ -621,8 +626,9 @@ func TestCreateProgress(t *testing.T) {
 		want float64 // seconds done when it starts
 	}{
 		{"launch", stagePrepare},
-		{"tune", stagePrepare + stageBoot},
-		{"vulkan_fix", stagePrepare + stageBoot + stageTune + stageIme + stageFirstBoot},
+		{"vulkan_fix", stagePrepare + stageBoot},
+		{"tune", stagePrepare + stageBoot + stageVulkanFix},
+		{"first_boot", stagePrepare + stageBoot + stageVulkanFix + stageTune + stageIme},
 		{"create_stop", total - stageShutdown},
 	} {
 		if d, want := doneAt(t, got, c.step), int(float64(progressTotal)*c.want/total); d != want {
@@ -652,13 +658,13 @@ func TestCreateProgressBridge(t *testing.T) {
 	var cold, rounds []int
 	for _, e := range planned[slices.IndexFunc(planned, func(e Progress) bool { return e.Step == "bridge" }):] {
 		switch e.Step {
-		case "launch", "tune", "vulkan_fix":
+		case "launch", "tune":
 			cold = append(cold, e.Done)
 		case "bridge":
 			rounds = append(rounds, e.Done)
 		}
 	}
-	increasing := len(cold) == 6
+	increasing := len(cold) == 4
 	for k := 1; k < len(cold); k++ {
 		increasing = increasing && cold[k] > cold[k-1]
 	}
@@ -711,9 +717,14 @@ func TestCreatePlanOfSetup(t *testing.T) {
 		}
 		return doneAt(t, sent, "tune")
 	}
+	// the fixes after the boot: mounted there on a first boot, only checked after a later one
 	want := func(boot, firstBoot float64) int {
-		total := stagePrepare + boot + stageTune + stageIme + firstBoot + stageVulkanFix + stageShutdown
-		return int(float64(progressTotal) * (stagePrepare + boot) / total)
+		fix := stageFixCheck
+		if firstBoot > 0 {
+			fix = stageVulkanFix
+		}
+		total := stagePrepare + boot + fix + stageTune + stageIme + firstBoot + stageShutdown
+		return int(float64(progressTotal) * (stagePrepare + boot + fix) / total)
 	}
 	i := 6
 	if d, w := tuneAt(CreateRequest{Index: &i, NoBridge: true}), want(stageBoot, stageFirstBoot); d != w {
@@ -792,8 +803,8 @@ func TestCreateProgressBootLog(t *testing.T) {
 		t.Fatalf("unreadable log: %d, was %d", d, late)
 	}
 	write("x is operational\nAdvertising in: x\nINFO | Initialized handle: videmulator20060\nINFO | Boot completed in 19637 ms\n")
-	// the log is only read in the boot wait: the tuning starts its own stage
-	p.boot(Progress{Step: "tune", Done: progressTune})
+	// the log is only read in the boot wait: the guest library fixes start their own stage
+	p.boot(Progress{Step: "vulkan_fix", Done: progressVulkanFix})
 	p.boot(Progress{Step: "boot", Done: 150})
 	if d := got[len(got)-1].Done; d != booted {
 		t.Fatalf("after the boot: %d, want %d", d, booted)
