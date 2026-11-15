@@ -208,7 +208,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 模拟器被强杀或电脑崩溃以后，下载目录回到最后一次落盘时的样子，最多少 3 秒的进度，游戏接着下。解压出来的资源、账号、设置不在这块盘上，和以前一样。
   - 守护每 3 秒看一次：游戏装上以后、第一次启动之前就把盘挂好；游戏开着时不动它；普通目录里有下到一半的，等那一轮下完再挂；卸载游戏或清了它的应用数据，盘跟着删。
   - 盘是客体里的 `/data/local/tmp/modavd-dldisk/<包名>/dl.img`，一个最大 16 GB 的稀疏文件，删掉的包占的空间会还给数据盘。下载比解压快，下好的包会先堆在盘里：下整包资源时，数据盘的占用高峰比以前多约 6 GB。数据盘剩余不到 2 GB 时不建盘。
-  - 名单里是官服 `com.hypergryph.arknights` 和 B 服 `com.hypergryph.arknights.bilibili`（B 服没有实测，目录相同）。
+  - 名单里是明日方舟官服 `com.hypergryph.arknights`、B 服 `com.hypergryph.arknights.bilibili`（B 服没有实测，目录相同），以及明日方舟：终末地 `com.hypergryph.endfield`（同一套下载器，目录和写法相同）。
   - 设环境变量 `MODAVD_DL_DISK=off` 再开机：把盘里还没下完的搬回普通目录，删掉盘，不再起守护。
 分辨率只有两档：1080p 为 1920×1080 / DPI 280，720p 为 1280×720 / DPI 240。新建默认 1080p，720p 更省资源。管理器的新建和实例设置、CLI `--resolution 1080|720`、MCP `resolution` 使用同一套档位。已有实例按宽高识别：横屏或竖屏的 1920×1080 保持 1080p，其余配置及缺字段的旧配置保持 720p。换档联动宽、高、DPI，保留方向，下次冷启动生效；DPI 不单独设置，不使用运行时 `wm size` 或 `wm density`。自动化工具里的分辨率也要跟着改。
 
