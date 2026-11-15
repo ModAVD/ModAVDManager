@@ -90,8 +90,8 @@ func TestSharedReadsDoNotBlockDelete(t *testing.T) {
 	if v, err := r.ReadMetadata(); err != nil || r.AdbServerPort() != 20391 {
 		t.Fatalf("ReadMetadata: %v %v", v, err)
 	}
-	if b, ok := r.ModBuild(); !ok || b != 35 || r.EmulatorVersion() != "37.2.10" {
-		t.Fatalf("source.properties: %d %v %q", b, ok, r.EmulatorVersion())
+	if b, ok := r.EmulatorBuild(); !ok || b != LegacyEmuBuild(35) || r.EmulatorVersion() != "37.2.10" {
+		t.Fatalf("source.properties: %v %v %q", b, ok, r.EmulatorVersion())
 	}
 	if got := r.VersionText(); got != "0.35.2" {
 		t.Fatalf("manifest: %q", got)

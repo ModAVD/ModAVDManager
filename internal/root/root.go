@@ -229,8 +229,9 @@ const (
 	ImeAPKName          = "modavd-ime.apk"
 )
 
-// MinModBuild: emulators whose Pkg.BuildId is below mas-<this> refuse to boot (AUTO-MAS MIN_MOD_AVD_BUILD).
-const MinModBuild = 25
+// MinEmulatorBuild: emulators whose Pkg.BuildId is below this refuse to boot (AUTO-MAS MIN_MOD_AVD_BUILD, mas-25; a
+// legacy mas-N compares as 0.N.0, see EmuBuild).
+var MinEmulatorBuild = EmuBuild{Minor: 25}
 
 // SelfBuiltMark is a qemu property only our build has (sdk-mas19+); scanned for in qemu-system-x86_64-headless.exe.
 const SelfBuiltMark = "free-page-reporting"
@@ -779,7 +780,7 @@ type ComponentStatus struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`         // source.properties Pkg.Revision, "" when not installed
 	Build     string `json:"build,omitempty"` // emulator only: "0.35.0"
-	Installed bool   `json:"installed"`       // emulator: present AND self-built AND build >= MinModBuild
+	Installed bool   `json:"installed"`       // emulator: present AND self-built AND build >= MinEmulatorBuild
 	Optional  bool   `json:"optional"`
 	LocalSDK  bool   `json:"local_sdk"`
 }
@@ -874,8 +875,8 @@ func (r *Root) Components() []ComponentStatus {
 	}
 	if r.EmulatorSelfBuilt() {
 		emulator.Build = r.VersionText()
-		b, ok := r.ModBuild()
-		emulator.Installed = ok && b >= MinModBuild
+		b, _ := r.EmulatorBuild()
+		emulator.Installed = b.AtLeast(MinEmulatorBuild)
 	} else if r.EmulatorPresent() && OfficialEmulatorVersionSupported(emulator.Version) {
 		emulator.Installed = true
 	}
@@ -997,14 +998,10 @@ func (r *Root) emulatorProps() map[string]string {
 	return readProperties(filepath.Join(r.RuntimeSDK(), "emulator", "source.properties"))
 }
 
-// ModBuild is N from sdk\emulator\source.properties Pkg.BuildId=mas-N; ok=false when absent or another format.
-func (r *Root) ModBuild() (int, bool) {
-	m := modBuildRe.FindStringSubmatch(PyStrip(r.emulatorProps()["Pkg.BuildId"]))
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	return n, err == nil
+// EmulatorBuild is sdk\emulator\source.properties Pkg.BuildId: legacy mas-N or the version "X.Y.Z" (EmuBuild);
+// ok=false (zero build) when absent or another format.
+func (r *Root) EmulatorBuild() (EmuBuild, bool) {
+	return ParseEmuBuild(r.emulatorProps()["Pkg.BuildId"])
 }
 
 // EmulatorVersion is sdk\emulator\source.properties Pkg.Revision ("37.2.10"), "" when unreadable.
@@ -1028,54 +1025,61 @@ func ParseVersion(text string) (major, build, patch int, ok bool) {
 	return 0, 0, 0, false
 }
 
-// LastCoupledBuild is the last emulator build whose ModAVD version was 0.<build>.<patch> (mas-40 = 0.40.x). Later
-// versions are numbered on their own; the package says its emulator build in modavd-manifest.json's "build".
+// LastCoupledBuild is the last legacy emulator build whose ModAVD version was 0.<build>.<patch> (mas-40 = 0.40.x).
+// Later versions are numbered on their own; the package says its emulator build in modavd-manifest.json's "build".
 const LastCoupledBuild = 40
 
-// manifestInfo is modavd-manifest.json's "version" ("" when missing or not a string) and "build" (hasBuild=false when
-// missing or not an integer); both empty when the file is missing / unreadable / not an object. Read like
-// readProperties (the updater replaces it).
-func (r *Root) manifestInfo() (version string, build int, hasBuild bool) {
+// manifestInfo is modavd-manifest.json's "version" ("" when missing or not a string) and "build" (ManifestEmuBuild:
+// an integer N for mas-N or a version string; hasBuild=false when missing or anything else); both empty when the file
+// is missing / unreadable / not an object. Read like readProperties (the updater replaces it).
+func (r *Root) manifestInfo() (version string, build EmuBuild, hasBuild bool) {
 	data, err := ReadFileShared(r.ManifestPath())
 	if err != nil {
-		return "", 0, false
+		return "", EmuBuild{}, false
 	}
 	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 	v, err := jsonord.Parse(data)
 	if err != nil {
-		return "", 0, false
+		return "", EmuBuild{}, false
 	}
 	o := v.Obj()
 	version, _ = o.Get("version").Str()
 	if n, ok := o.Get("build").Int(); ok {
-		return version, int(n), true
+		// any integer, as before: one that is not positive matches no emulator
+		return version, LegacyEmuBuild(int(n)), true
 	}
-	return version, 0, false
+	build, hasBuild = ManifestEmuBuild(o.Get("build"))
+	return version, build, hasBuild
 }
 
 // InstalledVersion is the installed package's ModAVD version. It is the manifest's "version" when the manifest
-// belongs to the emulator in sdk\emulator: its "build" is ModBuild (a manifest without "build", from before the two
-// were separate: its minor number is ModBuild), or ModBuild is unknown. Otherwise, for an emulator up to
-// LastCoupledBuild (no manifest, or sdk\emulator replaced by hand) it is 0.<ModBuild>.0, as those were numbered;
+// belongs to the emulator in sdk\emulator: its "build" is EmulatorBuild in the same form (N for mas-N, or the same
+// "X.Y.Z"), or, for a legacy mas-N, a manifest without "build" (from before the two were separate) whose minor
+// number is N, or EmulatorBuild is unknown. Otherwise (no manifest, or sdk\emulator replaced by hand) it is 0.N.0
+// for a legacy mas-N up to LastCoupledBuild, as those were numbered, and the build itself for an "X.Y.Z" build;
 // else unknown.
 func (r *Root) InstalledVersion() (major, minor, patch int, ok bool) {
-	build, haveBuild := r.ModBuild()
+	build, haveBuild := r.EmulatorBuild()
 	text, declared, hasDeclared := r.manifestInfo()
 	if major, minor, patch, ok := ParseVersion(text); ok {
-		if !haveBuild || (hasDeclared && declared == build) || (!hasDeclared && minor == build) {
+		n, legacy := build.LegacyNumber()
+		if !haveBuild || (hasDeclared && declared == build) || (!hasDeclared && legacy && minor == n) {
 			return major, minor, patch, true
 		}
 	}
-	if haveBuild && build <= LastCoupledBuild {
-		return 0, build, 0, true
+	if n, legacy := build.LegacyNumber(); legacy && n <= LastCoupledBuild {
+		return 0, n, 0, true
+	}
+	if haveBuild && !build.Legacy {
+		return build.Major, build.Minor, build.Patch, true
 	}
 	return 0, 0, 0, false
 }
 
-// VersionText is the ModAVD version for people, "0.35.0" (InstalledVersion); "" when ModBuild or the version is
-// unknown.
+// VersionText is the ModAVD version for people, "0.35.0" (InstalledVersion); "" when EmulatorBuild or the version
+// is unknown.
 func (r *Root) VersionText() string {
-	if _, ok := r.ModBuild(); !ok {
+	if _, ok := r.EmulatorBuild(); !ok {
 		return ""
 	}
 	if major, minor, patch, ok := r.InstalledVersion(); ok {

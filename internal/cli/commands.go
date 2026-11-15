@@ -1690,7 +1690,7 @@ func formatUpdateStatus(w io.Writer, r *update.Status) {
 	if r.CurrentVersion != "" {
 		cur = strings.TrimPrefix(r.CurrentVersion, "v")
 	}
-	if r.CurrentBuild != "" {
+	if r.CurrentBuild != "" && r.CurrentBuild != strings.TrimPrefix(r.CurrentVersion, "v") {
 		cur += "（" + r.CurrentBuild + "）"
 	}
 	fmt.Fprintf(w, "ModAVD：%s，根目录 %s\n", cur, r.Root)

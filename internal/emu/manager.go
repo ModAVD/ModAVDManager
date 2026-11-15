@@ -414,9 +414,8 @@ func (m *Manager) rootInfo() RootInfo {
 		PortBase:            m.Root.Ports().Base,
 		Version:             m.Root.VersionText(),
 	}
-	if b, ok := m.Root.ModBuild(); ok {
-		info.Build = b
-	}
+	b, _ := m.Root.EmulatorBuild()
+	info.SetBuild(b)
 	return info
 }
 

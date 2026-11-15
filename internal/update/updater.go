@@ -134,7 +134,7 @@ type Status struct {
 	Updatable          bool     `json:"updatable"`
 	NotUpdatableReason string   `json:"not_updatable_reason"`
 	CurrentVersion     string   `json:"current_version"` // vX.Y.Z, "" when unknown
-	CurrentBuild       string   `json:"current_build"`   // mas-N, "" when unknown
+	CurrentBuild       string   `json:"current_build"`   // Pkg.BuildId: mas-N (legacy, up to 0.41) or X.Y.Z; "" when unknown
 	Source             string   `json:"source"`          // in effect: --source, else the setting (github / mirrorchyan)
 	CDKSet             bool     `json:"cdk_set"`         // a MirrorChyan CDK is in effect (--cdk-dpapi or saved; never the CDK)
 	Checked            bool     `json:"checked"`         // a source was asked and answered
@@ -179,8 +179,8 @@ func (u *Updater) status() *Status {
 	if v, ok := LocalVersion(u.Root); ok {
 		st.CurrentVersion = v.String()
 	}
-	if n, ok := u.Root.ModBuild(); ok {
-		st.CurrentBuild = "mas-" + strconv.Itoa(n)
+	if b, ok := u.Root.EmulatorBuild(); ok {
+		st.CurrentBuild = b.String()
 	}
 	state := u.l.readState()
 	st.Phase = phaseOf(state)

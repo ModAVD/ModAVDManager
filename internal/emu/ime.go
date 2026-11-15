@@ -23,8 +23,6 @@ import (
 const (
 	hostImePackage = root.HostImePackage
 	hostImeID      = "org.modavd.ime/.HostImeService"
-	// the emulator has the modavd_ime channel from mas-35 on
-	hostImeMinBuild = 35
 	// The guest marker: this /data has decided whether the host IME becomes the default; the default is not touched
 	// again afterwards. Shared with the launcher and AUTO-MAS: another name and they would take the default back
 	// and forth.
@@ -34,6 +32,9 @@ const (
 	hostImeWaitTimeout = 20 * time.Second
 	uninstallTimeout   = 60 * time.Second
 )
+
+// hostImeMinBuild: the emulator has the modavd_ime channel from mas-35 (0.35.0) on.
+var hostImeMinBuild = root.EmuBuild{Minor: 35}
 
 // hostImeStockDefaults: the image's own keyboards (Gboard, AOSP LatinIME) and unset. Only while the default is one of
 // these (and nothing was decided yet) does it become the host IME.
@@ -196,15 +197,15 @@ func (p hostImePlan) commands() []string {
 	return cmds
 }
 
-// hostImeChannel verifies the modavd_ime channel. Windows accepts the mas-35+
+// hostImeChannel verifies the modavd_ime channel. Windows accepts the 0.35.0+
 // build contract or the current boot's registration log. Other hosts require
 // that registration in the verified current emulator boot's log. why says what
 // is missing.
 func (m *Manager) hostImeChannel(launched bool, logPath string) (ok bool, why string) {
-	build, known := m.Root.ModBuild()
+	build, known := m.Root.EmulatorBuild()
 	// The build-number contract describes the Windows core. Other hosts need
 	// the registration message from the boot being configured.
-	if root.CurrentPlatform().Windows() && known && build >= hostImeMinBuild {
+	if root.CurrentPlatform().Windows() && build.AtLeast(hostImeMinBuild) {
 		return true, ""
 	}
 	if launched && fileContains(logPath, hostImeChannelLine) {
@@ -214,9 +215,9 @@ func (m *Manager) hostImeChannel(launched bool, logPath string) (ok bool, why st
 		return false, "当前开机日志没有 modavd_ime 通道注册记录"
 	}
 	if known {
-		return false, fmt.Sprintf("内测包 mas-%d 低于 mas-%d", build, hostImeMinBuild)
+		return false, fmt.Sprintf("内测包 %s 低于 %s", build.VersionText(), hostImeMinBuild.VersionText())
 	}
-	return false, fmt.Sprintf("读不到内测包编号（要 mas-%d 起），模拟器日志里也没有 modavd_ime 通道", hostImeMinBuild)
+	return false, fmt.Sprintf("读不到内测包编号（要 %s 起），模拟器日志里也没有 modavd_ime 通道", hostImeMinBuild.VersionText())
 }
 
 // guestIO is how the IME step reaches the guest: `adb shell <command>` and other adb commands of one instance. The

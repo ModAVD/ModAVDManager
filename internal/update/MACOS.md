@@ -32,7 +32,7 @@ ZIP 根目录须直接包含 `modavd-update-manifest.json`，不得在外面再�
 - `sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64`
 - `sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64-headless`
 
-管理器打开系统浏览器，无须独立的 WebView 辅助程序。`ModAVD.app/Contents/Info.plist` 中的 `CFBundleExecutable` 必须为 `ModAVD`。`sdk/emulator/source.properties` 必须包含 `Pkg.BuildId=mas-<build>`，无界面 QEMU 二进制必须包含 `free-page-reporting`，随包安装的 `modavd-manifest.json` 中的版本必须与传输清单中的版本一致。每个 Mach-O 都使用 `codesign --verify --strict` 校验；应用和模拟器目录树还需使用 `--deep --strict` 校验。这些检查验证签名完整性，也接受 ad hoc 临时签名，但不证明发布者可信或已通过 Apple 公证。每个校验进程都有执行时限，整轮校验也有总时限。
+管理器打开系统浏览器，无须独立的 WebView 辅助程序。`ModAVD.app/Contents/Info.plist` 中的 `CFBundleExecutable` 必须为 `ModAVD`。`sdk/emulator/source.properties` 中的 `Pkg.BuildId` 必须与传输清单的 `build` 对应：`build` 写整数 N 时（0.41 及以前的旧写法）须为 `Pkg.BuildId=mas-N`；写版本字符串（如 `"build": "0.42.0"`）时须为同一版本 `Pkg.BuildId=0.42.0`。无界面 QEMU 二进制必须包含 `free-page-reporting`，随包安装的 `modavd-manifest.json` 中的版本必须与传输清单中的版本一致。每个 Mach-O 都使用 `codesign --verify --strict` 校验；应用和模拟器目录树还需使用 `--deep --strict` 校验。这些检查验证签名完整性，也接受 ad hoc 临时签名，但不证明发布者可信或已通过 Apple 公证。每个校验进程都有执行时限，整轮校验也有总时限。
 
 各项上限为：20,000 个 ZIP 条目、4 GiB 解压后总量、16 MiB 传输清单、12 MiB 编码后的签名扩展属性，以及 1 MiB 事务日志。写入时必须保留至少 20 GiB 可用空间，无法确定剩余空间时停止操作。本地输入包先复制到更新器专用的临时文件，再校验摘要并解压。替换前会重新计算暂存内容的摘要，并重新校验代码签名，不会仅凭修改时间判断内容可信。
 

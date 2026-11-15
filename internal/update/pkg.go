@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -566,15 +567,19 @@ func hashFile(p string) (string, error) {
 }
 
 // checkPackageManifest is AUTO-MAS check_package_manifest: version and platform match what is being installed, and
-// "build" (the emulator build, not tied to the version since 0.41) is a positive integer when given.
+// "build" (the emulator build, not tied to the version since 0.41), when given, is a positive integer N (legacy
+// mas-N, up to 0.41) or a version string "X.Y.Z" (root.ManifestEmuBuild).
 func checkPackageManifest(m *jsonord.Obj, target Version) error {
 	v, ok := ParseVersion(manifestString(m, "version"))
 	if !ok || v != target {
 		return packageError("包里清单的版本（%s）和要装的版本（%s）不一致", displayVersion(manifestString(m, "version")), target.Display())
 	}
 	if b := m.Get("build"); b.Kind() != jsonord.Null {
-		if n, ok := b.Int(); !ok || n <= 0 {
-			lit, _ := b.NumberLiteral()
+		if _, ok := root.ManifestEmuBuild(b); !ok {
+			lit, isNum := b.NumberLiteral()
+			if !isNum {
+				lit, _ = b.Str()
+			}
 			return packageError("包里清单的构建号（%s）不对", lit)
 		}
 	}
@@ -588,21 +593,29 @@ func checkPackageManifest(m *jsonord.Obj, target Version) error {
 	return nil
 }
 
-var buildIDRe = regexp.MustCompile(`^mas-([0-9]+)$`)
-
-// manifestBuild is the emulator build from the already-read manifest, or the minor version for legacy packages.
-func manifestBuild(m *jsonord.Obj, target Version) int {
+// manifestBuild is the emulator build from the already-read manifest ("build": N for mas-N, or "X.Y.Z"), or mas-<the
+// minor version> for legacy packages without one.
+func manifestBuild(m *jsonord.Obj, target Version) root.EmuBuild {
 	if m != nil {
-		if n, ok := m.Get("build").Int(); ok && n > 0 {
-			return int(n)
+		if b, ok := root.ManifestEmuBuild(m.Get("build")); ok {
+			return b
 		}
 	}
-	return target.Minor
+	return root.LegacyEmuBuild(target.Minor)
 }
 
-// checkEmulator is AUTO-MAS check_emulator: the package's sdk\emulator is complete, its Pkg.BuildId is mas-<build>,
-// and its qemu is our own build (it knows the free-page-reporting balloon option).
-func checkEmulator(emu string, want int, target Version) error {
+// buildNumberText is a build as the package messages show it: N for mas-N (as before), "X.Y.Z" otherwise.
+func buildNumberText(b root.EmuBuild) string {
+	if n, ok := b.LegacyNumber(); ok {
+		return strconv.Itoa(n)
+	}
+	return b.String()
+}
+
+// checkEmulator is AUTO-MAS check_emulator: the package's sdk\emulator is complete, its Pkg.BuildId is the build the
+// manifest names in the same form (mas-N for N, X.Y.Z for "X.Y.Z"), and its qemu is our own build (it knows the
+// free-page-reporting balloon option).
+func checkEmulator(emu string, want root.EmuBuild, target Version) error {
 	p := root.CurrentPlatform()
 	for _, rel := range []string{p.Emulator, filepath.Join("qemu", p.QemuDir, p.QEMU),
 		"source.properties", filepath.Join("qemu", p.QemuDir, p.QEMUHeadless)} {
@@ -615,6 +628,7 @@ func checkEmulator(emu string, want int, target Version) error {
 		}
 	}
 	build := "读不到"
+	var got root.EmuBuild
 	b, err := os.ReadFile(filepath.Join(emu, "source.properties"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -626,12 +640,12 @@ func checkEmulator(emu string, want int, target Version) error {
 				id = strings.TrimSpace(v)
 			}
 		}
-		if m := buildIDRe.FindStringSubmatch(id); m != nil {
-			build = m[1]
+		if g, ok := root.ParseEmuBuild(id); ok {
+			got, build = g, buildNumberText(g)
 		}
 	}
-	if build != fmt.Sprint(want) {
-		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %d）不一致", build, target.Display(), want)
+	if want.IsZero() || got != want {
+		return packageError("包里模拟器的构建号（%s）和要装的 %s（构建号 %s）不一致", build, target.Display(), buildNumberText(want))
 	}
 	ours, err := fileContains(filepath.Join(emu, "qemu", p.QemuDir, p.QEMUHeadless), []byte("free-page-reporting"))
 	if err != nil {
