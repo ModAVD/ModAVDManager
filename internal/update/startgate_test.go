@@ -173,12 +173,31 @@ func TestInstallHoldsAllStartLocksThroughCommit(t *testing.T) {
 			t.Error("install did not finish after releasing metadata lock")
 		}
 	})
-	deadline := time.Now().Add(5 * time.Second)
-	for read(t, r, "sdk/emulator/emulator.exe") != "emulator mas-37" {
+	// Install is parked on the metadata lock held above, so it cannot finish early; the bounds below are only hang
+	// guards, sized for a slow CI machine rather than for the expected time.
+	//
+	// Do not open anything under sdk\emulator while waiting: an open handle there makes the installer's rename of
+	// that directory fail with access denied. Wait for the old directory to appear under .update\previous (stat
+	// only, no handle), then for the new one to be in place; the swap does not touch it again until the commit.
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		select {
+		case <-done:
+			t.Fatalf("install ended before the metadata commit: %+v %v", installed, installErr)
+		default:
+		}
+		if _, err := os.Stat(filepath.Join(r.Dir, ".update", "previous", "emulator")); err == nil {
+			if _, err := os.Stat(filepath.Join(r.Dir, "sdk", "emulator", "emulator.exe")); err == nil {
+				break
+			}
+		}
 		if time.Now().After(deadline) {
 			t.Fatal("install never reached metadata commit")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if got := read(t, r, "sdk/emulator/emulator.exe"); got != "emulator mas-37" {
+		t.Fatalf("sdk emulator after swap = %q", got)
 	}
 	assertStartLocks(t, r, true)
 	// Exercise the real Manager.Start lock protocol. Cancellation must happen
@@ -194,7 +213,7 @@ func TestInstallHoldsAllStartLocksThroughCommit(t *testing.T) {
 		if installErr != nil || !installed.Updated {
 			t.Fatalf("install: %+v %v", installed, installErr)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Minute):
 		t.Fatal("install did not finish")
 	}
 	assertStartLocks(t, r, false)

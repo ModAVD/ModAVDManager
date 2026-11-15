@@ -203,7 +203,9 @@ func TestCaptureWaitIgnoresUnreadablePolicy(t *testing.T) {
 		}
 		return saved(r)
 	}
-	if err := m.waitDiagnosticCapture(context.Background(), 6, 10*time.Second); err != nil {
+	// The wait ends on the capture state, not on this bound; the bound is only a hang guard, sized for a slow CI
+	// machine where each process scan takes seconds.
+	if err := m.waitDiagnosticCapture(context.Background(), 6, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	state, err := m.readCaptureState(6)
