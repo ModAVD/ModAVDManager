@@ -8,13 +8,17 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/logx"
 	"modavd/internal/regional"
+	"modavd/internal/win"
 )
 
 func textPtr(s string) *string { return &s }
@@ -184,5 +188,142 @@ func TestRegionalCancelledAndDeferredApplication(t *testing.T) {
 	still, _ = m.readRegional(i)
 	if still.LocaleRequest == nil || still.LocaleRequest.Locale != "ja-JP" {
 		t.Fatal("deferred language was consumed")
+	}
+}
+
+func TestRegionalFailedLanguageDoesNotBlockCreation(t *testing.T) {
+	r, _ := portPlanRoot(t)
+	m := New(r, logx.Nop())
+	m.hostLanguage = func() (string, error) { return "en-US", nil }
+	oldScan := qemuScan
+	qemuScan = func([]int) map[int]win.Process { return nil }
+	t.Cleanup(func() { qemuScan = oldScan })
+	t.Setenv(fakeAdbRegionalExitEnv, "1")
+	t.Setenv(fakeAdbRegionalAppliedEnv, "app_process unavailable")
+	var request *regional.LocaleRequest
+	h := &createHooks{start: func(m *Manager, ctx context.Context, i int, _ StartOptions) (*StartResult, error) {
+		s, err := m.readRegional(i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request = s.LocaleRequest
+		if _, err := m.regionalLaunch(i); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.applyRegional(ctx, i, setupLaunched); err == nil {
+			t.Fatal("expected guest language failure")
+		}
+		if err := m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
+			meta.Set("initialized", jsonord.NewBool(true))
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return &StartResult{HostIME: true, LanguagePending: true}, nil
+	}}
+	h.install(t)
+	createCheck = (*Manager).checkCreated
+	in, err := m.Create(context.Background(), CreateRequest{NoBridge: true})
+	if err != nil {
+		t.Fatalf("language failure blocked creation: %v", err)
+	}
+	if in.Status != StatusOffline || in.Creation != "" || h.stopped != 1 || in.Regional.PendingLanguage != "en-US" {
+		t.Fatalf("creation did not finish normally: %+v, stops %d", in, h.stopped)
+	}
+	s, err := m.readRegional(in.Index)
+	if err != nil || !reflect.DeepEqual(s.LocaleRequest, request) {
+		t.Fatalf("lost pending request: %+v, %v", s, err)
+	}
+	// The next cold boot retries the same request even if the host language changed.
+	m.hostLanguage = func() (string, error) { return "zh-CN", nil }
+	if _, err := m.regionalLaunch(in.Index); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(fakeAdbRegionalExitEnv, "0")
+	t.Setenv(fakeAdbRegionalAppliedEnv, "applied="+request.ID+"\nlanguage=en-US\ntime_zone=Etc/UTC\n")
+	if err := m.applyRegional(context.Background(), in.Index, setupLaunched); err != nil {
+		t.Fatal(err)
+	}
+	s, err = m.readRegional(in.Index)
+	if err != nil || s.LocaleRequest != nil || s.LanguageApplied != "en-US" {
+		t.Fatalf("retry not acknowledged: %+v, %v", s, err)
+	}
+}
+
+func TestRegionalReadUsesUnprivilegedProperties(t *testing.T) {
+	r, log := portPlanRoot(t)
+	m := New(r, logx.Nop())
+	in, err := m.Create(context.Background(), CreateRequest{filesOnly: true, NoBridge: true, Language: textPtr("en-US")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := fakeQemu(t, filepath.Join(r.RuntimeSDK(), "emulator", "qemu", "windows-x86_64"), in.Index,
+		r.Ports().Console(in.Index), false, avd.Dir(r, in.Index))
+	oldScan := qemuScan
+	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{in.Index: q} }
+	t.Cleanup(func() { qemuScan = oldScan })
+	before, _ := os.ReadFile(r.MetadataPath())
+	for _, tc := range []struct {
+		name, output, exit string
+		guestError         bool
+	}{
+		{"current guest differs from saved language", "ja-JP\r\nAsia/Tokyo\r\n", "0", false},
+		{"missing language", "\nAsia/Tokyo\n", "0", true},
+		{"missing time zone", "ja-JP\n\n", "0", true},
+		{"adb failure", "device unavailable", "1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(fakeAdbRegionalPropertiesEnv, tc.output)
+			t.Setenv(fakeAdbRegionalExitEnv, tc.exit)
+			result, err := m.Regional(context.Background(), in.Index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.guestError {
+				if result.Guest != nil || result.GuestError == "" {
+					t.Fatalf("failed read was accepted: %+v", result)
+				}
+			} else if result.Guest == nil || *result.Guest != (RegionalGuest{Language: "ja-JP", TimeZone: "Asia/Tokyo"}) || result.GuestError != "" {
+				t.Fatalf("wrong guest values: %+v", result)
+			}
+		})
+	}
+	after, _ := os.ReadFile(r.MetadataPath())
+	if string(before) != string(after) {
+		t.Fatal("reading regional settings changed metadata")
+	}
+	b, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"push", "su 0", "app_process", "modavd-regional.dex"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("regional read ran %q: %s", forbidden, b)
+		}
+	}
+	if strings.Count(string(b), "getprop persist.sys.locale") != 4 || !strings.Contains(string(b), "persist.sys.timezone") {
+		t.Fatalf("missing property queries: %s", b)
+	}
+	// Offline and busy instances do not query their regional properties.
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, ok, err := win.TryLock(m.lockPath(in.Index, "start"))
+	if err != nil || !ok {
+		t.Fatalf("start lock: %v %v", ok, err)
+	}
+	result, err := m.Regional(context.Background(), in.Index)
+	lock.Unlock()
+	if err != nil || result.Guest != nil {
+		t.Fatalf("busy guest was queried: %+v %v", result, err)
+	}
+	qemuScan = func([]int) map[int]win.Process { return nil }
+	result, err = m.Regional(context.Background(), in.Index)
+	if err != nil || result.Guest != nil {
+		t.Fatalf("offline guest was queried: %+v %v", result, err)
+	}
+	b, _ = os.ReadFile(log)
+	if strings.Contains(string(b), "persist.sys.locale") {
+		t.Fatalf("offline or busy guest received a regional query: %s", b)
 	}
 }

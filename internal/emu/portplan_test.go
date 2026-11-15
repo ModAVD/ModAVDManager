@@ -172,6 +172,14 @@ func fakeAdbClientMain(args []string) int {
 	}
 	all := strings.Join(args, " ")
 	switch {
+	case strings.Contains(all, "org.modavd.regional.Regional"):
+		fmt.Print(os.Getenv(fakeAdbRegionalAppliedEnv))
+		code, _ := strconv.Atoi(os.Getenv(fakeAdbRegionalExitEnv))
+		return code
+	case strings.Contains(all, "getprop persist.sys.locale"):
+		fmt.Print(os.Getenv(fakeAdbRegionalPropertiesEnv))
+		code, _ := strconv.Atoi(os.Getenv(fakeAdbRegionalExitEnv))
+		return code
 	case strings.Contains(all, "get-state"):
 		fmt.Println("device")
 	case strings.Contains(all, "sys.boot_completed"):
@@ -194,9 +202,12 @@ func fakeAdbClientMain(args []string) int {
 // The fake adb client's answers for the stop tests: what guestHomeScript prints ("app" / "home", default "home") and
 // the exit code of the shutdown command (default 0).
 const (
-	fakeAdbHomeEnv    = "MODAVD_EMU_FAKE_ADB_HOME"
-	fakeAdbSvcExitEnv = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
-	fakeAdbNoBootEnv  = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
+	fakeAdbHomeEnv               = "MODAVD_EMU_FAKE_ADB_HOME"
+	fakeAdbSvcExitEnv            = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
+	fakeAdbNoBootEnv             = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
+	fakeAdbRegionalPropertiesEnv = "MODAVD_EMU_FAKE_REGIONAL_PROPERTIES"
+	fakeAdbRegionalAppliedEnv    = "MODAVD_EMU_FAKE_REGIONAL_APPLIED"
+	fakeAdbRegionalExitEnv       = "MODAVD_EMU_FAKE_REGIONAL_EXIT"
 )
 
 func freeTCPPort(t *testing.T) int {
