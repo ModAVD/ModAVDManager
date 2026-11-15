@@ -237,6 +237,9 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		// 12) download disks (dldisk.go). After 11: the framework restart there remounts the shared storage, and a
 		//     disk mounted on it before would be gone with it
 		func() { m.setupDownloadDisk(ctx, i) },
+		// 13) the guest's clock source into the log, its kernel log's clock lines saved when an x86_64 guest is not on
+		//     tsc (clocksource.go, ModAVD#110). Last: the later the one read, the more of a fallback during boot it sees
+		func() { m.recordClocksource(ctx, inst) },
 	}
 	for _, step := range steps {
 		if err := ctxErr(ctx); err != nil {

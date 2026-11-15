@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -696,6 +697,9 @@ func (c *collector) instanceFilesOf(avdDir string, ini fs.FileInfo, name string)
 			c.L(fmt.Sprintf("  警告：%s.avd 里没有 config.ini", name))
 		}
 	}
+	if line := clocksourceLine(avdDir, name); line != "" {
+		c.L("  " + line)
+	}
 	for _, fn := range present {
 		if _, err := copyShared(filepath.Join(dir, fn), filepath.Join(outDir, fn), 0); err != nil {
 			c.L("  复制 " + fn + " 失败：" + errText(err))
@@ -719,6 +723,51 @@ func (c *collector) instanceFilesOf(avdDir string, ini fs.FileInfo, name string)
 		lst = append(lst, "（空目录）")
 	}
 	return writeLinesBOM(filepath.Join(outDir, "_files.txt"), lst)
+}
+
+// clocksourceLine is the summary line of the instance's latest boot's clock source, from avd\.<name>.clocksource.json
+// (written by modavd at the end of each start, see emu/clocksource.go; ModAVD/ModAVD#110). "" when there is no
+// readable record (instances not started since, older modavd): no line then.
+func clocksourceLine(avdDir, name string) string {
+	b, err := root.ReadFileShared(filepath.Join(avdDir, "."+name+".clocksource.json"))
+	if err != nil {
+		return ""
+	}
+	var rec struct {
+		At          string `json:"at"`
+		Clocksource string `json:"clocksource"`
+		Available   string `json:"available"`
+		Arch        string `json:"arch"`
+		X86         bool   `json:"x86"`
+		KernelLog   string `json:"kernel_log"`
+		Error       string `json:"error"`
+	}
+	if json.Unmarshal(b, &rec) != nil || rec.At == "" {
+		return ""
+	}
+	at := rec.At
+	if t, err := time.Parse(time.RFC3339, rec.At); err == nil {
+		at = t.Local().Format("2006-01-02 15:04:05")
+	}
+	line := fmt.Sprintf("时钟源（最近一次开机，%s 读）：", at)
+	switch {
+	case rec.Clocksource == "":
+		return line + "读不到"
+	case !rec.X86 || rec.Clocksource == "tsc":
+		return line + rec.Clocksource
+	}
+	line += rec.Clocksource + "，不是 tsc（可选 " + orDash(rec.Available) + "）"
+	if rec.KernelLog != "" {
+		return line + `，内核日志 logs\` + rec.KernelLog
+	}
+	return line + "，内核日志没存下"
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
 }
 
 var (
@@ -1164,6 +1213,8 @@ func (c *collector) emulatorLogs() error {
 		c.L(fmt.Sprintf("启动卡死线程转储（startup-*-hang-threads.txt）：取了最新 %d 份：%s", hn, strings.Join(hangNames, "、")))
 	}
 
+	c.clocksourceLogs(logDir, all)
+
 	// the component fetch log: which mirror, which step failed
 	fc := filepath.Join(logDir, "fetch-components.log")
 	if exists(fc) {
@@ -1177,6 +1228,54 @@ func (c *collector) emulatorLogs() error {
 	}
 	c.bootDiagDirs(logDir)
 	return nil
+}
+
+var clocksourceLogName = regexp.MustCompile(`(?i)^(.+)-[0-9]{8}-[0-9]{6}-clocksource\.txt$`)
+
+// clocksourceLogsKeep: saved guest kernel logs of a clock source fallback taken per instance.
+const clocksourceLogsKeep = 3
+
+// clocksourceLogs copies the guest kernel logs modavd saved when an x86_64 guest booted without tsc
+// (logs\<instance>-<time>-clocksource.txt, at most 4 MB each, see emu/clocksource.go): the newest clocksourceLogsKeep
+// per instance by the time in the name, outside the cap like the thread dumps. Nothing is said when there are none.
+func (c *collector) clocksourceLogs(logDir string, all []fs.FileInfo) {
+	byInstance := map[string][]fs.FileInfo{}
+	var names []string
+	for _, f := range all {
+		m := clocksourceLogName.FindStringSubmatch(f.Name())
+		if m == nil || !f.Mode().IsRegular() {
+			continue
+		}
+		key := strings.ToLower(m[1])
+		if _, ok := byInstance[key]; !ok {
+			names = append(names, key)
+		}
+		byInstance[key] = append(byInstance[key], f)
+	}
+	if len(names) == 0 {
+		return
+	}
+	sortCulture(names)
+	var taken []string
+	var total int64
+	for _, n := range names {
+		files := byInstance[n]
+		sort.SliceStable(files, func(i, j int) bool { return cultureCompare(files[i].Name(), files[j].Name()) > 0 })
+		for k, f := range files {
+			if k == clocksourceLogsKeep {
+				break
+			}
+			got, _, err := c.copyBounded(filepath.Join(logDir, f.Name()), filepath.Join(c.stage, root.LogsDir, f.Name()), f.Size())
+			if err != nil {
+				c.L("  复制 " + f.Name() + " 失败：" + errText(err))
+				continue
+			}
+			total += got
+			taken = append(taken, f.Name())
+		}
+	}
+	c.L(fmt.Sprintf("时钟源不是 tsc 时存的客体内核日志（*-clocksource.txt）：取了 %d 份，%s：%s", len(taken),
+		formatSize(float64(total)), strings.Join(taken, "、")))
 }
 
 var bootDiagName = regexp.MustCompile(`(?i)^(.+)-([0-9]{8}-[0-9]{6})-bootfail$`)

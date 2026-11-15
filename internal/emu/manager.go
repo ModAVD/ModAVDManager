@@ -378,8 +378,8 @@ func (m *Manager) guestLockPath(i int) string {
 	return filepath.Join(m.Root.AvdHome(), "."+root.AvdName(i)+".guest.lock")
 }
 
-// removeLockFiles deletes the lock files, the setup marker, create's progress / cancellation files and the boot record
-// (after Delete); best effort.
+// removeLockFiles deletes the lock files, the setup marker, create's progress / cancellation files, the clock source
+// record and the boot record (after Delete); best effort.
 func (m *Manager) removeLockFiles(i int) {
 	for _, kind := range []string{"start", "boot", "stop", "watch", "logcat", "bridge", "create", "proxy", "disk"} {
 		os.Remove(m.lockPath(i, kind))
@@ -389,6 +389,7 @@ func (m *Manager) removeLockFiles(i int) {
 	os.Remove(m.createCancelPath(i))
 	os.Remove(m.guestLockPath(i))
 	os.Remove(m.localeBootPath(i))
+	os.Remove(m.clocksourcePath(i))
 	m.removeBootRecord(i)
 }
 
