@@ -9,7 +9,7 @@
 
 const ROOT = 'X:\\ModAVD';
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
-const MEM = [3072, 4096, 5120, 6144];
+const MEM = [3072, 4096, 5120, 6144, 8192];
 const db = { insts: new Map(), jobs: [], streams: new Set(), seq: 40, check: 'ok', offline: false, drop: false, ready: true, diagMode: '', componentsReady: false,
   componentSource: { source: 'auto', mirror: '', mirror_urls: [], configured: false },
   // the root's Google Play Store files (sdk\playstore): source is download | import once they are there
@@ -853,7 +853,7 @@ function probeAt(server) {
 const errResp = (code, message, advice) => fail(STATUS_OF[code] || 500, code, message, advice);
 
 function validate(b, create) {
-  if (b.memory_mb != null && !MEM.includes(b.memory_mb)) return ['invalid_argument', `内存只能选 3、4、5、6 GB（收到 ${b.memory_mb} MB）`, ''];
+  if (b.memory_mb != null && !MEM.includes(b.memory_mb)) return ['invalid_argument', `内存只能选 3、4、5、6、8 GB（收到 ${b.memory_mb} MB）`, ''];
   if (b.cpu != null && ![2, 4, 6].includes(b.cpu)) return ['invalid_argument', `CPU 核数只能是 2、4 或 6（收到 ${b.cpu}）`, ''];
   if (b.resolution != null && ![1080, 720].includes(b.resolution)) return ['invalid_argument', '分辨率只能是 1080 或 720', ''];
   if (b.fps != null && !(Number.isInteger(b.fps) && b.fps >= 1 && b.fps <= 60)) return ['invalid_argument', '帧率只能在 1–60 之间', ''];
