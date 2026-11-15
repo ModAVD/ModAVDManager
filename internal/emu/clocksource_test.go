@@ -275,3 +275,20 @@ func TestCheckClocksourceRecordUnwritable(t *testing.T) {
 		t.Errorf("log = %s", fmt.Sprint(*lines))
 	}
 }
+
+// The clock source is read as root: the adb shell user is denied this sysfs directory on the Android 14 images
+// (ModAVD/ModAVD#110; every boot of the 0.41.0 candidate logged "Permission denied").
+func TestClocksourceScriptRunsAsRoot(t *testing.T) {
+	if !strings.HasPrefix(clocksourceScript, "su 0 sh -c '") || !strings.HasSuffix(clocksourceScript, "'") ||
+		strings.Count(clocksourceScript, "'") != 2 {
+		t.Fatalf("clocksourceScript must be one su 0 sh -c '…' command: %q", clocksourceScript)
+	}
+}
+
+func TestParseClocksourceDenied(t *testing.T) {
+	out := "cat: /sys/devices/system/clocksource/clocksource0/current_clocksource: Permission denied\n---\n" +
+		"cat: /sys/devices/system/clocksource/clocksource0/available_clocksource: Permission denied\n---\nx86_64\n"
+	if current, _, arch, ok := parseClocksource(out); ok || current != "" || arch != "x86_64" {
+		t.Fatalf("denied read parsed as current=%q arch=%q ok=%v", current, arch, ok)
+	}
+}
