@@ -30,6 +30,7 @@ const (
 	modeTree  = "__tree"  // start a __child with StartDetached, print "grandchild=<pid>", sleep 60 s
 	modeExit  = "__exit"  // sleep 300 ms, exit with <code>
 	modeLock  = "__lock"  // TryLock <path>, print "locked=<bool>"
+	modeShm   = "__shm"   // open the named mapping <name>, print "held", sleep 60 s
 )
 
 func TestMain(m *testing.M) {
@@ -62,6 +63,15 @@ func TestMain(m *testing.M) {
 			l, ok, err := TryLock(os.Args[2])
 			fmt.Printf("locked=%v err=%v\n", ok, err)
 			l.Unlock()
+			os.Exit(0)
+		case modeShm:
+			p, _ := syscall.UTF16PtrFromString(os.Args[2])
+			if h, _ := call(procOpenFileMappingW, fileMapRead, 0, uintptr(unsafe.Pointer(p))); h == 0 {
+				fmt.Println("missing")
+				os.Exit(1)
+			}
+			fmt.Println("held")
+			time.Sleep(60 * time.Second)
 			os.Exit(0)
 		}
 	}
@@ -678,6 +688,67 @@ func TestSharedMemory(t *testing.T) {
 	syscall.CloseHandle(h)
 	if SharedMemoryExists(name) {
 		t.Error("closed mapping still found")
+	}
+}
+
+// ModAVD#210: the program that keeps a screenshot region alive after its emulator exited.
+func TestSharedMemoryHolders(t *testing.T) {
+	name := fmt.Sprintf("SHM_videmulator_modavd_holders_%d", os.Getpid())
+	if got, err := SharedMemoryHolders(name); got != nil || err != nil {
+		t.Fatalf("absent mapping: %v %v", got, err)
+	}
+	p, _ := syscall.UTF16PtrFromString(name)
+	h, err := syscall.CreateFileMapping(syscall.InvalidHandle, nil, syscall.PAGE_READWRITE, 0, 4096, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// only this process: it does not count itself
+	if got, err := SharedMemoryHolders(name); got != nil || err != nil {
+		t.Fatalf("own mapping: %v %v", got, err)
+	}
+	cmd := exec.Command(testExe(t), modeShm, name)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	line := make([]byte, 16)
+	if n, _ := out.Read(line); !strings.HasPrefix(string(line[:n]), "held") {
+		t.Fatalf("helper: %q", line[:n])
+	}
+	// the creator lets go: the helper alone keeps the region alive, as the stale reader did
+	syscall.CloseHandle(h)
+	got, err := SharedMemoryHolders(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PID != uint32(cmd.Process.Pid) || !strings.EqualFold(got[0].Name, filepath.Base(testExe(t))) {
+		t.Fatalf("holders %+v, want pid %d", got, cmd.Process.Pid)
+	}
+	// an unrelated section of the same process is not a match
+	other := name + "_other"
+	if got, _ := SharedMemoryHolders(other); got != nil {
+		t.Fatalf("absent other: %v", got)
+	}
+}
+
+func TestParseHandleTable(t *testing.T) {
+	buf := make([]byte, handleTableHeader+handleEntrySize)
+	*(*uintptr)(unsafe.Pointer(&buf[0])) = 3 // claims 3 rows, holds 1: no overrun
+	row := buf[handleTableHeader:]
+	*(*uintptr)(unsafe.Pointer(&row[0])) = 0xfeed
+	*(*uintptr)(unsafe.Pointer(&row[handleEntryPID])) = 42
+	*(*uintptr)(unsafe.Pointer(&row[handleEntryHandle])) = 0x1a4
+	*(*uint16)(unsafe.Pointer(&row[handleEntryType])) = 44
+	got := parseHandleTable(buf)
+	if len(got) != 1 || got[0] != (handleEntry{object: 0xfeed, pid: 42, handle: 0x1a4, typ: 44}) {
+		t.Fatalf("%+v", got)
+	}
+	if parseHandleTable(buf[:8]) != nil {
+		t.Error("short buffer")
 	}
 }
 

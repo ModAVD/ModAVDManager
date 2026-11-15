@@ -43,6 +43,9 @@ func L3Groups() []L3Group { return nil }
 // SharedMemoryExists calls OpenFileMappingW for the Windows named mapping.
 func SharedMemoryExists(string) bool { return false }
 
+// SharedMemoryHolders lists the other processes with a handle to the Windows named mapping.
+func SharedMemoryHolders(string) ([]Process, error) { return nil, nil }
+
 // GetCompressedFileSize calls GetCompressedFileSizeW for the Windows file.
 func GetCompressedFileSize(string) (uint64, error) { return 0, errUnsupported }
 

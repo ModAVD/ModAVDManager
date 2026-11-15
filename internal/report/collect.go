@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -791,6 +792,53 @@ func (c *collector) topMemory(procs []Process) {
 	c.L(fmt.Sprintf("读得到的 %d 个程序合计提交 %s", len(sums), formatSize(float64(total))))
 }
 
+// shmReporter is the Windows host's view of an emulator's screenshot region (SHM_videmulator<console port>): whether
+// it exists and which other processes hold it. Hosts without it (macOS, the tests' fakes) print nothing.
+type shmReporter interface {
+	ScreenshotShm(name string) (exists bool, holders []Process, err error)
+}
+
+// staleScreenshotShm lists the screenshot regions of instances that are not running. Such a region outlives its
+// emulator only while some program holds it, and the next boot on that port then cannot share frames at a new size
+// (ModAVD/ModAVD#210). Printed only when there is one.
+func (c *collector) staleScreenshotShm() {
+	s, ok := c.h.(shmReporter)
+	if !ok {
+		return
+	}
+	var lines []string
+	for _, name := range c.instances {
+		rest, ok := strings.CutPrefix(name, "mas_")
+		idx, err := strconv.Atoi(rest)
+		if !ok || err != nil || idx < 0 || slices.ContainsFunc(c.running, func(t liveTarget) bool { return strings.EqualFold(t.name, name) }) {
+			continue
+		}
+		shm := fmt.Sprintf("SHM_videmulator%d", c.plan.Console(idx))
+		exists, holders, err := s.ScreenshotShm(shm)
+		if !exists {
+			continue
+		}
+		who := "没认出是哪个程序"
+		if err != nil {
+			who = "查不出是哪个程序：" + errText(err)
+		} else if len(holders) > 0 {
+			names := make([]string, 0, len(holders))
+			for _, p := range holders {
+				names = append(names, fmt.Sprintf("%s（pid %d）", p.Name, p.PID))
+			}
+			who = "拿着它的程序：" + strings.Join(names, "、")
+		}
+		lines = append(lines, fmt.Sprintf("%s：%s 还在（%s）", name, shm, who))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	c.section("没在运行的实例留下的截图共享内存（有程序还拿着它，下次开机截图共享可能开不起来）")
+	for _, l := range lines {
+		c.L(l)
+	}
+}
+
 func (c *collector) runningAndAdb() error {
 	c.section("正在运行的 qemu-system 进程")
 	qs, err := c.h.Processes(func(name string) bool { return hasPrefixFold(name, "qemu-system") })
@@ -835,6 +883,7 @@ func (c *collector) runningAndAdb() error {
 		}
 	}
 	c.running = running
+	c.staleScreenshotShm()
 	if all, err := c.h.Processes(func(string) bool { return true }); err == nil {
 		c.topMemory(all)
 	}
