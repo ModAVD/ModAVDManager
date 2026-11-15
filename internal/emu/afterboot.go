@@ -25,24 +25,30 @@ import (
 // (toggled by the user, or allowed at an earlier boot) are left alone; an app whose mode cannot be read
 // (`appops get` non-zero) is not written and counts as failed. Enumeration failure exits 2; a failed app prints
 // "failed: <package>", the rest go on, the exit code is then 1. dumpsys also exits 0 when the service is missing,
-// so finding no package section counts as an enumeration failure. Same text as AUTO-MAS
-// _ALLOW_INSTALL_SOURCES_SCRIPT and the launcher.
+// so finding no package section counts as an enumeration failure.
+//
+// After a change the modes are written to /data/system/appops.xml at once (`appops write-settings`, a failure prints
+// "write-settings failed" and exits 1): system_server only writes them about 30 minutes later, and the guest Vulkan
+// fix (step 11) restarts system_server seconds after this step, so a new instance never kept them and the system
+// installer, finding the mode back at default, set it to deny on the first APK install (11-15).
 const allowInstallSourcesScript = `set -o pipefail; ` +
 	`list=$(dumpsys package packages 2>/dev/null` +
 	` | awk '/^  Package \[/ { n++; p = substr($2, 2, length($2) - 2) }` +
 	` /android.permission.REQUEST_INSTALL_PACKAGES/ { if (p != "" && p != "android") print p }` +
 	` END { if (n == 0) exit 3 }'` +
 	` | sort -u) || { echo "dumpsys package failed"; exit 2; }; ` +
-	`fail=0; ` +
+	`fail=0; changed=0; ` +
 	`for p in $list; do` +
 	` m=$(appops get "$p" REQUEST_INSTALL_PACKAGES 2>&1)` +
 	` || { echo "failed: $p"; fail=1; continue; };` +
 	` case "$m" in` +
 	` *"REQUEST_INSTALL_PACKAGES: default"*) ;;` +
 	` *"REQUEST_INSTALL_PACKAGES: "*) continue ;; esac;` +
-	` if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p";` +
+	` if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p"; changed=1;` +
 	` else echo "failed: $p"; fail=1; fi;` +
-	` done; exit $fail`
+	` done; ` +
+	`if [ $changed = 1 ] && ! appops write-settings >/dev/null 2>&1; then echo "write-settings failed"; fail=1; fi; ` +
+	`exit $fail`
 
 type afterBootResult struct {
 	FirstBoot       bool
