@@ -130,6 +130,7 @@ type collector struct {
 	adbPort           int
 	plan              root.PortPlan // mas-avd.json's portBase (ModAVD/ModAVD#75); the script's PORT_BASE otherwise
 	running           []liveTarget
+	liveSerials       []liveSerial // the instances live() reached, for the frame rate sample (extra.go)
 	cmdlineUnreadable bool
 	masFound          bool
 	diagnostics       map[int]diagnostics.State
@@ -278,6 +279,7 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	c.step("AUTO-MAS 日志", c.autoMAS)
 	c.step("系统事件日志", c.events)
 	c.step("现场截图与状态", c.live)
+	c.extra(sectionFrameRate, c.frameRate)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1892,6 +1894,7 @@ func (c *collector) live() error {
 		} else {
 			c.L(fmt.Sprintf("%s（pid %d，%s）：", t.name, t.pid, serial))
 		}
+		c.liveSerials = append(c.liveSerials, liveSerial{name: t.name, serial: serial})
 		if err := c.screenshot(filepath.Join(liveDir, "screen-"+t.name+".png"), serial); err != nil {
 			c.L("  截图出错：" + errText(err))
 		}
