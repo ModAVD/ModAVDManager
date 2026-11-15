@@ -42,7 +42,7 @@ func TestLoginCookieFlow(t *testing.T) {
 	}
 	expect(t, h.do("GET", "/api/info", nil, noCookie, withHeader("Cookie", cookies[0].Name+"="+cookies[0].Value)),
 		http.StatusOK, &info)
-	if info.Version == "" || info.Protocol == 0 || info.Root.Root != fakeRoot.Root || info.Root.Build != 35 {
+	if info.Version == "" || info.Protocol == 0 || info.Root.Root != fakeRoot.Root || info.Root.Build != 35 || info.Root.BuildID != "mas-35" {
 		t.Fatalf("info %+v", info)
 	}
 

@@ -114,7 +114,7 @@ func (f *fake) get(i int) (emu.InstanceInfo, bool) {
 
 // The fake root has a port plan of its own (portBase 21000), so a serial counted from 20000 anywhere shows.
 var fakeRoot = emu.RootInfo{Root: `C:\fake-root`, SDK: `C:\fake-root\sdk`, AdbServerPort: 21099,
-	ScriptAdbServerPort: 21098, PortBase: 21000, Version: "0.35.0", Build: 35}
+	ScriptAdbServerPort: 21098, PortBase: 21000, Version: "0.35.0", BuildID: "mas-35", Build: 35}
 
 var fakePorts = root.PortPlan{Base: fakeRoot.PortBase}
 

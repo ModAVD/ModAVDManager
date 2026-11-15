@@ -855,6 +855,14 @@ func TestComponentsAndEnsureMetadata(t *testing.T) {
 	if c := r.Components()[1]; c.Installed || c.Build != "0.24.0" {
 		t.Errorf("old build: %+v", c)
 	}
+	fakeSDK(t, r.SDK(), "0.42.0", true)
+	if c := r.Components()[1]; !c.Installed || c.Build != "0.42.0" {
+		t.Errorf("version build: %+v", c)
+	}
+	fakeSDK(t, r.SDK(), "0.24.0", true)
+	if c := r.Components()[1]; c.Installed || c.Build != "0.24.0" {
+		t.Errorf("old version build: %+v", c)
+	}
 	fakeSDK(t, r.SDK(), "mas-35", false)
 	if c := r.Components()[1]; c.Installed || c.Build != "" || c.Version != "37.2.10" {
 		t.Errorf("not self-built: %+v", c)
@@ -946,21 +954,19 @@ func TestSelfBuiltMarkAcrossChunks(t *testing.T) {
 	}
 }
 
-func TestModBuildAndVersionText(t *testing.T) {
+func TestEmulatorBuildAndVersionText(t *testing.T) {
 	r := newRoot(t)
-	if _, ok := r.ModBuild(); ok || r.VersionText() != "" || r.EmulatorVersion() != "" {
+	if _, ok := r.EmulatorBuild(); ok || r.VersionText() != "" || r.EmulatorVersion() != "" {
 		t.Fatal("empty root")
 	}
 	props := filepath.Join(r.SDK(), "emulator", "source.properties")
-	for id, want := range map[string]int{"mas-35": 35, "  mas-32  ": 32, "mas-007": 7, "mas-": -1, "mas-35b": -1,
-		"35": -1, "MAS-35": -1, "mas-x": -1, "mas-99999999999999999999": -1} {
+	for id, want := range map[string]string{"mas-35": "mas-35", "  mas-32  ": "mas-32", "mas-007": "mas-7", "mas-": "",
+		"mas-35b": "", "35": "", "MAS-35": "", "mas-x": "", "mas-99999999999999999999": "", "mas-0": "",
+		"0.42.0": "0.42.0", "v0.42.1": "0.42.1", " 1.0.0 ": "1.0.0", "0.42": "", "0.42.0-rc1": "", "0.0.0": ""} {
 		writeFile(t, props, []byte("Pkg.Revision=37.2.10\r\nPkg.BuildId="+id+"\r\n"))
-		got, ok := r.ModBuild()
-		if !ok {
-			got = -1
-		}
-		if got != want {
-			t.Errorf("BuildId %q: %d want %d", id, got, want)
+		got, ok := r.EmulatorBuild()
+		if ok == (want == "") || got.String() != want {
+			t.Errorf("BuildId %q: %q %v want %q", id, got, ok, want)
 		}
 	}
 	if r.EmulatorVersion() != "37.2.10" {
@@ -1021,6 +1027,37 @@ func TestModBuildAndVersionText(t *testing.T) {
 	if got := r.VersionText(); got != "" {
 		t.Errorf("mas-41 without manifest: %q", got)
 	}
+	// From 0.42 the build ID is the version: the manifest's "build" is that string; the forms do not mix.
+	writeFile(t, props, []byte("Pkg.BuildId=0.42.0\n"))
+	for content, want := range map[string]string{
+		`{"version": "v0.42.0", "build": "0.42.0"}`:  "0.42.0",
+		`{"version": "v0.42.3", "build": "0.42.0"}`:  "0.42.3", // a patch release on the same emulator
+		`{"version": "v0.42.3", "build": "v0.42.0"}`: "0.42.3",
+		`{"version": "v0.43.0", "build": "0.43.0"}`:  "0.42.0", // another build's manifest: the build itself
+		`{"version": "v0.42.3", "build": 42}`:        "0.42.0", // legacy N is mas-N, not 0.42.0
+		`{"version": "v0.42.3"}`:                     "0.42.0", // no "build": not known to be this emulator's
+		`{"version": "v0.42.3", "build": "0.42"}`:    "0.42.0",
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("0.42.0, manifest %q: %q want %q", content, got, want)
+		}
+	}
+	os.Remove(manifest)
+	if got := r.VersionText(); got != "0.42.0" {
+		t.Errorf("0.42.0 without manifest: %q", got)
+	}
+	// mas-41 against a manifest naming "0.41.0": a different form, so not this emulator's.
+	writeFile(t, props, []byte("Pkg.BuildId=mas-41\n"))
+	writeFile(t, manifest, []byte(`{"version": "v0.41.0", "build": "0.41.0"}`))
+	if got := r.VersionText(); got != "" {
+		t.Errorf("mas-41, manifest build \"0.41.0\": %q", got)
+	}
+	// The components list and the boot gate take the new form too.
+	writeFile(t, props, []byte("Pkg.BuildId=0.42.0\n"))
+	if b, _ := r.EmulatorBuild(); !b.AtLeast(MinEmulatorBuild) {
+		t.Error("0.42.0 below the minimum")
+	}
 	writeFile(t, props, []byte("Pkg.BuildId=12345\n"))
 	writeFile(t, manifest, []byte(`{"version": "v0.35.0"}`))
 	if got := r.VersionText(); got != "" {
@@ -1060,8 +1097,8 @@ func TestProductionRootReadOnly(t *testing.T) {
 	} else {
 		t.Logf("note: mas-avd.json is not what AUTO-MAS writes for its content (edited by hand?)")
 	}
-	b, ok := r.ModBuild()
-	t.Logf("build %d %v, version %q, emulator %q, adb %d / %d, missing %v", b, ok, r.VersionText(),
+	b, ok := r.EmulatorBuild()
+	t.Logf("build %v %v, version %q, emulator %q, adb %d / %d, missing %v", b, ok, r.VersionText(),
 		r.EmulatorVersion(), r.AdbServerPort(), r.ScriptAdbServerPort(), r.Missing())
 	for _, c := range r.Components() {
 		t.Logf("%+v", c)

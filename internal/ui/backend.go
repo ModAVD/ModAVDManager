@@ -96,8 +96,7 @@ func (b managerBackend) RootInfo() emu.RootInfo {
 		PortBase:            r.Ports().Base,
 		Version:             r.VersionText(),
 	}
-	if n, ok := r.ModBuild(); ok {
-		info.Build = n
-	}
+	build, _ := r.EmulatorBuild()
+	info.SetBuild(build)
 	return info
 }
