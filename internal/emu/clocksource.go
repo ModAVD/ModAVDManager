@@ -29,9 +29,10 @@ import (
 
 const (
 	// clocksourceScript prints the current clock source, the available ones and the guest's machine, separated by
-	// "---" lines: one fixed command line without variables, readable without root.
-	clocksourceScript = "cat /sys/devices/system/clocksource/clocksource0/current_clocksource; echo ---; " +
-		"cat /sys/devices/system/clocksource/clocksource0/available_clocksource; echo ---; uname -m"
+	// "---" lines: one fixed command line without variables. As root: on the Android 14 images SELinux does not let
+	// the adb shell user read this sysfs directory (every boot logged "Permission denied").
+	clocksourceScript = "su 0 sh -c 'cat /sys/devices/system/clocksource/clocksource0/current_clocksource; echo ---; " +
+		"cat /sys/devices/system/clocksource/clocksource0/available_clocksource; echo ---; uname -m'"
 	clocksourceTimeout = 10 * time.Second
 	// clocksourceKernelCommand is the guest kernel log as root (logcat -b kernel needs it on these images; dmesg may
 	// have been overwritten by then). Filtered here, on the host, so no pipe runs in the guest.
@@ -134,6 +135,7 @@ func (m *Manager) checkClocksource(i int, cfg *avd.Ini, run func(command string,
 	rec.Available, rec.Arch, rec.X86 = available, arch, x86Guest(arch, cfg)
 	switch {
 	case !ok:
+		rec.Available = "" // whatever stood there is part of an error text
 		rec.Error = orText(tail(strings.Join(strings.Fields(res.Out), " "), 200), fmt.Sprintf("退出码 %d", res.Code))
 		m.Log.Warnf("实例 %d 读不到客体时钟源（%s），这次开机不判断", i, rec.Error)
 	case !rec.X86 || current == "tsc":
