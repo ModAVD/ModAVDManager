@@ -420,6 +420,7 @@ func TestMountGuestFixes(t *testing.T) {
 	cases := []struct {
 		name               string
 		owed               bool
+		early              bool // during the boot (earlyGuestFixes)
 		installing         bool // an install holds the guest lock from the start
 		installDuringPush  bool // an install takes it while a library is uploaded
 		pushFail           []string
@@ -436,6 +437,12 @@ func TestMountGuestFixes(t *testing.T) {
 		{name: "launched, cached in the guest", fixes: []string{mountedBoth},
 			commands: []string{"pidof", "fix", "wait"}, runs: [][]string{bothRuns}, locked: []bool{true}, restarted: true,
 			level: logx.Info, has: []string{"客体库补丁已挂上（" + both + "），zygote 重启后系统界面已回来"}},
+		{name: "launched early, cached in the guest", early: true, fixes: []string{mountedBoth},
+			commands: []string{"pidof", "fix", "wait"}, runs: [][]string{bothRuns}, locked: []bool{true}, restarted: true,
+			level: logx.Info, has: []string{"客体库补丁已在开机过程中挂上（" + both + "），zygote 已重启，接着等安卓开机完成"}},
+		{name: "launched early, nothing to mount", early: true, fixes: []string{gfLine(gfVK, "IMAGE_PATCHED") +
+			gfLine(gfNDK, "ABSENT") + "UNCHANGED\r\n"}, commands: []string{"pidof", "fix"}, runs: [][]string{bothRuns},
+			locked: []bool{true}, level: logx.Info, has: []string{"已是补丁版，不用挂"}},
 		{name: "launched, both uploaded", fixes: []string{uploadBoth, mountedBoth},
 			commands: []string{"pidof", "fix", "push", "push", "fix", "wait"}, runs: [][]string{bothRuns, bothRuns},
 			pushes: []string{gfVK.UploadPath, gfNDK.UploadPath}, locked: []bool{true, true}, restarted: true,
@@ -532,7 +539,9 @@ func TestMountGuestFixes(t *testing.T) {
 			f.onPush = takeInstall
 		}
 
-		restarted, pending := m.mountGuestFixes(context.Background(), 3, f.io(), gfAll, c.owed, until)
+		fx := f.io()
+		fx.early = c.early
+		restarted, pending := m.mountGuestFixes(context.Background(), 3, fx, gfAll, c.owed, until)
 		install.Unlock()
 
 		if restarted != c.restarted || pending != c.pending {

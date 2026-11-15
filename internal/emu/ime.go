@@ -392,26 +392,3 @@ func installFailure(res adb.Result) string {
 	}
 	return fmt.Sprintf("退出码 %d", res.Code)
 }
-
-// recheckHostIme runs after the zygote restart of the Vulkan fix: the default was the host IME at the end of the IME
-// step; when it is not any more, set it back (AUTO-MAS _recheck_host_ime; the launcher only reports it).
-func (m *Manager) recheckHostIme(i int, g guestIO) {
-	current, ok := defaultImeFrom(g.shell(hostImeReadDefault, 0).Out)
-	if ok && current == hostImeID {
-		return
-	}
-	if !ok {
-		m.Log.Warnf("实例 %d 宿主输入法: 重启 zygote 后读不出默认输入法", i)
-		return
-	}
-	restored, rok := defaultImeFrom(g.shell("ime set "+hostImeID+" >/dev/null; "+hostImeReadDefault, 0).Out)
-	if rok && restored == hostImeID {
-		m.Log.Infof("实例 %d 宿主输入法: 重启 zygote 后默认变成了 %s，已设回", i, orText(current, "没设"))
-		return
-	}
-	now := "读不出"
-	if rok {
-		now = orText(restored, "没设")
-	}
-	m.Log.Warnf("实例 %d 宿主输入法: 重启 zygote 后默认变成了 %s，没能设回（现在 %s）", i, orText(current, "没设"), now)
-}

@@ -41,7 +41,7 @@ func TestWaitBootAdbUnusableAfterBoot(t *testing.T) {
 	tries := bootAdbFakes(t, q, true)
 	adbAfterBootWait, bootRegisterEvery = 1500*time.Millisecond, 500*time.Millisecond
 	t0 := time.Now()
-	_, err := m.waitBoot(context.Background(), 3, time.Hour, &q, nil, "", &progressor{}, nil, nil)
+	_, err := m.waitBoot(context.Background(), 3, time.Hour, &q, nil, "", &progressor{}, nil, nil, nil)
 	if errs.CodeOf(err) != errs.Timeout || !strings.Contains(err.Error(), "ModAVD 实例 3 的安卓已经开好了（模拟器报告开机完成），但之后") ||
 		!strings.Contains(err.Error(), "私有 adb（端口 20391）一直用不了") {
 		t.Fatalf("err %v", err)
@@ -61,7 +61,7 @@ func TestWaitBootAdbUnusableAfterBoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	adbAfterBootWait = time.Hour
-	_, err = m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &q, nil, "", &progressor{}, nil, nil)
+	_, err = m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &q, nil, "", &progressor{}, nil, nil, nil)
 	if errs.CodeOf(err) != errs.Timeout || !strings.Contains(err.Error(), "安卓已经开好了") ||
 		!strings.Contains(err.Error(), "；adb 自己的日志最后一行：fatal: boom。日志见 ") {
 		t.Fatalf("at the timeout: %v", err)
@@ -73,7 +73,7 @@ func TestWaitBootNoBootReport(t *testing.T) {
 	m, _ := opsTestManager(t)
 	q, _ := startSleeper(t)
 	tries := bootAdbFakes(t, q, false)
-	_, err := m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &q, nil, "", &progressor{}, nil, nil)
+	_, err := m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &q, nil, "", &progressor{}, nil, nil, nil)
 	if errs.CodeOf(err) != errs.Timeout || !strings.Contains(err.Error(), "启动超时（2 秒内安卓没有启动完成）") {
 		t.Fatalf("err %v", err)
 	}

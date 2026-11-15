@@ -139,7 +139,9 @@ type createStage struct {
 // the tuning 1–2 s, the host IME and the steps after it 2–3 s, the first-boot setup 3 s, the guest Vulkan fix 13–14 s
 // (most of it waiting for the framework after the zygote restart), the shutdown 5–8 s. The bridge on a new instance
 // takes two rounds with a cold boot each, then a check: the first remount turns verity off (27 s with its
-// shutdown), the install (12 s with its shutdown), the check that finds it installed (1 s, no boot).
+// shutdown), the install (12 s with its shutdown), the check that finds it installed (1 s, no boot). Since 11-15 a cold
+// boot mounts the guest library fixes during the boot (earlyGuestFixes, the boot itself still 17 s): only the check
+// after it is left (stageFixCheck); the first boot of a new instance mounts them right after the boot as before.
 const (
 	stagePrepare     = 2.0  // the checks before the launch (and starting the private adb server)
 	stageBoot        = 35.0 // from the launch until Android has booted, the first boot of a new instance
@@ -148,6 +150,7 @@ const (
 	stageIme         = 2.5
 	stageFirstBoot   = 3.0
 	stageVulkanFix   = 13.5
+	stageFixCheck    = 0.5  // the guest library fixes after a cold boot: found mounted already
 	stageRemount     = 27.0 // the bridge's first round: the first remount and the shutdown
 	stageBridge      = 12.0 // its second: the install and the shutdown
 	stageBridgeCheck = 1.0  // its last: the check that finds it installed
@@ -167,13 +170,19 @@ func createPlan(boot float64, firstBoot, bridge bool) []createStage {
 	return append(plan, createStage{"create_stop", stageShutdown})
 }
 
-// bootStages are the stages of one boot of the setup, by the steps Start reports; boot is the wait for Android.
+// bootStages are the stages of one boot of the setup, by the steps Start reports; boot is the wait for Android. The
+// guest library fixes come first after the boot (afterBoot); a boot with the first-boot setup is the only one that
+// mounts them there, the others did during the boot.
 func bootStages(boot float64, firstBoot bool) []createStage {
-	s := []createStage{{"launch", boot}, {"tune", stageTune}, {"ime", stageIme}}
+	fix := stageFixCheck
+	if firstBoot {
+		fix = stageVulkanFix
+	}
+	s := []createStage{{"launch", boot}, {"vulkan_fix", fix}, {"tune", stageTune}, {"ime", stageIme}}
 	if firstBoot {
 		s = append(s, createStage{"first_boot", stageFirstBoot})
 	}
-	return append(s, createStage{"vulkan_fix", stageVulkanFix})
+	return s
 }
 
 // bridgeRound is a round of the bridge install that changes the guest: the script (and the shutdown), then a cold
