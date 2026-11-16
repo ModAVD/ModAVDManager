@@ -95,6 +95,9 @@ const (
 	// DownloadDisk keeps the download folder of games that fsync after every few KB on a disk of its own, where
 	// fsync does not wait and the folder is committed as a whole every 3 s (modavd only, ModAVD/ModAVD#35).
 	DownloadDisk = "modavd-dldisk.sh"
+	// VulkanMode writes the Vulkan display mode for listed games that have not chosen one, before their first start
+	// (modavd only, ModAVD/ModAVD#222).
+	VulkanMode = "modavd-vkmode.sh"
 )
 
 // RemoteDir is where the scripts go in the guest.
