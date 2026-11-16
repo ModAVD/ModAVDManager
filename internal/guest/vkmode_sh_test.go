@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,8 @@ import (
 //   - stat -c %u, chown, chmod, chcon, ls -Zd keep owner, mode and label in <path>.owner / .mode / .label next to the
 //     path; mv moves those with the file and logs the call;
 //   - pgrep -u <uid> prints a pid when <root>/running lists the uid; pgrep -f finds nothing (no watcher);
-//   - chown and mv fail (doing nothing) on a path containing what <root>/<name>.fail holds.
+//   - chown and mv fail (doing nothing) on a path containing what <root>/<name>.fail holds;
+//   - sync logs the call.
 type vkGuest struct {
 	t        *testing.T
 	sh, root string
@@ -39,7 +41,7 @@ func newVKGuest(t *testing.T) *vkGuest {
 	if err != nil {
 		t.Skip("no sh")
 	}
-	for _, tool := range []string{"cut", "head", "cat", "rm", "mkdir", "rmdir", "mv", "find", "tr"} {
+	for _, tool := range []string{"cut", "head", "cat", "rm", "mkdir", "rmdir", "mv", "find", "tr", "od"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skip("no " + tool)
 		}
@@ -87,6 +89,7 @@ for x in owner mode label; do
 done
 echo "${3#$R}" >> "$R/mv.log"`)
 	stub("nohup", `exit 0`)
+	stub("sync", `echo sync >> "$R/sync.log"`)
 	g.env = append(os.Environ(), "MODAVD_VKMODE_ROOT="+g.root, "MODAVD_PS_STUBS="+filepath.ToSlash(bin))
 	return g
 }
@@ -165,12 +168,15 @@ func (g *vkGuest) launched(pkg, uid string) {
 	}
 }
 
-func (g *vkGuest) mvCalls() int {
-	if s := g.read("/mv.log"); s != "" {
+func (g *vkGuest) lines(p string) int {
+	if s := g.read(p); s != "" {
 		return strings.Count(s, "\n") + 1
 	}
 	return 0
 }
+
+func (g *vkGuest) mvCalls() int   { return g.lines("/mv.log") }
+func (g *vkGuest) syncCalls() int { return g.lines("/sync.log") }
 
 // wantVulkan: both files hold the byte 01 and belong to the app; the folders are the app's; no temporary file is left.
 func (g *vkGuest) wantVulkan(pkg, uid, what string) {
@@ -234,24 +240,43 @@ func TestVulkanModeBeforeFirstStart(t *testing.T) {
 	if g.exists(vkMedia + "/" + vkBili) {
 		t.Error("made folders for the bilibili package, which is not installed")
 	}
-	if out := g.run("status"); !strings.Contains(out, vkPkg+": set to Vulkan") || !strings.Contains(out, vkBili+": not installed") {
+	if out := g.run("status"); !strings.Contains(out, vkPkg+": set to Vulkan [custom=01 caps=01]\n") ||
+		!strings.Contains(out, vkBili+": not installed\n") {
 		t.Errorf("status %q", out)
 	}
 	n := g.mvCalls()
 	if n != 2 {
 		t.Errorf("%d moves, want 2", n)
 	}
+	if s := g.syncCalls(); s != 1 {
+		t.Errorf("%d syncs, want 1", s)
+	}
 	for k := 0; k < 2; k++ {
 		if out := g.run("once"); strings.TrimSpace(out) != "" {
 			t.Errorf("pass %d: output %q", k+2, out)
 		}
 	}
-	if g.mvCalls() != n {
-		t.Errorf("later passes wrote again (%d moves)", g.mvCalls())
+	if g.mvCalls() != n || g.syncCalls() != 1 {
+		t.Errorf("later passes wrote again (%d moves, %d syncs)", g.mvCalls(), g.syncCalls())
 	}
 	g.wantVulkan(vkPkg, vkUID, "later passes")
-	if out := g.run("status"); !strings.Contains(out, vkPkg+": set to Vulkan") {
+	if out := g.run("status"); !strings.Contains(out, vkPkg+": set to Vulkan [custom=01 caps=01]\n") {
 		t.Errorf("status after the later passes %q", out)
+	}
+
+	// broken since (the game crashed into GLES once more): written again, and the write is logged although the note
+	// says "set to Vulkan" already
+	g.remove(vkFiles(vkPkg) + "/customvulkancaps.bin")
+	g.write(vkFiles(vkPkg)+"/vulkancaps.bin", "\x03")
+	if out := g.run("status"); !strings.Contains(out, vkPkg+": set to Vulkan [custom=- caps=03]\n") {
+		t.Errorf("status of the broken files %q", out)
+	}
+	if out := g.run("once"); !strings.Contains(out, vkPkg+": set to Vulkan") {
+		t.Errorf("rewrite not logged: output %q", out)
+	}
+	g.wantVulkan(vkPkg, vkUID, "rewritten")
+	if g.syncCalls() != 2 {
+		t.Errorf("%d syncs after the rewrite, want 2", g.syncCalls())
 	}
 }
 
@@ -271,9 +296,10 @@ func TestVulkanModeAfterTheGameChoseGLES(t *testing.T) {
 	}
 }
 
-// customvulkancaps.bin there: a mode was chosen (in the game, or by an earlier pass), whatever the files hold.
+// customvulkancaps.bin there and not empty: a mode was chosen (in the game, or by an earlier pass), whatever the files
+// hold.
 func TestVulkanModeChosenAlready(t *testing.T) {
-	for _, c := range []struct{ custom, caps string }{{"\x01", "\x01"}, {"\x03", "\x03"}, {"\x02", ""}, {"", "\x03"}} {
+	for _, c := range []struct{ custom, caps string }{{"\x01", "\x01"}, {"\x03", "\x03"}, {"\x02", ""}, {"\x00", "\x00"}} {
 		g := newVKGuest(t)
 		g.install(vkPkg, vkUID)
 		g.launched(vkPkg, vkUID)
@@ -290,8 +316,47 @@ func TestVulkanModeChosenAlready(t *testing.T) {
 		if !strings.Contains(out, vkPkg+": display mode chosen already") {
 			t.Errorf("custom %q caps %q: output %q", c.custom, c.caps, out)
 		}
-		if out := g.run("status"); !strings.Contains(out, vkPkg+": display mode chosen already") {
-			t.Errorf("status %q", out)
+		hex := func(s string) string {
+			if s == "" {
+				return "-"
+			}
+			return fmt.Sprintf("%02x", s)
+		}
+		want := vkPkg + ": display mode chosen already [custom=" + hex(c.custom) + " caps=" + hex(c.caps) + "]\n"
+		if out := g.run("status"); !strings.Contains(out, want) {
+			t.Errorf("status %q, want %q", out, want)
+		}
+		if g.syncCalls() != 0 {
+			t.Errorf("custom %q caps %q: synced without a write", c.custom, c.caps)
+		}
+	}
+}
+
+// customvulkancaps.bin empty: what a hard kill leaves of the file a few seconds after it was moved into place, not a
+// choice. Both are written again.
+func TestVulkanModeEmptyLeftover(t *testing.T) {
+	for _, caps := range []string{"\x03", ""} {
+		g := newVKGuest(t)
+		g.install(vkPkg, vkUID)
+		g.launched(vkPkg, vkUID)
+		g.write(vkFiles(vkPkg)+"/customvulkancaps.bin", "")
+		g.write(vkFiles(vkPkg)+"/customvulkancaps.bin.owner", vkUID+":1078")
+		if caps != "" {
+			g.write(vkFiles(vkPkg)+"/vulkancaps.bin", caps)
+		}
+		want := "custom=empty caps=-"
+		if caps != "" {
+			want = "custom=empty caps=03"
+		}
+		if out := g.run("status"); !strings.Contains(out, vkPkg+": nothing done yet ["+want+"]\n") {
+			t.Errorf("caps %q: status %q", caps, out)
+		}
+		if out := g.run("once"); !strings.Contains(out, vkPkg+": set to Vulkan") {
+			t.Errorf("caps %q: output %q", caps, out)
+		}
+		g.wantVulkan(vkPkg, vkUID, fmt.Sprintf("empty custom, caps %q", caps))
+		if g.syncCalls() != 1 {
+			t.Errorf("caps %q: %d syncs, want 1", caps, g.syncCalls())
 		}
 	}
 }
@@ -378,11 +443,27 @@ func TestVulkanModeFailures(t *testing.T) {
 	}
 	g.remove("/chown.fail")
 
+	// vulkancaps.bin does not get into place: customvulkancaps.bin is not written either (alone it makes the game pick
+	// GLES and stops the next passes), so the next pass does both
+	g.write("/mv.fail", "/vulkancaps.bin")
+	out = g.run("once")
+	if g.exists(vkFiles(vkPkg)+"/customvulkancaps.bin") || g.exists(vkFiles(vkPkg)+"/vulkancaps.bin") ||
+		!strings.Contains(out, vkPkg+": cannot write the display mode files") {
+		t.Errorf("after a failed move of vulkancaps.bin: custom %v caps %v, output %q",
+			g.exists(vkFiles(vkPkg)+"/customvulkancaps.bin"), g.exists(vkFiles(vkPkg)+"/vulkancaps.bin"), out)
+	}
+	if out := g.run("status"); !strings.Contains(out, vkPkg+": cannot write the display mode files [custom=- caps=-]\n") {
+		t.Errorf("status %q", out)
+	}
+	g.wantNoTemp(vkPkg, "failed move of vulkancaps.bin")
+
 	// customvulkancaps.bin does not get into place: the next pass writes it
 	g.write("/mv.fail", "customvulkancaps.bin")
-	out = g.run("once")
-	if g.exists(vkFiles(vkPkg)+"/customvulkancaps.bin") || !strings.Contains(out, "cannot write the display mode files") {
-		t.Errorf("after a failed move: output %q", out)
+	g.run("once")
+	// (the note is the same as after the last pass, so it is not said again)
+	if out := g.run("status"); g.exists(vkFiles(vkPkg)+"/customvulkancaps.bin") ||
+		!strings.Contains(out, vkPkg+": cannot write the display mode files [custom=- caps=01]\n") {
+		t.Errorf("after a failed move: status %q", out)
 	}
 	g.wantNoTemp(vkPkg, "failed move")
 	g.remove("/mv.fail")
@@ -391,6 +472,9 @@ func TestVulkanModeFailures(t *testing.T) {
 		t.Errorf("output %q", out)
 	}
 	g.wantVulkan(vkPkg, vkUID, "after the failures")
+	if g.syncCalls() != 1 {
+		t.Errorf("%d syncs, want 1 (only after the write that went through)", g.syncCalls())
+	}
 }
 
 // The package's folder already there (made by the system) is kept as it is; only files/ is made.

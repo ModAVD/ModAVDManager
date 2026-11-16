@@ -55,15 +55,31 @@ func vulkanModeReport(i int, started, status string) (warn bool, msg string) {
 		if !ok || pkg == "watchers" || state == "" || state == "not installed" {
 			continue
 		}
+		state, files := vulkanModeFiles(state)
 		if strings.HasPrefix(state, "cannot ") {
 			warn = true
 		}
-		games = append(games, pkg+"（"+vulkanModeState(state)+"）")
+		text := vulkanModeState(state)
+		if files != "" {
+			text += "，" + files
+		}
+		games = append(games, pkg+"（"+text+"）")
 	}
 	if len(games) == 0 {
 		return false, fmt.Sprintf("实例 %d 游戏显示模式预设: 守护已起（pid %s），名单里的游戏都没装", i, lines["watchers"])
 	}
 	return warn, fmt.Sprintf("实例 %d 游戏显示模式预设: 守护已起（pid %s）；%s", i, lines["watchers"], strings.Join(games, "，"))
+}
+
+// vulkanModeFiles splits what status prints after the note, " [custom=01 caps=01]" (the two files' bytes in hex,
+// "-" for a missing one), from the note; files is "" when there is none (a script of an older build).
+func vulkanModeFiles(state string) (note, files string) {
+	if strings.HasSuffix(state, "]") {
+		if k := strings.LastIndex(state, " ["); k >= 0 {
+			return strings.TrimSpace(state[:k]), strings.TrimSpace(state[k+2 : len(state)-1])
+		}
+	}
+	return state, ""
 }
 
 // vulkanModeState puts the script's notes into the log's language; one it does not know stays as it is.

@@ -41,4 +41,19 @@ func TestVulkanModeReport(t *testing.T) {
 	if warn, _ = vulkanModeReport(2, "", ""); !warn {
 		t.Error("empty status: no warning")
 	}
+	// what the two files hold, as status prints it
+	warn, msg = vulkanModeReport(4, "", "watchers: 11 \r\ncom.miHoYo.hkrpg: set to Vulkan [custom=01 caps=01]\r\n"+
+		"com.miHoYo.hkrpg.bilibili: display mode chosen already [custom=00 caps=-]\r\n")
+	if warn || msg != "实例 4 游戏显示模式预设: 守护已起（pid 11）；com.miHoYo.hkrpg（已预设为 Vulkan，custom=01 caps=01），"+
+		"com.miHoYo.hkrpg.bilibili（已选过显示模式，不动，custom=00 caps=-）" {
+		t.Errorf("files: %v %q", warn, msg)
+	}
+	warn, msg = vulkanModeReport(4, "", "watchers: 11\ncom.miHoYo.hkrpg: cannot make /data/media/0/Android/data/com.miHoYo.hkrpg/files [custom=- caps=-]\n")
+	if !warn || msg != "实例 4 游戏显示模式预设: 守护已起（pid 11）；com.miHoYo.hkrpg（建不了 /data/media/0/Android/data/com.miHoYo.hkrpg/files，custom=- caps=-）" {
+		t.Errorf("cannot, with files: %v %q", warn, msg)
+	}
+	warn, msg = vulkanModeReport(4, "", "watchers: 11\ncom.miHoYo.hkrpg: nothing done yet [custom=empty caps=03]\n")
+	if warn || msg != "实例 4 游戏显示模式预设: 守护已起（pid 11）；com.miHoYo.hkrpg（还没处理，custom=empty caps=03）" {
+		t.Errorf("empty file: %v %q", warn, msg)
+	}
 }

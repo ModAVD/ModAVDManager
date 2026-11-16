@@ -16,20 +16,22 @@
 # 0x01 before the first start, the game starts in Vulkan and keeps both at 01
 # (dozens of starts). vulkancaps.bin alone: Vulkan once, then the game rewrites
 # it to 03; customvulkancaps.bin alone: GLES. The game writes both when the user
-# picks a mode in its settings, so customvulkancaps.bin being there means a
-# mode was chosen (by the user, or by an earlier pass).
+# picks a mode in its settings, so customvulkancaps.bin holding something means
+# a mode was chosen (by the user, or by an earlier pass). Both write one byte;
+# an empty one is what a hard kill leaves of a file moved into a new name 5-7 s
+# before (measured on ModAVD), not a choice: it is written again.
 #
 # What a pass does for each package of LIST, never while a process of the
 # package runs:
 #   - not installed: nothing (no folder is made);
-#   - files/customvulkancaps.bin there: nothing;
+#   - files/customvulkancaps.bin there and not empty: nothing;
 #   - otherwise: the missing folders are made the way the system makes them for
 #     the app (owner, ext_data_rw, 2770); both files are written as 01 (owner,
 #     ext_data_rw, 660) under a temporary name and moved into place,
-#     customvulkancaps.bin last. A pass that fails half way leaves that one
-#     missing, so the next pass does it again.
+#     customvulkancaps.bin last, then sync. A pass that fails half way leaves
+#     that one missing, so the next pass does it again. Every write is logged.
 # The watcher repeats this, so a game installed after boot is set before its
-# first start.
+# first start. status also prints what the two files hold (hex; - when missing).
 
 R=${MODAVD_VKMODE_ROOT:-}
 TAG=modavd-vkmode
@@ -51,6 +53,12 @@ note() {
 uid_of() { stat -c %u "$R/data/data/$1" 2>/dev/null; }
 running() { [ -n "$(pgrep -u "$1" 2>/dev/null | head -1)" ]; }
 label_of() { ls -Zd "$1" 2>/dev/null | cut -d' ' -f1; }
+# bytes <file>: its first bytes in hex ("01"), "empty", or "-" when missing
+bytes() {
+    [ -e "$1" ] || { echo -; return; }
+    b=$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')
+    echo "${b:-empty}"
+}
 
 # mkpath <package> <uid>: <package>/files under MEDIA; a folder that cannot be given its owner is not left behind
 mkpath() {
@@ -80,7 +88,7 @@ setup() {
         return 0
     fi
     dir=$MEDIA/$pkg/files
-    if [ -e "$dir/customvulkancaps.bin" ]; then
+    if [ -s "$dir/customvulkancaps.bin" ]; then
         [ "$(cat "$BASE/.$pkg.note" 2>/dev/null)" = "set to Vulkan" ] || note "$pkg" "display mode chosen already"
         return 0
     fi
@@ -90,7 +98,11 @@ setup() {
     fi
     [ -d "$MEDIA" ] || return 0
     mkpath "$pkg" "$uid" || { note "$pkg" "cannot make ${dir#$R}"; return 0; }
+    # vulkancaps.bin first: customvulkancaps.bin alone makes the game pick GLES, and it stops the next passes
     if put "$uid" "$dir" vulkancaps.bin && put "$uid" "$dir" customvulkancaps.bin; then
+        sync
+        # logged on every write, also when the note says so already (a game set before and broken since)
+        rm -f "$BASE/.$pkg.note"
         note "$pkg" "set to Vulkan"
     else
         note "$pkg" "cannot write the display mode files"
@@ -140,7 +152,8 @@ status)
     echo "watchers: $(watchers | tr '\n' ' ')"
     for pkg in $LIST; do
         if [ -z "$(uid_of "$pkg")" ]; then echo "$pkg: not installed"; continue; fi
-        echo "$pkg: $(cat "$BASE/.$pkg.note" 2>/dev/null || echo "nothing done yet")"
+        d=$MEDIA/$pkg/files
+        echo "$pkg: $(cat "$BASE/.$pkg.note" 2>/dev/null || echo "nothing done yet") [custom=$(bytes "$d/customvulkancaps.bin") caps=$(bytes "$d/vulkancaps.bin")]"
     done
     ;;
 *)
