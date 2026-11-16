@@ -25,7 +25,7 @@ import (
 
 // Instance options (user decisions: memory and cores only in these steps, no silent rounding).
 var (
-	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144}
+	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144, 8192}
 	CPUChoices        = []int{2, 4, 6}
 	ResolutionChoices = []int{1080, 720}
 )

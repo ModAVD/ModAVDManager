@@ -441,7 +441,7 @@ func TestPropertiesMatchPython(t *testing.T) {
 	titles := []string{"", "  ", "星铁", "a=b", "mas_x"}
 	metas := []string{`{"memoryMb": 4096}`, `{"memoryMb": 4096.0}`, `{"memoryMb": "4096"}`, `{"memoryMb": true}`,
 		`{"memoryMb": 3000}`, `{"memoryMb": null}`, `5`, `{"memoryMb": 5120}`, `{}`, `{"memoryMb": 3072, "x": 1}`,
-		`{"memoryMb": 6144e0}`, `{"memoryMb": -0}`}
+		`{"memoryMb": 6144e0}`, `{"memoryMb": -0}`, `{"memoryMb": 8192}`, `{"memoryMb": 7168}`}
 
 	setup := map[string]string{}
 	var instMeta []string
@@ -760,8 +760,8 @@ func TestValidate(t *testing.T) {
 		memory, cpu, data *int
 		msg               string
 	}{
-		{ip(1000), nil, nil, "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
-		{ip(0), ip(3), ip(1), "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
+		{ip(1000), nil, nil, "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB / 8 GB"},
+		{ip(0), ip(3), ip(1), "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB / 8 GB"},
 		{nil, ip(3), ip(1), "ModAVD 的 CPU 核数只能选 2 / 4 / 6"},
 		{nil, nil, ip(15), "数据盘上限只能在 16–512 GB 之间"},
 		{nil, nil, ip(513), "数据盘上限只能在 16–512 GB 之间"},
@@ -771,6 +771,12 @@ func TestValidate(t *testing.T) {
 		if err.Error() != tc.msg {
 			t.Errorf("got %q want %q", err.Error(), tc.msg)
 		}
+	}
+	if m, _, _, err := ValidateOptions(ip(8192), nil, nil); err != nil || m != 8192 {
+		t.Errorf("8 GB: %d %v", m, err)
+	}
+	if _, _, _, err := ValidateOptions(ip(7168), nil, nil); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("7 GB: %v", err)
 	}
 	if _, _, d, err := ValidateOptions(nil, nil, ip(16)); err != nil || d != 16 {
 		t.Error("16 GB")

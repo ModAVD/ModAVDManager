@@ -8,7 +8,7 @@ import { quoted, label, ownTitle, defaultName, uptime, fmtBytes } from './format
 import * as A from './actions.js';
 import { regionalFields, guestRegionalText } from './regional.js';
 
-const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB']];
+const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB'], [8192, '8 GB']];
 const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
 const FPS_MIN = 1;
 const FPS_MAX = 60;

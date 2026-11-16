@@ -169,15 +169,19 @@ func (m *Manager) installLauncher(ctx context.Context, i int) string {
 	// The stock launcher is uninstalled for user 0 (the system partition keeps it; `cmd package install-existing`
 	// restores it), not disabled: disabling sends PACKAGE_CHANGED, SystemUI's OverviewProxyService then looks for
 	// the stock launcher's recents service and crashes on null, which breaks the home switch transition and leaves
-	// only the wallpaper on the first boot. Uninstalling sends PACKAGE_REMOVED, which it ignores (10-08).
-	cmds := []string{
-		"cmd package set-home-activity " + lightLauncherHome,
-		"pm uninstall --user 0 " + pixelLauncherPackage,
-		"input keyevent KEYCODE_HOME",
-	}
-	if res := m.shell(ctx, i, strings.Join(cmds, " ; "), 0); res.Code != 0 {
+	// only the wallpaper on the first boot. Uninstalling sends PACKAGE_REMOVED, which it ignores (10-08). The removal
+	// is waited for until it is on disk (pixelLauncherRemoveScript); one that fails is retried at the next boot
+	// (ensurePixelLauncherRemoved), the light launcher is home all the same.
+	if res := m.shell(ctx, i, "cmd package set-home-activity "+lightLauncherHome, 0); res.Code != 0 {
 		m.Log.Warnf("实例 %d 设置轻量桌面失败: %s", i, res.Out)
 		return "pixel"
+	}
+	ok, saved, out := m.removePixelLauncher(ctx, i)
+	if r := pixelLauncherRemoveReport(i, "卸载原生 Pixel 桌面", ok, saved, out); r.warn {
+		m.logReport(r)
+	}
+	if res := m.shell(ctx, i, "input keyevent KEYCODE_HOME", 0); res.Code != 0 {
+		m.Log.Warnf("实例 %d 回到轻量桌面失败: %s", i, res.Out)
 	}
 	return lightLauncherPackage
 }

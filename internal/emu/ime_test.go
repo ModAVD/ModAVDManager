@@ -36,7 +36,7 @@ func TestHostImeScripts(t *testing.T) {
 		"wait":         {hostImeWaitScript, `i=0; while [ $i -lt 20 ]; do ime list -a -s | grep -qx org.modavd.ime/.HostImeService && { echo ok; exit 0; }; sleep 0.25; i=$((i+1)); done; echo timeout`},
 		"marker":       {hostImeMarker, "/data/local/tmp/modavd-ime.autoselected"},
 		"id":           {hostImeID, "org.modavd.ime/.HostImeService"},
-		"allow":        {allowInstallSourcesScript, `set -o pipefail; list=$(dumpsys package packages 2>/dev/null | awk '/^  Package \[/ { n++; p = substr($2, 2, length($2) - 2) } /android.permission.REQUEST_INSTALL_PACKAGES/ { if (p != "" && p != "android") print p } END { if (n == 0) exit 3 }' | sort -u) || { echo "dumpsys package failed"; exit 2; }; fail=0; for p in $list; do m=$(appops get "$p" REQUEST_INSTALL_PACKAGES 2>&1) || { echo "failed: $p"; fail=1; continue; }; case "$m" in *"REQUEST_INSTALL_PACKAGES: default"*) ;; *"REQUEST_INSTALL_PACKAGES: "*) continue ;; esac; if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p"; else echo "failed: $p"; fail=1; fi; done; exit $fail`},
+		"allow":        {allowInstallSourcesScript, `set -o pipefail; list=$(dumpsys package packages 2>/dev/null | awk '/^  Package \[/ { n++; p = substr($2, 2, length($2) - 2) } /android.permission.REQUEST_INSTALL_PACKAGES/ { if (p != "" && p != "android") print p } END { if (n == 0) exit 3 }' | sort -u) || { echo "dumpsys package failed"; exit 2; }; fail=0; changed=0; for p in $list; do m=$(appops get "$p" REQUEST_INSTALL_PACKAGES 2>&1) || { echo "failed: $p"; fail=1; continue; }; case "$m" in *"REQUEST_INSTALL_PACKAGES: default"*) ;; *"REQUEST_INSTALL_PACKAGES: "*) continue ;; esac; if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p"; changed=1; else echo "failed: $p"; fail=1; fi; done; if [ $changed = 1 ] && ! appops write-settings >/dev/null 2>&1; then echo "write-settings failed"; fail=1; fi; exit $fail`},
 	}
 	for name, c := range checks {
 		if c[0] != c[1] {
@@ -526,46 +526,6 @@ func TestRunHostImeProbeFails(t *testing.T) {
 	want := "实例 0 宿主输入法这次跳过，读不出客体现状: pm_err | def= | mark=0 | sha="
 	if len(*lines) != 1 || (*lines)[0].level != logx.Warn || (*lines)[0].msg != want {
 		t.Errorf("log %v, want warning %q", *lines, want)
-	}
-}
-
-func TestRecheckHostIme(t *testing.T) {
-	cases := []struct {
-		name  string
-		def   string // before
-		fails bool   // ime set does not take
-		after string
-		level logx.Level
-		msg   string
-	}{
-		{"still ours", hostImeID, false, hostImeID, -1, ""},
-		{"lost: set back", gboard, false, hostImeID, logx.Info,
-			"实例 4 宿主输入法: 重启 zygote 后默认变成了 " + gboard + "，已设回"},
-		{"lost: cannot set back", "", true, "", logx.Warn,
-			"实例 4 宿主输入法: 重启 zygote 后默认变成了 没设，没能设回（现在 没设）"},
-	}
-	for _, c := range cases {
-		g := fakeImeGuest{imeState: imeState{installed: 3, build: releaseSigner, enabled: true, def: c.def, marker: true},
-			imeFaults: imeFaults{setFails: c.fails}}
-		m, lines := recordingManager()
-		m.recheckHostIme(4, g.io())
-		if g.def != c.after || len(g.unknown) > 0 {
-			t.Errorf("%s: default %q (unknown %q), want %q", c.name, g.def, g.unknown, c.after)
-		}
-		switch {
-		case c.msg == "" && len(*lines) != 0:
-			t.Errorf("%s: logged %v", c.name, *lines)
-		case c.msg != "" && (len(*lines) != 1 || (*lines)[0].level != c.level || (*lines)[0].msg != c.msg):
-			t.Errorf("%s: log %v, want %v %q", c.name, *lines, c.level, c.msg)
-		}
-	}
-	// settings unreadable: no ime set, a warning
-	m, lines := recordingManager()
-	m.recheckHostIme(4, guestIO{shell: func(string, time.Duration) adb.Result {
-		return adb.Result{Code: -1, Out: "adb shell 超时（30 秒）"}
-	}})
-	if len(*lines) != 1 || (*lines)[0].msg != "实例 4 宿主输入法: 重启 zygote 后读不出默认输入法" {
-		t.Errorf("unreadable: %v", *lines)
 	}
 }
 

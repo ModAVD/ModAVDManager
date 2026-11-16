@@ -84,7 +84,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 
 Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、macOS、HVF、Metal 和组件版本；游戏列表只向归属已确认的运行实例与现有私有 ADB 查询，不启动服务。问题包只收本目录的实例配置白名单和最多 8 份模拟器日志，每份最多 2 MiB、总文本最多 20 MiB，过滤常见凭据字段、路径和设备标识。macOS 不收截图、系统转储或其他应用日志；分享前请检查问题包。默认复制配置到剪贴板、用 Finder 显示问题包，自动化可用 `--no-clipboard` / `--no-explorer`。
 
-- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 1–60 的整数（默认 60）。
+- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 / 8 GB 五档，核数 2 / 4 / 6，帧率 1–60 的整数（默认 60）。
 - 根目录：`--root`，没给就用环境变量 `MODAVD_ROOT`，再没有就用 `modavd.exe` 所在目录或它的上一级。
 - 0.3.0 起没有 `restart`：先 `stop` 再 `start`。旧的调用报用法错误（退出码 2），提示改用这两步。
 
@@ -208,8 +208,11 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 模拟器被强杀或电脑崩溃以后，下载目录回到最后一次落盘时的样子，最多少 3 秒的进度，游戏接着下。解压出来的资源、账号、设置不在这块盘上，和以前一样。
   - 守护每 3 秒看一次：游戏装上以后、第一次启动之前就把盘挂好；游戏开着时不动它；普通目录里有下到一半的，等那一轮下完再挂；卸载游戏或清了它的应用数据，盘跟着删。
   - 盘是客体里的 `/data/local/tmp/modavd-dldisk/<包名>/dl.img`，一个最大 16 GB 的稀疏文件，删掉的包占的空间会还给数据盘。下载比解压快，下好的包会先堆在盘里：下整包资源时，数据盘的占用高峰比以前多约 6 GB。数据盘剩余不到 2 GB 时不建盘。
-  - 名单里是官服 `com.hypergryph.arknights` 和 B 服 `com.hypergryph.arknights.bilibili`（B 服没有实测，目录相同）。
+  - 名单里是明日方舟官服 `com.hypergryph.arknights`、B 服 `com.hypergryph.arknights.bilibili`（B 服没有实测，目录相同），以及明日方舟：终末地 `com.hypergryph.endfield`（同一套下载器，目录和写法相同）。
   - 设环境变量 `MODAVD_DL_DISK=off` 再开机：把盘里还没下完的搬回普通目录，删掉盘，不再起守护。
+- 崩坏：星穹铁道（官服 `com.miHoYo.hkrpg`、B 服 `com.miHoYo.hkrpg.bilibili`，B 服没有实测）的显示模式预先设成 Vulkan（客体脚本 `modavd-vkmode.sh`，只在 Windows 上）。游戏第一次启动时自己选 OpenGL ES，在 ModAVD 上十几秒后闪退；在游戏设置里的显示设置（Display Settings）选 Vulkan 模式就正常。
+  - 守护每 3 秒看一次：游戏装上以后、第一次启动之前，在它的 `Android/data/<包名>/files` 里写好 `vulkancaps.bin`、`customvulkancaps.bin`。已经因为闪退停在 OpenGL ES 的，下次开机或游戏退出后也改成 Vulkan。
+  - 在游戏设置里选过显示模式的（`customvulkancaps.bin` 已经在、不是空文件）不动；游戏开着时不动；没装的游戏不建任何目录。
 分辨率只有两档：1080p 为 1920×1080 / DPI 280，720p 为 1280×720 / DPI 240。新建默认 1080p，720p 更省资源。管理器的新建和实例设置、CLI `--resolution 1080|720`、MCP `resolution` 使用同一套档位。已有实例按宽高识别：横屏或竖屏的 1920×1080 保持 1080p，其余配置及缺字段的旧配置保持 720p。换档联动宽、高、DPI，保留方向，下次冷启动生效；DPI 不单独设置，不使用运行时 `wm size` 或 `wm density`。自动化工具里的分辨率也要跟着改。
 
 AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。

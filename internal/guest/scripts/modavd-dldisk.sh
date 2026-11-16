@@ -53,7 +53,9 @@ BASE=$R/data/local/tmp/$TAG
 MEDIA=$R/data/media/0/Android/data
 VIEW=$R/mnt/user/0/emulated/0/Android/data
 MI=$R/proc/self/mountinfo
-LIST="com.hypergryph.arknights:files/HGGameUpdate/HGDownload com.hypergryph.arknights.bilibili:files/HGGameUpdate/HGDownload"
+# Endfield uses the same downloader: same folder, same 8 KB writes (11-15: 15700 write calls for 124 MB in 10 s,
+# 5.5 times that written to the data disk). Its packages are up to 1.6 GB each, two at a time.
+LIST="com.hypergryph.arknights:files/HGGameUpdate/HGDownload com.hypergryph.arknights.bilibili:files/HGGameUpdate/HGDownload com.hypergryph.endfield:files/HGGameUpdate/HGDownload"
 SIZE=16G
 MIN_FREE_KB=2097152
 TICK=3
