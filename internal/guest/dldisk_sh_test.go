@@ -242,6 +242,28 @@ func TestDownloadDiskNotInstalled(t *testing.T) {
 	}
 }
 
+// Every game on the list gets a disk of its own, on its own folder.
+func TestDownloadDiskEveryListedGame(t *testing.T) {
+	g := newDDGuest(t)
+	pkgs := []string{"com.hypergryph.arknights", "com.hypergryph.arknights.bilibili", "com.hypergryph.endfield"}
+	for n, pkg := range pkgs {
+		g.mkdir("/data/data/" + pkg)
+		g.write("/data/data/"+pkg+".owner", "1019"+string(rune('4'+n))+":1019"+string(rune('4'+n)))
+	}
+	out := g.run("once")
+	for _, pkg := range pkgs {
+		if !g.mountedOn(ddBase+"/"+pkg+"/inner") || !g.mountedOn(ddView+"/"+pkg+ddRel) {
+			t.Errorf("%s: not on its disk; mountinfo:\n%s", pkg, g.read("/proc/self/mountinfo"))
+		}
+		if !strings.Contains(out, pkg+": disk mounted (new image)") {
+			t.Errorf("%s: output %q", pkg, out)
+		}
+	}
+	if g.calls("mke2fs.log") != len(pkgs) {
+		t.Errorf("%d images made", g.calls("mke2fs.log"))
+	}
+}
+
 // Installed and never started: the folders are made as the system makes them, so the disk is there before the game's
 // first download.
 func TestDownloadDiskBeforeFirstStart(t *testing.T) {

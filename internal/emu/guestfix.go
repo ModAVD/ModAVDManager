@@ -105,12 +105,84 @@ func (m *Manager) ensureGuestFixes(ctx context.Context, inst *avd.Instance, mode
 	}, profiles, mode == setupOwed, until)
 }
 
+// earlyGuestFixes mounts the guest library fixes of a launched boot while that boot is still on its way: adb answers,
+// zygote runs, sys.boot_completed is not 1 yet. The zygote restart then cuts short a framework start nobody has seen,
+// and a window keeps showing the boot animation until the restarted framework is up, instead of the home screen going
+// away and coming back after the boot (11-15). Measured on a 1080p instance: adb answers about 11 s after the launch,
+// the boot completes about 5 s later.
+//
+// done=false: the guest is not that far yet (adb error, zygote not running): the boot wait asks again at its next
+// poll. Everything else is done, also a failure or a boot that completed meanwhile: afterBoot's guest fix step then
+// mounts what is still missing, after the boot as before. restarted: zygote was restarted here.
+func (m *Manager) earlyGuestFixes(ctx context.Context, inst *avd.Instance, prog *progressor) (done, restarted bool) {
+	i := inst.Index
+	profiles, err := m.guestLibFixes(inst)
+	if err != nil {
+		return true, false // afterBoot's step says why
+	}
+	state, ok := earlyBootState(m.shell(ctx, i, earlyBootProbe, statusAdbTimeout))
+	switch {
+	case !ok:
+		return false, false
+	case state.booted:
+		return true, false
+	case !state.zygote:
+		return false, false
+	}
+	remote, ok := m.pushGuestScript(ctx, i, guest.LibFix)
+	if !ok {
+		return true, false
+	}
+	prog.emit("vulkan_fix", fmt.Sprintf("实例 %d 开机过程中挂客体库补丁（Vulkan 驱动、ARM 转译层）", i), 0)
+	g := m.guestIO(ctx, i)
+	restarted, _ = m.mountGuestFixes(ctx, i, guestFixIO{
+		guestIO: g,
+		remote:  remote,
+		library: func(p guestpatch.Profile) string { return m.patchedGuestLibrary(ctx, i, p) },
+		waitBack: func(uiBefore string) bool {
+			// The boot may have completed right before the restart: sys.boot_completed then stays 1 while the
+			// framework comes back, and the boot wait would go on at once. Otherwise it waits for the restarted one.
+			if m.bootCompleted(ctx, i, statusAdbTimeout, false) {
+				return m.waitFrameworkBack(ctx, g, uiBefore, frameworkBackTimeout)
+			}
+			return true
+		},
+		early: true,
+	}, profiles, false, time.Time{})
+	return true, restarted
+}
+
+// earlyBootProbe prints the zygote service state and sys.boot_completed (no root needed).
+const earlyBootProbe = `echo "zygote=$(getprop init.svc.zygote) booted=$(getprop sys.boot_completed)"`
+
+// bootState is earlyBootProbe's answer: zygote runs, the boot has completed.
+type bootState struct{ zygote, booted bool }
+
+// earlyBootState reads earlyBootProbe's output; ok=false when adb failed or the line is missing.
+func earlyBootState(res adb.Result) (bootState, bool) {
+	if res.Code != 0 {
+		return bootState{}, false
+	}
+	for _, line := range outputLines(res.Out) {
+		f := strings.Fields(line)
+		if len(f) == 0 || !strings.HasPrefix(f[0], "zygote=") {
+			continue
+		}
+		var s bootState
+		s.zygote = f[0] == "zygote=running"
+		s.booted = len(f) > 1 && f[1] == "booted=1"
+		return s, true
+	}
+	return bootState{}, false
+}
+
 // guestFixIO is what mountGuestFixes works through: the instance's adb in Manager, a fake guest in tests.
 type guestFixIO struct {
 	guestIO
 	remote   string                            // libfix.sh in the guest (pushed already)
 	library  func(p guestpatch.Profile) string // the host's patched copy (patchedGuestLibrary); "" when it cannot be had
 	waitBack func(uiBefore string) bool        // after the zygote restart (waitFrameworkBack)
+	early    bool                              // during the boot (earlyGuestFixes): the messages say so
 }
 
 // report is one log line: a warning or an info.
@@ -292,6 +364,11 @@ func (m *Manager) mountGuestFixes(ctx context.Context, i int, fx guestFixIO, pro
 	back := fx.waitBack(uiBefore)
 	if ctx.Err() != nil {
 		return true, false // canceled while waiting: zygote did restart, but nothing is known about the framework
+	}
+	if fx.early && back {
+		m.Log.Infof("实例 %d 客体库补丁已在开机过程中挂上（%s），zygote 已重启，接着等安卓开机完成", i,
+			strings.Join(mounted, "、"))
+		return true, false
 	}
 	how := "超时未回来"
 	if back {

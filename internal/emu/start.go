@@ -28,10 +28,10 @@ const (
 	bootProgressFrom   = 100
 	bootProgressTo     = 600
 	progressBooted     = 610
+	progressVulkanFix  = 615
 	progressTune       = 620
 	progressIme        = 700
 	progressFirstBoot  = 800
-	progressVulkanFix  = 900
 	bootReportInterval = 5 * time.Second
 	// how long a start waits for a boot lock nobody should hold (the start lock is ours)
 	bootLockWait = 10 * time.Second
@@ -216,6 +216,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	var marker *setupMarker
 	var mode bootSetup
 	var qemu host.Process
+	earlyRestarted := false // earlyGuestFixes restarted zygote during the boot
 	// owed: errors from here on leave a boot whose setup the next start finishes
 	owed := func(err error) error {
 		if marker == nil {
@@ -355,7 +356,17 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			prog.emit("launch", fmt.Sprintf("实例 %d 的模拟器已拉起（pid %d），等安卓开机", i, p.PID), progressLaunch)
 		}
 
-		qemu, err = m.waitBoot(ctx, i, timeout, emulator, adopted, res.LogFile, prog, onQemu, &stopSeen)
+		// A launched boot of an instance set up before mounts the guest library fixes under the boot animation; the
+		// first boot of a new one leaves them to afterBoot (system_server's very first start is not cut short).
+		var early func() bool
+		if mode == setupLaunched && m.initialized(i) {
+			early = func() bool {
+				done, restarted := m.earlyGuestFixes(ctx, inst, prog)
+				earlyRestarted = earlyRestarted || restarted
+				return done
+			}
+		}
+		qemu, err = m.waitBoot(ctx, i, timeout, emulator, adopted, res.LogFile, prog, onQemu, &stopSeen, early)
 		bootLock.Unlock()
 		if err == nil {
 			break
@@ -400,7 +411,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		return nil, m.startFailure(ctx, i, owed(err), unknownState)
 	}
 	res.FirstBoot = ab.FirstBoot
-	res.ZygoteRestarted = ab.ZygoteRestarted
+	res.ZygoteRestarted = ab.ZygoteRestarted || earlyRestarted
 	res.LogcatFile = ab.LogcatFile
 	res.HostIME = ab.HostIME
 
@@ -489,9 +500,10 @@ func pollUntil(ctx context.Context, limit, every time.Duration, ok func() bool) 
 // one may have missed a server restart and is. Fails when the deadline passes, when emulator.exe has exited while
 // no qemu is there, or when the adopted qemu is gone. onQemu, when set, is told the qemu process each time the scan
 // finds it (the setup marker records it the first time). stopSeen, when set and a qemu was adopted, is set to true
-// once a stop of this instance is seen holding its lock (relaunchAfterAdoptedGone).
+// once a stop of this instance is seen holding its lock (relaunchAfterAdoptedGone). early, when set, runs each time
+// adb answers before the boot has completed, until it returns true (earlyGuestFixes).
 func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, emulator, adopted *host.Process,
-	logPath string, prog *progressor, onQemu func(host.Process), stopSeen *bool) (host.Process, error) {
+	logPath string, prog *progressor, onQemu func(host.Process), stopSeen *bool, early func() bool) (host.Process, error) {
 	launched := emulator != nil
 	started := time.Now()
 	deadline := started.Add(timeout)
@@ -510,8 +522,15 @@ func (m *Manager) waitBoot(ctx context.Context, i int, timeout time.Duration, em
 			// before the getprop, which may take seconds: a cancel then must find qemu already recorded
 			onQemu(p)
 		}
-		if found && m.bootCompleted(ctx, i, statusAdbTimeout, !launched) {
-			return p, nil
+		if found {
+			done, answered := waitBootProbe(m, ctx, i, statusAdbTimeout, !launched)
+			if done {
+				return p, nil
+			}
+			if answered && early != nil && early() {
+				early = nil
+				continue // ask getprop again right away
+			}
 		}
 		if err := ctxErr(ctx); err != nil {
 			return host.Process{}, err
@@ -591,6 +610,9 @@ var emulatorReportedBoot = func(r *root.Root, i int, qemu host.Process) bool {
 
 // waitBootFindQemu is the boot wait's process scan (a variable for the tests).
 var waitBootFindQemu = func(m *Manager, i int) (host.Process, bool, error) { return m.findQemu(i) }
+
+// waitBootProbe is the boot wait's getprop (a variable for the tests).
+var waitBootProbe = (*Manager).bootProbe
 
 // registerBooted is adb's RegisterBooted for instance i (a variable for the tests).
 var registerBooted = func(ctx context.Context, m *Manager, i int) bool {

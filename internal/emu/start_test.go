@@ -408,8 +408,8 @@ func TestProgressor(t *testing.T) {
 }
 
 func TestProgressOrder(t *testing.T) {
-	order := []int{progressLaunch, bootProgressFrom, bootProgressTo, progressBooted, progressTune, progressIme,
-		progressFirstBoot, progressVulkanFix, progressTotal}
+	order := []int{progressLaunch, bootProgressFrom, bootProgressTo, progressBooted, progressVulkanFix, progressTune,
+		progressIme, progressFirstBoot, progressTotal}
 	for k := 1; k < len(order); k++ {
 		if order[k] <= order[k-1] {
 			t.Errorf("progress constants out of order at %d: %v", k, order)
@@ -554,11 +554,11 @@ func TestWaitBootAdoptedGone(t *testing.T) {
 	q, kill := startSleeper(t)
 	kill()
 	stopSeen := false
-	_, err := m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen)
+	_, err := m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen, nil)
 	if !errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed || stopSeen {
 		t.Fatalf("adopted qemu gone: %v, stopSeen %v", err, stopSeen)
 	}
-	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, &q, nil, "", &progressor{}, nil, &stopSeen)
+	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, &q, nil, "", &progressor{}, nil, &stopSeen, nil)
 	if errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed {
 		t.Fatalf("launched emulator gone: %v", err)
 	}
@@ -570,11 +570,11 @@ func TestWaitBootAdoptedGone(t *testing.T) {
 	defer l.Unlock()
 	// a launched emulator.exe that still runs: the wait polls (and times out) without looking at the stop lock
 	live, _ := startSleeper(t)
-	_, err = m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &live, nil, "", &progressor{}, nil, &stopSeen)
+	_, err = m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &live, nil, "", &progressor{}, nil, &stopSeen, nil)
 	if errs.CodeOf(err) != errs.Timeout || stopSeen {
 		t.Fatalf("launched emulator during a stop: %v, stopSeen %v", err, stopSeen)
 	}
-	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen)
+	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen, nil)
 	if !errors.Is(err, errAdoptedGone) || !stopSeen {
 		t.Fatalf("adopted qemu gone during a stop: %v, stopSeen %v", err, stopSeen)
 	}

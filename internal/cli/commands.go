@@ -86,7 +86,7 @@ func dataGBOpt(inv *invocation) (gb *int, auto bool, err error) {
 var (
 	optIndex         = flagSpec{"index", kindString, "N", "实例编号（不给就取最小的空闲编号，端口也要空着）"}
 	optTitle         = flagSpec{"title", kindString, "T", "显示名称"}
-	optMemory        = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 MB，也可写 6G"}
+	optMemory        = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 / 8192 MB，也可写 6G"}
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
 	optDataGB        = flagSpec{"data-gb", kindString, "auto|N", "数据盘：auto 自动扩盘（默认），或指定大小 16–512 GB"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}

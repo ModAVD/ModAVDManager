@@ -75,7 +75,7 @@ func TestQemuWaitsPropagateUnsupported(t *testing.T) {
 		"waitQemuGone": func() error { return m.waitQemuGone(ctx, 1) },
 		"stopAndWait":  func() error { return m.stopAndWait(ctx, 1) },
 		"waitBoot": func() error {
-			_, err := m.waitBoot(ctx, 1, 0, nil, nil, "", nil, nil, nil)
+			_, err := m.waitBoot(ctx, 1, 0, nil, nil, "", nil, nil, nil, nil)
 			return err
 		},
 	} {
