@@ -558,6 +558,73 @@ func TestLaunchPlanPorts(t *testing.T) {
 	}
 }
 
+// TestLaunchPlanSound: a boot follows the instance's sound switch (ModAVD/ModAVD#226) as set through Update, which
+// also writes config.ini's hw.audio* and shows it in the instance's info; every boot gets -save-path
+// <Pictures>\ModAVD, made first (ModAVD/ModAVD#231).
+func TestLaunchPlanSound(t *testing.T) {
+	r, _ := portPlanRoot(t)
+	m := New(r, logx.Nop())
+	six := 6
+	if _, err := m.Create(context.Background(), CreateRequest{filesOnly: true, Index: &six}); err != nil {
+		t.Fatal(err)
+	}
+	pictures := testutil.TempDir(t)
+	usePictures(t, pictures)
+	shots := filepath.Join(pictures, "ModAVD")
+	boot := func(want bool) {
+		t.Helper()
+		inst, err := m.instance(6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := m.launchPlanFor(context.Background(), inst, 3072, true)
+		if errs.CodeOf(err) == errs.Busy {
+			t.Skipf("ports of instance 6 in use on this machine: %v", err)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := " " + strings.Join(plan.args, " ") + " "
+		muted := strings.Contains(args, " -audio none ")
+		card := !strings.Contains(args, " -feature -VirtioSndCard ")
+		if muted == want || card != want {
+			t.Errorf("sound %v: emulator arguments %s", want, args)
+		}
+		if !strings.Contains(args, " -save-path "+shots+" ") {
+			t.Errorf("no -save-path %s: %s", shots, args)
+		}
+		if st, err := os.Stat(shots); err != nil || !st.IsDir() {
+			t.Errorf("%s not made before the boot: %v", shots, err)
+		}
+		in, err := m.instance(6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := "no"
+		if want {
+			v = "yes"
+		}
+		if in.Config.Value("hw.audioInput") != v || in.Config.Value("hw.audioOutput") != v {
+			t.Errorf("sound %v: config.ini hw.audioInput=%q hw.audioOutput=%q", want, in.Config.Value("hw.audioInput"),
+				in.Config.Value("hw.audioOutput"))
+		}
+		if got := m.mustInfo(t, 6).Config.Sound; got != want {
+			t.Errorf("info config.sound = %v, want %v", got, want)
+		}
+	}
+	boot(false) // a new instance: no sound, exactly as before
+	for _, on := range []bool{true, false} {
+		res, err := m.Update(context.Background(), 6, UpdateRequest{Sound: &on})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Applied["sound"] != on || res.Instance.Config.Sound != on {
+			t.Errorf("Update sound %v: applied %v, info %v", on, res.Applied, res.Instance.Config.Sound)
+		}
+		boot(on)
+	}
+}
+
 // TestQemuMatchedByPortPlan: on a root with portBase 21000, this root's qemu of instance 6 is the one on -ports 21060
 // (and listening on 21061), not one of mas_6 on the default plan's 20060; a qemu of another root's mas_7 on 21070 is
 // that other root's instance on our ports; the host tuning counts our qemu's vCPUs from our instance.

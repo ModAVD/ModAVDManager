@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"modavd/internal/errs"
+	"modavd/internal/jsonord"
 	"modavd/internal/root"
 	"modavd/internal/testutil"
 )
@@ -991,6 +992,108 @@ func TestUpdateTitleAndApplied(t *testing.T) {
 	wantCode(t, err, errs.MetadataUnreadable)
 	if !bytes.Equal(cfg, readFile(t, ConfigPath(r, 0))) {
 		t.Fatal("config.ini changed")
+	}
+}
+
+// TestUpdateSound: the sound switch (ModAVD/ModAVD#226) is off for a new instance, and Update writes it to
+// instances.<i>.sound and config.ini's hw.audioInput / hw.audioOutput in place, nothing else of config.ini changing.
+func TestUpdateSound(t *testing.T) {
+	r := newRoot(t)
+	if _, err := Create(r, 0, CreateOptions{MemoryMB: 4096, CPU: 4, DataPartitionGB: 64, FPS: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if SoundMeta(r.InstanceMeta(0)) {
+		t.Fatal("a new instance has sound")
+	}
+	before := string(readFile(t, ConfigPath(r, 0)))
+	if !strings.Contains(before, "hw.audioInput=no\r\n") || !strings.Contains(before, "hw.audioOutput=no\r\n") {
+		t.Fatalf("new config.ini: %q", before)
+	}
+	for _, on := range []bool{true, false} {
+		applied, err := Update(r, 0, UpdateOptions{Sound: &on})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if applied["sound"] != on || len(applied) != 1 {
+			t.Errorf("sound %v: applied %v", on, applied)
+		}
+		if SoundMeta(r.InstanceMeta(0)) != on {
+			t.Errorf("sound %v: instances.0.sound = %v", on, SoundMeta(r.InstanceMeta(0)))
+		}
+		want := before
+		if on {
+			want = strings.NewReplacer("hw.audioInput=no\r\n", "hw.audioInput=yes\r\n",
+				"hw.audioOutput=no\r\n", "hw.audioOutput=yes\r\n").Replace(before)
+		}
+		if got := string(readFile(t, ConfigPath(r, 0))); got != want {
+			t.Errorf("sound %v: config\n got %q\nwant %q", on, got, want)
+		}
+	}
+
+	// Sound alone neither validates nor rewrites unrelated values: an old 8 GB data disk is not refused, AUTO-MAS's
+	// automatic memory (no memoryMb) stays automatic, hw.ramSize stays as it was.
+	cfg := strings.NewReplacer("disk.dataPartition.size=64G", "disk.dataPartition.size=8G",
+		"hw.ramSize=4096M", "hw.ramSize=3000M").Replace(before)
+	if strings.Count(cfg, "=8G\r\n")+strings.Count(cfg, "=3000M\r\n") != 2 {
+		t.Fatalf("old config: %q", cfg)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(cfg))
+	if err := r.EditInstanceMeta(0, func(meta *jsonord.Obj) error { meta.Delete("memoryMb"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &on}); err != nil || fmt.Sprint(applied) != "map[sound:true]" {
+		t.Fatalf("sound on an old instance: %v %v", applied, err)
+	}
+	want := strings.NewReplacer("hw.audioInput=no\r\n", "hw.audioInput=yes\r\n",
+		"hw.audioOutput=no\r\n", "hw.audioOutput=yes\r\n").Replace(cfg)
+	if got := string(readFile(t, ConfigPath(r, 0))); got != want {
+		t.Errorf("sound on an old instance: config\n got %q\nwant %q", got, want)
+	}
+	if r.InstanceMeta(0).Has("memoryMb") || !SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on an old instance: metadata %v", r.InstanceMeta(0))
+	}
+
+	// Together with a hardware setting it goes the whole way, sound keys included.
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	off := false
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &off, CPU: ip(6)}); err != nil ||
+		fmt.Sprint(applied) != "map[cpu:6 sound:false]" {
+		t.Fatalf("sound with cpu: %v %v", applied, err)
+	}
+	got := string(readFile(t, ConfigPath(r, 0)))
+	if !strings.Contains(got, "hw.cpu.ncore=6\r\n") || !strings.Contains(got, "hw.audioInput=no\r\n") ||
+		!strings.Contains(got, "hw.audioOutput=no\r\n") || SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	if _, err := Update(r, 0, UpdateOptions{Sound: &on, CPU: ip(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readFile(t, ConfigPath(r, 0))); !strings.Contains(got, "hw.audioOutput=yes\r\n") ||
+		!SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
+}
+
+// TestSoundMeta: only a JSON true turns sound on.
+func TestSoundMeta(t *testing.T) {
+	if SoundMeta(nil) {
+		t.Error("nil metadata")
+	}
+	for text, want := range map[string]bool{`{}`: false, `{"sound":true}`: true, `{"sound":false}`: false,
+		`{"sound":"true"}`: false, `{"sound":1}`: false} {
+		v, err := jsonord.Parse([]byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := SoundMeta(v.Obj()); got != want {
+			t.Errorf("%s: SoundMeta = %v, want %v", text, got, want)
+		}
+	}
+	if fmt.Sprint(SoundConfig(true)) != "[[hw.audioInput yes] [hw.audioOutput yes]]" ||
+		fmt.Sprint(SoundConfig(false)) != "[[hw.audioInput no] [hw.audioOutput no]]" {
+		t.Errorf("SoundConfig: %v %v", SoundConfig(true), SoundConfig(false))
 	}
 }
 

@@ -51,6 +51,10 @@ const (
 	DataDiskModeKey = "dataDiskMode"
 	DataDiskAuto    = "auto"
 	DataDiskManual  = "manual"
+	// SoundKey is instances.<i>.sound in mas-avd.json: true gives the instance a sound card from its next boot
+	// (ModAVD/ModAVD#226); anything else (absent: every instance before it) keeps it without one, the default. The
+	// boot reads only this key; config.ini's hw.audioInput / hw.audioOutput are written along with it (SoundConfig).
+	SoundKey = "sound"
 	// New instances default to 1080p. Existing instances are identified by their dimensions.
 	DefaultResolution = 1080
 	TargetAPI         = "android-34"
@@ -60,8 +64,10 @@ const (
 )
 
 // ConfigTemplate is config.ini of a new instance before the per-instance keys (AUTO-MAS _CONFIG_TEMPLATE, same
-// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, no sound card keys (the real switch is
-// -feature -VirtioSndCard), hw.mainKeys=yes (no on-screen navigation bar; ModAVD #1).
+// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, sound keys hw.audioInput / hw.audioOutput
+// set to no (the real switch is -feature -VirtioSndCard; the instance's sound switch, SoundKey, writes them yes),
+// hw.mainKeys=yes (no on-screen
+// navigation bar; ModAVD #1).
 var ConfigTemplate = [][2]string{
 	{"PlayStore.enabled", "no"},
 	{"abi.type", "x86_64"},
@@ -329,6 +335,22 @@ func (in *Instance) DataPartitionGB() (int, bool) {
 func DataDiskAutoMeta(meta *jsonord.Obj) bool {
 	s, _ := meta.Get(DataDiskModeKey).Str()
 	return s != DataDiskManual
+}
+
+// SoundMeta: the instance with metadata meta boots with a sound card (SoundKey is true; nil metadata, a missing key or
+// any other value is off).
+func SoundMeta(meta *jsonord.Obj) bool {
+	on, ok := meta.Get(SoundKey).BoolVal()
+	return ok && on
+}
+
+// SoundConfig is config.ini's sound keys for the switch: hw.audioInput and hw.audioOutput, both yes or both no.
+func SoundConfig(on bool) [][2]string {
+	v := "no"
+	if on {
+		v = "yes"
+	}
+	return [][2]string{{"hw.audioInput", v}, {"hw.audioOutput", v}}
 }
 
 // Display returns the size and density the instance will boot with (after DisplayChanges).
@@ -777,15 +799,21 @@ type UpdateOptions struct {
 	// DataDiskAuto makes the data disk automatic (dataDiskMode auto) and raises it to AutoDataPartitionGB unless it is
 	// larger already. Not together with DataPartitionGB.
 	DataDiskAuto bool
+	// Sound turns the instance's sound card on or off from its next boot: instances.<i>.sound (SoundKey) and
+	// config.ini's hw.audioInput / hw.audioOutput (SoundConfig).
+	Sound *bool
 }
 
 // Update writes the changed keys like AUTO-MAS write_instance_settings: hw.ramSize=<n>M and hw.cpu.ncore always
 // (current values when not changed), hw.lcd.vsync only when FPS is given, avd.ini.displayname when Title is given,
-// disk.dataPartition.size when DataPartitionGB is given, and instances.<i>.memoryMb always. Validates first
-// (memory / cpu / fps steps). Returns the applied changes by option name ("title", "memory_mb", "cpu", "fps",
-// "data_partition_gb"). Takes effect at the next boot.
+// disk.dataPartition.size when DataPartitionGB is given, hw.audioInput / hw.audioOutput and instances.<i>.sound when
+// Sound is given, and instances.<i>.memoryMb always. Validates first (memory / cpu / fps steps). Returns the applied
+// changes by option name ("title", "memory_mb", "cpu", "fps", "data_partition_gb", "sound"). Takes effect at the next
+// boot.
 //
-// As in AUTO-MAS the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
+// Sound on its own only writes the sound keys and instances.<i>.sound: nothing is validated or rewritten then.
+//
+// Otherwise, as in AUTO-MAS, the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
 // hw.cpu.ncore (DefaultCPU when unreadable), and the instance's data partition must still be within range unless a
 // new DataPartitionGB is given (an old 8 GB instance can be raised that way). A given empty Title means the AVD name,
 // like Create.
@@ -804,6 +832,21 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	in, err := Get(r, i)
 	if err != nil {
 		return nil, err
+	}
+	// Sound alone is not an AUTO-MAS hardware edit: like the diagnostics switch it neither validates nor rewrites the
+	// unrelated values (an old out-of-range data disk, AUTO-MAS's automatic memory), only the sound keys.
+	if opt.Sound != nil && opt.Title == nil && opt.MemoryMB == nil && opt.CPU == nil && opt.FPS == nil &&
+		opt.Resolution == nil && opt.DataPartitionGB == nil && !opt.DataDiskAuto {
+		if _, err := r.ReadMetadata(); err != nil {
+			return nil, err
+		}
+		if err := writeInstanceConfig(r, i, SoundConfig(*opt.Sound)); err != nil {
+			return nil, err
+		}
+		if err := r.UpdateInstanceMeta(i, map[string]*jsonord.Value{SoundKey: jsonord.NewBool(*opt.Sound)}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sound": *opt.Sound}, nil
 	}
 	if opt.Title != nil {
 		if err := validateTitle(*opt.Title); err != nil {
@@ -874,6 +917,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		changes = append(changes, [2]string{"disk.dataPartition.size", strconv.Itoa(data) + "G"})
 	}
+	if opt.Sound != nil {
+		changes = append(changes, SoundConfig(*opt.Sound)...)
+	}
 	title := ""
 	if opt.Title != nil {
 		title = *opt.Title
@@ -892,6 +938,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskAuto)
 	case opt.DataPartitionGB != nil:
 		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskManual)
+	}
+	if opt.Sound != nil {
+		metaChanges[SoundKey] = jsonord.NewBool(*opt.Sound)
 	}
 	if err := r.UpdateInstanceMeta(i, metaChanges); err != nil {
 		return nil, err
@@ -918,6 +967,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 		if opt.DataDiskAuto {
 			applied["data_disk_mode"] = DataDiskAuto
 		}
+	}
+	if opt.Sound != nil {
+		applied["sound"] = *opt.Sound
 	}
 	return applied, nil
 }

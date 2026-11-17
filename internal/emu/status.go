@@ -224,6 +224,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	if avd.DataDiskAutoMeta(meta) {
 		cfg.DataDiskMode = avd.DataDiskAuto
 	}
+	cfg.Sound = avd.SoundMeta(meta)
 	info.Config = cfg
 
 	if meta != nil {

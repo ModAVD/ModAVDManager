@@ -270,6 +270,7 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	kv("内存", fmtMemory(cfg.MemoryMB))
 	kv("核数", intOrDash(cfg.CPU))
 	kv("帧率", intOrDash(cfg.FPS))
+	kv("声音", onOff(cfg.Sound))
 	kv("数据盘", dataDiskText(cfg)+"，"+dataSpaceSummary(in.DataSpace))
 	if in.DataSpace.Message != "" {
 		kv("数据盘提示", dataSpaceNote(in.DataSpace))
@@ -306,6 +307,14 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		kv("按应用走代理", state)
 	}
 	kv("路径", in.Path)
+}
+
+// onOff is a switch for people: "开" / "关".
+func onOff(on bool) string {
+	if on {
+		return "开"
+	}
+	return "关"
 }
 
 // bossKeyText is a boss key for people: "无" when there is none.
@@ -415,6 +424,9 @@ func appliedParts(applied map[string]any) []string {
 			} else {
 				parts = append(parts, "诊断模式 关")
 			}
+		case "sound":
+			on, _ := v.(bool)
+			parts = append(parts, "声音 "+onOff(on))
 		case "boss_key":
 			key, _ := v.(string)
 			parts = append(parts, "老板键 "+bossKeyText(key))
