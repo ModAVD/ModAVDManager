@@ -28,7 +28,7 @@
 
 ## 和 ModAVD 的关系
 
-- 本公开仓库是管理器和命令行程序的开发与发版依据，版本号独立维护，并单独提供 GitHub Release。
+- 本公开仓库是管理器和命令行程序的开发与发版依据，并单独提供 GitHub Release。版本号跟着 ModAVD 整包走：哪一版 ModAVD 重新打包了管理器，管理器就取那一版的版本号（比如随 ModAVD 0.42.3 重编的就是 0.42.3）；没重新打包的不动（[ModAVD#216](https://github.com/ModAVD/ModAVD/issues/216)）。
 - ModAVD 整包仍会带着 `ModAVD.exe` 和 `tools\modavd.exe`，每次 ModAVD 发版会钉住使用的管理器版本与哈希。
 - 单独下载包可在任意目录使用；给 `--root` 或设置 `MODAVD_ROOT` 指向 ModAVD 根目录，并按下面的哈希核对下载内容。不要把它解压到 ModAVD 根目录覆盖整包里的文件。
 
