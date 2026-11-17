@@ -27,13 +27,13 @@ var (
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
 		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
-		"-device", "virtio-balloon-pci,free-page-reporting=on"}
+		"-device", "virtio-balloon-pci,free-page-reporting=on", "-append", "tsc=nowatchdog"}
 	masArgsWindow = []string{"-avd", "mas_3", "-no-snapshot", "-gpu", "host", "-ports", "20030,20031", "-grpc", "20032",
 		"-grpc-use-token", "-audio", "none", "-memory", "4096",
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
 		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
-		"-device", "virtio-balloon-pci,free-page-reporting=on"}
+		"-device", "virtio-balloon-pci,free-page-reporting=on", "-append", "tsc=nowatchdog"}
 )
 
 func TestBuildLaunchArgs(t *testing.T) {
