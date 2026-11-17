@@ -42,6 +42,8 @@ const adbServerStartTimeout = 20 * time.Second
 //
 // qemuExtra comes last, still inside the -qemu part: the manager's own QEMU arguments (syncIOQemuArgs).
 //
+// On Windows the guest kernel also gets tsc=nowatchdog (tscNoWatchdogArgs).
+//
 // The window is not an instance option: it is decided at boot by whoever starts it.
 func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuExtra ...string) []string {
 	args := []string{
@@ -78,8 +80,22 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuE
 	if root.CurrentPlatform().MirrorOS != "macos" {
 		args = append(args, "-device", "virtio-balloon-pci,free-page-reporting=on")
 	}
+	if root.CurrentPlatform().MirrorOS == "win" {
+		args = append(args, tscNoWatchdogArgs...)
+	}
 	return append(args, qemuExtra...)
 }
+
+// tscNoWatchdogArgs keeps the guest on the TSC clocksource for the whole run (ModAVD/ModAVD#110). WHPX gives the
+// guest no kvm-clock, so when the kernel's clocksource watchdog drops the TSC the only clock left is the HPET, which
+// QEMU emulates: every clock read exits to the host. The watchdog compares the TSC against that HPET and gives up on
+// the TSC when an HPET read is slow three times in a row ("hpet read-back delay ..., attempt 3, marking unstable"),
+// which a busy host eventually causes. On a production instance it happened after 13.8 hours; from then on
+// Arknights' render thread spent 72% of its time in read_hpet and the game fell to about 5 fps until the next cold
+// boot. tsc=nowatchdog only takes the TSC out of the watchdog; the boot-time TSC synchronization check still runs, so
+// vCPUs whose TSCs really differ are still caught (unlike tsc=reliable, which skips that check too). "-append" after
+// -qemu is merged into the kernel command line by the emulator, not passed on to QEMU as a replacement.
+var tscNoWatchdogArgs = []string{"-append", "tsc=nowatchdog"}
 
 // launchPlan is what prepareLaunch settled before emulator.exe is started.
 type launchPlan struct {
