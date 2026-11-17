@@ -64,8 +64,9 @@ const (
 )
 
 // ConfigTemplate is config.ini of a new instance before the per-instance keys (AUTO-MAS _CONFIG_TEMPLATE, same
-// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, no sound card keys (the real switch is
-// -feature -VirtioSndCard; the instance's sound switch, SoundKey, writes them yes), hw.mainKeys=yes (no on-screen
+// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, sound keys hw.audioInput / hw.audioOutput
+// set to no (the real switch is -feature -VirtioSndCard; the instance's sound switch, SoundKey, writes them yes),
+// hw.mainKeys=yes (no on-screen
 // navigation bar; ModAVD #1).
 var ConfigTemplate = [][2]string{
 	{"PlayStore.enabled", "no"},
@@ -810,7 +811,9 @@ type UpdateOptions struct {
 // changes by option name ("title", "memory_mb", "cpu", "fps", "data_partition_gb", "sound"). Takes effect at the next
 // boot.
 //
-// As in AUTO-MAS the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
+// Sound on its own only writes the sound keys and instances.<i>.sound: nothing is validated or rewritten then.
+//
+// Otherwise, as in AUTO-MAS, the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
 // hw.cpu.ncore (DefaultCPU when unreadable), and the instance's data partition must still be within range unless a
 // new DataPartitionGB is given (an old 8 GB instance can be raised that way). A given empty Title means the AVD name,
 // like Create.
@@ -829,6 +832,21 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	in, err := Get(r, i)
 	if err != nil {
 		return nil, err
+	}
+	// Sound alone is not an AUTO-MAS hardware edit: like the diagnostics switch it neither validates nor rewrites the
+	// unrelated values (an old out-of-range data disk, AUTO-MAS's automatic memory), only the sound keys.
+	if opt.Sound != nil && opt.Title == nil && opt.MemoryMB == nil && opt.CPU == nil && opt.FPS == nil &&
+		opt.Resolution == nil && opt.DataPartitionGB == nil && !opt.DataDiskAuto {
+		if _, err := r.ReadMetadata(); err != nil {
+			return nil, err
+		}
+		if err := writeInstanceConfig(r, i, SoundConfig(*opt.Sound)); err != nil {
+			return nil, err
+		}
+		if err := r.UpdateInstanceMeta(i, map[string]*jsonord.Value{SoundKey: jsonord.NewBool(*opt.Sound)}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sound": *opt.Sound}, nil
 	}
 	if opt.Title != nil {
 		if err := validateTitle(*opt.Title); err != nil {

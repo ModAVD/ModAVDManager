@@ -1029,6 +1029,51 @@ func TestUpdateSound(t *testing.T) {
 			t.Errorf("sound %v: config\n got %q\nwant %q", on, got, want)
 		}
 	}
+
+	// Sound alone neither validates nor rewrites unrelated values: an old 8 GB data disk is not refused, AUTO-MAS's
+	// automatic memory (no memoryMb) stays automatic, hw.ramSize stays as it was.
+	cfg := strings.NewReplacer("disk.dataPartition.size=64G", "disk.dataPartition.size=8G",
+		"hw.ramSize=4096M", "hw.ramSize=3000M").Replace(before)
+	if strings.Count(cfg, "=8G\r\n")+strings.Count(cfg, "=3000M\r\n") != 2 {
+		t.Fatalf("old config: %q", cfg)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(cfg))
+	if err := r.EditInstanceMeta(0, func(meta *jsonord.Obj) error { meta.Delete("memoryMb"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &on}); err != nil || fmt.Sprint(applied) != "map[sound:true]" {
+		t.Fatalf("sound on an old instance: %v %v", applied, err)
+	}
+	want := strings.NewReplacer("hw.audioInput=no\r\n", "hw.audioInput=yes\r\n",
+		"hw.audioOutput=no\r\n", "hw.audioOutput=yes\r\n").Replace(cfg)
+	if got := string(readFile(t, ConfigPath(r, 0))); got != want {
+		t.Errorf("sound on an old instance: config\n got %q\nwant %q", got, want)
+	}
+	if r.InstanceMeta(0).Has("memoryMb") || !SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on an old instance: metadata %v", r.InstanceMeta(0))
+	}
+
+	// Together with a hardware setting it goes the whole way, sound keys included.
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	off := false
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &off, CPU: ip(6)}); err != nil ||
+		fmt.Sprint(applied) != "map[cpu:6 sound:false]" {
+		t.Fatalf("sound with cpu: %v %v", applied, err)
+	}
+	got := string(readFile(t, ConfigPath(r, 0)))
+	if !strings.Contains(got, "hw.cpu.ncore=6\r\n") || !strings.Contains(got, "hw.audioInput=no\r\n") ||
+		!strings.Contains(got, "hw.audioOutput=no\r\n") || SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	if _, err := Update(r, 0, UpdateOptions{Sound: &on, CPU: ip(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readFile(t, ConfigPath(r, 0))); !strings.Contains(got, "hw.audioOutput=yes\r\n") ||
+		!SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
 }
 
 // TestSoundMeta: only a JSON true turns sound on.
