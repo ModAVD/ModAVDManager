@@ -237,9 +237,10 @@ async function settingsHarness({ diagnostics = true, running = true, get, patch,
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
-test('settings has one diagnostic checkbox with limits, privacy and immediate application', async () => {
+test('settings has a diagnostic checkbox with limits, privacy and immediate application', async () => {
   const h = await settingsHarness();
-  assert.equal(descendants(h.settings.form).filter(x => x.type === 'checkbox').length, 1);
+  // the diagnostics switch and the sound switch
+  assert.deepEqual(descendants(h.settings.form).filter(x => x.type === 'checkbox').map(x => x.attrs.get('id')), ['s-sound', 's-diagnostics']);
   assert.equal(h.control('s-diagnostics').checked, true);
   const text = h.settings.options.body.textContent;
   for (const expected of ['历史日志上限 4 GiB', '客体内存最多增加 48 MiB', '账号信息', '仅保存在本机', '诊断设置立即生效']) assert.ok(text.includes(expected), text);
@@ -253,6 +254,19 @@ test('enabling diagnostics patches a boolean immediately without a deletion prev
   assert.equal(h.state.list.instances[0].diagnostics, true);
   assert.match(h.toasts[0].text, /已开启，立即生效/);
   assert.doesNotMatch(h.toasts[0].title + h.toasts[0].text, /下次开机/);
+});
+
+// ModAVD/ModAVD#226: off unless config.sound is true; turning it on patches sound alone, for the next boot.
+test('the sound switch is off by default and patches a boolean', async () => {
+  const h = await settingsHarness();
+  const sound = h.control('s-sound');
+  assert.equal(sound.checked, false);
+  const text = h.settings.options.body.textContent;
+  for (const expected of ['声音', '下次开机生效', '多占一些 CPU']) assert.ok(text.includes(expected), text);
+  sound.checked = true;
+  h.settings.form.dispatch('change');
+  await h.submit();
+  assert.deepEqual(h.requests, [{ method: 'PATCH', path: '/api/instances/3', body: { sound: true } }]);
 });
 
 test('diagnostic save displays the external capture warning from its result', async () => {

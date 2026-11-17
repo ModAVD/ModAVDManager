@@ -180,7 +180,7 @@ func TestSyncIOQemuArgs(t *testing.T) {
 		t.Errorf("table for the instance's 4 CPUs: %d bytes, err %v", len(b), err)
 	}
 	// they end up after the manager's other QEMU arguments
-	args := buildLaunchArgs("mas_3", 20030, 4096, true, m.syncIOQemuArgs(inst)...)
+	args := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true}, m.syncIOQemuArgs(inst)...)
 	if n := len(masArgsHeadless); !reflect.DeepEqual(args[:n], masArgsHeadless) || !reflect.DeepEqual(args[n:], want) {
 		t.Errorf("launch arguments: %q", args)
 	}
@@ -219,7 +219,7 @@ func TestSyncIOOff(t *testing.T) {
 		if got := m.syncIOQemuArgs(inst); got != nil {
 			t.Errorf("%s=%q: got %q", envSyncIO, v, got)
 		}
-		if got := buildLaunchArgs("mas_3", 20030, 4096, true, m.syncIOQemuArgs(inst)...); !reflect.DeepEqual(got, masArgsHeadless) {
+		if got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true}, m.syncIOQemuArgs(inst)...); !reflect.DeepEqual(got, masArgsHeadless) {
 			t.Errorf("%s=%q: launch arguments %q", envSyncIO, v, got)
 		}
 	}

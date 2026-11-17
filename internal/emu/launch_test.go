@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,16 +38,68 @@ var (
 )
 
 func TestBuildLaunchArgs(t *testing.T) {
-	if got := buildLaunchArgs("mas_3", 20030, 4096, true); !reflect.DeepEqual(got, masArgsHeadless) {
+	if got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true}); !reflect.DeepEqual(got, masArgsHeadless) {
 		t.Errorf("headless:\n got %q\nwant %q", got, masArgsHeadless)
 	}
-	if got := buildLaunchArgs("mas_3", 20030, 4096, false); !reflect.DeepEqual(got, masArgsWindow) {
+	if got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{}); !reflect.DeepEqual(got, masArgsWindow) {
 		t.Errorf("window:\n got %q\nwant %q", got, masArgsWindow)
 	}
 	// another instance: only the name, ports and memory move
-	got := buildLaunchArgs("mas_0", 20000, 6144, true)
+	got := buildLaunchArgs("mas_0", 20000, 6144, launchOptions{headless: true})
 	if got[1] != "mas_0" || got[6] != "20000,20001" || got[8] != "20002" || got[13] != "6144" {
 		t.Errorf("mas_0: %q", got)
+	}
+}
+
+// without drops every item of the pairs from args, each pair once.
+func without(args []string, pairs ...[2]string) []string {
+	out := append([]string(nil), args...)
+	for _, p := range pairs {
+		for k := 0; k+1 < len(out); k++ {
+			if out[k] == p[0] && out[k+1] == p[1] {
+				out = append(out[:k], out[k+2:]...)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// TestBuildLaunchArgsSound: the sound switch (ModAVD/ModAVD#226) takes out exactly -audio none and
+// -feature -VirtioSndCard, windowed and headless; everything else stays as it is.
+func TestBuildLaunchArgsSound(t *testing.T) {
+	soundless := [][2]string{{"-audio", "none"}, {"-feature", "-VirtioSndCard"}}
+	for _, c := range []struct {
+		name string
+		o    launchOptions
+		base []string
+	}{
+		{"headless", launchOptions{headless: true, sound: true}, masArgsHeadless},
+		{"window", launchOptions{sound: true}, masArgsWindow},
+	} {
+		got := buildLaunchArgs("mas_3", 20030, 4096, c.o)
+		if want := without(c.base, soundless...); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s with sound:\n got %q\nwant %q", c.name, got, want)
+		}
+		for _, a := range got {
+			if a == "none" || a == "-VirtioSndCard" {
+				t.Errorf("%s with sound still has %q: %q", c.name, a, got)
+			}
+		}
+	}
+}
+
+// TestBuildLaunchArgsSavePath: -save-path <dir> right after -memory (ModAVD/ModAVD#231); nothing when "".
+func TestBuildLaunchArgsSavePath(t *testing.T) {
+	dir := `X:\Pictures\ModAVD`
+	got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true, savePath: dir})
+	want := append(append(append([]string(nil), masArgsHeadless[:14]...), "-save-path", dir), masArgsHeadless[14:]...)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("save path:\n got %q\nwant %q", got, want)
+	}
+	got = buildLaunchArgs("mas_3", 20030, 4096, launchOptions{sound: true, savePath: dir})
+	if k := slices.Index(got, "-save-path"); k < 0 || got[k+1] != dir {
+		t.Errorf("save path with sound: %q", got)
 	}
 }
 

@@ -208,8 +208,8 @@ func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*Instanc
 	return m.setupNew(ctx, i, in.Config, req, lock)
 }
 
-// Update changes title / memory / cpu / fps / data partition size (next boot), the data partition's automatic growth
-// and diagnostics (at once).
+// Update changes title / memory / cpu / fps / data partition size / sound (next boot), the data partition's automatic
+// growth and diagnostics (at once).
 func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
 	if err := requireLifecycle(); err != nil {
 		return nil, err
@@ -238,10 +238,10 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 		}
 	}
 	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil ||
-		req.DataDiskAuto {
+		req.DataDiskAuto || req.Sound != nil {
 		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
 			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
-			DataDiskAuto: req.DataDiskAuto,
+			DataDiskAuto: req.DataDiskAuto, Sound: req.Sound,
 		})
 		if err != nil {
 			return nil, err

@@ -243,7 +243,7 @@ func toolDefs() []*toolDef {
 			})),
 
 		finishing(newTool("update_instance", "Update instance",
-			"Change the title, memory, CPU cores, frame rate, resolution or data disk (a fixed size or automatic) of an instance. The changes take "+
+			"Change the title, memory, CPU cores, frame rate, resolution, data disk (a fixed size or automatic) or sound of an instance. The changes take "+
 				"effect at its next boot (applies_next_boot=true when it is running now).",
 			mutating(true, true), reflect.TypeFor[emu.UpdateResult](), []prop{
 				indexProp(true),
@@ -259,6 +259,8 @@ func toolDefs() []*toolDef {
 				{"data_disk_auto", false, map[string]any{"type": "boolean", "description": fmt.Sprintf("true: make the data "+
 					"disk automatic (%d GB from the next boot, the host only pays for what is written). Not together with "+
 					"data_partition_gb.", avd.AutoDataPartitionGB)}},
+				{"sound", false, map[string]any{"type": "boolean", "description": "true: host sound and a guest sound " +
+					"card from the next boot, windowed or headless (costs some CPU); false: no sound (the default)."}},
 			},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
@@ -289,9 +291,12 @@ func toolDefs() []*toolDef {
 					return nil, err
 				}
 				req.DataDiskAuto = auto != nil && *auto
+				if req.Sound, err = a.optBool("sound"); err != nil {
+					return nil, err
+				}
 				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
-					!req.DataDiskAuto {
-					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto 至少给一项")
+					!req.DataDiskAuto && req.Sound == nil {
+					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、sound 至少给一项")
 				}
 				return b.Update(ctx, i, req)
 			})),

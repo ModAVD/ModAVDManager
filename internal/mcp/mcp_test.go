@@ -1003,6 +1003,21 @@ func TestIntegralFloatArgument(t *testing.T) {
 	}
 }
 
+// TestUpdateSound: update_instance takes sound alone (ModAVD/ModAVD#226), true and false both reaching the manager.
+func TestUpdateSound(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.initialize("2025-11-25")
+	for k, on := range []bool{true, false} {
+		h.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"update_instance","arguments":{"index":1,"sound":%v}}}`, k+2, on))
+		if text, isErr, _ := toolText(t, h.recv()); isErr {
+			t.Fatalf("sound %v: %s", on, text)
+		}
+		if u := h.f.updates[k]; u.Sound == nil || *u.Sound != on || u.MemoryMB != nil {
+			t.Fatalf("sound %v: update %+v", on, u)
+		}
+	}
+}
+
 func TestServeNeedsManager(t *testing.T) {
 	err := Serve(context.Background(), strings.NewReader(""), io.Discard, Options{})
 	if errs.CodeOf(err) != errs.Internal {

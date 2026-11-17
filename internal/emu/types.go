@@ -44,6 +44,8 @@ type InstanceConfig struct {
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	DPI          int    `json:"dpi"`
+	// Sound: the next boot has host sound and a guest sound card (mas-avd.json instances.<i>.sound; off by default).
+	Sound bool `json:"sound"`
 }
 
 type InstanceInfo struct {
@@ -185,6 +187,8 @@ type UpdateRequest struct {
 	// DataDiskAuto switches the data disk to 自动扩盘 (raised to avd.AutoDataPartitionGB at the next boot); not together
 	// with DataPartitionGB.
 	DataDiskAuto bool
+	// Sound turns the sound card on or off from the next boot (avd.SoundKey; ModAVD/ModAVD#226).
+	Sound *bool
 }
 
 type UpdateResult struct {

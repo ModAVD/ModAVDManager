@@ -27,7 +27,11 @@ const adbServerStartTimeout = 20 * time.Second
 //   - cold boot (-no-snapshot), like MAS does with LDPlayer / MuMu every round;
 //   - the boot animation is turned off only when headless: a window has something to show meanwhile;
 //   - -audio none and -feature -VirtioSndCard: no host sound and no guest sound card (the image's virtio-snd ignores
-//     hw.audio*); qemu CPU on the 1999 main screen 147% -> 104%;
+//     hw.audio*); qemu CPU on the 1999 main screen 147% -> 104%. Both are left out only for an instance whose sound
+//     switch is on (o.sound, avd.SoundMeta; ModAVD/ModAVD#226), headless or not; the emulator shows its volume button
+//     exactly when it was not started with -audio none;
+//   - -save-path: the folder the emulator's screenshot button saves to (o.savePath, screenshotSavePath;
+//     ModAVD/ModAVD#231); left out when empty, and the emulator keeps its own default;
 //   - -memory: the instance's own setting (avd.MemoryFor), hw.ramSize is left alone;
 //   - the Windows balloon (free page reporting) is on; QuickbootFileBacked has to be off for it, or the guest RAM is
 //     a file mapping whose pages qemu cannot drop;
@@ -45,7 +49,7 @@ const adbServerStartTimeout = 20 * time.Second
 // On Windows the guest kernel also gets tsc=nowatchdog (tscNoWatchdogArgs).
 //
 // The window is not an instance option: it is decided at boot by whoever starts it.
-func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuExtra ...string) []string {
+func buildLaunchArgs(avdName string, console, memoryMB int, o launchOptions, qemuExtra ...string) []string {
 	args := []string{
 		"-avd", avdName,
 		"-no-snapshot",
@@ -53,10 +57,15 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuE
 		"-ports", fmt.Sprintf("%d,%d", console, console+1),
 		"-grpc", strconv.Itoa(console + 2),
 		"-grpc-use-token",
-		"-audio", "none",
-		"-memory", strconv.Itoa(memoryMB),
 	}
-	if headless {
+	if !o.sound {
+		args = append(args, "-audio", "none")
+	}
+	args = append(args, "-memory", strconv.Itoa(memoryMB))
+	if o.savePath != "" {
+		args = append(args, "-save-path", o.savePath)
+	}
+	if o.headless {
 		args = append(args, "-no-window", "-no-boot-anim")
 	}
 	if p := root.CurrentPlatform(); p.MirrorOS == "macos" && p.GuestABI == "arm64-v8a" {
@@ -64,9 +73,11 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuE
 		// Silicon. -gpu host alone selects the older host GLES translation path.
 		args = append(args, "-feature", "GuestAngle,Vulkan")
 	}
+	args = append(args, "-feature", "-QuickbootFileBacked")
+	if !o.sound {
+		args = append(args, "-feature", "-VirtioSndCard")
+	}
 	args = append(args,
-		"-feature", "-QuickbootFileBacked",
-		"-feature", "-VirtioSndCard",
 		"-feature", "VulkanBatchedDescriptorSetUpdate",
 		"-feature", "-WiFiPacketStream",
 		"-feature", "-BluetoothEmulation",
@@ -84,6 +95,14 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool, qemuE
 		args = append(args, tscNoWatchdogArgs...)
 	}
 	return append(args, qemuExtra...)
+}
+
+// launchOptions are the per-boot choices of buildLaunchArgs. The zero value is a windowed boot without sound or
+// screenshot folder.
+type launchOptions struct {
+	headless bool   // no window, no boot animation
+	sound    bool   // the instance's sound switch (avd.SoundMeta): host sound and a guest sound card
+	savePath string // -save-path; "" leaves it out
 }
 
 // tscNoWatchdogArgs keeps the guest on the TSC clocksource for the whole run (ModAVD/ModAVD#110). WHPX gives the
@@ -178,7 +197,9 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	}
 
 	headless := !window
-	args := buildLaunchArgs(inst.Name, port, memoryMB, headless, m.syncIOQemuArgs(inst)...)
+	sound := avd.SoundMeta(m.Root.InstanceMeta(i))
+	args := buildLaunchArgs(inst.Name, port, memoryMB,
+		launchOptions{headless: headless, sound: sound, savePath: m.screenshotSavePath()}, m.syncIOQemuArgs(inst)...)
 	regionalArgs, err := m.regionalLaunch(i)
 	if err != nil {
 		return nil, err
@@ -202,8 +223,12 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 	if root.CurrentPlatform().MirrorOS == "macos" {
 		balloon = ""
 	}
-	m.Log.Infof("启动 ModAVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，%s不带声卡，ANDROID_EMU_VK_HIDE_REBAR=%s）: emulator %s",
-		i, mode, inst.Resolution(), inst.FPS(), memoryMB, cpu, balloon, hideRebar, strings.Join(args, " "))
+	card := "不带声卡"
+	if sound {
+		card = "带声卡"
+	}
+	m.Log.Infof("启动 ModAVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，%s%s，ANDROID_EMU_VK_HIDE_REBAR=%s）: emulator %s",
+		i, mode, inst.Resolution(), inst.FPS(), memoryMB, cpu, balloon, card, hideRebar, strings.Join(args, " "))
 	return &launchPlan{args: args, logPath: logPath, memoryMB: memoryMB}, nil
 }
 

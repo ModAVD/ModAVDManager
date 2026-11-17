@@ -209,8 +209,10 @@ export function openSettings(i, field) {
   const initDiagnostics = inst0.diagnostics === true;
   const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: defaultName(i) });
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
+  const initSound = cfg.sound === true;
+  const sound = h('input', { type: 'checkbox', id: 's-sound', checked: initSound, 'aria-describedby': 's-sound-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
-  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率、分辨率和数据盘在下次开机生效。诊断设置立即生效。' }));
+  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率、分辨率、数据盘和声音在下次开机生效。诊断设置立即生效。' }));
   const kv = h('dl', { class: 'kv' });
   const fps = fpsField('s', cfg.fps);
   const diskAuto0 = cfg.data_disk_mode !== 'manual';
@@ -235,6 +237,8 @@ export function openSettings(i, field) {
         fps.rows,
         segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
         disk.rows,
+        inputRow('声音', h('span', { class: 'checkbox p-switch' }, sound),
+          hint('下次开机生效，带窗口和无头都有声音。开了会多占一些 CPU。', 's-sound-h')),
         inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
           hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h')),
         boss.row,
@@ -252,6 +256,7 @@ export function openSettings(i, field) {
     const out = {};
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
     if (diagnostics.checked !== initDiagnostics) out.diagnostics = diagnostics.checked;
+    if (sound.checked !== initSound) out.sound = sound.checked;
     if (boss.changed()) out.boss_key = boss.value();
     if (regional) Object.assign(out, regional.changes());
     for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
