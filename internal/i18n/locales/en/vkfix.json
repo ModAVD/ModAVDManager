@@ -1,0 +1,11 @@
+{
+  "%s（0x%x）原字节不符: %s": "%s (0x%x): original bytes do not match: %s",
+  "%s（0x%x）超出库文件范围": "%s (0x%x) is outside the library file",
+  "jne 跳不到（%d）": "jne cannot reach the target (%d)",
+  "on_vkBindImageMemory 实现出口": "on_vkBindImageMemory implementation exit",
+  "on_vkBindImageMemory2 实现出口": "on_vkBindImageMemory2 implementation exit",
+  "包装函数": "wrapper function",
+  "包装函数（%d + %d 字节）放不进 %d 字节": "The wrapper function (%d + %d bytes) does not fit in %d bytes",
+  "客体驱动库 sha256 %s 不是预期版本": "Guest driver library sha256 %s is not the expected version",
+  "改完的库 sha256 %s 不是预期值": "Patched library sha256 %s is not the expected value"
+}

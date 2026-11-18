@@ -115,6 +115,7 @@ import (
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/host"
+	"modavd/internal/i18n"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
@@ -217,6 +218,11 @@ func readerIsTerminal(r io.Reader) bool {
 	return ok && f != nil && fileIsTerminal(f)
 }
 
+func writerIsTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && f != nil && fileIsTerminal(f)
+}
+
 // Main runs one command and returns the process exit code (errs.ExitCode, see the package comment).
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
@@ -237,6 +243,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunDiagnosticArchive(args[1:], stderr)
 		}
 	}
+	i18n.Init()
 	// StartOrphan re-runs this executable as the spawn helper.
 	if exe, err := os.Executable(); err == nil {
 		host.SetOrphanHelper(exe)
@@ -298,6 +305,19 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		d.stdinTerminal = readerIsTerminal
 	}
 	inv, perr := parseArgs(args)
+	// Human output in the language of the user (ModAVD/ModAVD#165), on a console only: what goes to a file or a pipe
+	// (the manager's update log, scripts) stays as before unless MODAVD_LANG asks for a language. --json, adb and
+	// mcp stay byte for byte, and so does what shell prints (the guest's own output).
+	if lang := i18n.Current(); !inv.json {
+		raw := inv.cmd != nil && inv.cmd.raw
+		forced := os.Getenv(i18n.EnvVar) != ""
+		if !raw && (inv.cmd == nil || inv.cmd.name != "shell") && (forced || writerIsTerminal(stdout)) {
+			stdout = i18n.Writer(stdout, lang)
+		}
+		if !raw && (forced || writerIsTerminal(stderr)) {
+			stderr = i18n.Writer(stderr, lang)
+		}
+	}
 	log := newLogger(stderr, inv.globals)
 	out := &output{stdout: stdout, stderr: stderr, json: inv.json, raw: inv.cmd != nil && inv.cmd.raw, log: log}
 	if perr != nil {

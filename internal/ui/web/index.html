@@ -24,13 +24,13 @@
       <span data-icon="folder"></span><span class="tchip-path" id="rootPath"><span class="sk sk-text"></span></span>
     </button>
     <button class="tchip" id="checkChip" type="button" aria-haspopup="dialog">
-      <span data-icon="shield"></span><span class="lbl">电脑检查</span><span class="sep" aria-hidden="true"></span><span class="st loading" id="checkState">检查中…</span>
+      <span data-icon="shield"></span><span class="lbl" data-t="">电脑检查</span><span class="sep" aria-hidden="true"></span><span class="st loading" id="checkState" data-t="">检查中…</span>
     </button>
     <button class="tchip" id="updChip" type="button" aria-haspopup="dialog">
-      <span data-icon="sliders"></span><span class="lbl">设置</span><span class="badge upd-dot" id="updBadge" hidden></span>
+      <span data-icon="sliders"></span><span class="lbl" data-t="">设置</span><span class="badge upd-dot" id="updBadge" hidden></span>
     </button>
     <button class="tchip" id="actBtn" type="button" aria-haspopup="dialog">
-      <span data-icon="pulse"></span><span class="lbl">活动</span><span class="badge" id="actBadge" hidden></span>
+      <span data-icon="pulse"></span><span class="lbl" data-t="">活动</span><span class="badge" id="actBadge" hidden></span>
     </button>
     <div class="iseg" id="themeSeg" role="radiogroup" aria-label="外观">
       <button type="button" role="radio" data-v="system" title="跟随系统" aria-label="跟随系统"><span data-icon="auto"></span></button>
@@ -40,20 +40,20 @@
   </div>
 </header>
 
-<div class="reconnect" id="reconnect" role="status" hidden><span class="spin"></span><span id="reconnectText">正在重新连接…</span><button class="link-btn" id="reconnectBtn" type="button" hidden>重新连接</button></div>
+<div class="reconnect" id="reconnect" role="status" hidden><span class="spin"></span><span id="reconnectText" data-t="">正在重新连接…</span><button class="link-btn" id="reconnectBtn" type="button" hidden data-t="">重新连接</button></div>
 
 <main class="main">
   <div id="banner" hidden></div>
   <section aria-labelledby="instTitle">
     <div class="section-head">
-      <h1 id="instTitle">实例</h1>
+      <h1 id="instTitle" data-t="">实例</h1>
       <span class="count" id="instCount"></span>
       <div class="summary" id="summary"></div>
       <div class="iseg view-seg" id="viewSeg" role="radiogroup" aria-label="显示方式">
         <button type="button" role="radio" data-v="card" title="卡片" aria-label="卡片"><span data-icon="cards"></span></button>
         <button type="button" role="radio" data-v="list" title="列表" aria-label="列表"><span data-icon="rows"></span></button>
       </div>
-      <button class="btn btn-primary" id="createBtn" type="button"><span data-icon="plus"></span>新建实例</button>
+      <button class="btn btn-primary" id="createBtn" type="button"><span data-icon="plus"></span><span data-t="">新建实例</span></button>
     </div>
     <div class="grid" id="grid" aria-live="off"></div>
     <div id="emptyBox" hidden>
@@ -72,10 +72,10 @@
             <rect class="art-knot" x="11.4" y="6.9" width="5.2" height="5.2" rx="2"/>
           </g>
         </svg>
-        <h2>还没有实例</h2>
-        <p>实例是一台独立的安卓模拟器，每台可以登录一个游戏账号挂机。</p>
-        <p class="small">新建时会在后台开机做完初始化再关机，一般要几分钟。</p>
-        <button class="btn btn-primary" id="emptyCreate" type="button"><span data-icon="plus"></span>新建第一台实例</button>
+        <h2 data-t="">还没有实例</h2>
+        <p data-t="">实例是一台独立的安卓模拟器，每台可以登录一个游戏账号挂机。</p>
+        <p class="small" data-t="">新建时会在后台开机做完初始化再关机，一般要几分钟。</p>
+        <button class="btn btn-primary" id="emptyCreate" type="button"><span data-icon="plus"></span><span data-t="">新建第一台实例</span></button>
       </div>
       <div class="empty" id="failState" hidden></div>
     </div>

@@ -1,0 +1,14 @@
+{
+  "GetUserDefaultUILanguage 没有返回语言": "GetUserDefaultUILanguage returned no language",
+  "Windows 时区 %q 没有 CLDR 对照": "Windows time zone %q has no CLDR mapping",
+  "regional 必须是对象": "regional must be an object",
+  "regional.language 无效": "regional.language is invalid",
+  "regional.localeRequest 无效": "regional.localeRequest is invalid",
+  "regional.timeZone 无效": "regional.timeZone is invalid",
+  "宿主时区设置只支持 Windows": "Host time zone settings are only supported on Windows",
+  "宿主语言设置只支持 Windows": "Host language settings are only supported on Windows",
+  "时区要填 host、preserve 或 IANA 时区，例如 Asia/Shanghai、Etc/UTC": "The time zone must be host, preserve or an IANA time zone, for example Asia/Shanghai or Etc/UTC",
+  "未知的 IANA 时区 %s": "Unknown IANA time zone %s",
+  "语言标识无效，例如 zh-CN、en-US": "Invalid language tag, for example zh-CN or en-US",
+  "语言要填 host、preserve 或语言标识，例如 zh-CN、en-US": "The language must be host, preserve or a language tag, for example zh-CN or en-US"
+}

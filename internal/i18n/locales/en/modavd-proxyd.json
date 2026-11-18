@@ -1,0 +1,3 @@
+{
+  "modavd-proxyd 只在安卓实例里跑（linux/amd64），由 build.ps1 编好嵌进 modavd.exe": "modavd-proxyd only runs inside Android instances (linux/amd64); build.ps1 builds it and embeds it in modavd.exe"
+}

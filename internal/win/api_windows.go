@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"syscall"
 	"unsafe"
+
+	"modavd/internal/i18n"
 )
 
 // HideConsoleCmd marks a child command with CREATE_NO_WINDOW.
@@ -42,11 +44,11 @@ func MessageBox(msg string) error { return messageBox(msg, mbIconError) }
 func InfoBox(msg string) error { return messageBox(msg, mbIconInformation) }
 
 func messageBox(msg string, icon uintptr) error {
-	text, err := syscall.UTF16PtrFromString(msg)
+	text, err := syscall.UTF16PtrFromString(i18n.T(msg))
 	if err != nil {
 		return err
 	}
-	caption, err := syscall.UTF16PtrFromString("ModAVD 管理器")
+	caption, err := syscall.UTF16PtrFromString(i18n.T("ModAVD 管理器"))
 	if err != nil {
 		return err
 	}

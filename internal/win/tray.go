@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"modavd/internal/i18n"
 )
 
 // Tray is the manager's hidden window (ModAVD/ModAVD#101): it owns the global hot keys of the boss keys
@@ -154,7 +156,7 @@ func StartTray(opt TrayOptions) (*Tray, error) {
 	}
 	t := &Tray{ev: opt.Events, noIcon: opt.NoIcon, hotkeys: map[int]bool{}, calls: make(chan func(), 64),
 		done: make(chan struct{}), eventWake: make(chan struct{}, 1)}
-	tip, _ := syscall.UTF16FromString(opt.Tip)
+	tip, _ := syscall.UTF16FromString(i18n.T(opt.Tip))
 	copy(t.tip[:len(t.tip)-1], tip)
 	ready := make(chan error, 1)
 	go t.loop(ready)
@@ -375,7 +377,7 @@ func (t *Tray) menu() int {
 		id   uintptr
 		text string
 	}{{menuOpen, "打开管理器"}, {menuExit, "退出"}} {
-		p, _ := syscall.UTF16PtrFromString(it.text)
+		p, _ := syscall.UTF16PtrFromString(i18n.T(it.text))
 		procAppendMenuW.Call(m, mfString, it.id, uintptr(unsafe.Pointer(p)))
 	}
 	var pt struct{ X, Y int32 }

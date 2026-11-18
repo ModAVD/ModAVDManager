@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const source = await readFile(new URL('../internal/ui/web/js/format.js', import.meta.url), 'utf8');
-const { diskInfoText } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { diskInfoText } = await import(new URL('../internal/ui/web/js/format.js', import.meta.url));
 
 test('busy info shows readable values and the actual reason', () => {
   const text = diskInfoText({ logical_bytes: 8 * 2 ** 30, warnings: ['正在整理磁盘'], needs_shutdown: true });

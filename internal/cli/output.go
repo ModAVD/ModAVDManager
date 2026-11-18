@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"modavd/internal/errs"
+	"modavd/internal/i18n"
 	"modavd/internal/logx"
 )
 
@@ -54,7 +55,8 @@ func (o *output) success(cmd *command, data any) int {
 		return 0
 	}
 	if cmd.human != nil {
-		cmd.human(o.stdout, data)
+		// Text fields are translated before the summary is laid out (columns, "标题：原因" lines).
+		cmd.human(o.stdout, i18n.Localize(i18n.LangOf(o.stdout), data))
 	}
 	return 0
 }

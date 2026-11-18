@@ -24,6 +24,8 @@ func (s *server) routes() {
 	m.HandleFunc("/", s.handleStatic)
 	m.HandleFunc("/api/", s.handleNoAPI)
 	m.HandleFunc("GET /api/info", s.handleInfo)
+	m.HandleFunc("GET /api/locale", s.handleLocale)
+	m.HandleFunc("PUT /api/locale", s.handleSetLocale)
 	m.HandleFunc("GET /api/instances", s.handleList)
 	m.HandleFunc("POST /api/instances", s.handleCreate)
 	m.HandleFunc("GET /api/instances/{i}", s.handleGet)
@@ -167,7 +169,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	w.Write(buf.Bytes())
+	w.Write(localizeJSON(buf.Bytes()))
 }
 
 func writeError(w http.ResponseWriter, err error) {
@@ -180,6 +182,7 @@ func writeErrorStatus(w http.ResponseWriter, status int, code, message, advice s
 }
 
 func writeErrorBody(w http.ResponseWriter, status int, e errorBody) {
+	e = localizeError(e)
 	body, _ := json.Marshal(struct {
 		Error errorBody `json:"error"`
 	}{e})

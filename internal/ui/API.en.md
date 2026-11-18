@@ -37,6 +37,8 @@ HTTP 4xx / 5xx with the body `{"error":{"code":"…","message":"…","advice":"�
 | Method | Path | Request | Response |
 | --- | --- | --- | --- |
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
+| GET | `/api/locale` | | `{"language","preference","system","languages":[{code,name}],"messages"}`: the language the manager shows now (`zh-CN` / `en`), the one chosen in the settings (`auto` follows the system), what `auto` picks, the languages on offer, and the translations of the page's own strings (keyed by the Chinese text; `{}` in Chinese). Text the back end sends to the page (errors, progress, logs, check items) is already translated into `language`; the CLI's `--json`, MCP, logs and problem reports are not translated and stay Chinese |
+| PUT | `/api/locale` | `{preference: "auto"\|"zh-CN"\|"en"}` | as above; saved for this Windows user in `%LOCALAPPDATA%\ModAVD\language.json` (the CLI follows it too); the manager switches at once and the page reloads |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | GET | `/api/instances/{i}/regional` | | `RegionalResult` |

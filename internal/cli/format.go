@@ -12,6 +12,7 @@ import (
 	"modavd/internal/avd"
 	"modavd/internal/components"
 	"modavd/internal/emu"
+	"modavd/internal/i18n"
 )
 
 // Human-readable summaries (stdout without --json). Wording follows AUTO-MAS where it has a message for the same
@@ -134,6 +135,13 @@ func displayWidth(s string) int {
 
 // writeTable aligns columns by display width (text/tabwriter counts runes, which misaligns Chinese).
 func writeTable(w io.Writer, rows [][]string) {
+	if lang := i18n.LangOf(w); lang != i18n.Chinese {
+		for _, row := range rows {
+			for k, cell := range row {
+				row[k] = i18n.Translate(lang, cell)
+			}
+		}
+	}
 	var widths []int
 	for _, row := range rows {
 		for k, cell := range row {

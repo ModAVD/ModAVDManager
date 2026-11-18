@@ -37,6 +37,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
+| GET | `/api/locale` | | `{"language","preference","system","languages":[{code,name}],"messages"}`：管理器现在用的语言（`zh-CN` / `en`）、设置里选的（`auto` 是跟随系统）、跟随系统时会选哪种、可选的语言，以及页面自己那部分字符串的译文（键是中文原文，中文时是 `{}`）。后端发给页面的文字（错误、进度、日志、检查项）已经按 `language` 翻好；命令行 `--json`、MCP、日志和问题包不翻，照旧是中文 |
+| PUT | `/api/locale` | `{preference: "auto"\|"zh-CN"\|"en"}` | 同上；记进这个 Windows 用户的 `%LOCALAPPDATA%\ModAVD\language.json`（命令行也按它选），管理器马上换语言，页面随后重新加载 |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | GET | `/api/instances/{i}/regional` | | `RegionalResult` |
