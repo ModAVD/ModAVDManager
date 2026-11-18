@@ -1,5 +1,6 @@
 // New instance, settings drawer, delete confirmation.
 
+import { t, tNode, gap, semi, paren, cap } from './i18n.js';
 import { h, icon, btn, ibtn, showError, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, lastJob } from './store.js';
@@ -9,13 +10,13 @@ import * as A from './actions.js';
 import { regionalFields, guestRegionalText } from './regional.js';
 
 const MEM = [[3072, '3 GB'], [4096, '4 GB'], [5120, '5 GB'], [6144, '6 GB'], [8192, '8 GB']];
-const CPU = [[2, '2 核'], [4, '4 核'], [6, '6 核']];
+const CPU = [[2, t('2 核')], [4, t('4 核')], [6, t('6 核')]];
 const FPS_MIN = 1;
 const FPS_MAX = 60;
 const RESOLUTION = [[1080, '1080p'], [720, '720p']];
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
-const MIN12 = '约 1⁠–⁠2 分钟';
-const CREATE_TIME = '一般要几分钟';
+const MIN12 = t('约 1⁠–⁠2 分钟');
+const CREATE_TIME = t('一般要几分钟');
 const settingsOpen = new Map();
 let seq = 0;
 
@@ -24,11 +25,11 @@ export const hint = (text, id) => h('p', { class: 'f-hint', text, id });
 export const cell = (...kids) => h('div', { class: 'f-ctl' }, kids);
 export const inputRow = (text, el, ...more) => [h('label', { class: 'f-label', for: (el.id ? el : el.querySelector('input')).id, text }), cell(el, ...more)];
 
-function segRow(text, name, opts, value, ...more) {
+function segRow(rowText, name, opts, value, ...more) {
   const id = 'seg' + ++seq;
-  return [h('span', { class: 'f-label', id, text }),
+  return [h('span', { class: 'f-label', id, text: rowText }),
     cell(h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': id },
-      opts.map(([v, t]) => h('label', null, h('input', { type: 'radio', name, value: String(v), checked: v === value }), h('span', { text: t })))), ...more)];
+      opts.map(([v, text]) => h('label', null, h('input', { type: 'radio', name, value: String(v), checked: v === value }), h('span', { text })))), ...more)];
 }
 
 // Data disk (ModAVD#153): 自动扩盘 (the default: 256 GB from the start, the host only pays for what is written) or a
@@ -42,14 +43,14 @@ function diskField(prefix, mode, gb, minGB) {
   const labelId = id + '-l';
   const startAuto = mode !== 'manual';
   const num = h('input', { class: 'input', id, type: 'number', min: String(minGB), max: String(DISK_MAX_GB), step: '1',
-    value: String(startAuto ? Math.max(minGB, 64) : gb), inputmode: 'numeric', 'aria-describedby': id + '-h', 'aria-label': '数据盘大小' });
+    value: String(startAuto ? Math.max(minGB, 64) : gb), inputmode: 'numeric', 'aria-describedby': id + '-h', 'aria-label': t('数据盘大小') });
   const size = h('span', { class: 'with-suffix' }, num, h('span', { class: 'suffix', text: 'GB' }));
   const hintEl = hint('', id + '-h');
   const err = h('p', { class: 'f-err', id: id + '-e', role: 'alert', hidden: true });
-  const radios = [['auto', '自动扩盘'], ['manual', '指定大小']].map(([v]) =>
+  const radios = [['auto', t('自动扩盘')], ['manual', t('指定大小')]].map(([v]) =>
     h('input', { type: 'radio', name: prefix + '-diskmode', value: v, checked: (v === 'auto') === startAuto }));
   const seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': labelId },
-    radios.map((r, k) => h('label', null, r, h('span', { text: k === 0 ? '自动扩盘' : '指定大小' }))));
+    radios.map((r, k) => h('label', null, r, h('span', { text: k === 0 ? t('自动扩盘') : t('指定大小') }))));
   const isAuto = () => radios[0].checked;
   const clear = () => {
     if (err.hidden) return;
@@ -60,8 +61,8 @@ function diskField(prefix, mode, gb, minGB) {
   };
   const sync = () => {
     size.hidden = isAuto();
-    hintEl.textContent = isAuto() ? `一开始就是 ${DISK_AUTO_GB} GB，按实际写入占电脑硬盘，不用管大小`
-      : `${minGB}–${DISK_MAX_GB} GB，以后只能改大；快满时会提醒`;
+    hintEl.textContent = isAuto() ? t('一开始就是 {gb} GB，按实际写入占电脑硬盘，不用管大小', { gb: DISK_AUTO_GB })
+      : t('{min}–{max} GB，以后只能改大；快满时会提醒', { min: minGB, max: DISK_MAX_GB });
     clear();
   };
   seg.addEventListener('change', sync);
@@ -72,7 +73,7 @@ function diskField(prefix, mode, gb, minGB) {
     const n = Number(num.value);
     if (num.value.trim() && Number.isInteger(n) && n >= minGB && n <= DISK_MAX_GB) return { auto: false, gb: n };
     if (quiet) return null;
-    err.replaceChildren(icon('alert'), h('span', { text: `要填 ${minGB}–${DISK_MAX_GB} 之间的整数（单位 GB）` }));
+    err.replaceChildren(icon('alert'), h('span', { text: t('要填 {min}–{max} 之间的整数（单位 GB）', { min: minGB, max: DISK_MAX_GB }) }));
     err.hidden = false;
     hintEl.hidden = true;
     attr(num, 'aria-invalid', true);
@@ -80,7 +81,7 @@ function diskField(prefix, mode, gb, minGB) {
     num.focus();
     return null;
   };
-  return { rows: [h('span', { class: 'f-label', id: labelId, text: '数据盘' }), cell(seg, size, hintEl, err)], value };
+  return { rows: [h('span', { class: 'f-label', id: labelId, text: t('数据盘') }), cell(seg, size, hintEl, err)], value };
 }
 
 // Frame rate 1–60 (ModAVD#180): a number box named fps (what the form sends) and a slider moving with it.
@@ -89,8 +90,8 @@ function fpsField(prefix, value) {
   const id = prefix + '-fps';
   const v0 = Number.isInteger(value) && value >= FPS_MIN && value <= FPS_MAX ? value : FPS_MAX;
   const num = h('input', { class: 'input', id, name: 'fps', type: 'number', min: String(FPS_MIN), max: String(FPS_MAX), step: '1', value: String(v0), inputmode: 'numeric', 'aria-describedby': id + '-h' });
-  const range = h('input', { type: 'range', min: String(FPS_MIN), max: String(FPS_MAX), step: '1', value: String(v0), 'aria-label': '帧率', tabindex: '-1' });
-  const hintEl = hint(`${FPS_MIN}–${FPS_MAX} 的整数，越低越省资源`, id + '-h');
+  const range = h('input', { type: 'range', min: String(FPS_MIN), max: String(FPS_MAX), step: '1', value: String(v0), 'aria-label': t('帧率'), tabindex: '-1' });
+  const hintEl = hint(t('{min}–{max} 的整数，越低越省资源', { min: FPS_MIN, max: FPS_MAX }), id + '-h');
   const err = h('p', { class: 'f-err', id: id + '-e', role: 'alert', hidden: true });
   const clear = () => {
     if (err.hidden) return;
@@ -109,7 +110,7 @@ function fpsField(prefix, value) {
   const check = () => {
     const n = Number(num.value);
     if (num.value.trim() && Number.isInteger(n) && n >= FPS_MIN && n <= FPS_MAX) return n;
-    err.replaceChildren(icon('alert'), h('span', { text: `要填 ${FPS_MIN}–${FPS_MAX} 之间的整数` }));
+    err.replaceChildren(icon('alert'), h('span', { text: t('要填 {min}–{max} 之间的整数', { min: FPS_MIN, max: FPS_MAX }) }));
     err.hidden = false;
     hintEl.hidden = true;
     attr(num, 'aria-invalid', true);
@@ -118,7 +119,7 @@ function fpsField(prefix, value) {
     return null;
   };
   const ctl = h('div', { class: 'fps-ctl' }, h('span', { class: 'with-suffix' }, num, h('span', { class: 'suffix', text: 'Hz' })), range);
-  return { rows: inputRow('帧率', ctl, hintEl, err), check };
+  return { rows: inputRow(t('帧率'), ctl, hintEl, err), check };
 }
 
 export const errorBox = () => h('div', { class: 'form-error', role: 'alert', hidden: true });
@@ -156,25 +157,25 @@ export function openCreate() {
   const used = new Set(S.list.instances.map((x) => x.index));
   const free = INDEXES.filter((i) => !used.has(i));
   if (!free.length) {
-    toast({ tone: 'info', title: '已经有 9 台实例了', text: '最多 9 台（编号 0–9，5 除外）。删掉不用的实例再新建。' });
+    toast({ tone: 'info', title: t('已经有 9 台实例了'), text: t('最多 9 台（编号 0–9，5 除外）。删掉不用的实例再新建。') });
     return;
   }
-  const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: '明日方舟 · 主号' });
+  const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: t('明日方舟 · 主号') });
   // the number is always picked by the server (the first free one); the dialog no longer offers a choice
-  const titleHint = hint(`不填就显示「${defaultName(free[0])}」，以后可以随时改`);
+  const titleHint = hint(t('不填就显示「{name}」，以后可以随时改', { name: defaultName(free[0]) }));
   const disk = diskField('c', 'auto', 64, 16);
   const fps = fpsField('c', 60);
   const regional = S.list.regional_supported ? regionalFields('c', null, true) : null;
   const box = errorBox();
-  const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: '新建' }));
+  const ok = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', { text: t('新建') }));
   const ctl = openDialog({
-    title: '新建实例', sub: '每台实例是一台独立的安卓模拟器，可以各登录一个游戏账号。', cls: 'dlg-create', form: true, focus: '#c-title',
+    title: t('新建实例'), sub: t('每台实例是一台独立的安卓模拟器，可以各登录一个游戏账号。'), cls: 'dlg-create', form: true, focus: '#c-title',
     body: h('div', { class: 'dlg-body' }, h('div', { class: 'fields' },
-      inputRow('名称', title, titleHint),
-      segRow('内存', 'memory', MEM, 6144),
+      inputRow(t('名称'), title, titleHint),
+      segRow(t('内存'), 'memory', MEM, 6144),
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
-      segRow('分辨率', 'resolution', RESOLUTION, 1080, hint('720p 更省资源')),
+      segRow(t('分辨率'), 'resolution', RESOLUTION, 1080, hint(t('720p 更省资源'))),
       disk.rows, regional && regional.rows), box),
     actions: { ok },
     onSubmit() {
@@ -183,7 +184,7 @@ export function openCreate() {
       if (d === null) return;
       const fpsValue = fps.check();
       if (fpsValue === null) return;
-      submit(ctl, ok, '正在新建…', box, async () => {
+      submit(ctl, ok, t('正在新建…'), box, async () => {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
         const job = await api.post('/api/instances', {
           ...(regional ? regional.values() : {}),
@@ -193,7 +194,7 @@ export function openCreate() {
         });
         A.onJob(job);
         S.watch.add(job.id);
-        return { title: `正在新建实例 ${job.index}`, text: `后台无头开机做完初始化后关机，${CREATE_TIME}；关掉窗口也会在后台做完。` };
+        return { title: t('正在新建实例 {index}', { index: job.index }), text: t('后台无头开机做完初始化后关机，{time}；关掉窗口也会在后台做完。', { time: CREATE_TIME }) };
       });
     },
   });
@@ -212,7 +213,7 @@ export function openSettings(i, field) {
   const initSound = cfg.sound === true;
   const sound = h('input', { type: 'checkbox', id: 's-sound', checked: initSound, 'aria-describedby': 's-sound-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
-  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: '实例运行中，内存、CPU、帧率、分辨率、数据盘和声音在下次开机生效。诊断设置立即生效。' }));
+  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: t('实例运行中，内存、CPU、帧率、分辨率、数据盘和声音在下次开机生效。诊断设置立即生效。') }));
   const kv = h('dl', { class: 'kv' });
   const fps = fpsField('s', cfg.fps);
   const diskAuto0 = cfg.data_disk_mode !== 'manual';
@@ -220,32 +221,32 @@ export function openSettings(i, field) {
   // the size can only grow
   const disk = diskField('s', cfg.data_disk_mode, diskGB0, Math.max(16, diskGB0));
   const regional = inst0.regional ? regionalFields('s', inst0.regional) : null;
-  const regionalNow = h('p', { class: 'f-hint', text: '正在读取安卓当前值…' });
+  const regionalNow = h('p', { class: 'f-hint', text: t('正在读取安卓当前值…') });
   const box = errorBox();
-  const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: '保存' }));
-  const del = btn('btn btn-danger-ghost left', [icon('trash'), '删除…'], () => { if (!instance(i).running) openDelete(i); });
+  const save = h('button', { class: 'btn btn-primary', type: 'submit', 'aria-disabled': 'true' }, h('span', { text: t('保存') }));
+  const del = btn('btn btn-danger-ghost left', [icon('trash'), t('删除…')], () => { if (!instance(i).running) openDelete(i); });
   let confirmation = null;
   const ctl = openDialog({
-    title: '设置', sub: `${label(inst0)} · ${inst0.name}`, cls: 'drawer', form: true,
+    title: t('设置'), sub: `${label(inst0)} · ${inst0.name}`, cls: 'drawer', form: true,
     focus: field === 'memory' ? 'input[name="memory"]:checked' : '#s-title',
     body: h('div', { class: 'dlg-body' }, runNote,
-      h('h3', { class: 'sec-title', text: '可以修改' }),
+      h('h3', { class: 'sec-title', text: t('可以修改') }),
       h('div', { class: 'fields' },
-        inputRow('名称', title, hint(`不填就显示「${defaultName(i)}」`)),
-        segRow('内存', 'memory', MEM, cfg.memory_mb),
+        inputRow(t('名称'), title, hint(t('不填就显示「{name}」', { name: defaultName(i) }))),
+        segRow(t('内存'), 'memory', MEM, cfg.memory_mb),
         segRow('CPU', 'cpu', CPU, cfg.cpu),
         fps.rows,
-        segRow('分辨率', 'resolution', RESOLUTION, cfg.resolution, hint('下次开机生效，自动化工具里的分辨率也要跟着改')),
+        segRow(t('分辨率'), 'resolution', RESOLUTION, cfg.resolution, hint(t('下次开机生效，自动化工具里的分辨率也要跟着改'))),
         disk.rows,
-        inputRow('声音', h('span', { class: 'checkbox p-switch' }, sound),
-          hint('下次开机生效，带窗口和无头都有声音。开了会多占一些 CPU。', 's-sound-h')),
-        inputRow('诊断模式', h('span', { class: 'checkbox p-switch' }, diagnostics),
-          hint('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。', 's-diagnostics-h')),
+        inputRow(t('声音'), h('span', { class: 'checkbox p-switch' }, sound),
+          hint(t('下次开机生效，带窗口和无头都有声音。开了会多占一些 CPU。'), 's-sound-h')),
+        inputRow(t('诊断模式'), h('span', { class: 'checkbox p-switch' }, diagnostics),
+          hint(t('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。'), 's-diagnostics-h')),
         boss.row,
         regional && regional.rows,
-        regional && [h('span', { class: 'f-label', text: '安卓当前' }), cell(regionalNow)]),
+        regional && [h('span', { class: 'f-label', text: t('安卓当前') }), cell(regionalNow)]),
       box,
-      h('h3', { class: 'sec-title', text: '实例信息' }), kv),
+      h('h3', { class: 'sec-title', text: t('实例信息') }), kv),
     actions: { left: del, ok: save },
     onSubmit: saveSettings,
   });
@@ -275,13 +276,13 @@ export function openSettings(i, field) {
   ctl.form.addEventListener('input', dirty);
   ctl.form.addEventListener('change', dirty);
   if (regional) {
-    if (inst0.regional.error) showError(box, { message: `语言/时区配置无效：${inst0.regional.error}`, advice: '修正 mas-avd.json 的 regional 设置后重试。' });
-    runNote.querySelector('span').textContent = '实例运行中，语言、时区和硬件设置在下次开机生效。诊断设置立即生效。';
+    if (inst0.regional.error) showError(box, { message: t('语言/时区配置无效：{error}', { error: inst0.regional.error }), advice: t('修正 mas-avd.json 的 regional 设置后重试。') });
+    runNote.querySelector('span').textContent = t('实例运行中，语言、时区和硬件设置在下次开机生效。诊断设置立即生效。');
     api.get(`/api/instances/${i}/regional`).then((r) => {
       if (ctl.closed) return;
       regionalNow.textContent = guestRegionalText(r);
       if (r.guest_error) regionalNow.title = r.guest_error;
-    }).catch((e) => { if (!ctl.closed) { regionalNow.textContent = '读取失败'; regionalNow.title = e.message; } });
+    }).catch((e) => { if (!ctl.closed) { regionalNow.textContent = t('读取失败'); regionalNow.title = e.message; } });
   }
 
   async function saveSettings() {
@@ -292,12 +293,12 @@ export function openSettings(i, field) {
       ctl.busy = true;
       diagnostics.disabled = true;
       box.hidden = true;
-      setBusy(save, true, '正在读取清理范围…');
+      setBusy(save, true, t('正在读取清理范围…'));
       try {
         const preview = await api.get(`/api/instances/${i}/diagnostics/preview`);
         if (ctl.closed) return;
         if (!preview || preview.index !== i || !Number.isSafeInteger(preview.files) || preview.files < 0 || !Number.isSafeInteger(preview.bytes) || preview.bytes < 0) {
-          throw new Error('读不到诊断日志清理范围，请稍后重试');
+          throw new Error(t('读不到诊断日志清理范围，请稍后重试'));
         }
         if (!await confirmDisable(preview)) return;
       } catch (e) {
@@ -311,25 +312,25 @@ export function openSettings(i, field) {
       }
       if (ctl.closed) return;
     }
-    return submit(ctl, save, '正在保存…', box, async () => {
+    return submit(ctl, save, t('正在保存…'), box, async () => {
       const r = await api.patch(`/api/instances/${i}`, pending);
       const k = S.list.instances.findIndex((x) => x.index === i);
       if (k >= 0 && r.instance) S.list.instances[k] = r.instance;
       if (r.boss_key_taken) {
         // saved, but another program has the key: say so (the settings page marks it too)
-        return { tone: 'warn', title: '已保存，但老板键用不了', text: `${r.instance.boss_key} 被别的程序占了，在设置里换一个。` };
+        return { tone: 'warn', title: t('已保存，但老板键用不了'), text: t('{boss_key} 被别的程序占了，在设置里换一个。', { boss_key: r.instance.boss_key }) };
       }
       if ('diagnostics' in pending) {
-        let text = '诊断模式已开启，立即生效。';
+        let text = t('诊断模式已开启，立即生效。');
         if (!pending.diagnostics) {
           const cleanup = r.diagnostics_cleanup;
-          text = cleanup ? `诊断模式已关闭，已清理 ${cleanup.files} 个文件（${fmtBytes(cleanup.bytes)}）。` : '诊断模式已关闭。';
+          text = cleanup ? t('诊断模式已关闭，已清理 {files} 个文件（{bytes}）。', { files: cleanup.files, bytes: fmtBytes(cleanup.bytes) }) : t('诊断模式已关闭。');
         }
-        if (r.applies_next_boot && Object.keys(pending).some((k) => k !== 'diagnostics')) text += '其他设置在下次开机生效。';
-        if (r.warnings && r.warnings.length) text += r.warnings.join('；');
-        return { title: '已保存', text };
+        if (r.applies_next_boot && Object.keys(pending).some((k) => k !== 'diagnostics')) text += t('其他设置在下次开机生效。');
+        if (r.warnings && r.warnings.length) text += gap() + r.warnings.join(semi());
+        return { title: t('已保存'), text };
       }
-      return r.applies_next_boot ? { title: '已保存，下次开机生效', text: '实例正在运行，这次开机还是原来的设置。' } : { title: '已保存' };
+      return r.applies_next_boot ? { title: t('已保存，下次开机生效'), text: t('实例正在运行，这次开机还是原来的设置。') } : { title: t('已保存') };
     }, dirty);
   }
 
@@ -337,10 +338,10 @@ export function openSettings(i, field) {
     return new Promise((resolve) => {
       let accepted = false;
       const desc = 's-diagnostics-off-' + i;
-      const ok = h('button', { class: 'btn btn-danger', type: 'submit' }, h('span', { text: '关闭并清理日志' }));
+      const ok = h('button', { class: 'btn btn-danger', type: 'submit' }, h('span', { text: t('关闭并清理日志') }));
       const confirm = openDialog({
-        title: '关闭诊断模式？', form: true, alert: true, desc,
-        body: h('div', { class: 'dlg-body' }, h('p', { id: desc, text: `预计清理 ${preview.files} 个日志文件（${fmtBytes(preview.bytes)}）。` })),
+        title: t('关闭诊断模式？'), form: true, alert: true, desc,
+        body: h('div', { class: 'dlg-body' }, h('p', { id: desc, text: t('预计清理 {files} 个日志文件（{bytes}）。', { files: preview.files, bytes: fmtBytes(preview.bytes) }) })),
         actions: { ok },
         onSubmit() { accepted = true; confirm.close(); },
       });
@@ -355,12 +356,12 @@ export function openSettings(i, field) {
     if (!inst) { ctl.close(); return; }
     runNote.hidden = !inst.running;
     attr(del, 'aria-disabled', inst.running || null);
-    del.title = inst.running ? '先关机才能删除' : '';
+    del.title = inst.running ? t('先关机才能删除') : '';
     const rows = infoRows(inst);
     const s = JSON.stringify(rows.map((r) => r.slice(0, 3)));
     if (s === sig) return;
     sig = s;
-    kv.replaceChildren(...rows.flatMap(([k, v, extra, act]) => [h('dt', { text: k }),
+    kv.replaceChildren(...rows.flatMap(([k, v, extra, act]) => [h('dt', { text: cap(k) }),
       h('dd', null, h('span', { class: extra === 'mono' ? 'v mono' : 'v' }, v, extra && extra !== 'mono' && h('span', { class: 'dim', text: extra })), act)]));
   };
   const un = subscribe(render);
@@ -386,12 +387,12 @@ export function bossKeyName(code) {
 // held, { error } for one a boss key cannot be, or null for keys the field lets through (Tab moves on).
 export function bossKeyOf(e) {
   const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean);
-  if (e.metaKey || e.key === 'Meta' || e.key === 'OS') return { error: 'Win 的组合 Windows 自己留着用，换一个' };
+  if (e.metaKey || e.key === 'Meta' || e.key === 'OS') return { error: t('Win 的组合 Windows 自己留着用，换一个') };
   if (['Control', 'Alt', 'Shift', 'AltGraph'].includes(e.key)) return { partial: mods.join('+') };
   if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) return null;
   const name = bossKeyName(e.code);
-  if (!name) return { error: '这个键不能用：要数字、字母、F1–F24、小键盘数字或 Home / End 这类键' };
-  if (!mods.length) return { error: '至少要带 Ctrl、Alt、Shift 中的一个' };
+  if (!name) return { error: t('这个键不能用：要数字、字母、F1–F24、小键盘数字或 Home / End 这类键') };
+  if (!mods.length) return { error: t('至少要带 Ctrl、Alt、Shift 中的一个') };
   return { key: [...mods, name].join('+') };
 }
 
@@ -401,12 +402,12 @@ export function bossKeyOf(e) {
 function bossKeyField(initial, onChange) {
   let value = initial;
   const input = h('input', { class: 'input', id: 's-bosskey', readonly: true, autocomplete: 'off', value: initial,
-    placeholder: '无', 'aria-describedby': 's-bosskey-h' });
-  const warn = h('span', { class: 'bk-warn', role: 'img', title: '这个键被别的程序占了，换一个', 'aria-label': '这个键被别的程序占了，换一个', hidden: true }, icon('alert'));
-  const clear = ibtn('x', '清空老板键（这台不要老板键）', () => set(''));
+    placeholder: t('无'), 'aria-describedby': 's-bosskey-h' });
+  const warn = h('span', { class: 'bk-warn', role: 'img', title: t('这个键被别的程序占了，换一个'), 'aria-label': t('这个键被别的程序占了，换一个'), hidden: true }, icon('alert'));
+  const clear = ibtn('x', t('清空老板键（这台不要老板键）'), () => set(''));
   const err = h('p', { class: 'f-err', role: 'alert', hidden: true });
-  const help = hint('点一下输入框，再按想用的组合，至少带 Ctrl、Alt、Shift 中的一个。按一下藏起这台的窗口，再按一下叫回来；几台用同一个键就一起藏、一起显示。立即生效；关掉管理器窗口后留在托盘，照样能用。', 's-bosskey-h');
-  const label = h('label', { class: 'f-label', for: 's-bosskey', text: '老板键' });
+  const help = hint(t('点一下输入框，再按想用的组合，至少带 Ctrl、Alt、Shift 中的一个。按一下藏起这台的窗口，再按一下叫回来；几台用同一个键就一起藏、一起显示。立即生效；关掉管理器窗口后留在托盘，照样能用。'), 's-bosskey-h');
+  const label = h('label', { class: 'f-label', for: 's-bosskey', text: t('老板键') });
   const ctl = cell(h('span', { class: 'bosskey' }, input, clear, warn), err, help);
   label.hidden = ctl.hidden = true;
   let seq = 0;
@@ -456,22 +457,22 @@ function infoRows(inst) {
   const shm = inst.screencap || {};
   const port = S.list && S.list.adb_server_port;
   return [
-    ['编号', `${inst.index}（${inst.name}）`],
-    ['状态', inst.status === 'online' ? `运行中 · PID ${inst.pid} · ${uptime(inst.started_at)}` : inst.status === 'starting' ? `开机中 · PID ${inst.pid}` : '已关机'],
-    ['adb 地址', inst.adb_address, 'mono', ibtn('copy', '复制 adb 地址', () => A.copy(inst.adb_address))],
-    ['序列号', inst.serial, port ? `私有 adb server ${port} 上` : ''],
-    ['端口', `控制台 ${p.console} · adb ${p.adb} · gRPC ${p.grpc}`],
-    ['数据盘', cfg.data_disk_mode === 'manual' ? `${cfg.data_partition_gb} GB（指定大小）` : `自动扩盘（${cfg.data_partition_gb} GB）`,
-      inst.data_space && inst.data_space.host_bytes >= 0 ? `电脑上实际占 ${fmtBytes(inst.data_space.host_bytes)}` : ''],
-    ['显示', cfg.width ? `${cfg.width}×${cfg.height} · ${cfg.dpi} dpi` : '—'],
-    ['渲染器', inst.renderer || (inst.initialized ? '未知' : '首次开机后才知道'), inst.software_renderer ? '软件渲染（没有可用的显卡驱动）' : ''],
-    ['截图共享内存', shm.shm || '—', shm.shm ? (shm.shm_ready ? '已就绪' : '未就绪') : ''],
-    ['首次初始化', inst.initialized ? '已完成' : `还没做（首次开机时做，${MIN12}）`],
+    [t('编号'), inst.index + paren(inst.name)],
+    [t('状态'), inst.status === 'online' ? t('运行中 · PID {pid} · {uptime}', { pid: inst.pid, uptime: uptime(inst.started_at) }) : inst.status === 'starting' ? t('开机中 · PID {pid}', { pid: inst.pid }) : t('已关机')],
+    [t('adb 地址'), inst.adb_address, 'mono', ibtn('copy', t('复制 adb 地址'), () => A.copy(inst.adb_address))],
+    [t('序列号'), inst.serial, port ? t('私有 adb server {port} 上', { port }) : ''],
+    [t('端口'), t('控制台 {console} · adb {adb} · gRPC {grpc}', { console: p.console, adb: p.adb, grpc: p.grpc })],
+    [t('数据盘'), cfg.data_disk_mode === 'manual' ? t('{gb} GB（指定大小）', { gb: cfg.data_partition_gb }) : t('自动扩盘（{gb} GB）', { gb: cfg.data_partition_gb }),
+      inst.data_space && inst.data_space.host_bytes >= 0 ? t('电脑上实际占 {size}', { size: fmtBytes(inst.data_space.host_bytes) }) : ''],
+    [t('显示'), cfg.width ? `${cfg.width}×${cfg.height} · ${cfg.dpi} dpi` : '—'],
+    [t('渲染器'), inst.renderer || cap(inst.initialized ? t('未知') : t('首次开机后才知道')), inst.software_renderer ? t('软件渲染（没有可用的显卡驱动）') : ''],
+    [t('截图共享内存'), shm.shm || '—', shm.shm ? (shm.shm_ready ? t('已就绪') : t('未就绪')) : ''],
+    [t('首次初始化'), inst.initialized ? t('已完成') : t('还没做（首次开机时做，{time}）', { time: MIN12 })],
     // the record in mas-avd.json (InstanceInfo.play_store, play_store_partial); the card's 「更多操作」 menu adds or removes it
-    inst.play_store_partial ? ['Google Play 商店', '只装了一部分', '上次补全中途失败，没能全部撤回：在「更多操作」里移除，或者再补全一次']
-      : ['Google Play 商店', inst.play_store ? '已补全' : '没有', inst.play_store ? '' : '要用的话在实例的「更多操作」菜单里补全'],
-    ['报告 GLES 3.2', inst.gles32 ? '开（实验）' : '关', inst.gles32 ? '只改报的版本，实际渲染仍是 3.1；在「更多操作」里关闭' : '实验功能，要用的话在实例的「更多操作」菜单里开启'],
-    ['路径', inst.path, 'mono', ibtn('folder', '打开实例目录', () => A.openFolder('instance', inst.index))],
+    inst.play_store_partial ? [t('Google Play 商店'), t('只装了一部分'), t('上次补全中途失败，没能全部撤回：在「更多操作」里移除，或者再补全一次')]
+      : [t('Google Play 商店'), inst.play_store ? t('已补全') : t('没有'), inst.play_store ? '' : t('要用的话在实例的「更多操作」菜单里补全')],
+    [t('报告 GLES 3.2'), cap(inst.gles32 ? t('开（实验）') : t('关')), inst.gles32 ? t('只改报的版本，实际渲染仍是 3.1；在「更多操作」里关闭') : t('实验功能，要用的话在实例的「更多操作」菜单里开启')],
+    [t('路径'), inst.path, 'mono', ibtn('folder', t('打开实例目录'), () => A.openFolder('instance', inst.index))],
   ];
 }
 
@@ -486,25 +487,25 @@ export function openDelete(i) {
   const stopBtn = h('button', { class: 'btn btn-secondary btn-sm', type: 'button' });
   stopBtn.addEventListener('click', () => { if (stopBtn.getAttribute('aria-disabled') !== 'true') A.stop(i); });
   const runNote = h('div', { class: 'note-box tone-warn has-act', role: 'status' }, icon('alert'),
-    h('span', { class: 'nb-text', text: '实例正在运行，先关机才能删除。' }), stopBtn);
+    h('span', { class: 'nb-text', text: t('实例正在运行，先关机才能删除。') }), stopBtn);
   const box = errorBox();
-  const del = h('button', { class: 'btn btn-danger', type: 'submit', 'aria-disabled': 'true' }, icon('trash'), h('span', { text: '永久删除' }));
+  const del = h('button', { class: 'btn btn-danger', type: 'submit', 'aria-disabled': 'true' }, icon('trash'), h('span', { text: t('永久删除') }));
   const ctl = openDialog({
-    title: '删除实例？', cls: 'dlg-delete', form: true, focus: '#d-ok', alert: true, desc: descId,
+    title: t('删除实例？'), cls: 'dlg-delete', form: true, focus: '#d-ok', alert: true, desc: descId,
     lead: h('span', { class: 'dlg-lead tone-err' }, icon('trash')),
     body: h('div', { class: 'dlg-body' },
-      h('p', { class: 'danger-text', id: descId }, h('strong', { text: who }), '会连同里面装的游戏、登录状态和所有数据一起永久删除，不能恢复。'),
+      h('p', { class: 'danger-text', id: descId }, ...tNode(t('{who}会连同里面装的游戏、登录状态和所有数据一起永久删除，不能恢复。'), { who: h('strong', { text: who }) })),
       h('div', { class: 'path-box', text: inst.path }), runNote,
-      h('label', { class: 'checkbox danger' }, chk, h('span', { text: '我明白，所有数据都会删除' })), box),
+      h('label', { class: 'checkbox danger' }, chk, h('span', { text: t('我明白，所有数据都会删除') })), box),
     actions: { ok: del },
     onSubmit() {
       if (!chk.checked) chk.focus();
-      submit(ctl, del, '正在删除…', box, async () => {
+      submit(ctl, del, t('正在删除…'), box, async () => {
         await api.del(`/api/instances/${i}?confirm=1`);
         S.list.instances = S.list.instances.filter((x) => x.index !== i);
         const s = settingsOpen.get(i);
         if (s) s.close();
-        return { title: `已删除${who}` };
+        return { title: t('已删除{who}', { who }) };
       }, sync);
     },
   });
@@ -517,7 +518,7 @@ export function openDelete(i) {
     const stopping = S.pending[i] === 'stop' || cur.busy === 'stopping' || (job && job.kind === 'stop');
     if (stopSig !== String(stopping)) {
       stopSig = String(stopping);
-      stopBtn.replaceChildren(...(stopping ? [h('span', { class: 'spin' }), h('span', { text: '正在关机…' })] : [icon('power'), h('span', { text: '关机' })]));
+      stopBtn.replaceChildren(...(stopping ? [h('span', { class: 'spin' }), h('span', { text: t('正在关机…') })] : [icon('power'), h('span', { text: t('关机') })]));
       attr(stopBtn, 'aria-busy', stopping || null);
       attr(stopBtn, 'aria-disabled', stopping || null);
     }

@@ -1,0 +1,9 @@
+{
+  "%s: 补丁点的指令不是 ja / jbe / jmp": "%s: the instruction at the patch point is not ja / jbe / jmp",
+  "%s（0x%x）: 落下去的 jmp 去 0x%x，不是 NOP 出口 0x%x": "%s (0x%x): the fall-through jmp goes to 0x%x, not the NOP exit 0x%x",
+  "%s（0x%x）原字节不符: %s": "%s (0x%x): original bytes do not match: %s",
+  "ARM 转译层库 sha256 %s 不是预期版本": "ARM translation layer library sha256 %s is not the expected version",
+  "InterpretInsn（内联的 Decoder<SemanticsPlayer<Interpreter>>::DecodeSystemClass）": "InterpretInsn (inlined Decoder<SemanticsPlayer<Interpreter>>::DecodeSystemClass)",
+  "不在可执行段里": "Not in an executable segment",
+  "改完的 ARM 转译层库 sha256 %s 不是预期值": "Patched ARM translation layer library sha256 %s is not the expected value"
+}

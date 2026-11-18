@@ -262,7 +262,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	write := func(name string, data []byte) bool {
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data); err != nil {
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, localizeJSON(data)); err != nil {
 			return false
 		}
 		fl.Flush()

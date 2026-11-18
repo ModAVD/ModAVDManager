@@ -925,7 +925,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .diag-head strong { font-size: 14px; font-weight: 600; }
 .diag-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .diag-components { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
-.diag-components:empty::before { content: "正在读取组件状态…"; display: block; padding: 12px; color: var(--text-3); font-size: 13px; }
+.diag-components:empty::before { content: attr(data-empty); display: block; padding: 12px; color: var(--text-3); font-size: 13px; }
 .diag-components .comp-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .diag-running { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; color: var(--text-2); font-size: 13px; }
 .diag-running .btn { margin-left: auto; }
@@ -1050,7 +1050,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
   border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--code-bg);
   font-family: var(--mono); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.loglines:empty::before { content: "暂无消息"; color: var(--text-3); font-family: var(--font); }
+.loglines:empty::before { content: attr(data-empty); color: var(--text-3); font-family: var(--font); }
 /* ordinary lines are quiet; only warnings and errors keep a colour */
 .ll { display: block; color: var(--text-2); }
 .ll-t { color: var(--text-3); margin-right: 8px; }

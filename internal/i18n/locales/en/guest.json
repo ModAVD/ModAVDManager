@@ -1,0 +1,8 @@
+{
+  "不支持的客体代理 ABI：%s": "Unsupported guest proxy ABI: %s",
+  "客体代理不是 ELF：%w": "The guest proxy is not an ELF file: %w",
+  "客体代理的 ELF 架构与 %s 不匹配": "The ELF architecture of the guest proxy does not match %s",
+  "客体代理程序过大": "The guest proxy program is too large",
+  "此构建未附带 ARM64 客体代理程序 %s": "This build does not include the ARM64 guest proxy program %s",
+  "这个 modavd 编的时候没带按应用走代理的客体程序（要用 build.ps1 编）": "This modavd was built without the guest program for per-app proxy (build it with build.ps1)"
+}

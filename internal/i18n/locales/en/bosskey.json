@@ -1,0 +1,16 @@
+{
+  "%q 不是 Ctrl、Alt、Shift，只能放在最后": "%q is not Ctrl, Alt or Shift, so it can only go last",
+  "Alt 写了两次": "Alt is given twice",
+  "Ctrl 写了两次": "Ctrl is given twice",
+  "Shift 写了两次": "Shift is given twice",
+  "Win 的组合 Windows 自己留着用，不能当老板键": "Win combinations are reserved by Windows and cannot be a boss key",
+  "不认识按键 %q": "Unknown key %q",
+  "写成 Ctrl+Alt+Shift+1 这样：Ctrl、Alt、Shift 至少带一个，最后是一个数字、字母、F1–F24、Num0–Num9 等按键；不要老板键写 none": "Write it like Ctrl+Alt+Shift+1: include at least one of Ctrl, Alt, Shift, ending with a key such as a digit, a letter, F1-F24 or Num0-Num9; write none for no boss key",
+  "实例 %d 的 %s 不是字符串，当作不要老板键": "%s of instance %d is not a string; treated as no boss key",
+  "实例 %d 的老板键 %q 不对，当作不要老板键": "The boss key %q of instance %d is invalid; treated as no boss key",
+  "有空的一段": "There is an empty part",
+  "缺少 Ctrl、Alt、Shift 以外的那个按键": "The key other than Ctrl, Alt and Shift is missing",
+  "老板键 %q 不对：%s": "Boss key %q is invalid: %s",
+  "老板键是空的": "The boss key is empty",
+  "至少要带 Ctrl、Alt、Shift 中的一个": "Include at least one of Ctrl, Alt, Shift"
+}

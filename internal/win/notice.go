@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"syscall"
 	"unsafe"
+
+	"modavd/internal/i18n"
 )
 
 // wtsapi32 by full System32 path, like crypt32 (dpapi.go): a wtsapi32.dll next to the exe must never be picked up.
@@ -21,11 +23,11 @@ func SessionNotice(title, text string, seconds uint32) error {
 	if err := procWTSSendMessageW.Find(); err != nil {
 		return err
 	}
-	t, err := syscall.UTF16FromString(title)
+	t, err := syscall.UTF16FromString(i18n.T(title))
 	if err != nil {
 		return err
 	}
-	m, err := syscall.UTF16FromString(text)
+	m, err := syscall.UTF16FromString(i18n.T(text))
 	if err != nil {
 		return err
 	}

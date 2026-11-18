@@ -1,6 +1,7 @@
 // Instance cards: keyed by index, built once and patched in place (an update never loses the thumbnail).
 // The same elements make both views: cards in a grid, or 56px rows in one surface (.grid.is-list, CSS only).
 
+import { t, colon } from './i18n.js';
 import { h, icon, btn, ibtn, keyed, setText, attr } from './dom.js';
 import { S, lastJob, rootBlocked } from './store.js';
 import { label, ownTitle, stripInst, pct, cfgText } from './format.js';
@@ -19,7 +20,7 @@ let io;
 let skeleton = null;
 let view = 'card';
 const $apk = () => document.getElementById('apkInput');
-const BLOCKED = '这个目录现在还不能开机，先按上方提示处理';
+const BLOCKED = t('这个目录现在还不能开机，先按上方提示处理');
 
 export function initGrid(el) {
   grid = el;
@@ -86,14 +87,14 @@ export function viewState(inst) {
   return { key, job, kind, failed };
 }
 
-const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'],
-  creating: ['新建中', 'warn'], createfail: ['新建失败', 'err'] };
-const FAIL = { start: '开机失败', stop: '关机失败', install: '安装失败', create: '新建失败', 'disk-info': '查看磁盘占用失败', 'disk-trim': '回收磁盘空间失败', 'disk-compact': '整理磁盘失败',
-  'playstore-install': '补全 Google Play 商店失败', 'playstore-uninstall': '移除 Google Play 商店失败',
-  'gles32-on': '开启报告 GLES 3.2 失败', 'gles32-off': '关闭报告 GLES 3.2 失败' };
+const PILL = { online: [t('运行中'), 'ok'], starting: [t('开机中'), 'warn'], stopping: [t('关机中'), 'warn'], offline: [t('已关机'), 'idle'], error: [t('开机失败'), 'err'],
+  creating: [t('新建中'), 'warn'], createfail: [t('新建失败'), 'err'] };
+const FAIL = { start: t('开机失败'), stop: t('关机失败'), install: t('安装失败'), create: t('新建失败'), 'disk-info': t('查看磁盘占用失败'), 'disk-trim': t('回收磁盘空间失败'), 'disk-compact': t('整理磁盘失败'),
+  'playstore-install': t('补全 Google Play 商店失败'), 'playstore-uninstall': t('移除 Google Play 商店失败'),
+  'gles32-on': t('开启报告 GLES 3.2 失败'), 'gles32-off': t('关闭报告 GLES 3.2 失败') };
 // 补全 / 移除 Google Play 商店: stops and boots the instance cold; the card is busy with it the whole time
-const STORE_JOB = { 'playstore-install': ['补全商店中', '正在补全 Google Play 商店…'], 'playstore-uninstall': ['移除商店中', '正在移除 Google Play 商店…'],
-  'gles32-on': ['改版本中', '正在开启报告 GLES 3.2…'], 'gles32-off': ['改版本中', '正在关闭报告 GLES 3.2…'] };
+const STORE_JOB = { 'playstore-install': [t('补全商店中'), t('正在补全 Google Play 商店…')], 'playstore-uninstall': [t('移除商店中'), t('正在移除 Google Play 商店…')],
+  'gles32-on': [t('改版本中'), t('正在开启报告 GLES 3.2…')], 'gles32-off': [t('改版本中'), t('正在关闭报告 GLES 3.2…')] };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -132,7 +133,7 @@ function makeCard(i) {
   c.progFill = h('i');
   c.progBar = h('div', { class: 'bar' }, c.progFill);
   // no live region here: a boot reports every 2.5 s; the toast at the end says how it went
-  c.peek = btn('peek', h('span', { class: 'peek-chip' }, icon('eye'), '打开画面'), view);
+  c.peek = btn('peek', h('span', { class: 'peek-chip' }, icon('eye'), t('打开画面')), view);
   c.screen = h('div', { class: 'screen' },
     h('div', { class: 'ph' }, h('span', { class: 'ph-tile' }, h('span', { class: 'ph-num', text: String(i) })), c.phText),
     c.img,
@@ -140,14 +141,14 @@ function makeCard(i) {
     c.peek);
   c.title = h('h2', { class: 'card-title', id: `card-t-${i}` });
   // 按应用走代理 is on: the mark opens its dialog; red when the guest says it is not working
-  c.pmark = btn('pmark', [icon('shield'), h('span', { text: '代理' })], () => openProxy(i), { hidden: true });
+  c.pmark = btn('pmark', [icon('shield'), h('span', { text: t('代理') })], () => openProxy(i), { hidden: true });
   c.sub = h('div', { class: 'card-sub' });
   c.lmsg = h('div', { class: 'card-sub card-lmsg' });
-  c.cfg = h('div', { class: 'card-cfg', title: '内存 · CPU 核数 · 帧率 · 数据盘（指定大小时）· 数据盘现在实际占的电脑硬盘' });
+  c.cfg = h('div', { class: 'card-cfg', title: t('内存 · CPU 核数 · 帧率 · 数据盘（指定大小时）· 数据盘现在实际占的电脑硬盘') });
   c.pillText = h('span');
   c.pill = h('span', { class: 'pill' }, c.pillText);
   c.adb = h('span', { class: 'adb-addr' });
-  c.copy = ibtn('copy', '复制 adb 地址', () => A.copy(c.inst.adb_address));
+  c.copy = ibtn('copy', t('复制 adb 地址'), () => A.copy(c.inst.adb_address));
   c.notes = h('div', { class: 'notes' });
   c.primary = btn('btn btn-power', null, () => {
     const m = c.primary.dataset.mode;
@@ -156,7 +157,7 @@ function makeCard(i) {
     else if (m === 'stop') A.stop(i);
     else if (m === 'resume') A.resumeCreate(i);
   });
-  c.view = btn('btn btn-ghost act-view', [icon('screen'), '画面'], view);
+  c.view = btn('btn btn-ghost act-view', [icon('screen'), t('画面')], view);
   c.more = btn('icon-btn act-more', icon('more'), menu, {
     'aria-haspopup': 'menu', 'aria-expanded': 'false',
     onkeydown: (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); menu(); } },
@@ -187,32 +188,32 @@ function updateCard(c, inst) {
   setText(c.title, (c.title.title = name));
   const sub = [];
   if (ownTitle(inst)) sub.push(inst.name);
-  const subtitle = sub.join(' · ') || `编号 ${inst.index}`;
+  const subtitle = sub.join(' · ') || t('编号 {index}', { index: inst.index });
   const headless = inst.running && inst.window === false && v.key !== 'creating';
-  setText(c.sub, subtitle + (headless ? ' · 无头' : '') + (inst.diagnostics ? ' · 诊断模式' : ''));
-  c.sub.title = headless ? '命令行开的，没有窗口，可以在这里关机' : '';
+  setText(c.sub, [subtitle, headless && t('无头'), inst.diagnostics && t('诊断模式')].filter(Boolean).join(' · '));
+  c.sub.title = headless ? t('命令行开的，没有窗口，可以在这里关机') : '';
   setText(c.cfg, cfgText(inst.config, inst.data_space));
 
   let [pt, tone] = PILL[v.key];
   // create's setup: our own job's progress, else what the process doing it (CLI, AUTO-MAS) left in the instance
   const cp = v.key === 'creating' ? (pct(v.job && v.job.progress) ?? (inst.status === 'creating' ? inst.creation_progress : null)) : null;
-  if (cp != null) pt = `新建中 ${Math.floor(cp)}%`;
+  if (cp != null) pt = t('新建中 {pct}%', { pct: Math.floor(cp) });
   if (v.key === 'error') pt = FAIL[v.failed.kind];
   setText(c.pillText, pt);
   attr(c.pill, 'class', 'pill tone-' + tone);
 
   setText(c.adb, inst.adb_address);
-  attr(c.copy, 'aria-label', `复制 ${inst.adb_address}`);
-  c.copy.title = '复制 adb 地址';
-  attr(c.more, 'aria-label', `更多操作：${name}`);
-  attr(c.view, 'aria-label', `打开「${name}」的画面`);
-  attr(c.peek, 'aria-label', `打开「${name}」的画面`);
+  attr(c.copy, 'aria-label', t('复制 {adb_address}', { adb_address: inst.adb_address }));
+  c.copy.title = t('复制 adb 地址');
+  attr(c.more, 'aria-label', t('更多操作：{name}', { name }));
+  attr(c.view, 'aria-label', t('打开「{name}」的画面', { name }));
+  attr(c.peek, 'aria-label', t('打开「{name}」的画面', { name }));
   const pm = markOf(inst);
   c.pmark.hidden = !pm;
   if (pm) {
     attr(c.pmark, 'class', 'pmark tone-' + pm.tone);
-    c.pmark.title = '按应用走代理：' + pm.text;
-    attr(c.pmark, 'aria-label', '按应用走代理：' + pm.text);
+    c.pmark.title = t('按应用走代理：{text}', { text: pm.text });
+    attr(c.pmark, 'aria-label', c.pmark.title);
   }
   renderNotes(c, inst, v);
 
@@ -227,11 +228,11 @@ function updateCard(c, inst) {
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
-  setText(c.phText, v.key === 'error' ? '上次开机没有成功' : v.key === 'createfail' ? '新建时的初始化没做完' : live ? '正在取画面…' : '未开机');
+  setText(c.phText, v.key === 'error' ? t('上次开机没有成功') : v.key === 'createfail' ? t('新建时的初始化没做完') : live ? t('正在取画面…') : t('未开机'));
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? '正在关机…' : v.key === 'creating' ? '正在新建：后台开机做初始化…' : v.kind === 'install' ? '正在安装 APK…'
-      : v.kind === 'disk-trim' ? '正在触发磁盘回收…' : v.kind === 'disk-compact' ? '正在整理磁盘…' : '正在开机…');
+    const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? t('正在关机…') : v.key === 'creating' ? t('正在新建：后台开机做初始化…') : v.kind === 'install' ? t('正在安装 APK…')
+      : v.kind === 'disk-trim' ? t('正在触发磁盘回收…') : v.kind === 'disk-compact' ? t('正在整理磁盘…') : t('正在开机…'));
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     // the store's jobs report no percentage while they run (done 0 of 1000): an indeterminate bar, not a stuck 0%
@@ -242,12 +243,12 @@ function updateCard(c, inst) {
     }
   }
   attr(c.view, 'aria-disabled', !live);
-  c.view.title = live ? '实时画面，可以点按' : '开机后才能看画面';
+  c.view.title = live ? t('实时画面，可以点按') : t('开机后才能看画面');
 
   const blocked = rootBlocked();
-  const mode = store ? ['busy', store[0]] : v.key === 'starting' || v.key === 'creating' ? ['busy', pt] : v.key === 'createfail' ? ['resume', '重试初始化']
-    : v.key === 'stopping' ? ['busy', '关机中'] : inst.running ? ['stop', '关机']
-    : blocked ? ['blocked', '开机'] : ['start', '开机'];
+  const mode = store ? ['busy', store[0]] : v.key === 'starting' || v.key === 'creating' ? ['busy', pt] : v.key === 'createfail' ? ['resume', t('重试初始化')]
+    : v.key === 'stopping' ? ['busy', t('关机中')] : inst.running ? ['stop', t('关机')]
+    : blocked ? ['blocked', t('开机')] : ['start', t('开机')];
   const sig = mode.join();
   if (sig !== c.psig) {
     c.psig = sig;
@@ -266,20 +267,21 @@ function renderNotes(c, inst, v) {
   const notes = [];
   const f = v.key === 'createfail' ? null : v.failed;
   if (v.key === 'createfail') {
-    notes.push({ tone: 'err', ic: 'bad', text: `新建失败：${inst.creation_error || '初始化没做完'}`,
-      advice: '点「重试初始化」再做一次，或在「更多」里删除这台实例' + (inst.creation_log ? `；日志 ${inst.creation_log}` : '') });
+    notes.push({ tone: 'err', ic: 'bad', text: t('新建失败：{reason}', { reason: inst.creation_error || t('初始化没做完') }),
+      advice: inst.creation_log ? t('点「重试初始化」再做一次，或在「更多」里删除这台实例；日志 {log}', { log: inst.creation_log })
+        : t('点「重试初始化」再做一次，或在「更多」里删除这台实例') });
   }
   if (f) {
     const e = f.error || {};
     // 内存不够 is the one failure a setting fixes: offer the setting right there
     const mem = e.code === 'insufficient_memory';
-    notes.push({ tone: 'err', ic: 'bad', text: `${FAIL[f.kind] || '失败'}：${e.message || '原因未知'}`, advice: e.advice, job: f.id, mem });
+    notes.push({ tone: 'err', ic: 'bad', text: (FAIL[f.kind] || t('失败')) + colon() + (e.message || t('原因未知')), advice: e.advice, job: f.id, mem });
   }
-  if (inst.software_renderer) notes.push({ tone: 'warn', ic: 'alert', text: '软件渲染：显卡驱动不可用，游戏会卡' });
+  if (inst.software_renderer) notes.push({ tone: 'warn', ic: 'alert', text: t('软件渲染：显卡驱动不可用，游戏会卡') });
   // data disk almost full, or the host volume of an automatic one low (InstanceInfo.data_space): both need the user
   const ds = inst.data_space;
   if (ds && ds.message) notes.push({ tone: 'warn', ic: 'alert', text: ds.message, advice: ds.advice });
-  if (!inst.initialized && !inst.running && !inst.creation && v.key !== 'starting' && v.key !== 'creating') notes.push({ tone: 'info', ic: 'info', text: '首次开机会做初始化，约 1⁠–⁠2 分钟' });
+  if (!inst.initialized && !inst.running && !inst.creation && v.key !== 'starting' && v.key !== 'creating') notes.push({ tone: 'info', ic: 'info', text: t('首次开机会做初始化，约 1⁠–⁠2 分钟') });
   const sig = JSON.stringify(notes);
   if (sig === c.nsig) return;
   c.nsig = sig;
@@ -291,9 +293,9 @@ function renderNotes(c, inst, v) {
         h('p', { class: 'note-text', text: n.text }),
         n.advice && h('p', { class: 'note-text note-adv', text: n.advice }),
         n.job && h('div', { class: 'note-links' },
-          n.mem && btn('link-btn', '调小内存', () => openSettings(c.i, 'memory')),
-          btn('link-btn', '详情', openActivity))),
-      n.job && ibtn('x', '不再显示这条', () => { S.dismissed.add(n.job); renderGrid(); }));
+          n.mem && btn('link-btn', t('调小内存'), () => openSettings(c.i, 'memory')),
+          btn('link-btn', t('详情'), openActivity))),
+      n.job && ibtn('x', t('不再显示这条'), () => { S.dismissed.add(n.job); renderGrid(); }));
   }));
 }
 
@@ -306,26 +308,26 @@ function menuItems(c) {
   const fresh = v.key === 'creating' || v.key === 'createfail'; // create's setup is not done
   // no 带窗口开机 (开机 is with the window), no 重启 and no 显示 / 隐藏窗口: the manager never switches how an instance runs
   return [
-    v.key === 'starting' && { label: '关机', icon: 'power', run: () => A.stop(i) },
+    v.key === 'starting' && { label: t('关机'), icon: 'power', run: () => A.stop(i) },
     // create's setup: our own create job is cancelled, one of another process (CLI, AUTO-MAS) is ended by a normal
     // stop with explicit cancellation; either way it shuts down normally and reads create_failed (resumable)
-    v.key === 'creating' ? { label: '取消新建', icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.cancelCreate(i)) }
-      : { label: '强制关机', icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
+    v.key === 'creating' ? { label: t('取消新建'), icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.cancelCreate(i)) }
+      : { label: t('强制关机'), icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
-    { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
+    { label: t('安装 APK…'), icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     ...storeItems(inst, i, fresh || busy || !!v.kind),
     glesItem(inst, i, fresh || busy || !!v.kind),
     // 磁盘占用 reads only (on or off); 回收 needs the guest booted; 整理 rewrites the data disk file, so the instance must be off.
     // Any job running on the instance blocks all three (the server would answer busy).
-    { label: '磁盘占用', icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
-    { label: '回收磁盘空间', icon: 'refresh', disabled: inst.status !== 'online' || !!v.kind, hint: inst.status !== 'online' ? '开机后可用' : '', run: () => A.diskTrim(i) },
-    { label: '整理磁盘', icon: 'disk', disabled: inst.status !== 'offline' || !!v.kind, hint: inst.status !== 'offline' ? '关机后可用' : '', run: () => A.diskCompact(i) },
-    { label: '查看日志', icon: 'file', run: () => openLogs(i) },
-    { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
+    { label: t('磁盘占用'), icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
+    { label: t('回收磁盘空间'), icon: 'refresh', disabled: inst.status !== 'online' || !!v.kind, hint: inst.status !== 'online' ? t('开机后可用') : '', run: () => A.diskTrim(i) },
+    { label: t('整理磁盘'), icon: 'disk', disabled: inst.status !== 'offline' || !!v.kind, hint: inst.status !== 'offline' ? t('关机后可用') : '', run: () => A.diskCompact(i) },
+    { label: t('查看日志'), icon: 'file', run: () => openLogs(i) },
+    { label: t('打开目录'), icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },
-    { label: '设置…', icon: 'sliders', disabled: fresh, run: () => openSettings(i) },
-    { label: '按应用走代理…', icon: 'shield', disabled: fresh, run: () => openProxy(i) },
-    { label: '删除…', icon: 'trash', danger: true, disabled: running || busy, hint: running || busy ? '先关机' : '', run: () => openDelete(i) },
+    { label: t('设置…'), icon: 'sliders', disabled: fresh, run: () => openSettings(i) },
+    { label: t('按应用走代理…'), icon: 'shield', disabled: fresh, run: () => openProxy(i) },
+    { label: t('删除…'), icon: 'trash', danger: true, disabled: running || busy, hint: running || busy ? t('先关机') : '', run: () => openDelete(i) },
   ];
 }
 
@@ -335,12 +337,12 @@ function menuItems(c) {
 // install that failed half way (partial): 补全 to finish it and 移除 to take it out. held: setup not done, a boot or
 // stop, or a job on the instance.
 function storeItems(inst, i, held) {
-  const add = { label: '补全 Google Play 商店…', icon: 'plus', disabled: held || inst.bridge === 'off',
-    hint: inst.bridge === 'off' ? '要执行桥' : '', run: () => openPlayStore(i, 'install') };
-  const remove = { label: '移除 Google Play 商店…', icon: 'x', disabled: held, run: () => openPlayStore(i, 'uninstall') };
+  const add = { label: t('补全 Google Play 商店…'), icon: 'plus', disabled: held || inst.bridge === 'off',
+    hint: inst.bridge === 'off' ? t('要执行桥') : '', run: () => openPlayStore(i, 'install') };
+  const remove = { label: t('移除 Google Play 商店…'), icon: 'x', disabled: held, run: () => openPlayStore(i, 'uninstall') };
   if (inst.play_store) {
     const online = inst.status === 'online';
-    return [remove, { label: '复制 GSF ID', icon: 'copy', disabled: held || !online, hint: online ? '' : '开机后可用', run: () => openGSFID(i) }];
+    return [remove, { label: t('复制 GSF ID'), icon: 'copy', disabled: held || !online, hint: online ? '' : t('开机后可用'), run: () => openGSFID(i) }];
   }
   return inst.play_store_partial ? [add, remove] : [add];
 }
@@ -351,8 +353,8 @@ function storeItems(inst, i, held) {
 function glesItem(inst, i, held) {
   const on = !!inst.gles32;
   const noBridge = !on && inst.bridge === 'off';
-  return { label: on ? '关闭报告 GLES 3.2（实验）…' : '开启报告 GLES 3.2（实验）…', icon: on ? 'x' : 'plus', disabled: held || noBridge,
-    hint: noBridge ? '要执行桥' : '只改报的版本，渲染仍是 3.1', title: GLES32_NOTE, run: () => openGLES32(i, on ? 'off' : 'on') };
+  return { label: on ? t('关闭报告 GLES 3.2（实验）…') : t('开启报告 GLES 3.2（实验）…'), icon: on ? 'x' : 'plus', disabled: held || noBridge,
+    hint: noBridge ? t('要执行桥') : t('只改报的版本，渲染仍是 3.1'), title: GLES32_NOTE, run: () => openGLES32(i, on ? 'off' : 'on') };
 }
 
 // ---- thumbnails: about every 5 s, only while the card view is on screen, the window has focus and no dialog covers

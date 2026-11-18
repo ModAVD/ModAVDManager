@@ -1,0 +1,5 @@
+{
+  "Windows 代理设置": "Windows proxy settings",
+  "macOS 代理设置": "macOS proxy settings",
+  "这台电脑的代理是自动配置脚本（PAC），本程序不读它；请把 HTTPS_PROXY 环境变量设成代理的地址（比如 http://127.0.0.1:7890）再试": "This PC's proxy is an automatic configuration script (PAC), which this program does not read; set the HTTPS_PROXY environment variable to the proxy address (for example http://127.0.0.1:7890) and try again"
+}

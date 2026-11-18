@@ -1,0 +1,9 @@
+{
+  "%s未查（%s）": "%s not checked (%s)",
+  "%s未通过（%s）": "%s failed (%s)",
+  "%s通过（%s）": "%s passed (%s)",
+  "ModAVD 实例 %d 显示窗口失败: %v": "ModAVD instance %d failed to show the window: %v",
+  "ModAVD 实例 %d 隐藏窗口失败: %v": "ModAVD instance %d failed to hide the window: %v",
+  "ModAVD 实例 %d 已显示窗口": "ModAVD instance %d: window shown",
+  "ModAVD 实例 %d 已隐藏窗口": "ModAVD instance %d: window hidden"
+}

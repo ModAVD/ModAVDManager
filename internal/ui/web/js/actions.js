@@ -1,23 +1,24 @@
 // Everything that changes something on the server, with the toasts that go with it.
 
+import { t, comma, gap } from './i18n.js';
 import { api } from './api.js';
 import { S, update, instance } from './store.js';
 import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import { openActivity, runCheck } from './panels.js';
 
-const VERB = { start: '开机', stop: '关机', install: '安装 APK', create: '新建', 'disk-info': '查看磁盘占用', 'disk-trim': '回收磁盘空间', 'disk-compact': '整理磁盘',
-  components: '补全组件', 'collect-info': '收集问题信息', 'playstore-install': '补全 Google Play 商店', 'playstore-uninstall': '移除 Google Play 商店',
-  'playstore-import': '导入 Google Play 商店的文件', 'gles32-on': '开启报告 GLES 3.2', 'gles32-off': '关闭报告 GLES 3.2',
-  update: '整包更新' };
+const VERB = { start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), 'disk-info': t('查看磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'),
+  components: t('补全组件'), 'collect-info': t('收集问题信息'), 'playstore-install': t('补全 Google Play 商店'), 'playstore-uninstall': t('移除 Google Play 商店'),
+  'playstore-import': t('导入 Google Play 商店的文件'), 'gles32-on': t('开启报告 GLES 3.2'), 'gles32-off': t('关闭报告 GLES 3.2'),
+  update: t('整包更新') };
 // what the store needs once it is in an instance: registering its GSF ID (playstore.js openGSFID, the page is
 // playstore.js UNCERTIFIED; not imported from there, as playstore.js imports this module)
-const GSF = '登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。';
+const GSF = t('登录时提示设备未经 Play 保护机制认证的，在实例的「更多操作」里点「复制 GSF ID」，到 https://www.google.com/android/uncertified/ 登记。');
 // an import the server refused (components_rejected, details.reason) when its message has no advice of its own
 const IMPORT_ADVICE = {
-  unknown_file: '要的是 Google 官方的 Google Play 版镜像压缩包 x86_64-34_r14.zip，或者从它里面取出的五个文件。',
-  mismatch: '这个文件和 Google 发布的那份不一样（可能没下载完整或被改过），重新下载后再试。',
-  incomplete: '五个文件要一起选上，或者只选镜像压缩包。',
+  unknown_file: t('要的是 Google 官方的 Google Play 版镜像压缩包 x86_64-34_r14.zip，或者从它里面取出的五个文件。'),
+  mismatch: t('这个文件和 Google 发布的那份不一样（可能没下载完整或被改过），重新下载后再试。'),
+  incomplete: t('五个文件要一起选上，或者只选镜像压缩包。'),
 };
 
 export function importAdvice(e) {
@@ -29,7 +30,7 @@ function reloadComponents() {
   api.get('/api/components').then((v) => { S.components = v; S.componentsError = null; update(); }).catch(() => {});
 }
 const isBoot = (j) => j.kind === 'start';
-const activity = { label: '查看活动', run: () => openActivity() };
+const activity = { label: t('查看活动'), run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
 const safe = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toastError(e); } };
 
@@ -57,38 +58,39 @@ function notify(job) {
   const who = job.index < 0 ? '' : quoted(instance(job.index), job.index);
   const r = job.result || {};
   const e = job.error || {};
-  if (job.state === 'failed') toast({ tone: 'err', title: `${who}${VERB[job.kind] || ''}没有成功`, text: e.message, advice: job.kind === 'playstore-import' ? importAdvice(e) : e.advice, action: activity });
-  else if (job.state === 'canceled') { if (isBoot(job)) toast({ tone: 'info', title: '已停止等待', text: `${who}的模拟器会继续开机。` }); }
+  if (job.state === 'failed') toast({ tone: 'err', title: who ? t('{who}{what}没有成功', { who, what: VERB[job.kind] || '' }) : t('{what}没有成功', { what: VERB[job.kind] || '' }), text: e.message, advice: job.kind === 'playstore-import' ? importAdvice(e) : e.advice, action: activity });
+  else if (job.state === 'canceled') { if (isBoot(job)) toast({ tone: 'info', title: t('已停止等待'), text: t('{who}的模拟器会继续开机。', { who }) }); }
   else if (isBoot(job)) {
     const w = Math.max((r.warnings || []).length, (job.warnings || []).length);
-    toast({ tone: w ? 'warn' : 'ok', title: `${who}已开机`, action: w ? activity : null,
-      text: [r.first_boot && '首次初始化已完成', r.total_seconds && `用时 ${dur(r.total_seconds)}`, w && `有 ${w} 个设置步骤没成功`].filter(Boolean).join('，') });
-  } else if (job.kind === 'components') toast({ title: '组件补全完成', text: '已重新检查这台电脑。' });
-  else if (job.kind === 'collect-info') toast({ title: '问题信息已收集', text: r.zip_path ? `问题包：${r.zip_path}` : '', timeout: 9000 });
-  else if (job.kind === 'create') toast({ title: `${who}新建好了`, text: '初始化已做完，已关机；第一次开机和平常一样快。' });
-  else if (job.kind === 'stop') toast({ title: `${who}已关机` });
-  else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
+    toast({ tone: w ? 'warn' : 'ok', title: t('{who}已开机', { who }), action: w ? activity : null,
+      text: [r.first_boot && t('首次初始化已完成'), r.total_seconds && t('用时 {time}', { time: dur(r.total_seconds) }), w && t('有 {w} 个设置步骤没成功', { w })].filter(Boolean).join(comma()) });
+  } else if (job.kind === 'components') toast({ title: t('组件补全完成'), text: t('已重新检查这台电脑。') });
+  else if (job.kind === 'collect-info') toast({ title: t('问题信息已收集'), text: r.zip_path ? t('问题包：{zip_path}', { zip_path: r.zip_path }) : '', timeout: 9000 });
+  else if (job.kind === 'create') toast({ title: t('{who}新建好了', { who }), text: t('初始化已做完，已关机；第一次开机和平常一样快。') });
+  else if (job.kind === 'stop') toast({ title: t('{who}已关机', { who }) });
+  else if (job.kind === 'install') toast({ title: t('安装完成'), text: t('{who}装好了 {name}', { who, name: r.package || 'APK' }) });
   // the sizes are the answer, so they stay long enough to read
-  else if (job.kind === 'disk-info') toast({ tone: 'info', title: `${who}的磁盘占用`, text: diskInfoText(r), timeout: 9000 });
-  else if (job.kind === 'disk-trim') toast({ title: `${who}已触发磁盘回收`, text: diskTrimText(), timeout: 6000 });
-  else if (job.kind === 'disk-compact') toast({ title: r.skipped ? `${who}已跳过磁盘重写` : `${who}磁盘整理好了`, text: diskCompactText(r), timeout: 6000 });
+  else if (job.kind === 'disk-info') toast({ tone: 'info', title: t('{who}的磁盘占用', { who }), text: diskInfoText(r), timeout: 9000 });
+  else if (job.kind === 'disk-trim') toast({ title: t('{who}已触发磁盘回收', { who }), text: diskTrimText(), timeout: 6000 });
+  else if (job.kind === 'disk-compact') toast({ title: r.skipped ? t('{who}已跳过磁盘重写', { who }) : t('{who}磁盘整理好了', { who }), text: diskCompactText(r), timeout: 6000 });
   else if (job.kind === 'playstore-install') {
-    toast({ tone: r.installed ? 'ok' : 'warn', title: r.installed ? `${who}已补全 Google Play 商店` : `${who}的 Google Play 商店没装全`,
-      text: playStoreText(job.kind, r) + (r.installed ? GSF : ''), action: r.installed ? null : activity, timeout: 12000 });
+    toast({ tone: r.installed ? 'ok' : 'warn', title: r.installed ? t('{who}已补全 Google Play 商店', { who }) : t('{who}的 Google Play 商店没装全', { who }),
+      text: r.installed ? playStoreText(job.kind, r) + gap() + GSF : playStoreText(job.kind, r), action: r.installed ? null : activity, timeout: 12000 });
   } else if (job.kind === 'playstore-uninstall') {
-    toast({ tone: r.state === 'absent' ? 'ok' : 'warn', title: r.state === 'absent' ? `${who}已移除 Google Play 商店` : `${who}的 Google Play 商店没移除干净`,
+    toast({ tone: r.state === 'absent' ? 'ok' : 'warn', title: r.state === 'absent' ? t('{who}已移除 Google Play 商店', { who }) : t('{who}的 Google Play 商店没移除干净', { who }),
       text: playStoreText(job.kind, r), action: r.state === 'absent' ? null : activity, timeout: 6000 });
   } else if (job.kind === 'gles32-on' || job.kind === 'gles32-off') {
     const done = job.kind === 'gles32-on' ? r.state === 'on' : r.state === 'off';
-    toast({ tone: done ? 'ok' : 'warn', title: done ? `${who}${VERB[job.kind]}了` : `${who}的${VERB[job.kind]}没有生效`,
+    toast({ tone: done ? 'ok' : 'warn', title: job.kind === 'gles32-on' ? (done ? t('{who}开启报告 GLES 3.2了', { who }) : t('{who}的开启报告 GLES 3.2没有生效', { who }))
+      : (done ? t('{who}关闭报告 GLES 3.2了', { who }) : t('{who}的关闭报告 GLES 3.2没有生效', { who })),
       text: gles32Text(job.kind, r), action: done ? null : activity, timeout: (r.notes || []).length ? 14000 : 7000 });
   } else if (job.kind === 'playstore-import') {
-    toast({ title: 'Google Play 商店的文件已就绪', text: `${playStoreText(job.kind, r)}要用的实例在「更多操作」里补全商店。`, timeout: 9000 });
+    toast({ title: t('Google Play 商店的文件已就绪'), text: t('{text}要用的实例在「更多操作」里补全商店。', { text: playStoreText(job.kind, r) }), timeout: 9000 });
   } else if (job.kind === 'update') {
-    if (!r.handoff) toast({ tone: 'info', title: r.message || '已经是最新版本' });
+    if (!r.handoff) toast({ tone: 'info', title: r.message || t('已经是最新版本') });
     else {
       // the manager exits now and tools\modavd.exe starts it again after the swap, in a new window
-      toast({ title: '正在换上新版', text: `${r.message || ''}。这个窗口会自己关掉。`, timeout: 15000 });
+      toast({ title: t('正在换上新版'), text: t('{message}。这个窗口会自己关掉。', { message: r.message || '' }), timeout: 15000 });
       setTimeout(() => window.close(), 1200);
     }
   }
@@ -125,14 +127,14 @@ export const resumeCreate = (i) => run(i, 'resume', {});
 export async function install(i, file) {
   const fd = new FormData();
   fd.append('apk', file, file.name);
-  if (await run(i, 'install', fd)) toast({ tone: 'info', title: '正在安装', text: `${file.name} → ${quoted(instance(i), i)}` });
+  if (await run(i, 'install', fd)) toast({ tone: 'info', title: t('正在安装'), text: `${file.name} → ${quoted(instance(i), i)}` });
 }
 
 // 磁盘占用 reads only and works on or off; 回收磁盘空间 needs the instance booted; 整理磁盘 (copies the whole data disk, minutes) needs it off
 export const diskInfo = (i) => run(i, 'disk-info', {});
 export const diskTrim = (i) => run(i, 'disk-trim', {});
 export async function diskCompact(i) {
-  if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: '正在整理磁盘', text: `${quoted(instance(i), i)}正在检查并整理，期间不能开机`, timeout: 5000 });
+  if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: t('正在整理磁盘'), text: t('{who}正在检查并整理，期间不能开机', { who: quoted(instance(i), i) }), timeout: 5000 });
 }
 
 // 补全 / 移除 Google Play 商店 (action install | uninstall): a job that boots the instance cold once (playstore.js asks first)
@@ -147,8 +149,8 @@ export const input = safe((i, body) => api.post(`/api/instances/${i}/input`, bod
 
 export async function copy(text) {
   if (!text) return;
-  if (await copyText(text)) toast({ title: '已复制', text });
-  else toast({ tone: 'err', title: '没能复制', text: '浏览器不让写剪贴板，请手动选中复制。' });
+  if (await copyText(text)) toast({ title: t('已复制'), text });
+  else toast({ tone: 'err', title: t('没能复制'), text: t('浏览器不让写剪贴板，请手动选中复制。') });
 }
 
 export async function loadInstances() {

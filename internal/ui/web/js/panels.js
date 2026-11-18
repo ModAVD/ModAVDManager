@@ -1,5 +1,6 @@
 // 电脑检查 panel, 活动 drawer and the not-ready banner.
 
+import { t, comma, stop, gap, quote, cap } from './i18n.js';
 import { h, icon, btn, keyed, showError, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
@@ -9,7 +10,7 @@ import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, defaultName, par
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
-const folderBtn = (cls) => btn(cls, [icon('folder'), '打开目录'], () => A.openFolder('root'));
+const folderBtn = (cls) => btn(cls, [icon('folder'), t('打开目录')], () => A.openFolder('root'));
 
 // ---- check
 let refreshAgain = false;
@@ -44,21 +45,21 @@ export function checkSummary(c) {
   const blockers = items.filter((x) => x.blocking && x.ok === false);
   const hints = items.filter((x) => (x.ok === false && !x.blocking) || x.ok == null);
   const tone = !c.ready || blockers.length ? 'err' : hints.length ? 'warn' : 'ok';
-  const text = { err: '不能开机', warn: '有提示', ok: '就绪' }[tone];
+  const text = cap({ err: t('不能开机'), warn: t('有提示'), ok: t('就绪') }[tone]);
   return { tone, text, blockers, hints, n: items.length };
 }
 
 // ok / not ok / not checked; a failed item that does not block the boot is only a hint
 function itemView(it) {
-  if (it.ok === false && !it.blocking) return ['warn', 'alert', '提示'];
-  return it.ok ? ['ok', 'ok', '通过'] : it.ok === false ? ['err', 'bad', '未通过'] : ['idle', 'unknown', '未查'];
+  if (it.ok === false && !it.blocking) return ['warn', 'alert', cap(t('提示'))];
+  return it.ok ? ['ok', 'ok', cap(t('通过'))] : it.ok === false ? ['err', 'bad', cap(t('未通过'))] : ['idle', 'unknown', cap(t('未查'))];
 }
 
 // what needs doing first: blocking failures, then hints, then not checked, then passed (server order within each)
 const RANK = (it) => (it.ok === false ? (it.blocking ? 0 : 1) : it.ok == null ? 2 : 3);
 
 function checkRow() {
-  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: '不影响开机' }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }) };
+  const r = { ic: h('span', { class: 'ci-ic' }), title: h('span'), tag: h('span', { class: 'tag', text: t('不影响开机') }), reason: h('div', { class: 'ci-reason' }), adv: h('div', { class: 'ci-advice' }), state: h('span', { class: 'ci-state' }) };
   r.el = h('li', { class: 'check-item' }, r.ic, h('div', null, h('div', { class: 'ci-title' }, r.title, r.tag), r.reason, r.adv), r.state);
   return r;
 }
@@ -70,7 +71,7 @@ function fetchBox() {
   b.go = btn('btn btn-secondary btn-sm', null, openComponentFetch);
   b.text = h('span');
   b.running = h('div', { class: 'diag-running', role: 'status', hidden: true }, h('span', { class: 'spin' }), b.text,
-    btn('btn btn-ghost btn-sm', '取消', () => b.id && A.cancelJob(b.id)));
+    btn('btn btn-ghost btn-sm', t('取消'), () => b.id && A.cancelJob(b.id)));
   b.err = h('div', { class: 'form-error', role: 'alert', hidden: true });
   b.el = h('div', { class: 'ci-fetch' }, b.running, b.err, b.go);
   return b;
@@ -89,9 +90,9 @@ function fillFetchBox(b) {
   const sig = failed ? failed.id : '';
   if (b.sig !== sig) {
     b.sig = sig;
-    if (failed) showError(b.err, { message: `补全组件没有成功：${failed.error?.message || '原因未知'}`, advice: failed.error?.advice });
+    if (failed) showError(b.err, { message: t('补全组件没有成功：{reason}', { reason: failed.error?.message || t('原因未知') }), advice: failed.error?.advice });
     b.err.hidden = !failed;
-    b.go.replaceChildren(icon(failed ? 'refresh' : 'download'), failed ? '重试' : '补全组件');
+    b.go.replaceChildren(icon(failed ? 'refresh' : 'download'), failed ? t('重试') : t('补全组件'));
   }
 }
 
@@ -140,7 +141,7 @@ export function openCheck(opts) {
   const when = h('span', { class: 'foot-note' });
   const again = btn('btn btn-secondary', null, () => runCheck(true));
   const ctl = openDialog({
-    title: '电脑检查', sub: '开机前会自动检查这些项目，没通过的项目会说明原因和处理办法。', cls: 'dlg-check', light: true,
+    title: t('电脑检查'), sub: t('开机前会自动检查这些项目，没通过的项目会说明原因和处理办法。'), cls: 'dlg-check', light: true,
     body: h('div', { class: 'dlg-body' }, sum, box, list, passed, comps, store.el),
     foot: h('footer', { class: 'dlg-foot' }, when, folderBtn('btn btn-ghost'), again),
   });
@@ -170,11 +171,11 @@ export function openCheck(opts) {
     showStore();
     if (sigs[0] !== S.checking) {
       sigs[0] = S.checking;
-      again.replaceChildren(S.checking ? h('span', { class: 'spin' }) : icon('refresh'), S.checking ? '正在检查…' : '重新检查');
+      again.replaceChildren(S.checking ? h('span', { class: 'spin' }) : icon('refresh'), S.checking ? t('正在检查…') : t('重新检查'));
       attr(again, 'aria-busy', S.checking || null);
       attr(again, 'aria-disabled', S.checking || null);
     }
-    setText(when, S.checking ? '要几秒：硬件加速检查和 Vulkan 探测' : S.checkedAt ? `检查于 ${clock(S.checkedAt)}` : '');
+    setText(when, S.checking ? t('要几秒：硬件加速检查和 Vulkan 探测') : S.checkedAt ? t('检查于 {time}', { time: clock(S.checkedAt) }) : '');
     if (S.checkError && !c) showError(box, S.checkError);
     box.hidden = !S.checkError;
     if (!c) {
@@ -193,9 +194,9 @@ export function openCheck(opts) {
     }
     const s = checkSummary(c);
     const [head, line] = {
-      err: ['暂时不能开机', `${s.blockers.length} 项必需检查没通过，按下面的建议处理后再检查一次。`],
-      warn: ['可以开机，有提示', `${s.hints.length} 项需要留意，不影响开机。`],
-      ok: ['这台电脑可以开机', `${s.n} 项检查都通过了。`],
+      err: [t('暂时不能开机'), t('{blockers} 项必需检查没通过，按下面的建议处理后再检查一次。', { blockers: s.blockers.length })],
+      warn: [t('可以开机，有提示'), t('{hints} 项需要留意，不影响开机。', { hints: s.hints.length })],
+      ok: [t('这台电脑可以开机'), t('{n} 项检查都通过了。', { n: s.n })],
     }[s.tone];
     sum.className = 'check-sum tone-' + s.tone;
     sum.replaceChildren(icon({ ok: 'ok', warn: 'alert', err: 'bad' }[s.tone]), h('div', null, h('strong', { text: head }), h('span', { text: line })));
@@ -206,7 +207,7 @@ export function openCheck(opts) {
     keyed(list, rows, fold ? items.filter((x) => x.ok !== true) : items, (it) => it.id, checkRow, fillCheckRow);
     keyed(passList, passRows, fold ? good : [], (it) => it.id, checkRow, fillCheckRow);
     passed.hidden = !fold;
-    setText(passText, `其余 ${good.length} 项已通过`);
+    setText(passText, t('其余 {n} 项已通过', { n: good.length }));
 
     const cs = c.components || [];
     comps.hidden = !cs.length;
@@ -215,11 +216,11 @@ export function openCheck(opts) {
       sigs[1] = sig;
       if (cs.some((x) => !x.installed && !x.optional)) comps.open = true;
       comps.replaceChildren(
-        h('summary', null, '组件', h('span', { class: 'muted', text: `${cs.filter((x) => x.installed).length} / ${cs.length} 已安装` }), h('span', { class: 'spacer' }), icon('chevron')),
+        h('summary', null, t('组件'), h('span', { class: 'muted', text: t('{n} / {total} 已安装', { n: cs.filter((x) => x.installed).length, total: cs.length }) }), h('span', { class: 'spacer' }), icon('chevron')),
         ...cs.map((x) => h('div', { class: 'comp-row' },
-          h('span', null, x.name, x.optional && h('span', { class: 'muted', text: '（可选）' })),
+          h('span', null, x.name, x.optional && h('span', { class: 'muted', text: t('（可选）') })),
           h('span', { class: 'v', text: [x.version, x.build].filter(Boolean).join(' · ') }),
-          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: x.installed ? '已安装' : x.optional ? '未安装' : '缺少' }))));
+          h('span', { class: 'pill tone-' + (x.installed ? 'ok' : x.optional ? 'idle' : 'err'), text: cap(x.installed ? t('已安装') : x.optional ? t('未安装') : t('缺少')) }))));
     }
   };
   const un = subscribe(render);
@@ -243,17 +244,17 @@ export function renderBanner(el) {
   el.replaceChildren(h('div', { class: 'banner', role: 'status' },
     h('span', { class: 'banner-ic' }, icon('alert')),
     h('div', { class: 'banner-main' },
-      h('h2', { text: '这个目录现在还不能开机' }),
+      h('h2', { text: t('这个目录现在还不能开机') }),
       first && h('p', { text: first.reason }),
       first && first.advice && advice(first.id === 'components'
-        ? '请点下面的「补全组件」打开许可协议并下载，或运行 tools\\modavd.exe components fetch。'
+        ? t('请点下面的「补全组件」打开许可协议并下载，或运行 tools\\modavd.exe components fetch。')
         : first.advice),
       missing.length && !(first && first.id === 'components') && h('div', { class: 'banner-missing' },
-        h('span', { class: 'muted', text: '缺少的组件：' }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),
-      blockers.length > 1 && h('p', { class: 'banner-more', text: `另外还有 ${blockers.length - 1} 项必需检查没通过，详情见电脑检查。` }),
+        h('span', { class: 'muted', text: t('缺少的组件：') }), missing.map((m) => h('span', { class: 'chip-s', text: m.name }))),
+      blockers.length > 1 && h('p', { class: 'banner-more', text: t('另外还有 {blockers} 项必需检查没通过，详情见电脑检查。', { blockers: blockers.length - 1 }) }),
       h('div', { class: 'banner-actions' },
-        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), '补全组件'], openComponentFetch),
-        btn('btn btn-secondary', [icon('shield'), '查看电脑检查'], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
+        (first?.id === 'components' || missing.length) && btn('btn btn-secondary', [icon('download'), t('补全组件')], openComponentFetch),
+        btn('btn btn-secondary', [icon('shield'), t('查看电脑检查')], openCheck, { id: 'bannerCheck' }), folderBtn('btn btn-ghost')))));
 }
 
 // ---- activity
@@ -262,12 +263,12 @@ let actCtl = null;
 export function openActivity() {
   if (actCtl) return;
   const list = h('ul', { class: 'jobs' });
-  const empty = h('div', { class: 'act-empty' }, icon('pulse'), h('p', { text: '还没有任务' }),
-    h('p', { class: 'muted', text: '新建、开机、关机、安装 APK 和磁盘操作都会显示在这里。' }));
-  const logBox = h('div', { class: 'loglines', role: 'log', 'aria-label': '最近的消息' });
+  const empty = h('div', { class: 'act-empty' }, icon('pulse'), h('p', { text: t('还没有任务') }),
+    h('p', { class: 'muted', text: t('新建、开机、关机、安装 APK 和磁盘操作都会显示在这里。') }));
+  const logBox = h('div', { class: 'loglines', role: 'log', 'aria-label': t('最近的消息'), 'data-empty': t('暂无消息') });
   const ctl = openDialog({
-    title: '活动', sub: ' ', cls: 'drawer', light: true,
-    body: h('div', { class: 'dlg-body' }, list, empty, h('h3', { class: 'sec-title', text: '消息' }), logBox),
+    title: t('活动'), sub: ' ', cls: 'drawer', light: true,
+    body: h('div', { class: 'dlg-body' }, list, empty, h('h3', { class: 'sec-title', text: t('消息') }), logBox),
   });
   actCtl = ctl;
   const rows = new Map();
@@ -276,7 +277,7 @@ export function openActivity() {
 
   const render = () => {
     const n = runningCount();
-    setText(ctl.subEl, n ? `${n} 个任务进行中` : '没有进行中的任务');
+    setText(ctl.subEl, n ? t('{n} 个任务进行中', { n }) : t('没有进行中的任务'));
     const jobs = jobsSorted();
     empty.hidden = jobs.length > 0;
     keyed(list, rows, jobs, (j) => j.id, jobRow, updateJob);
@@ -315,10 +316,10 @@ function jobRow(j) {
   r.err = h('div', { class: 'job-err' });
   r.warn = h('ul', { class: 'job-warn' });
   r.res = h('div', { class: 'job-res' });
-  r.cancel = btn('btn btn-secondary btn-sm', '取消等待', () => A.cancelJob(j.id));
-  r.cancelHint = h('span', { class: 'muted', text: '只停止等待，模拟器会继续开机。' });
+  r.cancel = btn('btn btn-secondary btn-sm', t('取消等待'), () => A.cancelJob(j.id));
+  r.cancelHint = h('span', { class: 'muted', text: t('只停止等待，模拟器会继续开机。') });
   r.acts = h('div', { class: 'job-acts' }, r.cancel, r.cancelHint);
-  r.logs = h('div', { class: 'loglines' });
+  r.logs = h('div', { class: 'loglines', 'data-empty': t('暂无消息') });
   r.sum = h('summary');
   r.det = h('details', null, r.sum, r.logs);
   r.det.addEventListener('toggle', () => fillJobLog(r));
@@ -335,14 +336,15 @@ function updateJob(r, j) {
   const name = rootJob ? '' : inst ? label(inst) : defaultName(j.index);
   if (r.name !== name) {
     r.name = name;
-    r.title.replaceChildren(...[rootJob ? KIND[j.kind] || j.kind : `${KIND[j.kind] || j.kind}「${name}」`,
+    r.title.replaceChildren(...[rootJob ? cap(KIND[j.kind] || j.kind) : cap(KIND[j.kind] || j.kind) + gap() + quote(name),
       inst && name !== inst.name && h('span', { class: 'muted', text: inst.name })].filter(Boolean));
   }
   const running = j.state === 'running';
   const t0 = parseTime(j.created_at);
   const took = t0 && ((parseTime(j.finished_at) || Date.now()) - t0) / 1000;
-  setText(r.meta, clock(j.created_at) + (took ? ` · ${running ? '已进行' : j.kind === 'disk-trim' ? '触发请求用时' : '用时'} ${dur(took)}` : ''));
-  setText(r.pill, j.kind === 'disk-trim' && j.state === 'done' ? '已触发' : STATE[j.state] || j.state);
+  const tookText = !took ? '' : running ? t('已进行 {time}', { time: dur(took) }) : j.kind === 'disk-trim' ? t('触发请求用时 {time}', { time: dur(took) }) : t('用时 {time}', { time: dur(took) });
+  setText(r.meta, clock(j.created_at) + (tookText ? ' · ' + tookText : ''));
+  setText(r.pill, j.kind === 'disk-trim' && j.state === 'done' ? t('已触发') : STATE[j.state] || j.state);
   attr(r.pill, 'class', 'pill tone-' + (STATE_TONE[j.state] || 'idle'));
 
   r.prog.hidden = !running;
@@ -350,18 +352,18 @@ function updateJob(r, j) {
     const p = j.progress;
     // 补全 / 移除 Google Play 商店 report no percentage while they run (done 0 of 1000)
     const n = j.kind === 'playstore-install' || j.kind === 'playstore-uninstall' || j.kind.startsWith('gles32-') ? null : pct(p);
-    setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? '正在关机…' : j.kind === 'install' ? '正在安装…'
-      : j.kind === 'disk-info' ? '正在查看磁盘占用…' : j.kind === 'disk-trim' ? '正在触发磁盘回收…' : j.kind === 'disk-compact' ? '正在整理磁盘…'
-      : j.kind === 'playstore-install' ? '正在补全 Google Play 商店…' : j.kind === 'playstore-uninstall' ? '正在移除 Google Play 商店…'
-      : j.kind === 'gles32-on' ? '正在开启报告 GLES 3.2…' : j.kind === 'gles32-off' ? '正在关闭报告 GLES 3.2…'
-      : j.kind === 'playstore-import' ? '正在核对文件…' : '进行中…'));
+    setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? t('正在关机…') : j.kind === 'install' ? t('正在安装…')
+      : j.kind === 'disk-info' ? t('正在查看磁盘占用…') : j.kind === 'disk-trim' ? t('正在触发磁盘回收…') : j.kind === 'disk-compact' ? t('正在整理磁盘…')
+      : j.kind === 'playstore-install' ? t('正在补全 Google Play 商店…') : j.kind === 'playstore-uninstall' ? t('正在移除 Google Play 商店…')
+      : j.kind === 'gles32-on' ? t('正在开启报告 GLES 3.2…') : j.kind === 'gles32-off' ? t('正在关闭报告 GLES 3.2…')
+      : j.kind === 'playstore-import' ? t('正在核对文件…') : t('进行中…')));
     setText(r.pctEl, n == null ? '' : Math.round(n) + '%');
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
   const cancelBackend = j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import';
   r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || cancelBackend));
-  setText(r.cancel, j.kind === 'disk-compact' ? '取消整理' : cancelBackend ? '取消' : '取消等待');
+  setText(r.cancel, j.kind === 'disk-compact' ? t('取消整理') : cancelBackend ? t('取消') : t('取消等待'));
   r.cancelHint.hidden = j.kind === 'disk-compact' || cancelBackend;
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
@@ -374,7 +376,7 @@ function updateJob(r, j) {
   const esig = e ? e.message + e.advice : '';
   if (r.esig !== esig) {
     r.esig = esig;
-    r.err.replaceChildren(e ? h('strong', { text: e.message || '没有成功' }) : '', e && e.advice ? advice(e.advice) : '');
+    r.err.replaceChildren(e ? h('strong', { text: e.message || t('没有成功') }) : '', e && e.advice ? advice(e.advice) : '');
   }
   const warns = [...new Set([...(j.warnings || []), ...((j.result && j.result.warnings) || [])])];
   r.warn.hidden = !warns.length;
@@ -389,7 +391,7 @@ function updateJob(r, j) {
   let n = 0;
   for (const l of S.logs) if (l.job_id === j.id) n++;
   r.det.hidden = !n;
-  if (r.n !== n) r.sum.replaceChildren(`过程（${(r.n = n)} 条）`, icon('chevron'));
+  if (r.n !== n) r.sum.replaceChildren(t('过程（{n} 条）', { n: (r.n = n) }), icon('chevron'));
 }
 
 function fillJobLog(r) {
@@ -403,16 +405,19 @@ function fillJobLog(r) {
 function resultText(j) {
   const r = j.result;
   if (!r) return '';
-  if (j.kind === 'stop') return `${stopMethod(r.method)}${r.seconds ? `，${dur(r.seconds)}` : ''}。`;
-  if (j.kind === 'install') return `已装好 ${r.package || r.apk || 'APK'}${r.output ? `（${r.output.trim()}）` : ''}`;
+  if (j.kind === 'stop') return stopMethod(r.method) + (r.seconds ? comma() + dur(r.seconds) : '') + stop();
+  if (j.kind === 'install') {
+    const name = r.package || r.apk || 'APK';
+    return r.output ? t('已装好 {name}（{output}）', { name, output: r.output.trim() }) : t('已装好 {name}', { name });
+  }
   if (j.kind === 'disk-info') return diskInfoText(r);
   if (j.kind === 'disk-trim') return diskTrimText();
   if (j.kind === 'disk-compact') return diskCompactText(r);
-  if (j.kind === 'components') return '组件补全完成。';
-  if (j.kind === 'collect-info') return r.zip_path ? `问题包：${r.zip_path}` : '问题包已生成。';
+  if (j.kind === 'components') return t('组件补全完成。');
+  if (j.kind === 'collect-info') return r.zip_path ? t('问题包：{path}', { path: r.zip_path }) : t('问题包已生成。');
   if (j.kind.startsWith('playstore-')) return playStoreText(j.kind, r);
   if (j.kind.startsWith('gles32-')) return gles32Text(j.kind, r);
-  if (!r.launched) return '模拟器本来就在运行，只重做了开机后的设置。';
-  return [`安卓开机 ${dur(r.boot_seconds || 0)}，共 ${dur(r.total_seconds || 0)}`, r.first_boot && '完成了首次初始化',
-    r.zygote_restarted && '挂了客体库补丁（安卓框架重启过一次）'].filter(Boolean).join('，') + '。';
+  if (!r.launched) return t('模拟器本来就在运行，只重做了开机后的设置。');
+  return [t('安卓开机 {boot}，共 {total}', { boot: dur(r.boot_seconds || 0), total: dur(r.total_seconds || 0) }), r.first_boot && t('完成了首次初始化'),
+    r.zygote_restarted && t('挂了客体库补丁（安卓框架重启过一次）')].filter(Boolean).join(comma()) + stop();
 }

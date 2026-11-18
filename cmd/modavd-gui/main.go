@@ -39,6 +39,7 @@ import (
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/host"
+	"modavd/internal/i18n"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/ui"
@@ -112,6 +113,7 @@ func printVersion() int {
 }
 
 func run(args []string) (code int) {
+	i18n.Init()
 	var log *logx.Logger
 	defer func() {
 		// A GUI process has no console: a panic would otherwise end it without a trace.

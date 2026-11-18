@@ -873,6 +873,11 @@ async function handle(url, init) {
   if (typeof init.body === 'string') { try { body = JSON.parse(init.body); } catch { return errResp('usage', '请求体不是 JSON'); } }
   await sleep(p.endsWith('/screenshot') ? 40 : 80 + Math.random() * 120);
 
+  if (p === '/api/locale') { // the page's language: the mock stays Chinese (messages {}); a PUT is remembered and echoed
+    if (method === 'PUT' && ['auto', 'zh-CN', 'en'].includes(body.preference)) db.localePreference = body.preference;
+    return json({ language: 'zh-CN', preference: db.localePreference || 'auto', system: 'zh-CN',
+      languages: [{ code: 'zh-CN', name: '中文' }, { code: 'en', name: 'English' }], messages: {} });
+  }
   if (p === '/api/info') return json({ version: '0.1.0', protocol: 1, root: rootInfo() });
   if (p === '/api/instances' && method === 'GET') return json(list());
   if (p === '/api/instances' && method === 'POST') {
