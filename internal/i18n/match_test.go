@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"bytes"
+	"os"
 	"testing"
 )
 
@@ -119,5 +120,36 @@ func TestPreference(t *testing.T) {
 	defer current.Store("")
 	if Current() != English {
 		t.Fatalf("env: %q", Current())
+	}
+}
+
+// Only a new installation follows the system; a user with files from an earlier version keeps Chinese.
+func TestFirstRun(t *testing.T) {
+	old := prefPath
+	defer func() { prefPath = old }()
+
+	fresh := t.TempDir()
+	prefPath = func() string { return fresh + "/ModAVD/language.json" }
+	settleFirstRun()
+	if Preference() != PrefAuto {
+		t.Fatalf("new install: %q", Preference())
+	}
+
+	used := t.TempDir()
+	if err := os.WriteFile(used+"/affinity.lock", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prefPath = func() string { return used + "/language.json" }
+	settleFirstRun()
+	if Preference() != Chinese {
+		t.Fatalf("upgrade: %q", Preference())
+	}
+	// Decided once: a choice made later stays.
+	if err := SavePreference(English); err != nil {
+		t.Fatal(err)
+	}
+	settleFirstRun()
+	if Preference() != English {
+		t.Fatalf("kept: %q", Preference())
 	}
 }

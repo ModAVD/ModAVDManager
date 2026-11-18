@@ -75,7 +75,41 @@ func effectivePreference() string {
 	if v := strings.TrimSpace(os.Getenv(EnvVar)); v != "" {
 		return v
 	}
+	settleFirstRun()
 	return Preference()
+}
+
+// settleFirstRun writes the preference the first time a version with languages runs for this user: only a new
+// installation follows the system language; someone who already used ModAVD (Chinese only until then) keeps Chinese
+// rather than finding the interface switched after an update. Used before means the per-user directory already holds
+// something an earlier version wrote (the manager's window state ui-*, update-settings.json, affinity.lock from a
+// boot, …). Nothing is written when the preference exists or the directory is unknown.
+func settleFirstRun() {
+	path := prefPath()
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return
+	}
+	pref := PrefAuto
+	if usedBefore(filepath.Dir(path), filepath.Base(path)) {
+		pref = Chinese
+	}
+	_ = SavePreference(pref)
+}
+
+func usedBefore(dir, self string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if n := e.Name(); n != self && n != self+".tmp" {
+			return true
+		}
+	}
+	return false
 }
 
 // SystemLocale is the user's interface language as a locale name ("zh-CN", "en-US"); "" when unknown.

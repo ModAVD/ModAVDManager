@@ -81,12 +81,13 @@ func Set(lang string) {
 // Init picks the language from MODAVD_LANG, the saved preference, then the system. The CLI and the manager call it
 // once at start.
 func Init() {
-	pref := effectivePreference()
 	if testing.Testing() && os.Getenv(EnvVar) == "" {
-		// Tests of the CLI and the manager see the source text, whatever this computer's language and settings.
-		pref = Chinese
+		// Tests of the CLI and the manager see the source text, whatever this computer's language and settings, and
+		// write no preference.
+		current.Store(Chinese)
+		return
 	}
-	current.Store(Resolve(pref))
+	current.Store(Resolve(effectivePreference()))
 }
 
 // Resolve maps a preference ("", "auto", a code, a locale such as "en-US" or "zh-TW") to a supported code.
