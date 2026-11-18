@@ -28,7 +28,7 @@ Usage instructions and guidance for contributing are on the ModAVD documentation
 
 ## How it relates to ModAVD
 
-- This public repository is the basis for developing and releasing the manager and the CLI. Its version number is maintained independently, and it has its own GitHub Releases.
+- This public repository is the basis for developing and releasing the manager and the CLI. It has its own GitHub Releases. Its version number follows the ModAVD package: when a ModAVD release rebuilds the manager, the manager takes that release's version (rebuilt for ModAVD 0.42.3, it is 0.42.3); when it is not rebuilt, its version stays ([ModAVD#216](https://github.com/ModAVD/ModAVD/issues/216)).
 - The ModAVD package still ships `ModAVD.exe` and `tools\modavd.exe`; each ModAVD release pins the manager version and hash it uses.
 - The standalone download works from any folder: pass `--root` or set `MODAVD_ROOT` to point it at the ModAVD root folder, and check the download against the hashes below. Do not unpack it into the ModAVD root folder over the files from the package.
 
