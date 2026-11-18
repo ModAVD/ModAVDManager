@@ -15,7 +15,7 @@ function h(tag, props, ...children) {
 }
 export { elements };
 `;
-const mod = await import(`data:text/javascript;base64,${Buffer.from(source.replace("import { h } from './dom.js';", dom)).toString('base64')}`);
+const mod = await import(`data:text/javascript;base64,${Buffer.from(source.replace("import { h } from './dom.js';", dom).replace("from './i18n.js'", `from '${new URL('../internal/ui/web/js/i18n.js', import.meta.url)}'`)).toString('base64')}`);
 
 test('opening legacy settings leaves both Android choices unchanged', () => {
   const fields = mod.regionalFields('legacy', { language: 'preserve', time_zone: 'preserve' });

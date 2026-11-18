@@ -4,7 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../internal/ui/web/js/format.js', import.meta.url), 'utf8');
-const fmt = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const fmt = await import(new URL('../internal/ui/web/js/format.js', import.meta.url));
+const i18n = await import(new URL('../internal/ui/web/js/i18n.js', import.meta.url));
 const { diskCompactText } = fmt;
 const read = (name) => readFile(new URL(`../internal/ui/web/js/${name}`, import.meta.url), 'utf8');
 const moduleBody = (s) => s.replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
@@ -31,7 +32,7 @@ test('compact text distinguishes skip from rewrite', () => {
 test('trim, fallback info, growth and skipped notifications coexist', async () => {
   const notices = [];
   const S = { jobs: new Map(), watch: new Set(), logs: [] };
-  const scope = { ...fmt, S, instance: () => null, update() {}, toast: (r) => notices.push(r) };
+  const scope = { ...i18n, ...fmt, S, instance: () => null, update() {}, toast: (r) => notices.push(r) };
   vm.runInNewContext(moduleBody(await read('actions.js')) + '\nglobalThis.accept = onJob;', scope);
   const send = (id, kind, result) => {
     S.watch.add(id);
@@ -61,7 +62,7 @@ test('trim, fallback info, growth and skipped notifications coexist', async () =
 test('activity keeps trim request timing and compact cancellation distinct', async () => {
   const element = () => ({ hidden: false, style: {}, classList: { toggle() {} }, replaceChildren() {} });
   const row = () => Object.fromEntries(['title', 'meta', 'pill', 'prog', 'acts', 'cancel', 'cancelHint', 'why', 'err', 'warn', 'res', 'det', 'sum', 'msg', 'pctEl', 'bar', 'fill'].map((k) => [k, element()]));
-  const scope = { ...fmt, S: { logs: [] }, instance: () => null, setText: (el, text) => { el.text = text; }, attr() {}, h: element, icon: element };
+  const scope = { ...i18n, ...fmt, S: { logs: [] }, instance: () => null, setText: (el, text) => { el.text = text; }, attr() {}, h: element, icon: element };
   vm.runInNewContext(moduleBody(await read('panels.js')) + '\nglobalThis.render = updateJob;', scope);
   const r = row();
   const common = { id: 'one', index: 2, created_at: '2026-11-05T00:00:00Z', finished_at: '2026-11-05T00:00:02Z' };

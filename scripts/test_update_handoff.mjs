@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 
 const source = await readFile(new URL('../internal/ui/web/js/update.js', import.meta.url), 'utf8');
+const i18n = await import(new URL('../internal/ui/web/js/i18n.js', import.meta.url));
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 async function page(post, instances = []) {
@@ -25,6 +26,7 @@ async function page(post, instances = []) {
     }, toast: value => notices.push(value), toastError: noop },
     './diagnostics.js': { openDiagnostics: noop, activeJob: noop, progressText: noop },
     './actions.js': { onJob: noop, notifyJob: noop },
+    './i18n.js': { ...i18n },
     './format.js': { quoted: x => `「${x.title}」` },
   };
   const context = vm.createContext({});

@@ -8,20 +8,25 @@
 let view = { language: 'zh-CN', preference: 'auto', system: 'zh-CN', languages: [{ code: 'zh-CN', name: '中文' }, { code: 'en', name: 'English' }], messages: {} }; // i18n: keep
 let messages = {};
 
+// The page's modules are also loaded by the node tests (scripts/test_*.mjs), without a page around them.
+const inPage = typeof document !== 'undefined' && !!document.documentElement && typeof fetch === 'function';
+const setLang = () => { if (inPage) document.documentElement.lang = lang(); };
+
 const adopt = (v) => {
   if (!v || typeof v !== 'object') return;
   view = { ...view, ...v };
   messages = v.messages && typeof v.messages === 'object' ? v.messages : {};
-  document.documentElement.lang = lang();
+  setLang();
 };
 
-// loadLocale reads GET /api/locale; on any failure the page stays in Chinese.
+// loadLocale reads GET /api/locale; on any failure (or outside a page) the page stays in Chinese.
 export async function loadLocale() {
+  if (!inPage) return view;
   try {
     const res = await fetch('/api/locale', { credentials: 'same-origin', cache: 'no-store' });
     if (res.ok) adopt(await res.json());
   } catch { /* back end not reachable: Chinese */ }
-  document.documentElement.lang = lang();
+  setLang();
   return view;
 }
 
@@ -101,7 +106,7 @@ export function translateStatic(root = document) {
 }
 
 // ---- dev only: ?mock=… installs the fake back end before the locale is read (app.js used to do it after the imports)
-{
+if (inPage && typeof location !== 'undefined') {
   const params = new URLSearchParams(location.search);
   if (params.get('mock')) {
     try {

@@ -80,7 +80,7 @@ function confirmInstall(v) {
     } catch (e) { toastError(e); }
   };
   const confirmStop = () => {
-    const names = runningList.map((x) => quoted(x, x.index)).join(enumComma());
+    const names = runningList.map((x) => quoted(x, x.index)).join(lang() === 'en' ? ', ' : '');
     const stop = btn('btn btn-primary', [icon('stop'), t('关机并更新')], () => { second.close(); apply(); });
     const second = openDialog({
       title: t('要关掉 {n} 台实例', { n: running }), light: true,

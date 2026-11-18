@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const source = await readFile(new URL('../internal/ui/web/js/format.js', import.meta.url), 'utf8');
-const { cfgText } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { cfgText } = await import(new URL('../internal/ui/web/js/format.js', import.meta.url));
 
 const cfg = { memory_mb: 4096, cpu: 4, fps: 30, data_disk_mode: 'auto', data_partition_gb: 256 };
 
