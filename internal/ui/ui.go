@@ -113,6 +113,7 @@ type server struct {
 	dev        bool
 	files      map[string]*staticFile
 	openPath   func(path string) error
+	frame      func(rootDir, serial string) ([]byte, error) // a PNG of the instance's screen from shared memory; nil = adb only
 	launch     func(url string) (*Window, error)
 	removeOld  func(log *logx.Logger)
 	mux        *http.ServeMux
@@ -224,6 +225,7 @@ func newServer(opt Options) (*server, error) {
 		proxyEvery: proxyEvery,
 		hub:        newHub(),
 		marks:      newProxyMarks(),
+		frame:      shmFrame,
 
 		managerWindows: changeManagerWindows,
 	}
