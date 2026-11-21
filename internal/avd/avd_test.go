@@ -190,7 +190,7 @@ func describe(r *root.Root, list []*Instance) []map[string]any {
 			}
 			return n
 		}
-		w, h, dpi := in.Display()
+		w, h, dpi := in.Display(0)
 		keys := in.Config.Keys()
 		if keys == nil {
 			keys = []string{}
@@ -694,7 +694,7 @@ func TestListAndGet(t *testing.T) {
 	if d, ok := in.DataPartitionGB(); !ok || d != 64 {
 		t.Errorf("DataPartitionGB %d", d)
 	}
-	if w, h, dpi := in.Display(); in.FPS() != 60 || w != 1920 || h != 1080 || dpi != 280 {
+	if w, h, dpi := in.Display(0); in.FPS() != 60 || w != 1920 || h != 1080 || dpi != 280 {
 		t.Errorf("FPS / Display %d %d %d %d", in.FPS(), w, h, dpi)
 	}
 	// An instance whose config.ini cannot be read (opened elsewhere without sharing) is listed with an empty config
@@ -713,7 +713,7 @@ func TestListAndGet(t *testing.T) {
 	if _, ok := empty.MemoryMB(); ok || empty.FPS() != DefaultFPS {
 		t.Error("nil config")
 	}
-	if w, h, _ := empty.Display(); w != 1280 || h != 720 {
+	if w, h, _ := empty.Display(0); w != 1280 || h != 720 {
 		t.Error("nil config display")
 	}
 }
@@ -1230,7 +1230,7 @@ func TestApplyDisplay(t *testing.T) {
 		"":                                       "1280x720",
 		"hw.lcd.height=720\n":                    "720x1280",
 	} {
-		ch := DisplayChanges(parseIni([]byte(cfg)))
+		ch := DisplayChanges(parseIni([]byte(cfg)), 0)
 		if got := ch[0][1] + "x" + ch[1][1]; got != want || ch[2][1] != "240" || ch[3] != [2]string{"hw.mainKeys", "yes"} ||
 			ch[0][0] != "hw.lcd.width" || ch[1][0] != "hw.lcd.height" || ch[2][0] != "hw.lcd.density" {
 			t.Errorf("%q: %v", cfg, ch)

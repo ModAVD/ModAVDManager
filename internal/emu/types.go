@@ -43,7 +43,12 @@ type InstanceConfig struct {
 	DataDiskMode string `json:"data_disk_mode"`
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
-	DPI          int    `json:"dpi"`
+	DPI          int    `json:"dpi"` // the density the next boot uses
+	// DPISetting is the density chosen for the instance (mas-avd.json instances.<i>.dpi), 0 when it follows the
+	// resolution (720p 240, 1080p 280).
+	DPISetting int `json:"dpi_setting"`
+	// Orientation: "landscape" or "portrait" (config.ini hw.initialOrientation; the same wide canvas turned).
+	Orientation string `json:"orientation"`
 	// Sound: the next boot has host sound and a guest sound card (mas-avd.json instances.<i>.sound; off by default).
 	Sound bool `json:"sound"`
 }
@@ -157,6 +162,8 @@ type CreateRequest struct {
 	DataPartitionGB *int
 	FPS             *int
 	Resolution      *int
+	DPI             *int    // nil / 0 = the resolution's density; else one of avd.DPIChoices
+	Orientation     *string // nil = landscape; "landscape" / "portrait"
 	// NoBridge: no execution bridge (bridge.go), recorded for good. By default a new instance gets the bridge's boot
 	// marker and create's setup installs it.
 	NoBridge bool
@@ -182,6 +189,10 @@ type UpdateRequest struct {
 	CPU        *int
 	FPS        *int
 	Resolution *int
+	// DPI (0 = follow the resolution) and Orientation ("landscape" / "portrait") from the next boot; see
+	// avd.UpdateOptions.
+	DPI         *int
+	Orientation *string
 	// DataPartitionGB raises the data partition (never lowers it) and makes it manual; see avd.UpdateOptions.
 	DataPartitionGB *int
 	// DataDiskAuto switches the data disk to 自动扩盘 (raised to avd.AutoDataPartitionGB at the next boot); not together

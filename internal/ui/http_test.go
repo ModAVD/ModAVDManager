@@ -134,7 +134,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 		}
 		return h.waitJob(v.ID, stateIs(stateDone))
 	}
-	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720})
+	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720, "dpi": 320, "orientation": "portrait"})
 	if res, _ := j.Result.(map[string]any); j.Index != 2 || res["title"] != "测试机" {
 		t.Fatalf("created %+v", j)
 	}
@@ -153,7 +153,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	}
 	r := c[0]
 	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 || r.Resolution == nil || *r.Resolution != 720 ||
-		r.Progress == nil || r.Resume {
+		r.DPI == nil || *r.DPI != 320 || r.Orientation == nil || *r.Orientation != "portrait" || r.Progress == nil || r.Resume {
 		t.Fatalf("create request %+v", r)
 	}
 	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil || r.Resolution != nil {
@@ -178,7 +178,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	// update
 	expectError(t, h.do("PATCH", "/api/instances/2", "{}"), 400, errs.Usage)
 	var up emu.UpdateResult
-	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30,"resolution":1080}`), http.StatusOK, &up)
+	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30,"resolution":1080,"dpi":0,"orientation":"landscape"}`), http.StatusOK, &up)
 	if up.Applied["fps"] != float64(30) {
 		t.Fatalf("update result %+v", up)
 	}
@@ -189,7 +189,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 	u := h.f.updated
 	h.f.mu.Unlock()
 	if len(u) != 4 || u[0].Resolution == nil || *u[0].Resolution != 1080 || *u[0].FPS != 30 || u[0].Title != nil || u[0].MemoryMB != nil || u[0].CPU != nil ||
-		u[0].DataPartitionGB != nil {
+		u[0].DataPartitionGB != nil || u[0].DPI == nil || *u[0].DPI != 0 || u[0].Orientation == nil || *u[0].Orientation != "landscape" {
 		t.Fatalf("update requests %+v", u)
 	}
 	if *u[1].Title != "新名字" || *u[1].MemoryMB != 8192 || *u[1].CPU != 8 || u[1].FPS != nil {

@@ -42,8 +42,8 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
 | GET | `/api/instances/{i}/regional` | | `RegionalResult` |
-| POST | `/api/instances` | `{title?, index?, count?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, language?: string, time_zone?: string}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install`。`count` 是一次建几台（1–9，不给是 1，不能和 `index` 一起给）：大于 1 时服务端先取好这么多个空闲编号（不够就 409 `busy`，一台不建），每台当场开一个 `create` 任务，回 202 `{jobs: [Job…]}`；任务按编号一台做完再做下一台（排着的 `progress.step` 是 `queued`，可以单独取消），每台开建前查实例所在盘的剩余空间，不够那一台失败（`precheck_failed`）；`title` 后面加序号（`T 1`、`T 2`…）；一台失败或取消不影响别的 |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, sound?: bool, boss_key?: string, language?: string, time_zone?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置（声音 `sound` 也是）下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
+| POST | `/api/instances` | `{title?, index?, count?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, dpi?, orientation?: string, language?: string, time_zone?: string}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install`。`count` 是一次建几台（1–9，不给是 1，不能和 `index` 一起给）：大于 1 时服务端先取好这么多个空闲编号（不够就 409 `busy`，一台不建），每台当场开一个 `create` 任务，回 202 `{jobs: [Job…]}`；任务按编号一台做完再做下一台（排着的 `progress.step` 是 `queued`，可以单独取消），每台开建前查实例所在盘的剩余空间，不够那一台失败（`precheck_failed`）；`title` 后面加序号（`T 1`、`T 2`…）；一台失败或取消不影响别的 |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, dpi?, orientation?: string, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, sound?: bool, boss_key?: string, language?: string, time_zone?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置（声音 `sound` 也是）下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
 | GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
@@ -242,5 +242,7 @@ ModAVD/ModAVD#101，只有 Windows。
 - 设置页的老板键一项：点一下输入框再按组合；改了先 `POST /api/boss-keys/check` 当场试一次，保存时 `PATCH` 再试一次；打开设置时按 `GET /api/boss-keys` 的 `taken` 在被占的键旁边标警告图标。`supported` 为 `false` 时不显示这一项。
 
 `resolution` 只接受 1080 和 720。新建默认 1080，分别联动 1920×1080 / DPI 280 与 1280×720 / DPI 240；修改保留方向，下次开机生效。`InstanceInfo.config.resolution` 是按当前配置宽高识别的档位，运行中修改后表示下次开机的设置。
+
+`dpi` 是 0（跟随分辨率，默认）或 160、240、280、320、400、480 之一，记在 `mas-avd.json` 的 `instances.<i>.dpi`，每次开机前写进 config.ini 的 `hw.lcd.density`，换分辨率时保留；`config.dpi` 是下次开机用的 DPI，`config.dpi_setting` 是设的值（0 = 跟随分辨率）。`orientation` 是 `landscape`（横屏，默认）或 `portrait`（竖屏），写进 config.ini 的 `hw.initialOrientation`，画布仍是横的 1280×720 / 1920×1080，开机后安卓的 `user_rotation` 横屏是 0、竖屏是 3（模拟器 0.43.0 起也按这个值设）；`config.orientation` 是当前设置。两项都下次开机生效。MAA 等自动化任务要横屏，竖屏只适合自己玩。
 
 画面点击按当前截图的尺寸换算并校验。运行中改档时，`config` 表示下次开机设置，当前画面和点击坐标在重启前保持原尺寸。

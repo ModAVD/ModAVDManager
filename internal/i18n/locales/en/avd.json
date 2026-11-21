@@ -1,5 +1,6 @@
 {
   "%s 读不出：%s": "Cannot read %s: %s",
+  "DPI 只能选 %s，或 0（跟随分辨率）": "DPI must be one of %s, or 0 (follow the resolution)",
   "ModAVD 实例 %d 不存在": "ModAVD instance %d does not exist",
   "ModAVD 实例已满（端口段 %d–%d 最多 9 台）": "No free ModAVD instance slot (port range %d-%d holds at most 9)",
   "ModAVD 的 CPU 核数只能选 %v": "ModAVD CPU cores must be one of %v",
@@ -24,6 +25,7 @@
   "数据盘上限只能改大：实例 %d 现在是 %d GB，不能改成 %d GB": "The data disk limit can only be increased: instance %d is %d GB now and cannot be changed to %d GB",
   "数据盘只能二选一：自动扩盘，或者指定大小": "Choose one for the data disk: automatic size, or a fixed size",
   "文件不存在": "File does not exist",
+  "方向只能选 landscape（横屏）或 portrait（竖屏）": "Orientation must be landscape or portrait",
   "替换 %s 失败：%v": "Failed to replace %s: %v",
   "请手动删除这个链接和它指向的数据": "Delete this link and the data it points to by hand",
   "读不了实例目录 %s：%v": "Cannot read instance folder %s: %v"

@@ -50,7 +50,7 @@ function mk(i, title, o = {}) {
     ports: { console, adb: console + 1, grpc: console + 2 },
     screencap: { shm: 'SHM_videmulator' + console, shm_ready: st === 'online' },
     // o.disk: a size the user set (manual); without it 自动扩盘 (256 GB)
-    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 256, data_disk_mode: o.disk ? 'manual' : 'auto', resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.resolution === 1080 ? 280 : 240, sound: !!o.sound },
+    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 256, data_disk_mode: o.disk ? 'manual' : 'auto', resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.dpi || (o.resolution === 1080 ? 280 : 240), dpi_setting: o.dpi || 0, orientation: o.orientation || 'landscape', sound: !!o.sound },
     initialized, launcher: initialized ? 'µLauncher' : '',
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
@@ -856,6 +856,8 @@ function validate(b, create) {
   if (b.memory_mb != null && !MEM.includes(b.memory_mb)) return ['invalid_argument', `内存只能选 3、4、5、6、8 GB（收到 ${b.memory_mb} MB）`, ''];
   if (b.cpu != null && ![2, 4, 6].includes(b.cpu)) return ['invalid_argument', `CPU 核数只能是 2、4 或 6（收到 ${b.cpu}）`, ''];
   if (b.resolution != null && ![1080, 720].includes(b.resolution)) return ['invalid_argument', '分辨率只能是 1080 或 720', ''];
+  if (b.dpi != null && ![0, 160, 240, 280, 320, 400, 480].includes(b.dpi)) return ['invalid_argument', 'DPI 只能选 160 / 240 / 280 / 320 / 400 / 480，或 0（跟随分辨率）', ''];
+  if (b.orientation != null && !['landscape', 'portrait'].includes(b.orientation)) return ['invalid_argument', '方向只能选 landscape（横屏）或 portrait（竖屏）', ''];
   if (b.fps != null && !(Number.isInteger(b.fps) && b.fps >= 1 && b.fps <= 60)) return ['invalid_argument', '帧率只能在 1–60 之间', ''];
   if (create && b.data_partition_gb != null && (!Number.isInteger(b.data_partition_gb) || b.data_partition_gb < 16 || b.data_partition_gb > 512)) {
     return ['invalid_argument', `数据盘上限只能是 16–512 GB 的整数（收到 ${b.data_partition_gb}）`, ''];
@@ -890,7 +892,7 @@ async function handle(url, init) {
     if (!INDEXES.includes(i)) return errResp('invalid_argument', `实例编号 ${i} 不可用（只能是 0–9，5 除外）`);
     if (db.insts.has(i)) return errResp('already_exists', `实例 mas_${i} 已存在`);
     await sleep(500);
-    const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, resolution: body.resolution || 1080, disk: body.data_partition_gb, initialized: false, scene: i });
+    const inst = mk(i, body.title, { mem: body.memory_mb, cpu: body.cpu, fps: body.fps, resolution: body.resolution || 1080, dpi: body.dpi, orientation: body.orientation, disk: body.data_partition_gb, initialized: false, scene: i });
     log('info', `已新建 ModAVD 实例 ${i}（内存 ${inst.config.memory_mb} MB / ${inst.config.cpu} 核 / 数据盘 ${body.data_partition_gb ? inst.config.data_partition_gb + ' GB' : '自动扩盘'} / 帧率 ${inst.config.fps}）`);
     emit('instances', list());
     return json(pub(inst), 201);
@@ -999,8 +1001,17 @@ async function handle(url, init) {
       if (body.resolution != null) {
         const portrait = inst.config.height > inst.config.width;
         const w = body.resolution === 1080 ? 1920 : 1280, h = body.resolution;
-        Object.assign(inst.config, { resolution: body.resolution, width: portrait ? h : w, height: portrait ? w : h, dpi: body.resolution === 1080 ? 280 : 240 });
+        Object.assign(inst.config, { resolution: body.resolution, width: portrait ? h : w, height: portrait ? w : h, dpi: inst.config.dpi_setting || (body.resolution === 1080 ? 280 : 240) });
         applied.resolution = body.resolution;
+      }
+      if (body.dpi != null) {
+        Object.assign(inst.config, { dpi_setting: body.dpi, dpi: body.dpi || (inst.config.resolution === 1080 ? 280 : 240) });
+        applied.dpi = body.dpi;
+      }
+      if (body.orientation != null) {
+        const w = inst.config.resolution === 1080 ? 1920 : 1280;
+        Object.assign(inst.config, { orientation: body.orientation, width: w, height: inst.config.resolution });
+        applied.orientation = body.orientation;
       }
       for (const k of ['memory_mb', 'cpu', 'fps', 'sound']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
       // the data disk: 自动扩盘, or a size that can only grow

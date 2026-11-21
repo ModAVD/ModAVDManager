@@ -62,8 +62,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto\|N] [--fps 1-60] [--resolution 1080\|720] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建（数据盘默认自动扩盘，见下），并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--data-gb auto\|N] [--diagnostics on\|off] [--sound on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--sound on` 让这台下次开机起有声音（带窗口和无头都是，会多占一些 CPU），默认 `off` 不带声卡；记在 `mas-avd.json` 的 `instances.<i>.sound`。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto\|N] [--fps 1-60] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建（数据盘默认自动扩盘，见下），并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--data-gb auto\|N] [--diagnostics on\|off] [--sound on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--sound on` 让这台下次开机起有声音（带窗口和无头都是，会多占一些 CPU），默认 `off` 不带声卡；记在 `mas-avd.json` 的 `instances.<i>.sound`。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `clone <i> [--title T]` | 把已关机的实例整份复制成一台新实例（游戏、登录状态、设置都带上）：新实例用最小的空闲编号和它的端口，其余设置照源实例；数据盘整份复制，两台互不影响，可用空间不够时报错（`precheck_failed`）、什么都不复制；失败或取消时复制到一半的会删掉。两台的安卓设备标识（Android ID、GSF ID）相同 |
@@ -214,7 +214,9 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
 - 崩坏：星穹铁道（官服 `com.miHoYo.hkrpg`、B 服 `com.miHoYo.hkrpg.bilibili`，B 服没有实测）的显示模式预先设成 Vulkan（客体脚本 `modavd-vkmode.sh`，只在 Windows 上）。游戏第一次启动时自己选 OpenGL ES，在 ModAVD 上十几秒后闪退；在游戏设置里的显示设置（Display Settings）选 Vulkan 模式就正常。
   - 守护每 3 秒看一次：游戏装上以后、第一次启动之前，在它的 `Android/data/<包名>/files` 里写好 `vulkancaps.bin`、`customvulkancaps.bin`。已经因为闪退停在 OpenGL ES 的，下次开机或游戏退出后也改成 Vulkan。
   - 在游戏设置里选过显示模式的（`customvulkancaps.bin` 已经在、不是空文件）不动；游戏开着时不动；没装的游戏不建任何目录。
-分辨率只有两档：1080p 为 1920×1080 / DPI 280，720p 为 1280×720 / DPI 240。新建默认 1080p，720p 更省资源。管理器的新建和实例设置、CLI `--resolution 1080|720`、MCP `resolution` 使用同一套档位。已有实例按宽高识别：横屏或竖屏的 1920×1080 保持 1080p，其余配置及缺字段的旧配置保持 720p。换档联动宽、高、DPI，保留方向，下次冷启动生效；DPI 不单独设置，不使用运行时 `wm size` 或 `wm density`。自动化工具里的分辨率也要跟着改。
+分辨率只有两档：1080p 为 1920×1080 / DPI 280，720p 为 1280×720 / DPI 240。新建默认 1080p，720p 更省资源。管理器的新建和实例设置、CLI `--resolution 1080|720`、MCP `resolution` 使用同一套档位。已有实例按宽高识别：横屏或竖屏的 1920×1080 保持 1080p，其余配置及缺字段的旧配置保持 720p。换档联动宽、高和默认 DPI，保留方向，下次冷启动生效；不使用运行时 `wm size` 或 `wm density`。自动化工具里的分辨率也要跟着改。
+
+DPI 默认跟随分辨率，也可以在管理器设置、CLI `--dpi`、MCP `dpi` 里选 160 / 240 / 280 / 320 / 400 / 480（`--dpi auto` 改回跟随），换分辨率时保留。方向默认横屏，可以改成竖屏（`--orientation portrait`）：画布仍是横的，config.ini 的 `hw.initialOrientation` 设为 portrait，开机后安卓转到竖屏。两项都下次开机生效。MAA 等自动化任务要横屏，竖屏只适合自己玩。
 
 AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。
 

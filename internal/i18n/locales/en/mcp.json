@@ -33,7 +33,7 @@
   "已取消": "Canceled",
   "收到的消息不是合法 JSON，已回复解析错误: %s": "The received message is not valid JSON; replied with a parse error: %s",
   "新建中 %d%%：%s": "Creating %d%%: %s",
-  "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、sound 至少给一项": "Nothing to change: give at least one of title, memory_mb, cpu, fps, resolution, data_partition_gb, data_disk_auto, sound",
+  "没有要改的选项：title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、sound 至少给一项": "No option to change: give at least one of title, memory_mb, cpu, fps, resolution, dpi, orientation, data_partition_gb, data_disk_auto, sound",
   "没有要改的：enabled、server、apps、add_apps、remove_apps 至少给一项": "Nothing to change: give at least one of enabled, server, apps, add_apps, remove_apps",
   "确认要删除时把 confirm 设为 true": "To confirm the deletion, set confirm to true",
   "等 %d 个正在写文件的请求做完再退出（最多 %.0f 秒）": "Waiting for %d requests that are writing files to finish before exiting (up to %.0f s)",

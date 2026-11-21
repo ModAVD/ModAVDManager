@@ -267,6 +267,13 @@ func TestBuildCreateRequest(t *testing.T) {
 		req.FPS == nil || *req.FPS != 30 || req.Resolution == nil || *req.Resolution != 720 {
 		t.Errorf("all options: %+v", req)
 	}
+	req, err = buildCreateRequest(mustParse(t, "create", "--dpi", "320", "--orientation", "Portrait"))
+	if err != nil || req.DPI == nil || *req.DPI != 320 || req.Orientation == nil || *req.Orientation != "portrait" {
+		t.Errorf("dpi/orientation: %+v %v", req, err)
+	}
+	if _, err := buildCreateRequest(mustParse(t, "create", "--dpi", "high")); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("--dpi high: %v", err)
+	}
 	// Zero is passed on (emu rejects it with the AUTO-MAS wording), not mistaken for "not given".
 	req, _ = buildCreateRequest(mustParse(t, "create", "--cpu", "0"))
 	if req.CPU == nil || *req.CPU != 0 {
@@ -331,6 +338,14 @@ func TestBuildUpdateRequest(t *testing.T) {
 	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--resolution", "1080"))
 	if err != nil || req.Resolution == nil || *req.Resolution != 1080 || req.MemoryMB != nil {
 		t.Fatalf("resolution alone: %+v %v", req, err)
+	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--dpi", "auto"))
+	if err != nil || req.DPI == nil || *req.DPI != 0 || req.Orientation != nil || req.MemoryMB != nil {
+		t.Fatalf("dpi auto alone: %+v %v", req, err)
+	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--orientation", "landscape"))
+	if err != nil || req.Orientation == nil || *req.Orientation != "landscape" || req.DPI != nil {
+		t.Fatalf("orientation alone: %+v %v", req, err)
 	}
 	for _, v := range []string{"auto", "AUTO", " auto "} {
 		req, err = buildUpdateRequest(mustParse(t, "set", "3", "--data-gb", v))

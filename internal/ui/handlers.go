@@ -64,6 +64,8 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		FPS             *int    `json:"fps"`
 		Resolution      *int    `json:"resolution"`
+		DPI             *int    `json:"dpi"`
+		Orientation     *string `json:"orientation"`
 		Count           *int    `json:"count"`
 	}
 	if !decode(w, r, &body) {
@@ -71,7 +73,8 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	req := emu.CreateRequest{Index: body.Index, MemoryMB: body.MemoryMB, CPU: body.CPU,
 		Language: body.Language, TimeZone: body.TimeZone,
-		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution}
+		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution,
+		DPI: body.DPI, Orientation: body.Orientation}
 	if body.Title != nil {
 		req.Title = *body.Title
 	}
@@ -202,6 +205,8 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		CPU             *int    `json:"cpu"`
 		FPS             *int    `json:"fps"`
 		Resolution      *int    `json:"resolution"`
+		DPI             *int    `json:"dpi"`
+		Orientation     *string `json:"orientation"`
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		DataDiskAuto    bool    `json:"data_disk_auto"`
 		BossKey         *string `json:"boss_key"`
@@ -210,9 +215,9 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DataPartitionGB == nil &&
-		!body.DataDiskAuto && body.Diagnostics == nil && body.Sound == nil && body.BossKey == nil && body.Language == nil && body.TimeZone == nil {
-		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、boss_key 中的一项"))
+	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DPI == nil && body.Orientation == nil &&
+		body.DataPartitionGB == nil && !body.DataDiskAuto && body.Diagnostics == nil && body.Sound == nil && body.BossKey == nil && body.Language == nil && body.TimeZone == nil {
+		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、boss_key 中的一项"))
 		return
 	}
 	release, err := s.beginInstanceAction(kindSettings, i)
@@ -223,7 +228,8 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	res, err := s.mgr.Update(detached(r), i, emu.UpdateRequest{Title: body.Title, MemoryMB: body.MemoryMB, CPU: body.CPU,
 		Language: body.Language, TimeZone: body.TimeZone,
-		FPS: body.FPS, Resolution: body.Resolution, DataPartitionGB: body.DataPartitionGB, DataDiskAuto: body.DataDiskAuto,
+		FPS: body.FPS, Resolution: body.Resolution, DPI: body.DPI, Orientation: body.Orientation,
+		DataPartitionGB: body.DataPartitionGB, DataDiskAuto: body.DataDiskAuto,
 		Diagnostics: body.Diagnostics, BossKey: body.BossKey, Sound: body.Sound})
 	if err != nil {
 		writeError(w, err)
