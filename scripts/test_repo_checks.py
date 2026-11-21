@@ -20,6 +20,9 @@ class RepoChecksTest(unittest.TestCase):
         self.assertFalse(repo_checks.allowed("ai", "noreply@openai.com"))
         self.assertFalse(repo_checks.allowed("Claude", "noreply@" + "anthropic.com"))
         self.assertFalse(repo_checks.allowed("qiyinxi", "someone@example.com"))
+        self.assertTrue(repo_checks.allowed("Old", "octocat@users.noreply.github.com"))
+        self.assertFalse(repo_checks.allowed("Someone", "someone@example.com"))
+        self.assertFalse(repo_checks.allowed("Codex", "noreply@openai.com"))
 
     def test_commit_and_coauthor(self):
         with tempfile.TemporaryDirectory() as td:
