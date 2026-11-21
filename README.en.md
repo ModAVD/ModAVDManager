@@ -286,11 +286,16 @@ On 2026-11-03, Claude Code 2.1.317 (the command-line version) was connected to m
 - Two protocol versions were negotiated, 2025-11-25 and 2026-07-28; both work.
 - `delete_instance` carries the `anthropic/requiresUserInteraction` mark, so under `-p` it is always blocked and the instance is not deleted. That is what the mark is for. To delete an instance from an unattended script, use the command line `delete <i> --yes`.
 - If a create started over MCP is disconnected halfway, it cannot finish and is recorded as failed; redo it with `create --resume N`.
-- Not yet checked in Claude Code:
-  - the tools `check_host`, `shell`, `install_apk` and `set_window_visible` have not been called;
-  - there was no dedicated run with `MCP_PROTOCOL_NEGOTIATION=legacy`;
-  - whether the `notifications/progress` of `start_instance` increase one by one was not checked: the `-p` output only shows Claude Code's own heartbeat every 30 seconds.
+- A further run on 2026-11-21: Claude Code 2.1.317 and modavd 0.42.0, again with `claude -p --mcp-config <file> --strict-mcp-config`, with a pass-through process between `modavd mcp` and claude that only logs the traffic, to capture the protocol.
 
+| What was done | Result |
+| --- | --- |
+| Default protocol, seven tools in order: `list_instances`, `check_host`, `create_instance` (3 GB, 4 cores), `start_instance`, `shell` (`getprop sys.boot_completed`, output 1), `stop_instance`, `delete_instance` | Negotiated 2026-07-28 (`server/discover`). The first six succeeded, and `stop_instance` was a normal shutdown with the disk synced; `delete_instance` was blocked under `-p` (`MCPTool requires permission.`) and the request never reached modavd |
+| `MCP_PROTOCOL_NEGOTIATION=legacy`, the same seven tools | Negotiated 2025-11-25 (`initialize`). Same results as the row above |
+| Only `create_instance` + `start_instance`, and claude exited once the instance had booted (modavd started directly by claude, no pass-through process) | The emulator was still running and `list` showed it online; its parent chain was qemu and emulator, and the process above that no longer existed, so neither claude nor modavd was in it; a later `modavd stop` shut it down normally (synced) |
+
+- In both runs `create_instance` and `start_instance` carried a `progressToken`: 32 to 33 `notifications/progress` for the create and 9 for the start, with strictly increasing values ending at 1000 / 1000. The `-p` output does not show them; they were counted from the pass-through log.
+- The items previously listed as unchecked (`check_host`, `shell`, the legacy protocol, increasing progress) were all checked in this run. `install_apk` and `set_window_visible` have still not been called.
 ## The manager ModAVD.exe
 
 On Apple Silicon macOS, run the `ModAVD` manager. A `ModAVD.app` placed in the package root finds that root automatically; `--root` can select it explicitly. The page opens in the default browser. Pass `--chrome-window` for a separate Chrome app window, falling back to the default browser when Chrome is unavailable. State and the Chrome profile live under `~/Library/Application Support/ModAVD`; folder buttons open Finder. Launching again on the same root only reopens the page. Closing the page follows the existing idle and running-job exit rules. Instance operations remain subject to their platform support limits.

@@ -288,10 +288,16 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 协商到的协议有 2025-11-25 和 2026-07-28 两种，都能用。
 - `delete_instance` 带 `anthropic/requiresUserInteraction` 标记，在 `-p` 下一定被拦，实例不删，这是这个标记要的效果。在无人值守的脚本里删实例，用命令行 `delete <i> --yes`。
 - 经 MCP 新建时中途断开，新建就做不完，记成失败；用 `create --resume N` 重做。
-- 还没在 Claude Code 里核对的：
-  - `check_host`、`shell`、`install_apk`、`set_window_visible` 这几个工具没调过；
-  - 没有专门用 `MCP_PROTOCOL_NEGOTIATION=legacy` 跑一轮；
-  - `start_instance` 的 `notifications/progress` 是否逐条递增没核对，`-p` 的输出里只看得到 Claude Code 自己每 30 秒一条的心跳。
+- 2026-11-21 又补测一轮：Claude Code 2.1.317，modavd 0.42.0，同样用 `claude -p --mcp-config <文件> --strict-mcp-config`，在 `modavd mcp` 和 claude 之间串了一个只记录、不改内容的转发进程来抓协议。
+
+| 做了什么 | 结果 |
+| --- | --- |
+| 默认协议，按顺序调 7 个工具：`list_instances`、`check_host`、`create_instance`（3 GB、4 核）、`start_instance`、`shell`（`getprop sys.boot_completed`，输出 1）、`stop_instance`、`delete_instance` | 走 2026-07-28（`server/discover`）。前 6 个都成功，`stop_instance` 是正常关机且已 sync；`delete_instance` 在 `-p` 下被拦（`MCPTool requires permission.`），请求没发到 modavd |
+| `MCP_PROTOCOL_NEGOTIATION=legacy`，同样 7 个工具 | 走 2025-11-25（`initialize`）。结果和上一行一致 |
+| 只 `create_instance` + `start_instance`，开完机 claude 就退出（modavd 直接由 claude 拉起，中间没有转发进程） | 模拟器还在，`list` 是 online；它的父进程链是 qemu、emulator，再往上的进程已不存在，没有 claude 和 modavd；之后 `modavd stop` 正常关机（已 sync） |
+
+- 两轮里 `create_instance`、`start_instance` 都带 `progressToken`，新建收到 32 到 33 条 `notifications/progress`，开机 9 条，进度值都严格递增，最后是 1000 / 1000。`-p` 的输出里看不到这些通知，是从转发进程的记录里数的。
+- 之前列的"还没核对"的几项（`check_host`、`shell`、legacy 协议、进度递增）这一轮都核对了。`install_apk`、`set_window_visible` 还没调过。
 
 ## 管理器 ModAVD.exe
 
