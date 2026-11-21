@@ -193,7 +193,9 @@ func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryM
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %d 写显示设置（config.ini）失败: %v", i, err))
 	}
 	if wrote {
-		m.Log.Infof("实例 %d 显示设为 %dp、不显示导航栏（已写入 config.ini）", i, inst.Resolution())
+		// Display normalizes the config read before the write the same way ApplyDisplay did
+		w, h, dpi := inst.Display(avd.DPIMeta(m.Root.InstanceMeta(i)))
+		m.Log.Infof("实例 %d 显示设为 %d×%d、DPI %d、不显示导航栏（已写入 config.ini）", i, w, h, dpi)
 	}
 
 	headless := !window

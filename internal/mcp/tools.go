@@ -98,6 +98,14 @@ func resolutionProp(desc string) prop {
 	return prop{"resolution", false, map[string]any{"type": "integer", "enum": avd.ResolutionChoices, "description": desc}}
 }
 
+func dpiProp(desc string) prop {
+	return prop{"dpi", false, map[string]any{"type": "integer", "enum": append([]int{0}, avd.DPIChoices...), "description": desc}}
+}
+
+func orientationProp(desc string) prop {
+	return prop{"orientation", false, map[string]any{"type": "string", "enum": avd.OrientationChoices, "description": desc}}
+}
+
 func timeoutProp(def time.Duration, desc string) prop {
 	return prop{"timeout_s", false, map[string]any{"type": "integer", "minimum": 1, "maximum": maxTimeoutS,
 		"default": int(def / time.Second), "description": desc}}
@@ -203,6 +211,8 @@ func toolDefs() []*toolDef {
 						"pays for what is written).", avd.AutoDataPartitionGB)}},
 				fpsProp("Display refresh rate in Hz, 1-60."),
 				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280 (default), 720 = 1280×720 / DPI 240."),
+				dpiProp("Display density; 0 (default) = the resolution's own (720p 240, 1080p 280)."),
+				orientationProp("landscape (default) or portrait. Automation such as MAA needs landscape."),
 			},
 			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				var req emu.CreateRequest
@@ -231,6 +241,12 @@ func toolDefs() []*toolDef {
 				if req.Resolution, err = a.optInt("resolution"); err != nil {
 					return nil, err
 				}
+				if req.DPI, err = a.optInt("dpi"); err != nil {
+					return nil, err
+				}
+				if req.Orientation, err = a.optString("orientation"); err != nil {
+					return nil, err
+				}
 				if progress != nil {
 					req.Progress = func(p emu.Progress) {
 						if p.Step != "done" {
@@ -243,7 +259,7 @@ func toolDefs() []*toolDef {
 			})),
 
 		finishing(newTool("update_instance", "Update instance",
-			"Change the title, memory, CPU cores, frame rate, resolution, data disk (a fixed size or automatic) or sound of an instance. The changes take "+
+			"Change the title, memory, CPU cores, frame rate, resolution, DPI, orientation, data disk (a fixed size or automatic) or sound of an instance. The changes take "+
 				"effect at its next boot (applies_next_boot=true when it is running now).",
 			mutating(true, true), reflect.TypeFor[emu.UpdateResult](), []prop{
 				indexProp(true),
@@ -251,7 +267,9 @@ func toolDefs() []*toolDef {
 				memoryProp("New guest memory in MB."),
 				cpuProp("New CPU core count."),
 				fpsProp("New display refresh rate in Hz, 1-60."),
-				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280, 720 = 1280×720 / DPI 240. Preserves orientation; next boot."),
+				resolutionProp("Display preset: 1080 = 1920×1080 / DPI 280, 720 = 1280×720 / DPI 240. Preserves orientation and DPI; next boot."),
+				dpiProp("New display density; 0 = the resolution's own again (720p 240, 1080p 280). Next boot."),
+				orientationProp("New orientation: landscape or portrait. Automation such as MAA needs landscape. Next boot."),
 				{"data_partition_gb", false, map[string]any{"type": "integer", "minimum": avd.MinDataPartitionGB,
 					"maximum": avd.MaxDataPartitionGB, "description": "New data partition size in GB; can only be " +
 						"raised, and the data disk then keeps this size (manual). Game data is kept: the emulator grows the " +
@@ -283,6 +301,12 @@ func toolDefs() []*toolDef {
 				if req.Resolution, err = a.optInt("resolution"); err != nil {
 					return nil, err
 				}
+				if req.DPI, err = a.optInt("dpi"); err != nil {
+					return nil, err
+				}
+				if req.Orientation, err = a.optString("orientation"); err != nil {
+					return nil, err
+				}
 				if req.DataPartitionGB, err = a.optInt("data_partition_gb"); err != nil {
 					return nil, err
 				}
@@ -294,9 +318,9 @@ func toolDefs() []*toolDef {
 				if req.Sound, err = a.optBool("sound"); err != nil {
 					return nil, err
 				}
-				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
-					!req.DataDiskAuto && req.Sound == nil {
-					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、data_partition_gb、data_disk_auto、sound 至少给一项")
+				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DPI == nil && req.Orientation == nil &&
+					req.DataPartitionGB == nil && !req.DataDiskAuto && req.Sound == nil {
+					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、sound 至少给一项")
 				}
 				return b.Update(ctx, i, req)
 			})),

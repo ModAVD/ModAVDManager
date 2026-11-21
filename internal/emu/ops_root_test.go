@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
@@ -61,7 +62,7 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	if !root.ValidIndex(i) || created.Title != "测试实例" || created.Status != StatusOffline || created.Running || created.PID != 0 {
 		t.Fatalf("created = %+v", created)
 	}
-	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 256, DataDiskMode: "auto", Resolution: 1080, Width: 1920, Height: 1080, DPI: 280}
+	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 256, DataDiskMode: "auto", Resolution: 1080, Width: 1920, Height: 1080, DPI: 280, Orientation: "landscape"}
 	if created.Config != want {
 		t.Fatalf("config = %+v, want %+v", created.Config, want)
 	}
@@ -104,6 +105,25 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	}
 	if len(up.Applied) == 0 {
 		t.Fatalf("applied empty: %+v", up)
+	}
+	// DPI and orientation (ModAVD/ModAVD#247): the setting is shown, the next boot's density follows it, and back
+	dpi, portrait := 320, "portrait"
+	up, err = m.Update(ctx, i, UpdateRequest{DPI: &dpi, Orientation: &portrait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := up.Instance.Config; c.DPISetting != 320 || c.DPI != 320 || c.Orientation != "portrait" ||
+		c.Width != 1280 || c.Height != 720 || up.Applied["dpi"] != 320 || up.Applied["orientation"] != "portrait" {
+		t.Fatalf("dpi/orientation = %+v", up)
+	}
+	auto, landscape := 0, "landscape"
+	up, err = m.Update(ctx, i, UpdateRequest{DPI: &auto, Orientation: &landscape})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := up.Instance.Config; c.DPISetting != 0 || c.DPI != 240 || c.Orientation != "landscape" ||
+		m.Root.InstanceMeta(i).Has(avd.DPIKey) {
+		t.Fatalf("dpi/orientation back = %+v", up)
 	}
 
 	// A start in progress (lock held, here by this process) shows as busy and blocks the delete.

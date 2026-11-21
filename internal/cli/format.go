@@ -378,7 +378,7 @@ func formatCreate(w io.Writer, in *emu.InstanceInfo) {
 }
 
 // appliedOrder is the order changes are listed in; unknown keys follow alphabetically.
-var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "resolution", "data_partition_gb"}
+var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "resolution", "dpi", "orientation", "data_partition_gb"}
 
 func appliedParts(applied map[string]any) []string {
 	keys := make([]string, 0, len(applied))
@@ -418,6 +418,18 @@ func appliedParts(applied map[string]any) []string {
 			parts = append(parts, fmt.Sprintf("帧率 %v", v))
 		case "resolution":
 			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
+		case "dpi":
+			if n, ok := asInt(v); ok && n == 0 {
+				parts = append(parts, "DPI 跟随分辨率")
+			} else {
+				parts = append(parts, fmt.Sprintf("DPI %v", v))
+			}
+		case "orientation":
+			if v == avd.OrientationPortrait {
+				parts = append(parts, "方向 竖屏")
+			} else {
+				parts = append(parts, "方向 横屏")
+			}
 		case "data_partition_gb":
 			if applied["data_disk_mode"] == avd.DataDiskAuto {
 				parts = append(parts, fmt.Sprintf("数据盘 自动扩盘（%v GB，下次开机生效）", v))

@@ -57,6 +57,20 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	if err != nil {
 		return nil, err
 	}
+	dpi := 0
+	if req.DPI != nil {
+		dpi = *req.DPI
+	}
+	if err := avd.ValidateDPI(dpi); err != nil {
+		return nil, err
+	}
+	orientation := ""
+	if req.Orientation != nil {
+		orientation = *req.Orientation
+	}
+	if orientation, err = avd.ValidateOrientation(orientation); err != nil {
+		return nil, err
+	}
 	// A root used by modavd alone has no mas-avd.json yet (AUTO-MAS writes it when the root is added).
 	if _, err := m.Root.EnsureMetadata(); err != nil {
 		return nil, err
@@ -106,6 +120,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInf
 	}
 	in, err := avd.Create(m.Root, i, avd.CreateOptions{
 		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, DataDiskManual: manualDisk, FPS: fps, Resolution: resolution,
+		DPI: dpi, Orientation: orientation,
 		Creating: !req.filesOnly,
 		Regional: regionalSettings,
 	})
@@ -277,10 +292,11 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 			return nil, err
 		}
 	}
-	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DataPartitionGB != nil ||
-		req.DataDiskAuto || req.Sound != nil {
+	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DPI != nil ||
+		req.Orientation != nil || req.DataPartitionGB != nil || req.DataDiskAuto || req.Sound != nil {
 		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
-			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution, DataPartitionGB: req.DataPartitionGB,
+			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution,
+			DPI: req.DPI, Orientation: req.Orientation, DataPartitionGB: req.DataPartitionGB,
 			DataDiskAuto: req.DataDiskAuto, Sound: req.Sound,
 		})
 		if err != nil {

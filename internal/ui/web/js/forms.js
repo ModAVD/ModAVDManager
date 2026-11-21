@@ -14,6 +14,10 @@ const CPU = [[2, t('2 核')], [4, t('4 核')], [6, t('6 核')]];
 const FPS_MIN = 1;
 const FPS_MAX = 60;
 const RESOLUTION = [[1080, '1080p'], [720, '720p']];
+// DPI (ModAVD#247): 0 follows the resolution (720p 240, 1080p 280)
+const DPI = [[0, t('跟随分辨率')], [160, '160'], [240, '240'], [280, '280'], [320, '320'], [400, '400'], [480, '480']];
+const ORIENTATION = [['landscape', t('横屏')], ['portrait', t('竖屏')]];
+const ORIENTATION_HINT = t('MAA 等自动化任务要横屏，竖屏只适合自己玩');
 const INDEXES = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 const MIN12 = t('约 1⁠–⁠2 分钟');
 const CREATE_TIME = t('一般要几分钟');
@@ -182,6 +186,8 @@ export function openCreate() {
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
       segRow(t('分辨率'), 'resolution', RESOLUTION, 1080, hint(t('720p 更省资源'))),
+      segRow('DPI', 'dpi', DPI, 0, hint(t('默认跟随分辨率：720p 是 240，1080p 是 280'))),
+      segRow(t('方向'), 'orientation', ORIENTATION, 'landscape', hint(ORIENTATION_HINT)),
       disk.rows, regional && regional.rows), box),
     actions: { ok },
     onSubmit() {
@@ -203,7 +209,8 @@ export function openCreate() {
           ...(regional ? regional.values() : {}),
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           // no size: 自动扩盘
-          fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb,
+          fps: fpsValue, resolution: Number(f.resolution.value), dpi: Number(f.dpi.value) || undefined,
+          orientation: f.orientation.value === 'portrait' ? 'portrait' : undefined, data_partition_gb: d.auto ? undefined : d.gb,
           count: n > 1 ? n : undefined,
         });
         // several: a job each, run one after another by the server (the later ones wait in 活动)
@@ -231,7 +238,7 @@ export function openSettings(i, field) {
   const initSound = cfg.sound === true;
   const sound = h('input', { type: 'checkbox', id: 's-sound', checked: initSound, 'aria-describedby': 's-sound-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
-  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: t('实例运行中，内存、CPU、帧率、分辨率、数据盘和声音在下次开机生效。诊断设置立即生效。') }));
+  const runNote = h('div', { class: 'note-box tone-warn', role: 'status' }, icon('info'), h('span', { text: t('实例运行中，内存、CPU、帧率、分辨率、DPI、方向、数据盘和声音在下次开机生效。诊断设置立即生效。') }));
   const kv = h('dl', { class: 'kv' });
   const fps = fpsField('s', cfg.fps);
   const diskAuto0 = cfg.data_disk_mode !== 'manual';
@@ -255,6 +262,8 @@ export function openSettings(i, field) {
         segRow('CPU', 'cpu', CPU, cfg.cpu),
         fps.rows,
         segRow(t('分辨率'), 'resolution', RESOLUTION, cfg.resolution, hint(t('下次开机生效，自动化工具里的分辨率也要跟着改'))),
+        segRow('DPI', 'dpi', DPI, cfg.dpi_setting || 0, hint(t('下次开机生效；跟随分辨率时 720p 是 240，1080p 是 280'))),
+        segRow(t('方向'), 'orientation', ORIENTATION, cfg.orientation || 'landscape', hint(t('下次开机生效。MAA 等自动化任务要横屏，竖屏只适合自己玩'))),
         disk.rows,
         inputRow(t('声音'), h('span', { class: 'checkbox p-switch' }, sound),
           hint(t('下次开机生效，带窗口和无头都有声音。开了会多占一些 CPU。'), 's-sound-h')),
@@ -278,10 +287,12 @@ export function openSettings(i, field) {
     if (sound.checked !== initSound) out.sound = sound.checked;
     if (boss.changed()) out.boss_key = boss.value();
     if (regional) Object.assign(out, regional.changes());
-    for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution']]) {
+    for (const [k, key] of [['memory', 'memory_mb'], ['cpu', 'cpu'], ['fps', 'fps'], ['resolution', 'resolution'], ['dpi', 'dpi_setting']]) {
       const v = f[k].value === '' ? null : Number(f[k].value);
-      if (v != null && v !== cfg[key]) out[key] = v;
+      const cur = key === 'dpi_setting' ? (cfg.dpi_setting || 0) : cfg[key];
+      if (v != null && v !== cur) out[key === 'dpi_setting' ? 'dpi' : key] = v;
     }
+    if (f.orientation.value && f.orientation.value !== (cfg.orientation || 'landscape')) out.orientation = f.orientation.value;
     // 自动扩盘 or a size; an invalid size is no change yet (saving shows the error)
     const d = disk.value(true);
     if (d && d.auto && !diskAuto0) out.data_disk_auto = true;

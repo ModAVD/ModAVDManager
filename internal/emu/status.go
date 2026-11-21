@@ -217,8 +217,10 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	if n, ok := in.DataPartitionGB(); ok {
 		cfg.DataPartitionGB = n
 	}
-	cfg.Width, cfg.Height, cfg.DPI = in.Display()
 	meta := m.Root.InstanceMeta(i)
+	cfg.DPISetting = avd.DPIMeta(meta)
+	cfg.Width, cfg.Height, cfg.DPI = in.Display(cfg.DPISetting)
+	cfg.Orientation = in.Orientation()
 	info.Regional = regionalConfig(meta)
 	cfg.DataDiskMode = avd.DataDiskManual
 	if avd.DataDiskAutoMeta(meta) {

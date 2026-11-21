@@ -776,9 +776,9 @@ func TestToolCalls(t *testing.T) {
 		{"check_host", map[string]any{"memory_mb": 4096}, "check 4096"},
 		{"check_host", map[string]any{}, "check 0"},
 		{"create_instance", map[string]any{"title": "星铁", "index": 3, "memory_mb": 4096, "cpu": 4,
-			"data_partition_gb": 128, "fps": 30, "resolution": 720}, "create"},
+			"data_partition_gb": 128, "fps": 30, "resolution": 720, "dpi": 320, "orientation": "portrait"}, "create"},
 		{"create_instance", map[string]any{}, "create"},
-		{"update_instance", map[string]any{"index": 1, "memory_mb": 5120.0, "resolution": 1080}, "update 1"},
+		{"update_instance", map[string]any{"index": 1, "memory_mb": 5120.0, "resolution": 1080, "dpi": 0, "orientation": "landscape"}, "update 1"},
 		{"delete_instance", map[string]any{"index": 2, "confirm": true}, "delete 2"},
 		{"start_instance", map[string]any{"index": 1, "window": true, "timeout_s": 120}, "start 1"},
 		{"start_instance", map[string]any{"index": 1}, "start 1"},
@@ -827,14 +827,16 @@ func TestToolCalls(t *testing.T) {
 	f := h.f
 	full := f.creates[0]
 	if full.Title != "星铁" || *full.Index != 3 || *full.MemoryMB != 4096 || *full.CPU != 4 || *full.DataPartitionGB != 128 ||
-		*full.FPS != 30 || full.Resolution == nil || *full.Resolution != 720 {
+		*full.FPS != 30 || full.Resolution == nil || *full.Resolution != 720 || full.DPI == nil || *full.DPI != 320 ||
+		full.Orientation == nil || *full.Orientation != "portrait" {
 		t.Fatalf("create request %+v", full)
 	}
 	if empty := f.creates[1]; empty.Title != "" || empty.Index != nil || empty.MemoryMB != nil || empty.CPU != nil ||
 		empty.DataPartitionGB != nil || empty.FPS != nil || empty.Resolution != nil {
 		t.Fatalf("defaults must stay nil: %+v", empty)
 	}
-	if u := f.updates[0]; u.Resolution == nil || *u.Resolution != 1080 || *u.MemoryMB != 5120 || u.Title != nil || u.CPU != nil || u.FPS != nil {
+	if u := f.updates[0]; u.Resolution == nil || *u.Resolution != 1080 || *u.MemoryMB != 5120 || u.Title != nil || u.CPU != nil || u.FPS != nil ||
+		u.DPI == nil || *u.DPI != 0 || u.Orientation == nil || *u.Orientation != "landscape" {
 		t.Fatalf("update request %+v", u)
 	}
 	if s := f.starts[0]; !s.Window || s.Headless || s.Timeout != 120*time.Second || s.Progress != nil {

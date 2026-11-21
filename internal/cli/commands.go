@@ -90,6 +90,8 @@ var (
 	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
 	optDataGB        = flagSpec{"data-gb", kindString, "auto|N", "数据盘：auto 自动扩盘（默认），或指定大小 16–512 GB"}
 	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
+	optDPI           = flagSpec{"dpi", kindString, "auto|N", "DPI：auto 跟随分辨率（720p 240、1080p 280，默认），或 160 / 240 / 280 / 320 / 400 / 480"}
+	optOrientation   = flagSpec{"orientation", kindString, "landscape|portrait", "方向：landscape 横屏（默认），portrait 竖屏（MAA 等自动化任务要横屏）"}
 	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
 	optLanguage      = flagSpec{"language", kindString, "host|preserve|语言", "Windows：host 按宿主界面语言设置一次，preserve 保持安卓语言，或指定 zh-CN、en-US 等语言"}
 	optTimeZone      = flagSpec{"timezone", kindString, "host|preserve|IANA", "Windows：host 每次冷启动跟随宿主，preserve 沿用原行为，或指定 Asia/Shanghai、Etc/UTC 等 IANA 时区"}
@@ -199,7 +201,7 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N | --count N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N | --count N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘自动扩盘、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				dataDiskHelp +
@@ -211,19 +213,19 @@ func init() {
 				"--count N 一次建 N 台：先取 N 个空闲编号（不够就一台不建），再按编号一台一台建，其余选项每台一样，" +
 				"给了 --title 时名称后面加序号（「T 1」「T 2」…）；每台开建前查实例所在盘的剩余空间，低于开机所需就停下，剩下的不建。" +
 				"一台失败不影响后面的；结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
-			flags: []flagSpec{optIndex, optCount, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
+			flags: []flagSpec{optIndex, optCount, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optDPI, optOrientation, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
 			final: true,
 			run:   runCreate, human: humanCreate, exit: exitBatch,
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--boss-key 组合|none]",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--boss-key 组合|none]",
 			summary: "修改实例设置、诊断模式和老板键",
 			details: "至少给一个选项。诊断模式和老板键立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				dataDiskHelp + "数据盘只能改大，游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
 				"--sound on 让这台下次开机起有声音（带窗口和无头都是），会多占一些 CPU；默认 off。" +
 				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
 				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDataGB, optLanguage, optTimeZone, optDiagnostics, optSound, optBossKey},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDPI, optOrientation, optDataGB, optLanguage, optTimeZone, optDiagnostics, optSound, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -619,6 +621,10 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 	req.DataPartitionGB = gb
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
+	if req.DPI, err = dpiOpt(inv); err != nil {
+		return req, err
+	}
+	req.Orientation = strPtrOpt(inv, "orientation")
 	req.NoBridge = inv.boolOpt("no-bridge")
 	if inv.isSet("timeout") {
 		n := inv.intOpt("timeout")
@@ -628,7 +634,7 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.Timeout = time.Duration(n) * time.Second
 	}
 	if inv.isSet("resume") {
-		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "language", "timezone", "no-bridge"} {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "dpi", "orientation", "language", "timezone", "no-bridge"} {
 			if inv.isSet(o) {
 				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
 			}
@@ -664,6 +670,10 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	req.CPU = intPtrOpt(inv, "cpu")
 	req.FPS = intPtrOpt(inv, "fps")
 	req.Resolution = intPtrOpt(inv, "resolution")
+	if req.DPI, err = dpiOpt(inv); err != nil {
+		return req, err
+	}
+	req.Orientation = strPtrOpt(inv, "orientation")
 	gb, auto, err := dataGBOpt(inv)
 	if err != nil {
 		return req, err
@@ -689,9 +699,9 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		k := inv.strOpt("boss-key")
 		req.BossKey = &k
 	}
-	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DataPartitionGB == nil &&
+	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DPI == nil && req.Orientation == nil && req.DataPartitionGB == nil &&
 		!req.DataDiskAuto && req.Diagnostics == nil && req.Sound == nil && req.BossKey == nil && req.Language == nil && req.TimeZone == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--data-gb、--language、--timezone、--diagnostics、--sound、--boss-key 中的一个").
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--dpi、--orientation、--data-gb、--language、--timezone、--diagnostics、--sound、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil
@@ -730,6 +740,32 @@ func buildStartOptions(inv *invocation) (emu.StartOptions, error) {
 		opt.Timeout = time.Duration(s) * time.Second
 	}
 	return opt, nil
+}
+
+func strPtrOpt(inv *invocation, name string) *string {
+	if !inv.isSet(name) {
+		return nil
+	}
+	v := strings.ToLower(strings.TrimSpace(inv.strOpt(name)))
+	return &v
+}
+
+// dpiOpt is --dpi: auto (0, the resolution's own density) or a number; nil when not given. The choices are checked
+// by avd.ValidateDPI.
+func dpiOpt(inv *invocation) (*int, error) {
+	if !inv.isSet("dpi") {
+		return nil, nil
+	}
+	s := strings.ToLower(strings.TrimSpace(inv.strOpt("dpi")))
+	if s == "auto" {
+		zero := 0
+		return &zero, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil, errs.Newf(errs.InvalidArgument, "--dpi 只能是 auto 或数字，收到 %q", inv.strOpt("dpi"))
+	}
+	return &n, nil
 }
 
 func intPtrOpt(inv *invocation, name string) *int {

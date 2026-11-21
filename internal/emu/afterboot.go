@@ -640,8 +640,11 @@ func parseStatusLines(out string) map[string]string {
 	return lines
 }
 
-// setupOrientation keeps the display at 0° (landscape): it follows neither the sensor nor apps' orientation
-// requests, and landscape games are never flipped to 180°. A portrait page then sits letterboxed in the middle.
+// setupOrientation fixes the display's rotation: it follows neither the sensor nor apps' orientation requests, and
+// landscape games are never flipped to 180°. A page of the other orientation then sits letterboxed in the middle.
+// The rotation is the instance's orientation (config.ini hw.initialOrientation, ModAVD/ModAVD#247): landscape 0,
+// portrait 3 (the same wide canvas turned). The emulator (from 0.43.0, ModAVD/ModAVD#225) writes the same value as
+// soon as the settings service is up and before a window close, so both must agree (userRotationFor).
 // The letterbox education dialog ("See and do more") is turned off first: that switch is not persistent, so every
 // boot; `wm fixed-to-user-rotation` is stored in display_settings.xml and survives reboots.
 func (m *Manager) setupOrientation(ctx context.Context, i int) {
@@ -649,15 +652,32 @@ func (m *Manager) setupOrientation(ctx context.Context, i int) {
 	if res := m.shell(ctx, i, "wm set-letterbox-style --isEducationEnabled false", 0); res.Code != 0 {
 		failures = append(failures, "关信箱引导: "+tail(res.Out, 200))
 	}
-	if res := m.shell(ctx, i, "settings put system user_rotation 0 ; wm fixed-to-user-rotation enabled", 0); res.Code != 0 {
+	orientation := avd.OrientationLandscape
+	if in, err := avd.Get(m.Root, i); err == nil {
+		orientation = in.Orientation()
+	}
+	rot := userRotationFor(orientation)
+	if res := m.shell(ctx, i, fmt.Sprintf("settings put system user_rotation %d ; wm fixed-to-user-rotation enabled", rot), 0); res.Code != 0 {
 		failures = append(failures, "固定方向: "+tail(res.Out, 200))
 	}
 	rotation := m.shell(ctx, i, "dumpsys window displays | grep -m1 -oE mDisplayRotation=ROTATION_[0-9]+", 0)
 	if len(failures) > 0 {
 		m.Log.Warnf("实例 %d 方向没设好: %s", i, pyList(failures))
 	} else {
-		m.Log.Infof("实例 %d 方向: 固定 0°，当前 %s", i, parseRotation(rotation.Out))
+		text := "横屏"
+		if orientation == avd.OrientationPortrait {
+			text = "竖屏"
+		}
+		m.Log.Infof("实例 %d 方向: %s，固定 user_rotation=%d，当前 %s", i, text, rot, parseRotation(rotation.Out))
 	}
+}
+
+// userRotationFor is the guest's user_rotation for an orientation, as the emulator sets it: landscape 0, portrait 3.
+func userRotationFor(orientation string) int {
+	if orientation == avd.OrientationPortrait {
+		return 3
+	}
+	return 0
 }
 
 // parseRotation takes the mDisplayRotation= line only: when grep -m1 exits early dumpsys adds a "Broken pipe" line.

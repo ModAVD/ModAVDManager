@@ -28,6 +28,18 @@ var (
 	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144, 8192}
 	CPUChoices        = []int{2, 4, 6}
 	ResolutionChoices = []int{1080, 720}
+	// DPIChoices are the densities an instance can be given instead of its resolution's (DPIKey; ModAVD/ModAVD#247).
+	DPIChoices = []int{160, 240, 280, 320, 400, 480}
+	// OrientationChoices: landscape (the default; what AUTO-MAS and MAA expect) or portrait (the same wide canvas, turned).
+	OrientationChoices = []string{OrientationLandscape, OrientationPortrait}
+)
+
+const (
+	OrientationLandscape = "landscape"
+	OrientationPortrait  = "portrait"
+	// DPIKey is instances.<i>.dpi in mas-avd.json: one of DPIChoices, written as hw.lcd.density before every boot;
+	// absent (or anything else) = the resolution's own density (720p 240, 1080p 280), as before it existed.
+	DPIKey = "dpi"
 )
 
 const (
@@ -353,13 +365,42 @@ func SoundConfig(on bool) [][2]string {
 	return [][2]string{{"hw.audioInput", v}, {"hw.audioOutput", v}}
 }
 
-// Display returns the size and density the instance will boot with (after DisplayChanges).
-func (in *Instance) Display() (width, height, dpi int) {
-	ch := DisplayChanges(in.Config)
+// DPIMeta is the density set for the instance with metadata meta (DPIKey), 0 when none is: the resolution's own.
+func DPIMeta(meta *jsonord.Obj) int {
+	if n, ok := meta.Get(DPIKey).Int(); ok && slices.Contains(DPIChoices, int(n)) {
+		return int(n)
+	}
+	return 0
+}
+
+// Display returns the size and density the instance will boot with (after DisplayChanges) when its metadata sets
+// density dpi (DPIMeta; 0 = the resolution's).
+func (in *Instance) Display(dpi int) (width, height, density int) {
+	ch := DisplayChanges(in.Config, dpi)
 	width, _ = strconv.Atoi(ch[0][1])
 	height, _ = strconv.Atoi(ch[1][1])
-	dpi, _ = strconv.Atoi(ch[2][1])
-	return width, height, dpi
+	density, _ = strconv.Atoi(ch[2][1])
+	return width, height, density
+}
+
+// Orientation is the instance's display orientation, config.ini's hw.initialOrientation (as the emulator reads it:
+// portrait or landscape, case-insensitive). Without either (no key, "natural") the emulator takes the size's natural
+// orientation: portrait when the height is larger.
+func (in *Instance) Orientation() string { return orientationFor(in.Config) }
+
+func orientationFor(cfg *Ini) string {
+	v, _ := cfg.Get("hw.initialOrientation")
+	for _, o := range OrientationChoices {
+		if strings.EqualFold(strings.TrimSpace(v), o) {
+			return o
+		}
+	}
+	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
+	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+	if h > w {
+		return OrientationPortrait
+	}
+	return OrientationLandscape
 }
 
 func IniPath(r *root.Root, i int) string    { return filepath.Join(r.AvdHome(), root.AvdName(i)+".ini") } // <root>\avd\mas_<i>.ini
@@ -588,6 +629,25 @@ func ValidateResolution(resolution *int) (int, error) {
 	return value, nil
 }
 
+// ValidateDPI takes 0 (the resolution's own density) or one of DPIChoices.
+func ValidateDPI(dpi int) error {
+	if dpi != 0 && !slices.Contains(DPIChoices, dpi) {
+		return errs.Newf(errs.InvalidArgument, "DPI 只能选 %s，或 0（跟随分辨率）", joinInts(DPIChoices, "%d", 1))
+	}
+	return nil
+}
+
+// ValidateOrientation takes "landscape" or "portrait" ("" = landscape).
+func ValidateOrientation(orientation string) (string, error) {
+	if orientation == "" {
+		return OrientationLandscape, nil
+	}
+	if !slices.Contains(OrientationChoices, orientation) {
+		return "", errs.New(errs.InvalidArgument, "方向只能选 landscape（横屏）或 portrait（竖屏）")
+	}
+	return orientation, nil
+}
+
 // isLineBreak is every character str.splitlines() splits at: a title holding one would break config.ini apart.
 func isLineBreak(r rune) bool {
 	switch r {
@@ -614,7 +674,9 @@ type CreateOptions struct {
 	CPU             int
 	DataPartitionGB int
 	FPS             int
-	Resolution      int // 0 = DefaultResolution
+	Resolution      int    // 0 = DefaultResolution
+	DPI             int    // 0 = the resolution's density; else one of DPIChoices (DPIKey)
+	Orientation     string // "" = landscape; OrientationChoices
 	// DataDiskManual: DataPartitionGB is a size the user chose (dataDiskMode manual); otherwise the data disk grows by
 	// itself (dataDiskMode auto; the caller passes AutoDataPartitionGB).
 	DataDiskManual bool
@@ -655,7 +717,14 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	display := displayChanges(nil, resolution)
+	if err := ValidateDPI(opt.DPI); err != nil {
+		return nil, err
+	}
+	orientation, err := ValidateOrientation(opt.Orientation)
+	if err != nil {
+		return nil, err
+	}
+	display := displayChanges(nil, resolution, orientation, opt.DPI)
 	if err := validateTitle(opt.Title); err != nil {
 		return nil, err
 	}
@@ -680,6 +749,8 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	cfg.Set("abi.type", p.GuestABI)
 	cfg.Set("hw.cpu.arch", p.GuestArch)
 	cfg.Set("target", p.TargetAPI)
+	// in the template's place (landscape there): the emulator turns its window when this and the size disagree
+	cfg.Set(display[4][0], display[4][1])
 	for _, kv := range [][2]string{
 		{"avd.id", name},
 		{"avd.name", name},
@@ -743,6 +814,9 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 			mode = DataDiskManual
 		}
 		meta.Set(DataDiskModeKey, jsonord.NewString(mode))
+		if opt.DPI != 0 {
+			meta.Set(DPIKey, jsonord.NewInt(int64(opt.DPI)))
+		}
 		if opt.Creating {
 			meta.Set("creationState", jsonord.NewString("creating"))
 		}
@@ -865,6 +939,11 @@ type UpdateOptions struct {
 	CPU        *int
 	FPS        *int
 	Resolution *int
+	// DPI sets the density (DPIKey; 0 = the resolution's own again); Orientation turns the display ("landscape" /
+	// "portrait": hw.initialOrientation on the wide canvas, see displayChanges). Both are written into config.ini with
+	// the resolution's size, and again before every boot (ApplyDisplay).
+	DPI         *int
+	Orientation *string
 	// DataPartitionGB raises disk.dataPartition.size (modavd only; AUTO-MAS cannot change it): within
 	// MinDataPartitionGB..MaxDataPartitionGB and never below the current value. The emulator (sdk-mas36 on) grows the
 	// disk image at the next boot without touching the data, and the boot's after-boot step grows the file system.
@@ -881,7 +960,8 @@ type UpdateOptions struct {
 // Update writes the changed keys like AUTO-MAS write_instance_settings: hw.ramSize=<n>M and hw.cpu.ncore always
 // (current values when not changed), hw.lcd.vsync only when FPS is given, avd.ini.displayname when Title is given,
 // disk.dataPartition.size when DataPartitionGB is given, hw.audioInput / hw.audioOutput and instances.<i>.sound when
-// Sound is given, and instances.<i>.memoryMb always. Validates first (memory / cpu / fps steps). Returns the applied
+// Sound is given, the display keys (displayChanges) and instances.<i>.dpi when Resolution, DPI or Orientation is
+// given, and instances.<i>.memoryMb always. Validates first (memory / cpu / fps steps). Returns the applied
 // changes by option name ("title", "memory_mb", "cpu", "fps", "data_partition_gb", "sound"). Takes effect at the next
 // boot.
 //
@@ -910,7 +990,7 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	// Sound alone is not an AUTO-MAS hardware edit: like the diagnostics switch it neither validates nor rewrites the
 	// unrelated values (an old out-of-range data disk, AUTO-MAS's automatic memory), only the sound keys.
 	if opt.Sound != nil && opt.Title == nil && opt.MemoryMB == nil && opt.CPU == nil && opt.FPS == nil &&
-		opt.Resolution == nil && opt.DataPartitionGB == nil && !opt.DataDiskAuto {
+		opt.Resolution == nil && opt.DPI == nil && opt.Orientation == nil && opt.DataPartitionGB == nil && !opt.DataDiskAuto {
 		if _, err := r.ReadMetadata(); err != nil {
 			return nil, err
 		}
@@ -936,6 +1016,17 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	var resolution int
 	if opt.Resolution != nil {
 		if resolution, err = ValidateResolution(opt.Resolution); err != nil {
+			return nil, err
+		}
+	}
+	if opt.DPI != nil {
+		if err := ValidateDPI(*opt.DPI); err != nil {
+			return nil, err
+		}
+	}
+	var orientation string
+	if opt.Orientation != nil {
+		if orientation, err = ValidateOrientation(*opt.Orientation); err != nil {
 			return nil, err
 		}
 	}
@@ -985,8 +1076,16 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.FPS != nil {
 		changes = append(changes, [2]string{"hw.lcd.vsync", strconv.Itoa(fps)})
 	}
-	if opt.Resolution != nil {
-		changes = append(changes, displayChanges(in.Config, resolution)...)
+	if opt.Resolution != nil || opt.DPI != nil || opt.Orientation != nil {
+		res := resolution
+		if opt.Resolution == nil {
+			res = resolutionFor(in.Config)
+		}
+		dpi := DPIMeta(r.InstanceMeta(i))
+		if opt.DPI != nil {
+			dpi = *opt.DPI
+		}
+		changes = append(changes, displayChanges(in.Config, res, orientation, dpi)...)
 	}
 	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		changes = append(changes, [2]string{"disk.dataPartition.size", strconv.Itoa(data) + "G"})
@@ -1016,8 +1115,16 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.Sound != nil {
 		metaChanges[SoundKey] = jsonord.NewBool(*opt.Sound)
 	}
+	if opt.DPI != nil && *opt.DPI != 0 {
+		metaChanges[DPIKey] = jsonord.NewInt(int64(*opt.DPI))
+	}
 	if err := r.UpdateInstanceMeta(i, metaChanges); err != nil {
 		return nil, err
+	}
+	if opt.DPI != nil && *opt.DPI == 0 {
+		if err := r.EditInstanceMeta(i, func(meta *jsonord.Obj) error { meta.Delete(DPIKey); return nil }); err != nil {
+			return nil, err
+		}
 	}
 	applied := map[string]any{}
 	if opt.Title != nil {
@@ -1034,6 +1141,12 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	}
 	if opt.Resolution != nil {
 		applied["resolution"] = resolution
+	}
+	if opt.DPI != nil {
+		applied["dpi"] = *opt.DPI
+	}
+	if opt.Orientation != nil {
+		applied["orientation"] = orientation
 	}
 	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		applied["data_partition_gb"] = data
@@ -1137,29 +1250,46 @@ func resolutionFor(cfg *Ini) int {
 	return 720
 }
 
-// DisplayChanges normalizes the current preset's dimensions and DPI, preserving orientation.
-func DisplayChanges(cfg *Ini) [][2]string { return displayChanges(cfg, resolutionFor(cfg)) }
+// DisplayChanges normalizes the current preset's dimensions, preserving orientation, with density dpi (DPIMeta; 0 =
+// the preset's).
+func DisplayChanges(cfg *Ini, dpi int) [][2]string {
+	return displayChanges(cfg, resolutionFor(cfg), "", dpi)
+}
 
-func displayChanges(cfg *Ini, resolution int) [][2]string {
-	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
-	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+// displayChanges: dpi 0 is the resolution's own density. orientation "" leaves the orientation alone: the size keeps
+// cfg's (an old instance whose height is larger stays that way) and hw.initialOrientation is not written. A given
+// orientation writes the landscape canvas of the resolution and hw.initialOrientation: portrait is the same wide
+// canvas turned (ModAVD/ModAVD#247), the emulator (from 0.43.0, ModAVD/ModAVD#225) sets the guest's user_rotation
+// from hw.initialOrientation (landscape 0, portrait 3) and the boot sets the same (emu setupOrientation).
+func displayChanges(cfg *Ini, resolution int, orientation string, dpi int) [][2]string {
 	width, height, density := 1280, 720, 240
 	if resolution == 1080 {
 		width, height, density = 1920, 1080, 280
 	}
-	if h > w {
-		width, height = height, width
+	if dpi != 0 {
+		density = dpi
 	}
-	return [][2]string{
+	if orientation == "" {
+		w, _ := intOrNone(cfg.Value("hw.lcd.width"))
+		h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+		if h > w {
+			width, height = height, width
+		}
+	}
+	changes := [][2]string{
 		{"hw.lcd.width", strconv.Itoa(width)},
 		{"hw.lcd.height", strconv.Itoa(height)},
 		{"hw.lcd.density", strconv.Itoa(density)},
 		{"hw.mainKeys", "yes"},
 	}
+	if orientation != "" {
+		changes = append(changes, [2]string{"hw.initialOrientation", orientation})
+	}
+	return changes
 }
 
-// ApplyDisplay writes DisplayChanges into config.ini when any differs; returns whether it wrote. Only while stopped.
-// Under the instance's root.LockInstanceConfig, like Update.
+// ApplyDisplay writes DisplayChanges (with the density instances.<i>.dpi sets) into config.ini when any differs;
+// returns whether it wrote. Only while stopped. Under the instance's root.LockInstanceConfig, like Update.
 func ApplyDisplay(r *root.Root, i int) (bool, error) {
 	l, noDir, err := lockInstance(r, i)
 	if err != nil {
@@ -1174,7 +1304,7 @@ func ApplyDisplay(r *root.Root, i int) (bool, error) {
 	if err != nil || cfg.Len() == 0 {
 		return false, configUnreadable(i, err)
 	}
-	changes := DisplayChanges(cfg)
+	changes := DisplayChanges(cfg, DPIMeta(r.InstanceMeta(i)))
 	same := true
 	for _, kv := range changes {
 		if v, ok := cfg.Get(kv[0]); !ok || v != kv[1] {
