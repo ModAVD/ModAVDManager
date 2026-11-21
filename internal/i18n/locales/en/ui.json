@@ -84,6 +84,7 @@
   "在 Finder 里打开 ": "Opening in Finder: ",
   "在托盘菜单里点了退出": "Exit was clicked in the tray menu",
   "在资源管理器里打开 ": "Opening in File Explorer: ",
+  "复制实例": "Copy instance",
   "字段 %s 的类型不对（要 %s）": "Field %s has the wrong type (needs %s)",
   "字符串": "string",
   "安装 APK": "installing an APK",

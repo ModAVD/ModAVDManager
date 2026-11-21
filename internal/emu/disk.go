@@ -519,6 +519,11 @@ func (m *Manager) qemuImgInfo(ctx context.Context, image string) (*qemuImgInfoRe
 	if code != 0 {
 		return nil, errs.Newf(errs.Internal, "qemu-img info 失败（退出码 %d）: %s", code, qemuImgFail(so, se))
 	}
+	return decodeQemuImgInfo(so)
+}
+
+// decodeQemuImgInfo reads the JSON object of `qemu-img info --output=json` (anything before its "{" is ignored).
+func decodeQemuImgInfo(so []byte) (*qemuImgInfoResult, error) {
 	start := bytes.IndexByte(so, '{')
 	if start < 0 {
 		return nil, errs.New(errs.Internal, "qemu-img info 没有输出 JSON")

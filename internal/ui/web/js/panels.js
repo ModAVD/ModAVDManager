@@ -6,7 +6,7 @@ import { api } from './api.js';
 import { S, update, subscribe, instance, jobsSorted, runningCount } from './store.js';
 import { openDialog } from './ui.js';
 import { openComponentFetch, activeJob, latestJob, progressText, loadDiagnostics, storeBox, fillStoreBox } from './diagnostics.js';
-import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, defaultName, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
+import { KIND, KIND_ICON, STATE, STATE_TONE, clock, dur, label, quoted, defaultName, parseTime, pct, stripInst, stopMethod, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import * as A from './actions.js';
 
 const advice = (text) => h('div', { class: 'advice' }, icon('bulb'), h('span', { text }));
@@ -353,7 +353,7 @@ function updateJob(r, j) {
     // 补全 / 移除 Google Play 商店 report no percentage while they run (done 0 of 1000)
     const n = j.kind === 'playstore-install' || j.kind === 'playstore-uninstall' || j.kind.startsWith('gles32-') ? null : pct(p);
     setText(r.msg, (p && stripInst(p.message)) || (j.kind === 'stop' ? t('正在关机…') : j.kind === 'install' ? t('正在安装…')
-      : j.kind === 'disk-info' ? t('正在查看磁盘占用…') : j.kind === 'disk-trim' ? t('正在触发磁盘回收…') : j.kind === 'disk-compact' ? t('正在整理磁盘…')
+      : j.kind === 'disk-info' ? t('正在查看磁盘占用…') : j.kind === 'disk-trim' ? t('正在触发磁盘回收…') : j.kind === 'disk-compact' ? t('正在整理磁盘…') : j.kind === 'clone' ? t('正在复制实例…')
       : j.kind === 'playstore-install' ? t('正在补全 Google Play 商店…') : j.kind === 'playstore-uninstall' ? t('正在移除 Google Play 商店…')
       : j.kind === 'gles32-on' ? t('正在开启报告 GLES 3.2…') : j.kind === 'gles32-off' ? t('正在关闭报告 GLES 3.2…')
       : j.kind === 'playstore-import' ? t('正在核对文件…') : t('进行中…')));
@@ -362,9 +362,9 @@ function updateJob(r, j) {
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
   const cancelBackend = j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import';
-  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || cancelBackend));
-  setText(r.cancel, j.kind === 'disk-compact' ? t('取消整理') : cancelBackend ? t('取消') : t('取消等待'));
-  r.cancelHint.hidden = j.kind === 'disk-compact' || cancelBackend;
+  r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || j.kind === 'clone' || cancelBackend));
+  setText(r.cancel, j.kind === 'disk-compact' ? t('取消整理') : j.kind === 'clone' ? t('取消复制') : cancelBackend ? t('取消') : t('取消等待'));
+  r.cancelHint.hidden = j.kind === 'disk-compact' || j.kind === 'clone' || cancelBackend;
 
   // 已取消: say why (stopped waiting, or a 关机 cut the boot short)
   const why = j.state === 'canceled' && j.error ? j.error.message || '' : '';
@@ -413,6 +413,7 @@ function resultText(j) {
   if (j.kind === 'disk-info') return diskInfoText(r);
   if (j.kind === 'disk-trim') return diskTrimText();
   if (j.kind === 'disk-compact') return diskCompactText(r);
+  if (j.kind === 'clone') return r.instance ? t('已复制成{copy}', { copy: quoted(r.instance, r.instance.index) }) : '';
   if (j.kind === 'components') return t('组件补全完成。');
   if (j.kind === 'collect-info') return r.zip_path ? t('问题包：{path}', { path: r.zip_path }) : t('问题包已生成。');
   if (j.kind.startsWith('playstore-')) return playStoreText(j.kind, r);

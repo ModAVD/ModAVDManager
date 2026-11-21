@@ -148,6 +148,14 @@ func (f *fakeManager) Delete(ctx context.Context, i int) (*emu.DeleteResult, err
 	return &emu.DeleteResult{Index: i, Name: root.AvdName(i), Path: `D:\r\avd\` + root.AvdName(i) + ".avd"}, nil
 }
 
+func (f *fakeManager) Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error) {
+	f.record("clone " + itoa(i) + " " + req.Title)
+	if req.Progress != nil {
+		req.Progress(emu.Progress{Step: "copy", Message: "m", Done: 500, Total: 1000})
+	}
+	return &emu.CloneResult{Source: i, Instance: sampleInstance(2), CopiedBytes: 3 << 30}, nil
+}
+
 func (f *fakeManager) Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error) {
 	f.record("start " + itoa(i))
 	if f.start != nil {

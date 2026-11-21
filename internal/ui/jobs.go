@@ -24,6 +24,7 @@ const (
 	kindCollect    = "collect-info"
 	kindSettings   = "instance-settings"
 	kindDelete     = "delete"
+	kindClone      = "clone"
 	kindInput      = "input"
 	rootJobIndex   = -1
 
@@ -68,6 +69,8 @@ func kindLabel(kind string) string {
 		return "修改设置"
 	case kindDelete:
 		return "删除"
+	case kindClone:
+		return "复制实例"
 	case kindInput:
 		return "发送操作"
 	case kindDiskInfo:

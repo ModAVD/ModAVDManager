@@ -763,6 +763,80 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	return &Instance{Index: i, Name: name, Title: title, Dir: dir, Config: cfg}, nil
 }
 
+// ValidateTitle refuses a title Create and Update would refuse (line breaks).
+func ValidateTitle(title string) error { return validateTitle(title) }
+
+// RegisterCopy makes instance i out of a directory the caller already copied to Dir(r, i) (emu's Clone,
+// ModAVD/ModAVD#239): config.ini becomes src's keys with avd.id / avd.name of i and avd.ini.displayname title ("" =
+// the AVD name), instances.<i> becomes meta (replacing whatever was there), and mas_<i>.ini is written last, which
+// makes the instance listed. Like Create, a failure takes back the metadata and the .ini; the directory is the
+// caller's to remove. errs.AlreadyExists when mas_<i>.ini exists, errs.NotFound when the directory does not.
+func RegisterCopy(r *root.Root, i int, src *Ini, title string, meta *jsonord.Obj) (*Instance, error) {
+	if !root.ValidIndex(i) {
+		return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
+	}
+	if err := validateTitle(title); err != nil {
+		return nil, err
+	}
+	name := root.AvdName(i)
+	dir, iniPath := Dir(r, i), IniPath(r, i)
+	if title == "" {
+		title = name
+	}
+	cfg := NewIni()
+	for _, k := range src.Keys() {
+		cfg.Set(k, src.Value(k))
+	}
+	cfg.Set("avd.id", name)
+	cfg.Set("avd.name", name)
+	cfg.Set("avd.ini.displayname", title)
+	target := cfg.Value("target")
+	if target == "" {
+		target = root.CurrentPlatform().TargetAPI
+	}
+	ini := NewIni()
+	ini.Set("avd.ini.encoding", "UTF-8")
+	ini.Set("path", dir)
+	ini.Set("path.rel", filepath.Join(root.AvdDir, name+".avd"))
+	ini.Set("target", target)
+
+	l, err := r.LockInstanceConfig(i)
+	if err != nil {
+		return nil, err
+	}
+	defer l.Unlock()
+	if pathExists(iniPath) {
+		return nil, errs.Newf(errs.AlreadyExists, "实例 %s 已存在", name)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return nil, errs.Newf(errs.NotFound, "实例目录 %s 不存在", dir)
+	}
+	if err := WriteIni(filepath.Join(dir, "config.ini"), cfg); err != nil {
+		return nil, err
+	}
+	err = r.EditInstanceMeta(i, func(o *jsonord.Obj) error {
+		for _, k := range o.Keys() {
+			o.Delete(k)
+		}
+		for _, k := range meta.Keys() {
+			o.Set(k, meta.Get(k).Clone())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := WriteIni(iniPath, ini); err != nil {
+		os.Remove(iniPath)
+		r.RemoveInstanceMeta(i)
+		return nil, err
+	}
+	if in, err := Get(r, i); err == nil {
+		return in, nil
+	}
+	return &Instance{Index: i, Name: name, Title: title, Dir: dir, Config: cfg}, nil
+}
+
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

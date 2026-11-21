@@ -25,6 +25,8 @@ type backend interface {
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
+	// Clone copies a stopped instance into a new one (modavd clone): minutes for a large data disk, so a job.
+	Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
 	// StopTargets is what `stop --all` stops: the running or actively creating instances (设置 → 更新 stops them).

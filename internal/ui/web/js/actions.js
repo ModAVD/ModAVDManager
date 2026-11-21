@@ -7,7 +7,7 @@ import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import { openActivity, runCheck } from './panels.js';
 
-const VERB = { start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), 'disk-info': t('查看磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'),
+const VERB = { start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), 'disk-info': t('查看磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'), clone: t('复制实例'),
   components: t('补全组件'), 'collect-info': t('收集问题信息'), 'playstore-install': t('补全 Google Play 商店'), 'playstore-uninstall': t('移除 Google Play 商店'),
   'playstore-import': t('导入 Google Play 商店的文件'), 'gles32-on': t('开启报告 GLES 3.2'), 'gles32-off': t('关闭报告 GLES 3.2'),
   update: t('整包更新') };
@@ -73,6 +73,7 @@ function notify(job) {
   else if (job.kind === 'disk-info') toast({ tone: 'info', title: t('{who}的磁盘占用', { who }), text: diskInfoText(r), timeout: 9000 });
   else if (job.kind === 'disk-trim') toast({ title: t('{who}已触发磁盘回收', { who }), text: diskTrimText(), timeout: 6000 });
   else if (job.kind === 'disk-compact') toast({ title: r.skipped ? t('{who}已跳过磁盘重写', { who }) : t('{who}磁盘整理好了', { who }), text: diskCompactText(r), timeout: 6000 });
+  else if (job.kind === 'clone' && r.instance) toast({ title: t('{who}已复制成{copy}', { who, copy: quoted(r.instance, r.instance.index) }), text: t('游戏、登录状态和设置都带过去了；两台的设备标识一样，别同时登同一个账号。'), timeout: 9000 });
   else if (job.kind === 'playstore-install') {
     toast({ tone: r.installed ? 'ok' : 'warn', title: r.installed ? t('{who}已补全 Google Play 商店', { who }) : t('{who}的 Google Play 商店没装全', { who }),
       text: r.installed ? playStoreText(job.kind, r) + gap() + GSF : playStoreText(job.kind, r), action: r.installed ? null : activity, timeout: 12000 });
@@ -135,6 +136,11 @@ export const diskInfo = (i) => run(i, 'disk-info', {});
 export const diskTrim = (i) => run(i, 'disk-trim', {});
 export async function diskCompact(i) {
   if (await run(i, 'disk-compact', {})) toast({ tone: 'info', title: t('正在整理磁盘'), text: t('{who}正在检查并整理，期间不能开机', { who: quoted(instance(i), i) }), timeout: 5000 });
+}
+
+// 复制实例 (clone): copies the shut-down instance whole into a new one (minutes for a large data disk); the new one shows up when done
+export async function clone(i) {
+  if (await run(i, 'clone', {})) toast({ tone: 'info', title: t('正在复制实例'), text: t('{who}正在复制成一台新实例，期间不能开机', { who: quoted(instance(i), i) }), timeout: 5000 });
 }
 
 // 补全 / 移除 Google Play 商店 (action install | uninstall): a job that boots the instance cold once (playstore.js asks first)

@@ -479,6 +479,13 @@ func formatDelete(w io.Writer, r *emu.DeleteResult) {
 	fmt.Fprintf(w, "已删除实例 %d（%s），连同数据目录 %s\n", r.Index, r.Name, r.Path)
 }
 
+func formatClone(w io.Writer, r *emu.CloneResult) {
+	in := r.Instance
+	fmt.Fprintf(w, "已把实例 %d 复制成%s，复制了 %.1f GB\n", r.Source, instLabel(in.Index, in.Name, in.Title), float64(r.CopiedBytes)/(1<<30))
+	fmt.Fprintf(w, "adb 地址：%s\n", in.AdbAddress)
+	fmt.Fprintf(w, "路径：%s\n", in.Path)
+}
+
 // formatCreateBatch: each new instance as create prints it, then the ones not made.
 func formatCreateBatch(w io.Writer, r *CreateBatchResult) {
 	fmt.Fprintf(w, "新建了 %d 台，%d 台没建成\n", len(r.Results), len(r.Failed))

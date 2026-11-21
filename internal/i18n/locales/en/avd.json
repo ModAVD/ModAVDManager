@@ -14,6 +14,7 @@
   "实例 %s 已存在": "Instance %s already exists",
   "实例 %s 的配置读不出": "Cannot read the configuration of instance %s",
   "实例标题不能包含换行": "The instance title cannot contain line breaks",
+  "实例目录 %s 不存在": "The instance folder %s does not exist",
   "实例目录 %s 是链接，不能跟着它删除": "Instance folder %s is a link; it will not be deleted through the link",
   "实例编号 %d 不可用（只能是 0–9，5 除外）": "Instance number %d is not available (must be 0-9, except 5)",
   "帧率只能在 %d–%d 之间": "Frame rate must be between %d and %d",

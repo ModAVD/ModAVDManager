@@ -246,6 +246,17 @@ func init() {
 			run:   runDelete, human: humanDelete, exit: exitBatch,
 		},
 		{
+			name: "clone", args: "<i> [--title T]", summary: "把一台已关机的实例复制成一台新实例（连同游戏、登录状态和设置）",
+			details: "新实例用最小的空闲编号（所以有自己的端口和 adb 序列号），其余设置照源实例：内存、核数、帧率、分辨率、声音、语言、时区、数据盘方式等；" +
+				"--title 给新实例起名，不给就叫它的实例名。数据盘整份复制，两台互不影响，所以要和源实例差不多大的可用空间；不够就报错（precheck_failed），什么都不复制。" +
+				"源实例在运行或正在开关机时拒绝（busy）。复制失败或按 Ctrl+C 取消时，复制到一半的新实例会删掉。" +
+				"两台的安卓设备标识（Android ID、GSF ID）一样，同时开着登同一个游戏账号可能被顶掉。",
+			flags:    []flagSpec{optTitle},
+			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
+			final: true,
+			run:   runClone, human: humanOf(formatClone),
+		},
+		{
 			name: "start", args: "<i> [--window | --headless] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
 			details: "默认无头启动，--window 带窗口。运行中不能换：实例已经在运行（或正被另一次 start 开着）时，" +
 				"带了 --window 或 --headless 而它不是这种方式，就报错（busy），不接管也不重启，要换先 stop 再 start；" +
@@ -867,6 +878,26 @@ func runDelete(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+func runClone(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	last := -5 // so 0 % gets its line
+	req := emu.CloneRequest{Title: c.inv.strOpt("title"), Progress: func(p emu.Progress) {
+		// one line per 5 %: a copy of 100 GB takes minutes
+		if pct := p.Percent(); pct/5 != last/5 {
+			last = pct
+			c.log.Infof("复制中 %d%%：%s", pct, p.Message)
+		}
+	}}
+	return m.Clone(c.ctx, i, req)
 }
 
 // ---- batch create and delete (ModAVD/ModAVD#240) ----------------------------------------------------------------
