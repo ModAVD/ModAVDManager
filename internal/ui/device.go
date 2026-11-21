@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/avd"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 )
@@ -154,7 +155,13 @@ func (s *server) captureOnce(ctx context.Context, i int, skipShm bool) (data []b
 	}
 	if !skipShm && s.frame != nil {
 		if png, ferr := s.frame(s.root.Dir, s.mgr.Serial(i)); ferr == nil && bytes.HasPrefix(png, pngSignature) {
-			return png, shotSourceShm, false, nil
+			// a portrait instance's shared frame is the wide canvas, not turned (adb screencap is)
+			if in, gerr := avd.Get(s.root, i); gerr == nil && in.Orientation() == avd.OrientationPortrait {
+				png, ferr = turnPortrait(png)
+			}
+			if ferr == nil {
+				return png, shotSourceShm, false, nil
+			}
 		}
 		shmFailed = true
 	}
