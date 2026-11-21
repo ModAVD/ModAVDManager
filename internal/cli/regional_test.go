@@ -5,10 +5,20 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
+	"modavd/internal/emu"
 	"modavd/internal/errs"
 )
+
+func TestFormatRegionalUnsetTimeZone(t *testing.T) {
+	var b strings.Builder
+	formatRegional(&b, &emu.RegionalResult{Supported: true, Guest: &emu.RegionalGuest{Language: "ja-JP"}})
+	if out := b.String(); !strings.Contains(out, "安卓当前语言：ja-JP\n安卓当前时区：未设置\n") || strings.Contains(out, "读取失败") {
+		t.Fatalf("unset time zone: %q", out)
+	}
+}
 
 func TestRegionalFlags(t *testing.T) {
 	create, err := buildCreateRequest(mustParse(t, "create", "--language", "zh-cn", "--timezone", "UTC"))

@@ -51,5 +51,6 @@ test('a fixed language stays fixed and does not send an unrelated time-zone edit
 test('the current guest display never uses a configured or last-applied value as a live fact', () => {
   assert.match(mod.guestRegionalText({ config: { language: 'en-US', time_zone: 'Etc/UTC' }, guest: null }), /^未读取/);
   assert.equal(mod.guestRegionalText({ guest: { language: 'ja-JP', time_zone: 'Asia/Tokyo' } }), 'ja-JP · Asia/Tokyo');
+  assert.equal(mod.guestRegionalText({ guest: { language: 'ja-JP', time_zone: '' } }), 'ja-JP · 时区未设置');
   assert.equal(mod.guestRegionalText({ guest: null, guest_error: 'adb timeout' }), '读取失败');
 });

@@ -193,7 +193,7 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 
 新建、修改接口接受 `language` 和 `time_zone`。语言是 `host`、`preserve` 或 `zh-CN`、`en-US` 等语言标识；时区是 `host`、`preserve` 或 IANA 名称，`UTC` 归一为 `Etc/UTC`。Windows 新建默认两项 `host`。语言每次显式选择只生成一次请求；之后不覆盖安卓里的更改。`preserve` 取消待应用语言。时区 `host` 每次冷启动解析，`preserve` 沿用原来的模拟器检测。运行中修改等下次冷启动生效，接管运行中的实例不会应用刚保存的语言。
 
-`RegionalResult` 是 `{index, supported, config, host_language?, host_time_zone?, host_errors?, guest, guest_error?}`。`config` 是上述概要，`last_language` 只表示上次请求设置的语言。`guest` 是从安卓框架读取的 `{language, time_zone}`；关机、忙碌或不可访问时为 `null`。页面按需读一次，不加入实例状态的轮询。宿主时区无法映射时，启动日志警告并回退原检测；读取宿主语言失败则在写入新建/修改前返回 `not_ready`。
+`RegionalResult` 是 `{index, supported, config, host_language?, host_time_zone?, host_errors?, guest, guest_error?}`。`config` 是上述概要，`last_language` 只表示上次请求设置的语言。`guest` 是从安卓系统属性读取的 `{language, time_zone}`：`language` 取语言列表的第一项，时区属性没设过时 `time_zone` 是 `""`；关机、忙碌或不可访问时为 `null`。页面按需读一次，不加入实例状态的轮询。宿主时区无法映射时，启动日志警告并回退原检测；读取宿主语言失败则在写入新建/修改前返回 `not_ready`。
 
 开机结果的可选 `language_pending: true` 表示本次语言请求失败、后续 `start` 可重试；原有 `setup_pending` 仍只表示待处理的客体库补丁。两个状态都保留本次开机的设置标记。
 
