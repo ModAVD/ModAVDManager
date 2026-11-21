@@ -249,6 +249,24 @@ func (b fakeBackend) Delete(ctx context.Context, i int) (*emu.DeleteResult, erro
 	return &emu.DeleteResult{Index: i, Name: root.AvdName(i)}, nil
 }
 
+// Clone copies a fake instance to the next free index (2 up); the copy has the request's title.
+func (b fakeBackend) Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error) {
+	if _, ok := b.f.get(i); !ok {
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
+	}
+	j, err := b.FreeIndex()
+	if err != nil {
+		return nil, err
+	}
+	if req.Progress != nil {
+		req.Progress(emu.Progress{Step: "copy", Message: "copy", Done: 500, Total: 1000})
+	}
+	b.f.put(j, emu.StatusOffline)
+	in, _ := b.f.get(j)
+	in.Title = req.Title
+	return &emu.CloneResult{Source: i, Instance: in, CopiedBytes: 1 << 30}, nil
+}
+
 func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error) {
 	b.f.mu.Lock()
 	b.f.starts = append(b.f.starts, opt)

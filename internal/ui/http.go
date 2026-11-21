@@ -40,6 +40,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/instances/{i}/disk-trim", s.handleDiskTrim)
 	m.HandleFunc("POST /api/instances/{i}/disk-compact", s.handleDiskCompact)
 	m.HandleFunc("POST /api/instances/{i}/resume", s.handleResumeCreate)
+	m.HandleFunc("POST /api/instances/{i}/clone", s.handleClone)
 	m.HandleFunc("POST /api/instances/{i}/playstore-install", s.handlePlayStore("install"))
 	m.HandleFunc("POST /api/instances/{i}/playstore-uninstall", s.handlePlayStore("uninstall"))
 	m.HandleFunc("GET /api/instances/{i}/playstore-gsfid", s.handlePlayStoreGSFID)

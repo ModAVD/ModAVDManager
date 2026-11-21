@@ -89,7 +89,7 @@ export function viewState(inst) {
 
 const PILL = { online: [t('运行中'), 'ok'], starting: [t('开机中'), 'warn'], stopping: [t('关机中'), 'warn'], offline: [t('已关机'), 'idle'], error: [t('开机失败'), 'err'],
   creating: [t('新建中'), 'warn'], createfail: [t('新建失败'), 'err'] };
-const FAIL = { start: t('开机失败'), stop: t('关机失败'), install: t('安装失败'), create: t('新建失败'), 'disk-info': t('查看磁盘占用失败'), 'disk-trim': t('回收磁盘空间失败'), 'disk-compact': t('整理磁盘失败'),
+const FAIL = { start: t('开机失败'), stop: t('关机失败'), install: t('安装失败'), create: t('新建失败'), 'disk-info': t('查看磁盘占用失败'), 'disk-trim': t('回收磁盘空间失败'), 'disk-compact': t('整理磁盘失败'), clone: t('复制实例失败'),
   'playstore-install': t('补全 Google Play 商店失败'), 'playstore-uninstall': t('移除 Google Play 商店失败'),
   'gles32-on': t('开启报告 GLES 3.2 失败'), 'gles32-off': t('关闭报告 GLES 3.2 失败') };
 // 补全 / 移除 Google Play 商店: stops and boots the instance cold; the card is busy with it the whole time
@@ -224,7 +224,7 @@ function updateCard(c, inst) {
     c.hold = null;
   }
   const store = STORE_JOB[v.kind];
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact' || !!store;
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact' || v.kind === 'clone' || !!store;
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
@@ -232,7 +232,7 @@ function updateCard(c, inst) {
   if (busy) {
     const p = v.job && v.job.progress;
     const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? t('正在关机…') : v.key === 'creating' ? t('正在新建：后台开机做初始化…') : v.kind === 'install' ? t('正在安装 APK…')
-      : v.kind === 'disk-trim' ? t('正在触发磁盘回收…') : v.kind === 'disk-compact' ? t('正在整理磁盘…') : t('正在开机…'));
+      : v.kind === 'disk-trim' ? t('正在触发磁盘回收…') : v.kind === 'disk-compact' ? t('正在整理磁盘…') : v.kind === 'clone' ? t('正在复制实例…') : t('正在开机…'));
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     // the store's jobs report no percentage while they run (done 0 of 1000): an indeterminate bar, not a stuck 0%
@@ -322,6 +322,8 @@ function menuItems(c) {
     { label: t('磁盘占用'), icon: 'info', disabled: !!v.kind, run: () => A.diskInfo(i) },
     { label: t('回收磁盘空间'), icon: 'refresh', disabled: inst.status !== 'online' || !!v.kind, hint: inst.status !== 'online' ? t('开机后可用') : '', run: () => A.diskTrim(i) },
     { label: t('整理磁盘'), icon: 'disk', disabled: inst.status !== 'offline' || !!v.kind, hint: inst.status !== 'offline' ? t('关机后可用') : '', run: () => A.diskCompact(i) },
+    // 复制 copies the whole instance (data disk included), so it must be off too
+    { label: t('复制实例'), icon: 'copy', disabled: inst.status !== 'offline' || fresh || !!v.kind, hint: inst.status !== 'offline' ? t('关机后可用') : '', run: () => A.clone(i) },
     { label: t('查看日志'), icon: 'file', run: () => openLogs(i) },
     { label: t('打开目录'), icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },

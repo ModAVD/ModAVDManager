@@ -15,6 +15,7 @@
 //	proxy <i> [on|off] [--server URL|auto] [--add P] [--remove P] [--apps P]   emu.AppProxyResult
 //	proxy <i> test                                        emu.AppProxyTestResult
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)
+//	clone <i> [--title T]                                 emu.CloneResult {source,instance,copied_bytes}
 //	start <i> [--window|--headless] [--timeout 300]       emu.StartResult (running the other way than asked: busy)
 //	stop <i> [--force]                                    emu.StopResult
 //	stop --all [--force]                                  StopAllResult {"results":[StopResult],"failed":[{index,error}]}
@@ -130,6 +131,7 @@ type manager interface {
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
+	Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)

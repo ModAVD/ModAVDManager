@@ -209,6 +209,28 @@ func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// handleClone is POST /api/instances/{i}/clone {"title"}: copies the stopped instance into a new one (emu clone.go).
+// The job is the source's (its card shows the copy's progress); the new instance shows up when it is done. emu
+// refuses a running source and a volume without room; canceling the job removes the half-made copy.
+func (s *server) handleClone(w http.ResponseWriter, r *http.Request) {
+	i, ok := pathIndex(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	s.respondJob(w)(s.startJob(kindClone, i, func(ctx context.Context, j *job, b backend) (any, error) {
+		res, err := b.Clone(ctx, i, emu.CloneRequest{Title: body.Title, Progress: s.progressFn(j)})
+		s.hub.dropCached()
+		s.hub.requestRefresh()
+		return res, err
+	}))
+}
+
 // handleStart boots an instance with its window: the manager starts no headless ones (only the CLI does). One already
 // running headless is not adopted (emu: no switch while it runs).
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
