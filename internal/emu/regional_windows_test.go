@@ -222,6 +222,9 @@ func TestRegionalFailedLanguageDoesNotBlockCreation(t *testing.T) {
 		return &StartResult{HostIME: true, LanguagePending: true}, nil
 	}}
 	h.install(t)
+	// Keep the real check; restore the package hook explicitly rather than relying on the order of install's cleanup.
+	oldCheck := createCheck
+	t.Cleanup(func() { createCheck = oldCheck })
 	createCheck = (*Manager).checkCreated
 	in, err := m.Create(context.Background(), CreateRequest{NoBridge: true})
 	if err != nil {
@@ -265,12 +268,15 @@ func TestRegionalReadUsesUnprivilegedProperties(t *testing.T) {
 	before, _ := os.ReadFile(r.MetadataPath())
 	for _, tc := range []struct {
 		name, output, exit string
-		guestError         bool
+		want               *RegionalGuest // nil: the read fails
 	}{
-		{"current guest differs from saved language", "ja-JP\r\nAsia/Tokyo\r\n", "0", false},
-		{"missing language", "\nAsia/Tokyo\n", "0", true},
-		{"missing time zone", "ja-JP\n\n", "0", true},
-		{"adb failure", "device unavailable", "1", true},
+		{"current guest differs from saved language", "language=ja-JP\r\ntime_zone=Asia/Tokyo\r\n", "0", &RegionalGuest{"ja-JP", "Asia/Tokyo"}},
+		{"locale list shows its first language", "language=zh-CN,en-US\ntime_zone=Asia/Shanghai\n", "0", &RegionalGuest{"zh-CN", "Asia/Shanghai"}},
+		{"unset time zone keeps the language", "language=ja-JP\ntime_zone=\n", "0", &RegionalGuest{"ja-JP", ""}},
+		{"missing language", "language=\ntime_zone=Asia/Tokyo\n", "0", nil},
+		{"empty first locale", "language=,en-US\ntime_zone=Asia/Tokyo\n", "0", nil},
+		{"incomplete output", "language=ja-JP\n", "0", nil},
+		{"adb failure", "device unavailable", "1", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(fakeAdbRegionalPropertiesEnv, tc.output)
@@ -279,11 +285,11 @@ func TestRegionalReadUsesUnprivilegedProperties(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.guestError {
+			if tc.want == nil {
 				if result.Guest != nil || result.GuestError == "" {
 					t.Fatalf("failed read was accepted: %+v", result)
 				}
-			} else if result.Guest == nil || *result.Guest != (RegionalGuest{Language: "ja-JP", TimeZone: "Asia/Tokyo"}) || result.GuestError != "" {
+			} else if result.Guest == nil || *result.Guest != *tc.want || result.GuestError != "" {
 				t.Fatalf("wrong guest values: %+v", result)
 			}
 		})
@@ -301,7 +307,7 @@ func TestRegionalReadUsesUnprivilegedProperties(t *testing.T) {
 			t.Fatalf("regional read ran %q: %s", forbidden, b)
 		}
 	}
-	if strings.Count(string(b), "getprop persist.sys.locale") != 4 || !strings.Contains(string(b), "persist.sys.timezone") {
+	if strings.Count(string(b), "getprop persist.sys.locale") != 7 || !strings.Contains(string(b), "persist.sys.timezone") {
 		t.Fatalf("missing property queries: %s", b)
 	}
 	// Offline and busy instances do not query their regional properties.

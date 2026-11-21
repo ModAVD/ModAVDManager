@@ -288,16 +288,35 @@ func (m *Manager) Regional(ctx context.Context, i int) (*RegionalResult, error) 
 	}
 	if in.Booted && in.Busy == "" {
 		// Unchanged Android 14 guests may only have ro.product.locale. Reading properties needs no helper or root.
-		res := m.shell(ctx, i, `getprop persist.sys.locale "$(getprop ro.product.locale)"; getprop persist.sys.timezone`, statusAdbTimeout)
-		values := outputLines(res.Out)
-		switch {
-		case res.Code != 0:
+		// Each value is labeled: adb output loses blank lines at its ends, so an empty property has no position.
+		res := m.shell(ctx, i, `echo "language=$(getprop persist.sys.locale "$(getprop ro.product.locale)")"; `+
+			`echo "time_zone=$(getprop persist.sys.timezone)"`, statusAdbTimeout)
+		if res.Code != 0 {
 			result.GuestError = "客体语言/时区读取失败: " + tail(res.Out, 400)
-		case len(values) != 2:
-			result.GuestError = "客体语言/时区读回不完整"
-		default:
-			result.Guest = &RegionalGuest{Language: values[0], TimeZone: values[1]}
+		} else {
+			result.Guest, result.GuestError = parseGuestRegional(res.Out)
 		}
 	}
 	return result, nil
+}
+
+// parseGuestRegional reads the labeled property output. A missing language fails the read; an empty time zone (the
+// property was never set) does not, it stays "" next to the language that was read.
+func parseGuestRegional(out string) (*RegionalGuest, string) {
+	values := map[string]string{}
+	for _, line := range outputLines(out) {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			values[key] = strings.TrimSpace(value)
+		}
+	}
+	language, ok := values["language"]
+	if _, hasZone := values["time_zone"]; !ok || !hasZone {
+		return nil, "客体语言/时区读回不完整"
+	}
+	// A locale list ("zh-CN,en-US") is ordered by preference; the first one is the language in use.
+	language, _, _ = strings.Cut(language, ",")
+	if language = strings.TrimSpace(language); language == "" {
+		return nil, "客体语言读回为空"
+	}
+	return &RegionalGuest{Language: language, TimeZone: values["time_zone"]}, ""
 }

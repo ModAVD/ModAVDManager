@@ -508,6 +508,7 @@
   "客体语言/时区读取失败: %v": "Failed to read the guest language/time zone: %v",
   "客体语言/时区读回不完整": "The guest language/time zone read back incomplete",
   "客体语言接口失败: %s": "Guest language interface failed: %s",
+  "客体语言读回为空": "The guest language read back empty",
   "宿主 Metal 显卡：%v；模拟器 Vulkan 和渲染能力仍需实机验证": "Host Metal graphics card: %v; the emulator's Vulkan and rendering still need testing on a real machine",
   "宿主文件占用超出可表示范围，无法整理": "The host file usage is out of the representable range; cannot compact",
   "宿主盘只剩 %s：自动扩盘的数据盘随写入增长，宿主盘满了游戏会写不进去": "Only %s left on the host drive: the automatically sized data disk grows as data is written, and games cannot write when the host drive is full",
