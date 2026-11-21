@@ -64,6 +64,7 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		FPS             *int    `json:"fps"`
 		Resolution      *int    `json:"resolution"`
+		Count           *int    `json:"count"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -73,6 +74,18 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		DataPartitionGB: body.DataPartitionGB, FPS: body.FPS, Resolution: body.Resolution}
 	if body.Title != nil {
 		req.Title = *body.Title
+	}
+	if body.Count != nil && (*body.Count < 1 || *body.Count > 9) {
+		writeError(w, errs.Newf(errs.InvalidArgument, "count 要是 1–9 的整数，收到 %d", *body.Count))
+		return
+	}
+	if body.Count != nil && *body.Count > 1 {
+		if req.Index != nil {
+			writeError(w, errs.New(errs.Usage, "一次新建几台时不能指定 index：编号按空闲的从小到大取"))
+			return
+		}
+		s.startCreateBatch(w, req, *body.Count)
+		return
 	}
 	// The job is the instance's from the start (its card shows the progress): pick the index now when none is given.
 	if req.Index == nil {
@@ -99,18 +112,80 @@ func (s *server) handleResumeCreate(w http.ResponseWriter, r *http.Request) {
 // as a job with progress; a closed window waits for it.
 func (s *server) startCreateJob(w http.ResponseWriter, i int, req emu.CreateRequest) {
 	v, err := s.startJob(kindCreate, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		req.Progress = s.progressFn(j)
-		s.hub.requestRefresh() // the new instance shows up as creating at once
-		res, err := b.Create(ctx, req)
-		s.hub.dropCached()
-		s.hub.requestRefresh()
-		return res, err
+		return s.create(ctx, j, b, req)
 	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, v)
+}
+
+func (s *server) create(ctx context.Context, j *job, b backend, req emu.CreateRequest) (any, error) {
+	req.Progress = s.progressFn(j)
+	s.hub.requestRefresh() // the new instance shows up as creating at once
+	res, err := b.Create(ctx, req)
+	s.hub.dropCached()
+	s.hub.requestRefresh()
+	return res, err
+}
+
+// startCreateBatch creates count instances (ModAVD/ModAVD#240): the smallest free indexes are taken now (none when
+// fewer are free) and each gets its create job at once, so the activity list shows the queue and each can be
+// cancelled. A job waits for the one before it to end: one at a time, as each create boots its instance for the
+// setup. Before creating it checks the disk holding the instances; a failed or cancelled one does not stop the next.
+// The title, if any, is numbered ("T 1", "T 2" …). 202 with {"jobs": [...]}.
+func (s *server) startCreateBatch(w http.ResponseWriter, req emu.CreateRequest, count int) {
+	indexes, err := s.mgr.FreeIndexes(count)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, i := range indexes {
+		if err := s.checkFree(kindCreate, i); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	views := make([]jobView, 0, len(indexes))
+	var prev chan struct{}
+	for k, i := range indexes {
+		r := req
+		r.Index = &i
+		if req.Title != "" {
+			r.Title = fmt.Sprintf("%s %d", req.Title, k+1)
+		}
+		wait, done := prev, make(chan struct{})
+		v, err := s.startJob(kindCreate, i, func(ctx context.Context, j *job, b backend) (any, error) {
+			defer close(done)
+			if wait != nil {
+				s.setProgress(j, jobProgress{Step: "queued", Message: fmt.Sprintf("排队：等实例 %d 新建完", indexes[k-1]), Total: progressTotal})
+				select {
+				case <-wait:
+				case <-ctx.Done():
+					return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+				}
+			}
+			if err := b.CreateSpaceError(); err != nil {
+				return nil, err
+			}
+			return s.create(ctx, j, b, r)
+		})
+		if err != nil {
+			// a job started on one of the indexes since the check above: the jobs already started still run
+			s.log.Warnf("批量新建只开始了 %d 台，实例 %d 没开始: %s", len(views), i, errs.As(err).Error())
+			if len(views) == 0 {
+				writeError(w, err)
+				return
+			}
+			break
+		}
+		views = append(views, v)
+		prev = done
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		Jobs []jobView `json:"jobs"`
+	}{views})
 }
 
 func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {

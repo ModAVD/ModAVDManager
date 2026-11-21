@@ -38,6 +38,8 @@ func formatRegional(w io.Writer, result *emu.RegionalResult) {
 	}
 	if result.Guest == nil {
 		fmt.Fprintln(w, "安卓当前值：未读取")
+	} else if result.Guest.TimeZone == "" {
+		fmt.Fprintf(w, "安卓当前语言：%s\n安卓当前时区：未设置\n", result.Guest.Language)
 	} else {
 		fmt.Fprintf(w, "安卓当前语言：%s\n安卓当前时区：%s\n", result.Guest.Language, result.Guest.TimeZone)
 	}

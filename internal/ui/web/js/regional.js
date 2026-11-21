@@ -52,6 +52,6 @@ export function regionalFields(prefix, config, isNew = false) {
 }
 
 export function guestRegionalText(result) {
-  if (result.guest) return `${result.guest.language} · ${result.guest.time_zone}`;
+  if (result.guest) return `${result.guest.language} · ${result.guest.time_zone || t('时区未设置')}`;
   return result.guest_error ? t('读取失败') : t('未读取，实例需要开机且空闲');
 }

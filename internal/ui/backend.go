@@ -19,6 +19,9 @@ type backend interface {
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
 	// FreeIndex is the index Create picks when none is given.
 	FreeIndex() (int, error)
+	// FreeIndexes are the indexes a batch create takes; CreateSpaceError its disk check before each instance.
+	FreeIndexes(n int) ([]int, error)
+	CreateSpaceError() error
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)

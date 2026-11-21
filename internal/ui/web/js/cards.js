@@ -124,7 +124,7 @@ export function renderGrid() {
 }
 
 function makeCard(i) {
-  const c = { i, url: null, next: 0, fail: 0, visible: true };
+  const c = { i, url: null, next: 0, last: 0, fail: 0, shm: false, visible: true };
   const view = () => { if (c.inst.status === 'online') openViewer(i); };
   const menu = () => openMenu(c.more, menuItems(c));
   c.img = h('img', { class: 'shot', alt: '', draggable: 'false' });
@@ -360,16 +360,24 @@ function glesItem(inst, i, held) {
 }
 
 // ---- thumbnails: about every 5 s, only while the card view is on screen, the window has focus and no dialog covers
-// the grid (the first frame too). Every one is an `adb exec-out screencap`, so a failing card backs off up to 30 s and
-// a 409 (not booted after all) waits for the next instances event.
+// the grid (the first frame too). A frame is either read from the emulator's shared memory (cheap; the backend says so
+// in X-Shot-Source) or comes from `adb exec-out screencap`. Without focus (window visible, not minimized) only cards
+// whose last frame came from shared memory go on, about every 12 s. A failing card backs off up to 30 s and a 409 (not
+// booted after all) waits for the next instances event.
+const SHOT_EVERY = 5000;
+const SHOT_EVERY_UNFOCUSED = 12000;
 function tick() {
   if (view !== 'card') return;
-  if (document.visibilityState !== 'visible' || !document.hasFocus() || document.querySelector('dialog[open]')) return;
+  if (document.visibilityState !== 'visible' || document.querySelector('dialog[open]')) return;
+  const focused = document.hasFocus();
   const now = Date.now();
   for (const c of cards.values()) {
     if (!c.inst || c.inst.status !== 'online' || c.inflight || !c.visible) continue;
     if (c.hold && c.hold === S.list) continue;
-    if (now >= c.next) shoot(c);
+    if (!focused && !c.shm) continue;
+    let due = c.next;
+    if (!focused && !c.fail) due = Math.max(c.next, c.last + SHOT_EVERY_UNFOCUSED);
+    if (now >= due) shoot(c);
   }
 }
 
@@ -378,6 +386,7 @@ async function shoot(c) {
   c.hold = null;
   let url = null;
   let ok = false;
+  let shm = false;
   try {
     const res = await fetch(`/api/instances/${c.i}/screenshot`, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000) });
     if (res.status === 409) {
@@ -386,6 +395,7 @@ async function shoot(c) {
       return;
     }
     if (!res.ok) return;
+    shm = res.headers.get('X-Shot-Source') === 'shm';
     url = URL.createObjectURL(await res.blob());
     // decode off screen first: the swap never shows a blank frame, and a broken image counts as a failure
     const im = new Image();
@@ -405,7 +415,9 @@ async function shoot(c) {
     c.inflight = false;
     if (ok) {
       c.fail = 0;
-      c.next = Date.now() + 5000;
+      c.shm = shm;
+      c.last = c.next = Date.now();
+      c.next += SHOT_EVERY;
     } else {
       c.fail++;
       c.next = Date.now() + Math.min(30000, 2000 * 2 ** c.fail);

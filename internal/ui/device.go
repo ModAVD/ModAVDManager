@@ -36,15 +36,27 @@ type shotCache struct {
 
 type shotEntry struct {
 	data   []byte
+	src    string // shotSourceShm or shotSourceAdb: where data came from
 	at     time.Time
 	flight *shotCall
+	// shmSkip: no shared-memory attempt before this time (the last one failed: library absent, sharing off, old emulator)
+	shmSkip time.Time
 }
 
 type shotCall struct {
 	done chan struct{}
 	data []byte
+	src  string
 	err  error
 }
+
+const (
+	// X-Shot-Source values: the page refreshes thumbnails of an unfocused window only when they come from shared memory.
+	shotSourceShm = "shm"
+	shotSourceAdb = "adb"
+	// shmRetry: how long after a failed shared-memory capture the instance goes straight to adb.
+	shmRetry = 20 * time.Second
+)
 
 func (c *shotCache) entry(i int) *shotEntry {
 	if c.by == nil {
@@ -69,13 +81,14 @@ func (s *server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, err := s.screenshot(r.Context(), i)
+	data, src, err := s.screenshot(r.Context(), i)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	h := w.Header()
 	h.Set("Content-Type", "image/png")
+	h.Set("X-Shot-Source", src)
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
@@ -84,13 +97,13 @@ func (s *server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 
 // screenshot joins the capture in flight, reuses one younger than shotReuse, or starts one. The capture runs on the
 // server's context, so a viewer that goes away does not fail the others waiting for it.
-func (s *server) screenshot(ctx context.Context, i int) ([]byte, error) {
+func (s *server) screenshot(ctx context.Context, i int) ([]byte, string, error) {
 	s.shots.mu.Lock()
 	e := s.shots.entry(i)
 	if e.data != nil && time.Since(e.at) < shotReuse {
-		data := e.data
+		data, src := e.data, e.src
 		s.shots.mu.Unlock()
-		return data, nil
+		return data, src, nil
 	}
 	call := e.flight
 	if call == nil {
@@ -101,23 +114,29 @@ func (s *server) screenshot(ctx context.Context, i int) ([]byte, error) {
 	s.shots.mu.Unlock()
 	select {
 	case <-call.done:
-		return call.data, call.err
+		return call.data, call.src, call.err
 	case <-ctx.Done():
-		return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+		return nil, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 	}
 }
 
 func (s *server) capture(i int, e *shotEntry, call *shotCall) {
 	ctx, cancel := context.WithTimeout(s.ctx, shotTimeout)
 	defer cancel()
-	data, err := s.captureOnce(ctx, i)
+	s.shots.mu.Lock()
+	skip := time.Now().Before(e.shmSkip)
+	s.shots.mu.Unlock()
+	data, src, shmFailed, err := s.captureOnce(ctx, i, skip)
 	s.shots.mu.Lock()
 	e.flight = nil
+	if shmFailed {
+		e.shmSkip = time.Now().Add(shmRetry)
+	}
 	if err == nil {
-		e.data, e.at = data, time.Now()
+		e.data, e.src, e.at = data, src, time.Now()
 	}
 	s.shots.mu.Unlock()
-	call.data, call.err = data, err
+	call.data, call.src, call.err = data, src, err
 	close(call.done)
 }
 
@@ -126,11 +145,27 @@ func notBooted(i int) error {
 	return errs.Newf(errs.Busy, "实例 %d 没有开机", i).WithAdvice("开机后再看画面")
 }
 
-func (s *server) captureOnce(ctx context.Context, i int) ([]byte, error) {
+// captureOnce takes the frame from the emulator's shared memory when it can (unless skipShm), else from adb screencap.
+// shmFailed: the shared-memory attempt was made and failed, so the caller holds the next ones back for a while.
+func (s *server) captureOnce(ctx context.Context, i int, skipShm bool) (data []byte, src string, shmFailed bool, err error) {
 	// A recent list that says offline saves an adb call (which would also start the private adb server).
 	if in, ok := s.hub.cachedInstance(i, statusMaxAge); ok && !in.Running {
-		return nil, notBooted(i)
+		return nil, "", false, notBooted(i)
 	}
+	if !skipShm && s.frame != nil {
+		if png, ferr := s.frame(s.root.Dir, s.mgr.Serial(i)); ferr == nil && bytes.HasPrefix(png, pngSignature) {
+			return png, shotSourceShm, false, nil
+		}
+		shmFailed = true
+	}
+	data, err = s.captureAdb(ctx, i)
+	if err == nil {
+		src = shotSourceAdb
+	}
+	return data, src, shmFailed, err
+}
+
+func (s *server) captureAdb(ctx context.Context, i int) ([]byte, error) {
 	res := s.mgr.AdbRun(ctx, adb.RunOptions{Serial: s.mgr.Serial(i), Timeout: shotTimeout, Raw: true},
 		"exec-out", "screencap", "-p")
 	if res.Code == 0 && bytes.HasPrefix(res.Stdout, pngSignature) {
@@ -239,7 +274,7 @@ func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
 	if body.Type == "tap" {
 		// Config describes the next boot. A running guest may still use the previous
 		// preset, so validate against its screenshot, shared with the viewer cache.
-		data, err := s.screenshot(r.Context(), i)
+		data, _, err := s.screenshot(r.Context(), i)
 		if err != nil {
 			writeError(w, err)
 			return

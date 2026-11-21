@@ -95,24 +95,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Checkout ModAVD for the shared privacy scanner
+      - name: Checkout ModAVD for the shared scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ModAVD/ModAVD
           ref: main
           path: .modavd
           persist-credentials: false
-          sparse-checkout: scripts/privacy.py
+          sparse-checkout: |
+            scripts/privacy.py
+            scripts/repo_checks.py
+            scripts/test_repo_checks.py
           sparse-checkout-cone-mode: false
-      - name: scripts/privacy.py is ModAVD's
+      - name: Shared scripts are ModAVD's
         shell: bash
         run: |
           set -euo pipefail
-          if ! cmp -s scripts/privacy.py .modavd/scripts/privacy.py; then
-            echo "::error file=scripts/privacy.py::scripts/privacy.py differs from ModAVD/ModAVD main. The scanner is changed in ModAVD first; copy its scripts/privacy.py here byte for byte (only privacy-allowlist.json is this repository's own)."
-            exit 1
-          fi
-          echo "scripts/privacy.py is the same as ModAVD/ModAVD main $(git -C .modavd rev-parse --short HEAD)"
+          for f in scripts/privacy.py scripts/repo_checks.py scripts/test_repo_checks.py; do
+            if ! cmp -s "$f" ".modavd/$f"; then
+              echo "::error file=$f::$f differs from ModAVD/ModAVD main. These scripts are changed in ModAVD first; copy its $f here byte for byte (only privacy-allowlist.json is this repository's own)."
+              exit 1
+            fi
+          done
+          echo "privacy.py, repo_checks.py and test_repo_checks.py are the same as ModAVD/ModAVD main $(git -C .modavd rev-parse --short HEAD)"
   portable:
     strategy:
       fail-fast: false

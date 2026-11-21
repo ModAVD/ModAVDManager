@@ -1,7 +1,7 @@
 // New instance, settings drawer, delete confirmation.
 
-import { t, tNode, gap, semi, paren, cap } from './i18n.js';
-import { h, icon, btn, ibtn, showError, attr } from './dom.js';
+import { t, tNode, gap, semi, paren, cap, enumComma } from './i18n.js';
+import { h, icon, btn, ibtn, showError, attr, setText } from './dom.js';
 import { api } from './api.js';
 import { S, update, subscribe, instance, lastJob } from './store.js';
 import { openDialog, toast } from './ui.js';
@@ -163,6 +163,11 @@ export function openCreate() {
   const title = h('input', { class: 'input', id: 'c-title', maxlength: '40', autocomplete: 'off', placeholder: t('明日方舟 · 主号') });
   // the number is always picked by the server (the first free one); the dialog no longer offers a choice
   const titleHint = hint(t('不填就显示「{name}」，以后可以随时改', { name: defaultName(free[0]) }));
+  // 数量 (ModAVD#240): several are made one after another on the smallest free numbers, the name numbered
+  const countHintText = t('1–{n} 台；几台时按编号一台建好再建下一台，名称后面加序号', { n: free.length });
+  const count = h('input', { class: 'input', id: 'c-count', type: 'number', min: '1', max: String(free.length), step: '1', value: '1', inputmode: 'numeric', 'aria-describedby': 'c-count-h' });
+  const countHint = hint(countHintText, 'c-count-h');
+  count.addEventListener('input', () => { attr(count, 'aria-invalid', null); countHint.textContent = countHintText; });
   const disk = diskField('c', 'auto', 64, 16);
   const fps = fpsField('c', 60);
   const regional = S.list.regional_supported ? regionalFields('c', null, true) : null;
@@ -172,6 +177,7 @@ export function openCreate() {
     title: t('新建实例'), sub: t('每台实例是一台独立的安卓模拟器，可以各登录一个游戏账号。'), cls: 'dlg-create', form: true, focus: '#c-title',
     body: h('div', { class: 'dlg-body' }, h('div', { class: 'fields' },
       inputRow(t('名称'), title, titleHint),
+      free.length > 1 && inputRow(t('数量'), count, countHint),
       segRow(t('内存'), 'memory', MEM, 6144),
       segRow('CPU', 'cpu', CPU, 6),
       fps.rows,
@@ -184,17 +190,29 @@ export function openCreate() {
       if (d === null) return;
       const fpsValue = fps.check();
       if (fpsValue === null) return;
+      const n = free.length > 1 ? Number(count.value) : 1;
+      if (!Number.isInteger(n) || n < 1 || n > free.length) {
+        attr(count, 'aria-invalid', true);
+        countHint.textContent = t('要填 1–{n} 之间的整数', { n: free.length });
+        count.focus();
+        return;
+      }
       submit(ctl, ok, t('正在新建…'), box, async () => {
         // a job: the setup boots the instance headless for a few minutes; its card shows the progress
-        const job = await api.post('/api/instances', {
+        const res = await api.post('/api/instances', {
           ...(regional ? regional.values() : {}),
           title: title.value.trim() || undefined, memory_mb: Number(f.memory.value), cpu: Number(f.cpu.value),
           // no size: 自动扩盘
           fps: fpsValue, resolution: Number(f.resolution.value), data_partition_gb: d.auto ? undefined : d.gb,
+          count: n > 1 ? n : undefined,
         });
-        A.onJob(job);
-        S.watch.add(job.id);
-        return { title: t('正在新建实例 {index}', { index: job.index }), text: t('后台无头开机做完初始化后关机，{time}；关掉窗口也会在后台做完。', { time: CREATE_TIME }) };
+        // several: a job each, run one after another by the server (the later ones wait in 活动)
+        for (const job of res.jobs || [res]) {
+          A.onJob(job);
+          S.watch.add(job.id);
+        }
+        if (res.jobs) return { title: t('正在依次新建 {n} 台实例', { n: res.jobs.length }), text: t('按编号一台做完再建下一台，每台{time}；进度在「活动」里，关掉窗口也会在后台做完。', { time: CREATE_TIME }) };
+        return { title: t('正在新建实例 {index}', { index: res.index }), text: t('后台无头开机做完初始化后关机，{time}；关掉窗口也会在后台做完。', { time: CREATE_TIME }) };
       });
     },
   });
@@ -524,6 +542,73 @@ export function openDelete(i) {
     }
     if (!ctl.busy) attr(del, 'aria-disabled', chk.checked && !cur.running ? null : true);
   }
+  chk.addEventListener('change', sync);
+  ctl.onClose.push(subscribe(sync));
+  sync();
+}
+
+// ---- delete several (ModAVD#240): tick the instances (running ones cannot be ticked), the names to be deleted are
+// listed, one confirmation; then they are deleted one after another and the toast says which were and which not
+export function openDeleteMany() {
+  if (!S.list) return;
+  const picks = new Map();
+  const listEl = h('div', { class: 'pick-list' });
+  for (const inst of S.list.instances) {
+    const c = h('input', { type: 'checkbox' });
+    const note = h('span', { class: 'muted' });
+    picks.set(inst.index, { c, note });
+    listEl.append(h('label', { class: 'checkbox' }, c, h('span', { text: quoted(inst, inst.index) }), note));
+  }
+  const descId = 'dm-desc';
+  const desc = h('p', { class: 'danger-text', id: descId });
+  const chk = h('input', { type: 'checkbox', id: 'dm-ok' });
+  const box = errorBox();
+  const del = h('button', { class: 'btn btn-danger', type: 'submit', 'aria-disabled': 'true' }, icon('trash'), h('span', { text: t('永久删除') }));
+  const selected = () => [...picks].filter(([, p]) => p.c.checked && !p.c.disabled).map(([i]) => i);
+  const ctl = openDialog({
+    title: t('批量删除实例'), cls: 'dlg-delete', form: true, alert: true, desc: descId,
+    lead: h('span', { class: 'dlg-lead tone-err' }, icon('trash')),
+    body: h('div', { class: 'dlg-body' }, hint(t('勾上要删除的实例；在运行的要先关机。')), listEl, desc,
+      h('label', { class: 'checkbox danger' }, chk, h('span', { text: t('我明白，勾上的实例所有数据都会删除') })), box),
+    actions: { ok: del },
+    onSubmit() {
+      const sel = selected();
+      if (!sel.length || !chk.checked) { chk.focus(); return; }
+      submit(ctl, del, t('正在删除…'), box, async () => {
+        const done = [];
+        const failed = [];
+        for (const i of sel) {
+          const who = quoted(instance(i), i);
+          try {
+            await api.del(`/api/instances/${i}?confirm=1`);
+            done.push(who);
+            S.list.instances = S.list.instances.filter((x) => x.index !== i);
+            const s = settingsOpen.get(i);
+            if (s) s.close();
+          } catch (e) {
+            failed.push(t('{who}没删：{reason}', { who, reason: e.message || String(e) }));
+          }
+        }
+        const deleted = done.length ? t('已删除{names}', { names: done.join(enumComma()) }) : '';
+        if (!failed.length) return { title: t('已删除 {n} 台实例', { n: done.length }), text: deleted };
+        return { tone: 'err', title: t('{n} 台实例没删', { n: failed.length }), text: [...failed, deleted].filter(Boolean).join(semi()) };
+      }, sync);
+    },
+  });
+  function sync() {
+    for (const [i, p] of picks) {
+      const cur = instance(i);
+      p.c.disabled = !cur || cur.running;
+      if (p.c.disabled) p.c.checked = false;
+      setText(p.note, !cur ? t('已删除') : cur.running ? t('运行中，先关机') : '');
+    }
+    const sel = selected();
+    desc.replaceChildren(...(sel.length
+      ? tNode(t('{who}会连同里面装的游戏、登录状态和所有数据一起永久删除，不能恢复。'), { who: h('strong', { text: sel.map((i) => quoted(instance(i), i)).join(enumComma()) }) })
+      : [t('勾上要删除的实例。')]));
+    if (!ctl.busy) attr(del, 'aria-disabled', sel.length && chk.checked ? null : true);
+  }
+  listEl.addEventListener('change', sync);
   chk.addEventListener('change', sync);
   ctl.onClose.push(subscribe(sync));
   sync();

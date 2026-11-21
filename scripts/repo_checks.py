@@ -1,4 +1,8 @@
-"""Validate commit authors and Co-authored-by trailers for public history."""
+"""Validate commit authors and Co-authored-by trailers for public history.
+
+This file and test_repo_checks.py are the same in every ModAVD repository. Change them in ModAVD/ModAVD first, then
+copy them byte for byte to the others; each repository's CI compares them with ModAVD/ModAVD main.
+"""
 from __future__ import annotations
 
 import os

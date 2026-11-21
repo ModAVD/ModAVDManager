@@ -102,6 +102,7 @@ var (
 	optTimeout       = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
 	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
 	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的，它开的模拟器还开着就先正常关机；其他选项不用）"}
+	optCount         = flagSpec{"count", kindInt, "N", "一次新建 N 台（1–9），按编号从小到大一台做完再建下一台；不能和 --index、--resume 一起用"}
 	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
 	optCancelCreate  = flagSpec{"cancel-create", kindBool, "", "允许打断新建中的初始化，之后用 create --resume N 重做"}
 	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
@@ -198,7 +199,7 @@ func init() {
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
+			name: "create", args: "[--index N | --count N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
 			summary: "新建一台实例，后台开机做完初始化后关机",
 			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘自动扩盘、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
 				dataDiskHelp +
@@ -206,10 +207,13 @@ func init() {
 				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
 				"之后第一次开机和平常一样快。新建的实例不带 Google Play 商店，要的话建好后用 playstore <i> install 补全。" +
 				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
-				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。",
-			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
+				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。" +
+				"--count N 一次建 N 台：先取 N 个空闲编号（不够就一台不建），再按编号一台一台建，其余选项每台一样，" +
+				"给了 --title 时名称后面加序号（「T 1」「T 2」…）；每台开建前查实例所在盘的剩余空间，低于开机所需就停下，剩下的不建。" +
+				"一台失败不影响后面的；结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
+			flags: []flagSpec{optIndex, optCount, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
 			final: true,
-			run:   runCreate, human: humanOf(formatCreate),
+			run:   runCreate, human: humanCreate, exit: exitBatch,
 		},
 		{
 			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--boss-key 组合|none]",
@@ -232,12 +236,14 @@ func init() {
 		},
 		proxyCommand(),
 		{
-			name: "delete", args: "<i> --yes", summary: "删除一台已关机的实例（连同游戏数据）",
-			details:  "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。",
+			name: "delete", args: "<i> [<j> …] --yes", summary: "删除已关机的实例（连同游戏数据）",
+			details: "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。" +
+				"给几个编号就依次删几台：在运行或正在开关机的跳过，一台没删成不影响别的；" +
+				"结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
 			flags:    []flagSpec{optYes},
-			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
+			posNames: []string{"实例编号"}, minPos: 1, maxPos: -1,
 			final: true,
-			run:   runDelete, human: humanOf(formatDelete),
+			run:   runDelete, human: humanDelete, exit: exitBatch,
 		},
 		{
 			name: "clone", args: "<i> [--title T]", summary: "把一台已关机的实例复制成一台新实例（连同游戏、登录状态和设置）",
@@ -796,9 +802,16 @@ func runCreate(c *cmdCtx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	count, err := createCount(c.inv)
+	if err != nil {
+		return nil, err
+	}
 	m, err := c.mgr()
 	if err != nil {
 		return nil, err
+	}
+	if count > 1 {
+		return createBatch(c, m, req, count)
 	}
 	req.Progress = func(p emu.Progress) { c.log.Infof("%s", createProgressLine(p)) }
 	in, err := m.Create(c.ctx, req)
@@ -837,18 +850,30 @@ func runSet(c *cmdCtx) (any, error) {
 }
 
 func runDelete(c *cmdCtx) (any, error) {
-	i, err := parseIndex(c.inv.pos[0])
-	if err != nil {
-		return nil, err
+	var indexes []int
+	for _, p := range c.inv.pos {
+		i, err := parseIndex(p)
+		if err != nil {
+			return nil, err
+		}
+		indexes = append(indexes, i)
 	}
+	slices.Sort(indexes)
+	indexes = slices.Compact(indexes)
 	if !c.inv.boolOpt("yes") {
+		if len(indexes) > 1 {
+			return nil, errs.Newf(errs.Usage, "要删除实例 %s，会连同游戏数据一起删掉，确认请加 --yes", joinInts(indexes, "、"))
+		}
 		return nil, errs.New(errs.Usage, "删除会连同游戏数据一起删掉，确认请加 --yes")
 	}
 	m, err := c.mgr()
 	if err != nil {
 		return nil, err
 	}
-	r, err := m.Delete(c.ctx, i)
+	if len(indexes) > 1 {
+		return deleteBatch(c, m, indexes), nil
+	}
+	r, err := m.Delete(c.ctx, indexes[0])
 	if err != nil {
 		return nil, err
 	}
@@ -873,6 +898,146 @@ func runClone(c *cmdCtx) (any, error) {
 		}
 	}}
 	return m.Clone(c.ctx, i, req)
+}
+
+// ---- batch create and delete (ModAVD/ModAVD#240) ----------------------------------------------------------------
+
+// InstanceFailure is one instance a batch create or delete did not do.
+type InstanceFailure struct {
+	Index int       `json:"index"`
+	Error ErrorInfo `json:"error"`
+}
+
+// CreateBatchResult is `create --count N` (N > 1): both lists in index order, never null.
+type CreateBatchResult struct {
+	Results []emu.InstanceInfo `json:"results"`
+	Failed  []InstanceFailure  `json:"failed"`
+}
+
+// DeleteBatchResult is `delete <i> <j> …` with more than one index: both lists in index order, never null.
+type DeleteBatchResult struct {
+	Results []emu.DeleteResult `json:"results"`
+	Failed  []InstanceFailure  `json:"failed"`
+}
+
+// createCount is --count: 1 when not given; more than one only without --index and --resume.
+func createCount(inv *invocation) (int, error) {
+	if !inv.isSet("count") {
+		return 1, nil
+	}
+	n := inv.intOpt("count")
+	if n < 1 || n > 9 {
+		return 0, errs.Newf(errs.InvalidArgument, "--count 要给 1–9 的整数，收到 %d", n)
+	}
+	if n > 1 && (inv.isSet("index") || inv.isSet("resume")) {
+		return 0, errs.New(errs.Usage, "--count 不能和 --index、--resume 一起用：一次建几台时编号按空闲的从小到大取").
+			WithAdvice(findCommand("create").usageAdvice())
+	}
+	return n, nil
+}
+
+// createBatch creates n instances one after another, on the n smallest free indexes taken up front (none when fewer
+// are free). One at a time: each create boots its instance for the setup, so only one of them takes memory at once.
+// Before each the disk holding the instances must have the space a boot needs; when it has not, that one and the rest
+// are not made. A failed create does not stop the next.
+func createBatch(c *cmdCtx, m manager, req emu.CreateRequest, n int) (*CreateBatchResult, error) {
+	indexes, err := m.FreeIndexes(n)
+	if err != nil {
+		return nil, err
+	}
+	res := &CreateBatchResult{Results: []emu.InstanceInfo{}, Failed: []InstanceFailure{}}
+	c.log.Infof("依次新建 %d 台实例：%s", n, joinInts(indexes, "、"))
+	fail := func(i int, err error) {
+		if c.ctx.Err() != nil && errs.CodeOf(err) != errs.Canceled {
+			err = errs.Wrap(errs.Canceled, err, "已取消")
+		}
+		c.log.Warnf("实例 %d 没建成: %s", i, errs.As(err).Error())
+		res.Failed = append(res.Failed, InstanceFailure{Index: i, Error: errorInfo(err)})
+	}
+	for k, i := range indexes {
+		if err := c.ctx.Err(); err != nil {
+			fail(i, errs.Wrap(errs.Canceled, err, "已取消"))
+			continue
+		}
+		if err := m.CreateSpaceError(); err != nil {
+			for _, rest := range indexes[k:] {
+				fail(rest, err)
+			}
+			break
+		}
+		r := req
+		r.Index = &i
+		if req.Title != "" {
+			r.Title = fmt.Sprintf("%s %d", req.Title, k+1)
+		}
+		r.Progress = func(p emu.Progress) { c.log.Infof("[%d/%d] %s", k+1, n, createProgressLine(p)) }
+		in, err := m.Create(c.ctx, r)
+		if err == nil && in == nil {
+			err = errs.Newf(errs.Internal, "实例 %d 新建没有返回结果", i)
+		}
+		if err != nil {
+			fail(i, err)
+			continue
+		}
+		res.Results = append(res.Results, *in)
+	}
+	return res, nil
+}
+
+// deleteBatch deletes the instances one after another; one that runs (or is being started, stopped, created) is
+// refused by Delete and reported, and the others go on.
+func deleteBatch(c *cmdCtx, m manager, indexes []int) *DeleteBatchResult {
+	res := &DeleteBatchResult{Results: []emu.DeleteResult{}, Failed: []InstanceFailure{}}
+	c.log.Infof("依次删除 %d 台实例：%s", len(indexes), joinInts(indexes, "、"))
+	for _, i := range indexes {
+		var r *emu.DeleteResult
+		err := c.ctx.Err()
+		if err != nil {
+			err = errs.Wrap(errs.Canceled, err, "已取消")
+		} else if r, err = m.Delete(c.ctx, i); err == nil && r == nil {
+			err = errs.Newf(errs.Internal, "实例 %d 删除没有返回结果", i)
+		}
+		if err != nil {
+			c.log.Warnf("实例 %d 没删: %s", i, errs.As(err).Error())
+			res.Failed = append(res.Failed, InstanceFailure{Index: i, Error: errorInfo(err)})
+			continue
+		}
+		res.Results = append(res.Results, *r)
+	}
+	return res
+}
+
+// exitBatch: a batch create or delete exits with its first failure's code, like stop --all.
+func exitBatch(data any, _ bool) int {
+	var failed []InstanceFailure
+	switch r := data.(type) {
+	case *CreateBatchResult:
+		failed = r.Failed
+	case *DeleteBatchResult:
+		failed = r.Failed
+	}
+	if len(failed) > 0 {
+		return errs.ExitCode(errs.New(failed[0].Error.Code, failed[0].Error.Message))
+	}
+	return 0
+}
+
+func humanCreate(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.InstanceInfo:
+		formatCreate(w, r)
+	case *CreateBatchResult:
+		formatCreateBatch(w, r)
+	}
+}
+
+func humanDelete(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.DeleteResult:
+		formatDelete(w, r)
+	case *DeleteBatchResult:
+		formatDeleteBatch(w, r)
+	}
 }
 
 func runStart(c *cmdCtx) (any, error) {
