@@ -19,9 +19,8 @@ import (
 // replacing the DLL.
 
 const (
-	mxFmtBGRA     = 1
-	mxOpenNoStart = 1 << 0 // never turn frame sharing on: a thumbnail must not change the instance
-	mxOK          = 0
+	mxFmtBGRA = 1
+	mxOK      = 0
 )
 
 type mxOpenParams struct {
@@ -73,7 +72,7 @@ func shmFrame(rootDir, serial string) ([]byte, error) {
 		return nil, err
 	}
 	name, _ := syscall.BytePtrFromString("ModAVD manager thumbnail")
-	p := mxOpenParams{AdbAddress: addr, ClientName: name, Flags: mxOpenNoStart}
+	p := mxOpenParams{AdbAddress: addr, ClientName: name}
 	p.Size = uint32(unsafe.Sizeof(p))
 	var h uintptr
 	if r, _, _ := syscall.SyscallN(open, uintptr(unsafe.Pointer(&p)), uintptr(unsafe.Pointer(&h))); int32(r) != mxOK {
