@@ -128,6 +128,9 @@ type manager interface {
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	// FreeIndexes and CreateSpaceError are what create --count takes up front and checks before each instance.
+	FreeIndexes(n int) ([]int, error)
+	CreateSpaceError() error
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)

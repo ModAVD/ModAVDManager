@@ -150,6 +150,46 @@ func (m *Manager) FreeIndex() (int, error) {
 	return m.freeIndex(existing)
 }
 
+// FreeIndexes are the n indexes a batch create takes, in order (ModAVD/ModAVD#240): the smallest free ones, each as
+// FreeIndex picks it. errs.Busy when fewer than n are free, saying how many are.
+func (m *Manager) FreeIndexes(n int) ([]int, error) {
+	insts, err := avd.List(m.Root)
+	if err != nil {
+		return nil, err
+	}
+	existing := map[int]bool{}
+	for _, in := range insts {
+		existing[in.Index] = true
+	}
+	out := make([]int, 0, n)
+	for len(out) < n {
+		i, err := m.freeIndex(existing)
+		if err != nil {
+			if len(out) > 0 && errs.CodeOf(err) == errs.Busy {
+				return nil, errs.Newf(errs.Busy, "只有 %d 个空闲编号（端口也要空着），建不了 %d 台", len(out), n).
+					WithAdvice("少建几台，或者先删掉不用的实例")
+			}
+			return nil, err
+		}
+		existing[i] = true
+		out = append(out, i)
+	}
+	return out, nil
+}
+
+// CreateSpaceError is nil when the disk holding the instances has the space a boot needs (check's 磁盘 item), else
+// errs.PrecheckFailed with that item's reason and advice. A batch create asks before each instance, so a run of new
+// instances stops before the disk fills up; a free space that cannot be read does not stop it.
+func (m *Manager) CreateSpaceError() error {
+	target := diskExistingAncestor(m.Root.AvdHome())
+	free, err := hostDiskFree(target)
+	it := diskItem(diskDrive(target), free, err)
+	if it.OK == nil || *it.OK {
+		return nil
+	}
+	return errs.New(errs.PrecheckFailed, it.Reason).WithAdvice(it.Advice)
+}
+
 // freeIndex is the smallest index that is not in existing, has no leftovers and whose ports (in the root's plan) are
 // free; an errs.InvalidArgument error when mas-avd.json's ports are not ones to start with (root.CheckPorts).
 func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
