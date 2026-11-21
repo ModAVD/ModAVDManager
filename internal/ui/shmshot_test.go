@@ -2,9 +2,52 @@ package ui
 
 import (
 	"bytes"
+	"image"
+	"image/color"
 	"image/png"
 	"testing"
 )
+
+func TestTurnPortrait(t *testing.T) {
+	enc := func(w, h int, set map[[2]int]color.RGBA) []byte {
+		img := image.NewRGBA(image.Rect(0, 0, w, h))
+		for p, c := range set {
+			img.SetRGBA(p[0], p[1], c)
+		}
+		var b bytes.Buffer
+		if err := png.Encode(&b, img); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	red, green := color.RGBA{255, 0, 0, 255}, color.RGBA{0, 255, 0, 255}
+	// 3x2 canvas: red at the top-left corner, green at the top-right one
+	data := enc(3, 2, map[[2]int]color.RGBA{{0, 0}: red, {2, 0}: green})
+	out, err := turnPortrait(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := img.Bounds(); b.Dx() != 2 || b.Dy() != 3 {
+		t.Fatalf("bounds %v", b)
+	}
+	// clockwise: top-left goes to top-right, top-right to bottom-right
+	at := func(x, y int) color.RGBA { return color.RGBAModel.Convert(img.At(x, y)).(color.RGBA) }
+	if at(1, 0) != red || at(1, 2) != green {
+		t.Errorf("red at (1,0) = %v, green at (1,2) = %v", at(1, 0), at(1, 2))
+	}
+	// already upright: untouched
+	tall := enc(2, 3, nil)
+	if got, err := turnPortrait(tall); err != nil || !bytes.Equal(got, tall) {
+		t.Errorf("portrait frame changed: %v", err)
+	}
+	if _, err := turnPortrait([]byte("garbage")); err == nil {
+		t.Error("garbage accepted")
+	}
+}
 
 func TestBGRAPNG(t *testing.T) {
 	// 2x2, stride 12 (4 bytes of padding per row): the padding must not leak into the picture
