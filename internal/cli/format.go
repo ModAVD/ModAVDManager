@@ -479,6 +479,35 @@ func formatDelete(w io.Writer, r *emu.DeleteResult) {
 	fmt.Fprintf(w, "已删除实例 %d（%s），连同数据目录 %s\n", r.Index, r.Name, r.Path)
 }
 
+// formatCreateBatch: each new instance as create prints it, then the ones not made.
+func formatCreateBatch(w io.Writer, r *CreateBatchResult) {
+	fmt.Fprintf(w, "新建了 %d 台，%d 台没建成\n", len(r.Results), len(r.Failed))
+	for k := range r.Results {
+		formatCreate(w, &r.Results[k])
+	}
+	for _, f := range r.Failed {
+		fmt.Fprintf(w, "实例 %d 没建成：%s\n", f.Index, f.Error.Message)
+		formatFailureAdvice(w, f)
+	}
+}
+
+func formatDeleteBatch(w io.Writer, r *DeleteBatchResult) {
+	fmt.Fprintf(w, "删除了 %d 台，%d 台没删\n", len(r.Results), len(r.Failed))
+	for k := range r.Results {
+		formatDelete(w, &r.Results[k])
+	}
+	for _, f := range r.Failed {
+		fmt.Fprintf(w, "实例 %d 没删：%s\n", f.Index, f.Error.Message)
+		formatFailureAdvice(w, f)
+	}
+}
+
+func formatFailureAdvice(w io.Writer, f InstanceFailure) {
+	if f.Error.Advice != "" {
+		fmt.Fprintf(w, "  建议：%s\n", f.Error.Advice)
+	}
+}
+
 func formatStart(w io.Writer, r *emu.StartResult) {
 	in := r.Instance
 	label := subject(in.Index, in.Name, in.Title)

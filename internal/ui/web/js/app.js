@@ -6,7 +6,7 @@ import { S, update, subscribe, runningCount } from './store.js';
 import { api, connectEvents } from './api.js';
 import { initUI } from './ui.js';
 import { initGrid, renderGrid, viewState, setView } from './cards.js';
-import { openCreate, openSettings, openDelete } from './forms.js';
+import { openCreate, openSettings, openDelete, openDeleteMany } from './forms.js';
 import { openProxy } from './proxy.js';
 import { runCheck, checkSummary, openCheck, openActivity, renderBanner } from './panels.js';
 import { openViewer, openLogs } from './viewer.js';
@@ -72,6 +72,7 @@ $('checkChip').onclick = openCheck;
 $('updChip').onclick = openUpdate;
 $('actBtn').onclick = openActivity;
 $('createBtn').onclick = $('emptyCreate').onclick = openCreate;
+$('deleteManyBtn').onclick = () => openDeleteMany();
 
 const failBox = $('failState');
 const sigs = {};
@@ -128,6 +129,7 @@ function render() {
     $('createBtn').title = full ? t('最多 9 台实例（编号 0–9，5 除外）') : '';
   }
   $('createBtn').hidden = none || !!failed;
+  $('deleteManyBtn').hidden = none || !!failed || !list || list.instances.length < 2;
   $('viewSeg').hidden = none || !!failed;
   $('summary').hidden = none;
   $('grid').hidden = !!failed || none;

@@ -995,6 +995,10 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .store-opt { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .store-choose .f-hint, .store-own { margin-left: 28px; }
 .store-choose .checkbox input:disabled { opacity: .5; cursor: default; }
+/* 批量删除 (ModAVD#240): the instances to tick */
+.pick-list { display: grid; gap: 10px; margin: 12px 0 16px; }
+.pick-list .checkbox input:disabled { opacity: .5; cursor: default; }
+.pick-list .muted { margin-left: auto; font-size: 13px; }
 .store-own { margin-top: 6px; }
 .store-own .btn { margin-left: -10px; }
 .store-state { margin: 0; color: var(--tf); font-size: 13px; overflow-wrap: anywhere; }

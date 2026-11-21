@@ -42,8 +42,12 @@ type fakeManager struct {
 	install func(i int, apk string) (*emu.InstallResult, error)
 	create  func(req emu.CreateRequest) (*emu.InstanceInfo, error)
 	update  func(i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
-	running func(ctx context.Context) ([]int, error)
-	wait    func(timeout time.Duration)
+	del     func(i int) (*emu.DeleteResult, error)
+
+	freeIndexes func(n int) ([]int, error)
+	space       func() error
+	running     func(ctx context.Context) ([]int, error)
+	wait        func(timeout time.Duration)
 
 	waits []time.Duration // Wait calls (not in calls: most tests count those)
 }
@@ -107,6 +111,27 @@ func (f *fakeManager) Create(ctx context.Context, req emu.CreateRequest) (*emu.I
 	return &in, nil
 }
 
+// FreeIndexes is 1, 2, 3 … (n of them) unless the hook says otherwise.
+func (f *fakeManager) FreeIndexes(n int) ([]int, error) {
+	f.record("free-indexes " + itoa(n))
+	if f.freeIndexes != nil {
+		return f.freeIndexes(n)
+	}
+	out := make([]int, n)
+	for k := range out {
+		out[k] = k + 1
+	}
+	return out, nil
+}
+
+func (f *fakeManager) CreateSpaceError() error {
+	f.record("space")
+	if f.space != nil {
+		return f.space()
+	}
+	return nil
+}
+
 func (f *fakeManager) Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error) {
 	f.record("update " + itoa(i))
 	if f.update != nil {
@@ -117,6 +142,9 @@ func (f *fakeManager) Update(ctx context.Context, i int, req emu.UpdateRequest) 
 
 func (f *fakeManager) Delete(ctx context.Context, i int) (*emu.DeleteResult, error) {
 	f.record("delete " + itoa(i))
+	if f.del != nil {
+		return f.del(i)
+	}
 	return &emu.DeleteResult{Index: i, Name: root.AvdName(i), Path: `D:\r\avd\` + root.AvdName(i) + ".avd"}, nil
 }
 

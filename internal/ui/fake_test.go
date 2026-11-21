@@ -36,22 +36,24 @@ const testToken = "test-token-0123456789"
 
 // fake is the emu side of the tests: instances in memory, calls recorded, Start / Stop optionally held at a gate.
 type fake struct {
-	mu        sync.Mutex
-	instances map[int]emu.InstanceInfo
-	infoErr   map[int]error
-	created   []emu.CreateRequest
-	updated   []emu.UpdateRequest
-	deleted   []int
-	starts    []emu.StartOptions
-	stops     []emu.StopOptions
-	shells    []string
-	shellCode int
-	shellOut  string
-	shellErr  error
-	installs  []fakeInstall
-	disk      []string      // "info 3", "trim 3", "compact 3" in call order
-	diskErr   error         // returned by every disk call when set
-	diskGate  chan struct{} // DiskCompact waits here when set
+	mu         sync.Mutex
+	instances  map[int]emu.InstanceInfo
+	infoErr    map[int]error
+	created    []emu.CreateRequest
+	createGate chan struct{} // Create waits here (after recording the request) when set
+	spaceErr   func() error  // CreateSpaceError's answer when set
+	updated    []emu.UpdateRequest
+	deleted    []int
+	starts     []emu.StartOptions
+	stops      []emu.StopOptions
+	shells     []string
+	shellCode  int
+	shellOut   string
+	shellErr   error
+	installs   []fakeInstall
+	disk       []string      // "info 3", "trim 3", "compact 3" in call order
+	diskErr    error         // returned by every disk call when set
+	diskGate   chan struct{} // DiskCompact waits here when set
 
 	// the per-app proxy: AppProxy answers proxy[i] (a fresh unset one when missing); SetAppProxy records the change,
 	// applies it to proxy[i] and answers with proxyApplied ("next_boot" when "")
@@ -161,7 +163,15 @@ func (b fakeBackend) Regional(ctx context.Context, i int) (*emu.RegionalResult, 
 func (b fakeBackend) Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
 	b.f.mu.Lock()
 	b.f.created = append(b.f.created, req)
+	gate := b.f.createGate
 	b.f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, canceledErr(ctx)
+		}
+	}
 	i := 2
 	if req.Index != nil {
 		i = *req.Index
@@ -182,6 +192,33 @@ func (b fakeBackend) FreeIndex() (int, error) {
 		}
 	}
 	return 0, errs.New(errs.AlreadyExists, "没有空闲编号")
+}
+
+// FreeIndexes is FreeIndex n times over (2, 6, 7 … with 3 and 4 there); errs.Busy when fewer are free.
+func (b fakeBackend) FreeIndexes(n int) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	var out []int
+	for i := 2; i <= 9 && len(out) < n; i++ {
+		if _, ok := b.f.instances[i]; !ok && i != 5 {
+			out = append(out, i)
+		}
+	}
+	if len(out) < n {
+		return nil, errs.Newf(errs.Busy, "只有 %d 个空闲编号（端口也要空着），建不了 %d 台", len(out), n)
+	}
+	return out, nil
+}
+
+// CreateSpaceError answers spaceErr(): nil unless a test sets it.
+func (b fakeBackend) CreateSpaceError() error {
+	b.f.mu.Lock()
+	fn := b.f.spaceErr
+	b.f.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return nil
 }
 
 func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error) {
