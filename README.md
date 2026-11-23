@@ -406,6 +406,8 @@ go test ./...
 
 语言/时区的真实客体验收用 `python scripts/test_regional_guest.py --root <本工作树/out/全新测试根> --legacy-cli <旧版命令行> --lock <共享验收锁文件>`。测试根须复制独立 SDK，并明确设置 `portBase: 34100`、`adbServerPort: 34198`、`scriptAdbServerPort: 34199`、`shareDefaultAdbServer: false`。脚本验证这些条件；测试持有独占句柄直到正常关机和清理完成。英文宿主及宿主时区变化采用注入输入，不代替两种真实 Windows 的验收。
 
+在 Android 14 测试实例的 shell 里运行 `sh test_app_keepalive_guest.sh /data/local/tmp/modavd-app-keepalive.sh` 可复测后台应用计时。先将 `scripts/test_app_keepalive_guest.sh` 推到测试实例。脚本用模拟的应用切换和前台查询失败事件验证超时重试、切回取消，约需 70 秒。
+
 `internal/guest/regional/Regional.java` 的 4 KiB 客体助手随源码附带 DEX。普通构建不用 Java 或 Android SDK；修改助手后，用本地 JDK 和指定 D8 重建，并核对字节：`python internal/guest/regional/generate.py --r8 <r8-8.3.37.jar> --check`。脚本记录下载地址和 SHA-256。CLDR 表用 `python internal/regional/generate.py <windowsZones.xml>` 从固定版本重建。
 
 ## 单独下载与哈希

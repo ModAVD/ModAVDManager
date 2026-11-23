@@ -403,6 +403,8 @@ Tests run on Windows only. Optional environment variables:
 
 The native regional check is `python scripts/test_regional_guest.py --root <this-checkout/out/fresh-test-root> --legacy-cli <old-cli> --lock <shared-acceptance-lock>`. Copy an independent SDK into the test root and explicitly set `portBase: 34100`, `adbServerPort: 34198`, `scriptAdbServerPort: 34199`, and `shareDefaultAdbServer: false`. The runner validates these conditions. The test holds an exclusive handle through normal shutdown and cleanup. English-host inputs and host time-zone changes are injected; they do not replace acceptance on two real Windows display-language environments.
 
+To check background app timers, push `scripts/test_app_keepalive_guest.sh` to an Android 14 test instance. In its shell, run `sh test_app_keepalive_guest.sh /data/local/tmp/modavd-app-keepalive.sh` from the directory containing the test script. The check takes about 70 seconds and simulates app switches and a failed foreground query to verify retry and cancellation.
+
 The 4 KiB guest helper in `internal/guest/regional/Regional.java` includes its compiled DEX. Normal builds need neither Java nor an Android SDK. After changing the helper, rebuild and compare its bytes using a local JDK and the pinned D8: `python internal/guest/regional/generate.py --r8 <r8-8.3.37.jar> --check`. The script records the download URL and SHA-256. Regenerate the CLDR table with `python internal/regional/generate.py <windowsZones.xml>` using the pinned input.
 
 ## Standalone download and hashes

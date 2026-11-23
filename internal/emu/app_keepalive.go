@@ -25,11 +25,12 @@ func (m *Manager) setupAppKeepalive(ctx context.Context, i int) {
 		m.Log.Warnf("实例 %d 无法读取应用保活设置，跳过后台应用清理: %v", i, err)
 		return
 	}
+	mode := "off"
 	if keepBackgroundApps(meta.Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj()) {
-		return
+		mode = "on"
 	}
 	if script, ok := m.pushGuestScript(ctx, i, guest.AppKeepalive); ok {
-		if result := m.shell(ctx, i, "sh "+script+" daemon", 0); result.Code != 0 {
+		if result := m.shell(ctx, i, "sh "+script+" daemon "+mode, 0); result.Code != 0 {
 			m.Log.Warnf("实例 %d 后台应用清理未启动: %s", i, tail(result.Out, 300))
 		}
 	}
