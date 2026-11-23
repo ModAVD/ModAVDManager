@@ -51,6 +51,8 @@ type InstanceConfig struct {
 	Orientation string `json:"orientation"`
 	// Sound: the next boot has host sound and a guest sound card (mas-avd.json instances.<i>.sound; off by default).
 	Sound bool `json:"sound"`
+	// AppKeepalive leaves third-party apps running in the background from the next boot.
+	AppKeepalive bool `json:"app_keepalive"`
 }
 
 type InstanceInfo struct {
@@ -199,7 +201,8 @@ type UpdateRequest struct {
 	// with DataPartitionGB.
 	DataDiskAuto bool
 	// Sound turns the sound card on or off from the next boot (avd.SoundKey; ModAVD/ModAVD#226).
-	Sound *bool
+	Sound        *bool
+	AppKeepalive *bool
 }
 
 type UpdateResult struct {

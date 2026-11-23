@@ -96,6 +96,7 @@ var (
 	optLanguage      = flagSpec{"language", kindString, "host|preserve|语言", "Windows：host 按宿主界面语言设置一次，preserve 保持安卓语言，或指定 zh-CN、en-US 等语言"}
 	optTimeZone      = flagSpec{"timezone", kindString, "host|preserve|IANA", "Windows：host 每次冷启动跟随宿主，preserve 沿用原行为，或指定 Asia/Shanghai、Etc/UTC 等 IANA 时区"}
 	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
+	optAppKeepalive  = flagSpec{"app-keepalive", kindString, "on|off", "应用保活：默认 off，第三方应用连续在后台满 60 秒后结束；on 保留后台应用。下次开机生效。"}
 	optSound         = flagSpec{"sound", kindString, "on|off", "声音：on 下次开机起带声卡、电脑出声（会多占一些 CPU），off 照旧不带（默认）"}
 	optBossKey       = flagSpec{"boss-key", kindString, "组合", "老板键，比如 Ctrl+Alt+Shift+1（Ctrl、Alt、Shift 至少带一个，不收 Win）；none 是不要（只有 Windows）"}
 	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
@@ -218,14 +219,14 @@ func init() {
 			run:   runCreate, human: humanCreate, exit: exitBatch,
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--boss-key 组合|none]",
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--app-keepalive on|off] [--boss-key 组合|none]",
 			summary: "修改实例设置、诊断模式和老板键",
 			details: "至少给一个选项。诊断模式和老板键立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
 				dataDiskHelp + "数据盘只能改大，游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
 				"--sound on 让这台下次开机起有声音（带窗口和无头都是），会多占一些 CPU；默认 off。" +
 				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
 				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDPI, optOrientation, optDataGB, optLanguage, optTimeZone, optDiagnostics, optSound, optBossKey},
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDPI, optOrientation, optDataGB, optLanguage, optTimeZone, optDiagnostics, optSound, optAppKeepalive, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
@@ -695,13 +696,21 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 		on := value == "on"
 		req.Sound = &on
 	}
+	if inv.isSet("app-keepalive") {
+		value := strings.ToLower(inv.strOpt("app-keepalive"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--app-keepalive 只能是 on 或 off")
+		}
+		on := value == "on"
+		req.AppKeepalive = &on
+	}
 	if inv.isSet("boss-key") {
 		k := inv.strOpt("boss-key")
 		req.BossKey = &k
 	}
 	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DPI == nil && req.Orientation == nil && req.DataPartitionGB == nil &&
-		!req.DataDiskAuto && req.Diagnostics == nil && req.Sound == nil && req.BossKey == nil && req.Language == nil && req.TimeZone == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--dpi、--orientation、--data-gb、--language、--timezone、--diagnostics、--sound、--boss-key 中的一个").
+		!req.DataDiskAuto && req.Diagnostics == nil && req.Sound == nil && req.AppKeepalive == nil && req.BossKey == nil && req.Language == nil && req.TimeZone == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--dpi、--orientation、--data-gb、--language、--timezone、--diagnostics、--sound、--app-keepalive、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil

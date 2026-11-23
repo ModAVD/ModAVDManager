@@ -63,7 +63,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
 | `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto\|N] [--fps 1-60] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建（数据盘默认自动扩盘，见下），并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--data-gb auto\|N] [--diagnostics on\|off] [--sound on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--sound on` 让这台下次开机起有声音（带窗口和无头都是，会多占一些 CPU），默认 `off` 不带声卡；记在 `mas-avd.json` 的 `instances.<i>.sound`。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--data-gb auto\|N] [--diagnostics on\|off] [--sound on\|off] [--app-keepalive on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--sound on` 让这台下次开机起有声音（带窗口和无头都是，会多占一些 CPU），默认 `off` 不带声卡；记在 `mas-avd.json` 的 `instances.<i>.sound`。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `clone <i> [--title T]` | 把已关机的实例整份复制成一台新实例（游戏、登录状态、设置都带上）：新实例用最小的空闲编号和它的端口，其余设置照源实例；数据盘整份复制，两台互不影响，可用空间不够时报错（`precheck_failed`）、什么都不复制；失败或取消时复制到一半的会删掉。两台的安卓设备标识（Android ID、GSF ID）相同 |
@@ -82,6 +82,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--source github\|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源，或调用方这次传的更新源和 CDK（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
+
+实例设置里的「应用保活」下次开机生效。默认 `--app-keepalive off`，第三方应用连续离开前台满 60 秒后由 ModAVD 结束，中途切回就取消计时。桌面、当前输入法、系统包和谷歌服务豁免。`--app-keepalive on` 保留后台应用。设置记在 `mas-avd.json` 的 `instances.<i>.appKeepalive`，旧实例没有这个字段时按关闭处理。MCP 的 `update_instance` 接受布尔参数 `app_keepalive`。
 
 Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、macOS、HVF、Metal 和组件版本；游戏列表只向归属已确认的运行实例与现有私有 ADB 查询，不启动服务。问题包只收本目录的实例配置白名单和最多 8 份模拟器日志，每份最多 2 MiB、总文本最多 20 MiB，过滤常见凭据字段、路径和设备标识。macOS 不收截图、系统转储或其他应用日志；分享前请检查问题包。默认复制配置到剪贴板、用 Finder 显示问题包，自动化可用 `--no-clipboard` / `--no-explorer`。
 

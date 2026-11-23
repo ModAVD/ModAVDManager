@@ -235,6 +235,8 @@ export function openSettings(i, field) {
   const initDiagnostics = inst0.diagnostics === true;
   const title = h('input', { class: 'input', id: 's-title', maxlength: '40', autocomplete: 'off', value: initTitle, placeholder: defaultName(i) });
   const diagnostics = h('input', { type: 'checkbox', id: 's-diagnostics', checked: initDiagnostics, 'aria-describedby': 's-diagnostics-h' });
+  const initKeepalive = cfg.app_keepalive === true;
+  const keepalive = h('input', { type: 'checkbox', id: 's-keepalive', checked: initKeepalive, 'aria-describedby': 's-keepalive-h' });
   const initSound = cfg.sound === true;
   const sound = h('input', { type: 'checkbox', id: 's-sound', checked: initSound, 'aria-describedby': 's-sound-h' });
   const boss = bossKeyField(inst0.boss_key || '', () => dirty());
@@ -267,6 +269,8 @@ export function openSettings(i, field) {
         disk.rows,
         inputRow(t('声音'), h('span', { class: 'checkbox p-switch' }, sound),
           hint(t('下次开机生效，带窗口和无头都有声音。开了会多占一些 CPU。'), 's-sound-h')),
+        inputRow(t('应用保活'), h('span', { class: 'checkbox p-switch' }, keepalive),
+          hint(t('下次开机生效。关闭时，第三方应用退到后台满 60 秒后结束，切回前台会取消计时。'), 's-keepalive-h')),
         inputRow(t('诊断模式'), h('span', { class: 'checkbox p-switch' }, diagnostics),
           hint(t('立即生效。历史日志上限 4 GiB、客体内存最多增加 48 MiB；日志可能包含账号信息，仅保存在本机。'), 's-diagnostics-h')),
         boss.row,
@@ -284,6 +288,7 @@ export function openSettings(i, field) {
     const out = {};
     if (title.value.trim() !== initTitle) out.title = title.value.trim();
     if (diagnostics.checked !== initDiagnostics) out.diagnostics = diagnostics.checked;
+    if (keepalive.checked !== initKeepalive) out.app_keepalive = keepalive.checked;
     if (sound.checked !== initSound) out.sound = sound.checked;
     if (boss.changed()) out.boss_key = boss.value();
     if (regional) Object.assign(out, regional.changes());

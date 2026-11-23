@@ -210,14 +210,15 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		DataPartitionGB *int    `json:"data_partition_gb"`
 		DataDiskAuto    bool    `json:"data_disk_auto"`
 		BossKey         *string `json:"boss_key"`
+		AppKeepalive    *bool   `json:"app_keepalive"`
 		Sound           *bool   `json:"sound"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	if body.Title == nil && body.MemoryMB == nil && body.CPU == nil && body.FPS == nil && body.Resolution == nil && body.DPI == nil && body.Orientation == nil &&
-		body.DataPartitionGB == nil && !body.DataDiskAuto && body.Diagnostics == nil && body.Sound == nil && body.BossKey == nil && body.Language == nil && body.TimeZone == nil {
-		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、boss_key 中的一项"))
+		body.DataPartitionGB == nil && !body.DataDiskAuto && body.Diagnostics == nil && body.Sound == nil && body.AppKeepalive == nil && body.BossKey == nil && body.Language == nil && body.TimeZone == nil {
+		writeError(w, errs.New(errs.Usage, "没有要改的设置").WithAdvice("至少给出 title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、app_keepalive、boss_key 中的一项"))
 		return
 	}
 	release, err := s.beginInstanceAction(kindSettings, i)
@@ -230,7 +231,7 @@ func (s *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Language: body.Language, TimeZone: body.TimeZone,
 		FPS: body.FPS, Resolution: body.Resolution, DPI: body.DPI, Orientation: body.Orientation,
 		DataPartitionGB: body.DataPartitionGB, DataDiskAuto: body.DataDiskAuto,
-		Diagnostics: body.Diagnostics, BossKey: body.BossKey, Sound: body.Sound})
+		Diagnostics: body.Diagnostics, BossKey: body.BossKey, Sound: body.Sound, AppKeepalive: body.AppKeepalive})
 	if err != nil {
 		writeError(w, err)
 		return

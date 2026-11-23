@@ -1020,6 +1020,20 @@ func TestUpdateSound(t *testing.T) {
 	}
 }
 
+func TestUpdateAppKeepalive(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.initialize("2025-11-25")
+	for k, on := range []bool{true, false} {
+		h.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"update_instance","arguments":{"index":1,"app_keepalive":%v}}}`, k+2, on))
+		if text, isErr, _ := toolText(t, h.recv()); isErr {
+			t.Fatalf("app_keepalive %v: %s", on, text)
+		}
+		if u := h.f.updates[k]; u.AppKeepalive == nil || *u.AppKeepalive != on || u.MemoryMB != nil {
+			t.Fatalf("app_keepalive %v: update %+v", on, u)
+		}
+	}
+}
+
 func TestServeNeedsManager(t *testing.T) {
 	err := Serve(context.Background(), strings.NewReader(""), io.Discard, Options{})
 	if errs.CodeOf(err) != errs.Internal {

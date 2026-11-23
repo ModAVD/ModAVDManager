@@ -50,7 +50,7 @@ function mk(i, title, o = {}) {
     ports: { console, adb: console + 1, grpc: console + 2 },
     screencap: { shm: 'SHM_videmulator' + console, shm_ready: st === 'online' },
     // o.disk: a size the user set (manual); without it 自动扩盘 (256 GB)
-    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 256, data_disk_mode: o.disk ? 'manual' : 'auto', resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.dpi || (o.resolution === 1080 ? 280 : 240), dpi_setting: o.dpi || 0, orientation: o.orientation || 'landscape', sound: !!o.sound },
+    config: { memory_mb: o.mem || 6144, cpu: o.cpu || 6, fps: o.fps || 60, data_partition_gb: o.disk || 256, data_disk_mode: o.disk ? 'manual' : 'auto', resolution: o.resolution || 720, width: o.resolution === 1080 ? 1920 : 1280, height: o.resolution === 1080 ? 1080 : 720, dpi: o.dpi || (o.resolution === 1080 ? 280 : 240), dpi_setting: o.dpi || 0, orientation: o.orientation || 'landscape', app_keepalive: !!o.app_keepalive, sound: !!o.sound },
     initialized, launcher: initialized ? 'µLauncher' : '',
     renderer: initialized ? (o.sw ? SWIFT : GPU) : '', software_renderer: !!o.sw,
     path: `${ROOT}\\avd\\mas_${i}.avd`,
@@ -1013,7 +1013,7 @@ async function handle(url, init) {
         Object.assign(inst.config, { orientation: body.orientation, width: w, height: inst.config.resolution });
         applied.orientation = body.orientation;
       }
-      for (const k of ['memory_mb', 'cpu', 'fps', 'sound']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
+      for (const k of ['memory_mb', 'cpu', 'fps', 'sound', 'app_keepalive']) if (body[k] != null) { inst.config[k] = body[k]; applied[k] = body[k]; }
       // the data disk: 自动扩盘, or a size that can only grow
       if (body.data_disk_auto && body.data_partition_gb != null) return errResp('invalid_argument', '数据盘只能二选一：自动扩盘，或者指定大小');
       if (body.data_disk_auto) {

@@ -28,6 +28,41 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
+// A keepalive-only edit must also work on a legacy instance without rewriting
+// its hardware settings. Missing means off. An unreadable switch preserves apps.
+func TestUpdateAppKeepalive(t *testing.T) {
+	m, _ := opsTestManager(t)
+	i := createFiles(t, m, nil)
+	if m.mustInfo(t, i).Config.AppKeepalive {
+		t.Fatal("missing appKeepalive must default to off")
+	}
+	path := avd.ConfigPath(m.Root, i)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, on := range []bool{true, false} {
+		res, err := m.Update(context.Background(), i, UpdateRequest{AppKeepalive: &on})
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved, valid := m.Root.InstanceMeta(i).Get(appKeepaliveKey).BoolVal()
+		if !valid || saved != on || res.Instance.Config.AppKeepalive != on || res.Applied["app_keepalive"] != on {
+			t.Fatalf("keepalive %v: persisted %v/%v, result %+v", on, saved, valid, res)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("config.ini changed or unreadable: %v", err)
+	}
+	if err := m.Root.UpdateInstanceMeta(i, map[string]*jsonord.Value{appKeepaliveKey: jsonord.NewString("invalid")}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.mustInfo(t, i).Config.AppKeepalive {
+		t.Fatal("malformed keepalive switch must preserve apps")
+	}
+}
+
 // Leftovers of a delete or create that stopped half-way are deleted like AUTO-MAS's delete_instance does (it lets
 // NOT_FOUND through to delete_instance_files), and an explicit create on such an index says how to clear it.
 func TestDeleteHalfInstances(t *testing.T) {
