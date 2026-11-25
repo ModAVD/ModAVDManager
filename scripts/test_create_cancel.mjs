@@ -239,8 +239,7 @@ const turn = () => new Promise(resolve => setImmediate(resolve));
 
 test('settings has a diagnostic checkbox with limits, privacy and immediate application', async () => {
   const h = await settingsHarness();
-  // the diagnostics switch and the sound switch
-  assert.deepEqual(descendants(h.settings.form).filter(x => x.type === 'checkbox').map(x => x.attrs.get('id')), ['s-sound', 's-diagnostics']);
+  assert.deepEqual(descendants(h.settings.form).filter(x => x.type === 'checkbox').map(x => x.attrs.get('id')), ['s-sound', 's-keepalive', 's-diagnostics']);
   assert.equal(h.control('s-diagnostics').checked, true);
   const text = h.settings.options.body.textContent;
   for (const expected of ['历史日志上限 4 GiB', '客体内存最多增加 48 MiB', '账号信息', '仅保存在本机', '诊断设置立即生效']) assert.ok(text.includes(expected), text);
@@ -267,6 +266,16 @@ test('the sound switch is off by default and patches a boolean', async () => {
   h.settings.form.dispatch('change');
   await h.submit();
   assert.deepEqual(h.requests, [{ method: 'PATCH', path: '/api/instances/3', body: { sound: true } }]);
+});
+
+test('keep background apps defaults to off and sends a settings patch', async () => {
+  const h = await settingsHarness();
+  const control = h.control('s-keepalive');
+  assert.equal(control.checked, false);
+  control.checked = true;
+  h.settings.form.dispatch('change');
+  await h.submit();
+  assert.deepEqual(h.requests, [{ method: 'PATCH', path: '/api/instances/3', body: { app_keepalive: true } }]);
 });
 
 test('diagnostic save displays the external capture warning from its result', async () => {

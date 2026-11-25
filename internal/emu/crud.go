@@ -17,6 +17,7 @@ import (
 	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
 	"modavd/internal/host"
+	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 )
@@ -317,6 +318,12 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 			applied["time_zone"] = *zone
 		}
 	}
+	if req.AppKeepalive != nil {
+		if err := m.Root.UpdateInstanceMeta(i, map[string]*jsonord.Value{appKeepaliveKey: jsonord.NewBool(*req.AppKeepalive)}); err != nil {
+			return nil, err
+		}
+		applied["app_keepalive"] = *req.AppKeepalive
+	}
 	nextBoot := len(applied) > 0
 	var cleanup *DiagnosticsCleanup
 	var warnings []string
@@ -348,7 +355,7 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 	if ok {
 		p = &q
 		if nextBoot {
-			m.Log.Infof("ModAVD 实例 %d 正在运行，硬件改动下次开机生效", i)
+			m.Log.Infof("ModAVD 实例 %d 正在运行，设置改动下次开机生效", i)
 		}
 	}
 	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,

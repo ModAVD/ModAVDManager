@@ -97,7 +97,8 @@ const (
 	DownloadDisk = "modavd-dldisk.sh"
 	// VulkanMode writes the Vulkan display mode for listed games that have not chosen one, before their first start
 	// (modavd only, ModAVD/ModAVD#222).
-	VulkanMode = "modavd-vkmode.sh"
+	VulkanMode   = "modavd-vkmode.sh"
+	AppKeepalive = "modavd-app-keepalive.sh"
 )
 
 // RemoteDir is where the scripts go in the guest.

@@ -259,7 +259,7 @@ func toolDefs() []*toolDef {
 			})),
 
 		finishing(newTool("update_instance", "Update instance",
-			"Change the title, memory, CPU cores, frame rate, resolution, DPI, orientation, data disk (a fixed size or automatic) or sound of an instance. The changes take "+
+			"Change the title, memory, CPU cores, frame rate, resolution, DPI, orientation, data disk (a fixed size or automatic), sound or background app retention of an instance. The changes take "+
 				"effect at its next boot (applies_next_boot=true when it is running now).",
 			mutating(true, true), reflect.TypeFor[emu.UpdateResult](), []prop{
 				indexProp(true),
@@ -277,6 +277,7 @@ func toolDefs() []*toolDef {
 				{"data_disk_auto", false, map[string]any{"type": "boolean", "description": fmt.Sprintf("true: make the data "+
 					"disk automatic (%d GB from the next boot, the host only pays for what is written). Not together with "+
 					"data_partition_gb.", avd.AutoDataPartitionGB)}},
+				{"app_keepalive", false, map[string]any{"type": "boolean", "description": "Keep background apps from the next boot. By default, a third-party app is stopped after 60 continuous seconds in the background. Home, the active keyboard, system apps and Google services are exempt."}},
 				{"sound", false, map[string]any{"type": "boolean", "description": "true: host sound and a guest sound " +
 					"card from the next boot, windowed or headless (costs some CPU); false: no sound (the default)."}},
 			},
@@ -315,12 +316,15 @@ func toolDefs() []*toolDef {
 					return nil, err
 				}
 				req.DataDiskAuto = auto != nil && *auto
+				if req.AppKeepalive, err = a.optBool("app_keepalive"); err != nil {
+					return nil, err
+				}
 				if req.Sound, err = a.optBool("sound"); err != nil {
 					return nil, err
 				}
 				if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DPI == nil && req.Orientation == nil &&
-					req.DataPartitionGB == nil && !req.DataDiskAuto && req.Sound == nil {
-					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、sound 至少给一项")
+					req.DataPartitionGB == nil && !req.DataDiskAuto && req.Sound == nil && req.AppKeepalive == nil {
+					return nil, errs.New(errs.Usage, "没有要改的选项：title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、sound、app_keepalive 至少给一项")
 				}
 				return b.Update(ctx, i, req)
 			})),

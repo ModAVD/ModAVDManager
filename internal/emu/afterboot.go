@@ -231,6 +231,13 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 				m.ensurePixelLauncherRemoved(ctx, i)
 			}
 		},
+		func() {
+			// Changing the switch while running takes effect after reboot. Adopting an
+			// already configured boot must keep the current watcher and its timers.
+			if mode != setupAdopted {
+				m.setupAppKeepalive(ctx, i)
+			}
+		},
 		// 10) orientation: the display stays landscape (persistent; set every boot so old instances get it)
 		func() { m.setupOrientation(ctx, i) },
 		// 10b) hand the clusters the guest freed back to the host, at most once a day (best effort, see autotrim.go)

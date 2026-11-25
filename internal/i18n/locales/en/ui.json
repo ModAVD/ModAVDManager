@@ -231,7 +231,7 @@
   "老板键：读不了实例: %v": "Boss key: cannot read instances: %v",
   "自定义组件下载源至少要有一个地址": "A custom component download source needs at least one address",
   "至少给出 enabled、server、apps 中的一项": "Give at least one of enabled, server, apps",
-  "至少给出 title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、boss_key 中的一项": "Give at least one of title, memory_mb, cpu, fps, resolution, dpi, orientation, data_partition_gb, data_disk_auto, language, time_zone, diagnostics, sound, boss_key",
+  "至少给出 title、memory_mb、cpu、fps、resolution、dpi、orientation、data_partition_gb、data_disk_auto、language、time_zone、diagnostics、sound、app_keepalive、boss_key 中的一项": "Give at least one of title, memory_mb, cpu, fps, resolution, dpi, orientation, data_partition_gb, data_disk_auto, language, time_zone, diagnostics, sound, app_keepalive, boss_key",
   "补全 Google Play 商店": "setting up Google Play Store",
   "补全组件": "fetching components",
   "补全组件必须明确同意许可协议": "Fetching components requires explicitly accepting the license agreement",

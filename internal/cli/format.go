@@ -279,6 +279,7 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	kv("核数", intOrDash(cfg.CPU))
 	kv("帧率", intOrDash(cfg.FPS))
 	kv("声音", onOff(cfg.Sound))
+	kv("应用保活", onOff(cfg.AppKeepalive))
 	kv("数据盘", dataDiskText(cfg)+"，"+dataSpaceSummary(in.DataSpace))
 	if in.DataSpace.Message != "" {
 		kv("数据盘提示", dataSpaceNote(in.DataSpace))
@@ -444,6 +445,9 @@ func appliedParts(applied map[string]any) []string {
 			} else {
 				parts = append(parts, "诊断模式 关")
 			}
+		case "app_keepalive":
+			on, _ := v.(bool)
+			parts = append(parts, "应用保活 "+onOff(on))
 		case "sound":
 			on, _ := v.(bool)
 			parts = append(parts, "声音 "+onOff(on))
