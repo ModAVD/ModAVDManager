@@ -84,17 +84,14 @@ func discoverLDPlayer(root string) (Provider, bool) {
 			continue
 		}
 		path := filepath.Join(configDir, e.Name())
-		var cfg struct {
-			Status struct {
-				PlayerName string `json:"playerName"`
-			} `json:"statusSettings"`
-			Advanced struct {
-				Resolution string `json:"resolution"`
-			} `json:"advancedSettings"`
+		if !trailingDigits.MatchString(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))) {
+			continue
 		}
+		var cfg map[string]json.RawMessage
 		if b, err := os.ReadFile(path); err == nil && json.Unmarshal(b, &cfg) == nil {
 			id := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
-			p.Instances = append(p.Instances, Instance{ID: id, Name: cfg.Status.PlayerName, ConfigPath: path, ADBPort: ldPort(id)})
+			name := rawString(cfg["statusSettings.playerName"])
+			p.Instances = append(p.Instances, Instance{ID: id, Name: name, ConfigPath: path, ADBPort: ldPort(id)})
 		}
 	}
 	if len(p.Instances) == 0 {
@@ -157,8 +154,15 @@ func mumuPort(b []byte) int {
 		case map[string]any:
 			for k, v := range x {
 				if strings.EqualFold(k, "host_port") || strings.EqualFold(k, "adb_port") {
-					if n, ok := v.(float64); ok && n > 0 {
-						return int(n)
+					switch n := v.(type) {
+					case float64:
+						if n > 0 {
+							return int(n)
+						}
+					case string:
+						if port, err := strconv.Atoi(n); err == nil && port > 0 {
+							return port
+						}
 					}
 				}
 				if n := find(v); n > 0 {
@@ -175,6 +179,14 @@ func mumuPort(b []byte) int {
 		return 0
 	}
 	return find(v)
+}
+
+func rawString(v json.RawMessage) string {
+	var s string
+	if json.Unmarshal(v, &s) == nil {
+		return s
+	}
+	return ""
 }
 
 func trimExe(s string) string {
