@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ import (
 )
 
 const transferTimeout = 30 * time.Minute
+
+var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 type Progress struct {
 	Bytes int64  `json:"bytes"`
@@ -36,6 +39,9 @@ func (d Device) run(ctx context.Context, raw bool, args ...string) adb.Result {
 // ListAPKPaths returns the split APK paths reported by package manager. It only
 // reads metadata and does not modify the source instance.
 func (d Device) ListAPKPaths(ctx context.Context, packageName string) ([]string, error) {
+	if !packageNamePattern.MatchString(packageName) {
+		return nil, fmt.Errorf("包名格式不合法：%s", packageName)
+	}
 	r := d.run(ctx, false, "shell", "pm", "path", packageName)
 	if !r.OK() {
 		return nil, fmt.Errorf("查询 %s 的 APK 失败：%s", packageName, r.Out)
@@ -106,6 +112,9 @@ func InstallMultiple(ctx context.Context, source, target Device, packageName, te
 // the pipe and a byte counter, so Android/data and Android/obb never get written
 // to a host file.
 func CopyGameData(ctx context.Context, source, target Device, packageName string, progress func(Progress)) error {
+	if !packageNamePattern.MatchString(packageName) {
+		return fmt.Errorf("包名格式不合法：%s", packageName)
+	}
 	free, err := target.FreeBytes(ctx)
 	if err != nil {
 		return err
@@ -117,7 +126,16 @@ func CopyGameData(ctx context.Context, source, target Device, packageName string
 	portDst := strconv.Itoa(target.Client.Root.AdbServerPort())
 	adbSrc := source.Client.Root.AdbExe()
 	adbDst := target.Client.Root.AdbExe()
-	argsSrc := []string{"-P", portSrc, "-s", source.Serial, "exec-out", "tar", "-cf", "-", "-C", "/sdcard", "Android/data/" + packageName, "Android/obb/" + packageName}
+	paths := make([]string, 0, 2)
+	for _, base := range []string{"Android/data/", "Android/obb/"} {
+		if r := source.run(ctx, false, "shell", "test", "-d", "/sdcard/"+base+packageName); r.OK() {
+			paths = append(paths, base+packageName)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	argsSrc := append([]string{"-P", portSrc, "-s", source.Serial, "exec-out", "tar", "-cf", "-", "-C", "/sdcard"}, paths...)
 	argsDst := []string{"-P", portDst, "-s", target.Serial, "exec-in", "tar", "-xf", "-", "-C", "/sdcard"}
 	src := exec.CommandContext(ctx, adbSrc, argsSrc...)
 	dst := exec.CommandContext(ctx, adbDst, argsDst...)
