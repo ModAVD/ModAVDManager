@@ -425,6 +425,7 @@ go test ./...
 - 只有一个维护者，回复可能要几天。改代码前先在 ModAVD 仓库开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
 - 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义、删了命令或字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- 给人看的文字在代码里写中文，中文原文就是翻译表的键。新加或改了以后跑 `go test ./internal/i18n -run TestCatalog -update`，再把 `internal/i18n/locales/en/` 里新出现的 `""` 填成英文；不会写中文的，键照意思写一句中文，在 PR 里说一声，由维护者改顺。写法和术语对照表见 [internal/i18n/README.md](internal/i18n/README.md)。
 - README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
 - 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
