@@ -179,6 +179,9 @@ func mumuPort(b []byte) int {
 
 func trimExe(s string) string {
 	s = strings.Trim(strings.TrimSpace(s), `"`)
+	if i := strings.IndexByte(s, ','); i >= 0 {
+		s = s[:i]
+	}
 	if strings.HasSuffix(strings.ToLower(s), ".exe") {
 		return filepath.Dir(s)
 	}
@@ -237,14 +240,14 @@ func DiscoverInstalled() ([]Provider, error) {
 		return nil, registryError()
 	}
 	var roots []string
-	for _, query := range []struct{ key, value string }{
-		{`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\leidian14`, "InstallLocation"},
-		{`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer`, "InstallLocation"},
+	for _, key := range []string{
+		`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\leidian14`,
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer`,
 	} {
-		out, err := exec.Command("reg.exe", "query", query.key, "/v", query.value).Output()
+		out, err := exec.Command("reg.exe", "query", key).Output()
 		if err == nil {
 			values := ParseRegistryOutput(string(out))
-			if r := values[query.value]; r != "" {
+			if r := firstNonEmpty(values["InstallLocation"], values["DisplayIcon"]); r != "" {
 				roots = append(roots, trimExe(r))
 			}
 		}
