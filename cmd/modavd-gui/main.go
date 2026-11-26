@@ -69,32 +69,19 @@ func run(args []string) (code int) {
 		}
 	}()
 
-	fs := flag.NewFlagSet("ModAVD", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	rootFlag := fs.String("root", "", "魔改 AVD 根目录")
-	port := fs.Int("port", 0, "监听端口（0 = 随机）")
-	noWindow := fs.Bool("no-window", false, "不打开窗口")
-	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
-	if err := fs.Parse(args); err != nil {
-		fatal("命令行参数不对：" + err.Error() + "\n\n" + usage)
-		return 2
+	parsed, exitCode, ok := parseArgs(args, reportFatal)
+	if !ok {
+		return exitCode
 	}
-	if fs.NArg() > 0 {
-		fatal("多余的参数：" + strings.Join(fs.Args(), " ") + "\n\n" + usage)
-		return 2
-	}
-	if *port < 0 || *port > 65535 {
-		fatal(fmt.Sprintf("端口 %d 不对（0–65535，0 = 随机）", *port))
-		return 2
-	}
-	r, err := root.Resolve(*rootFlag)
+	rootFlag, port, noWindow, dev := parsed.root, parsed.port, parsed.noWindow, parsed.dev
+	r, err := root.Resolve(rootFlag)
 	if err != nil {
 		fatalErr("找不到魔改 AVD 根目录", err)
 		return errs.ExitCode(err)
 	}
 
 	minLevel := logx.Info
-	if *dev {
+	if dev {
 		minLevel = logx.Debug
 	}
 	// Not closed by a defer: the crash handler above still writes to it, and the process exit closes it anyway.
@@ -108,7 +95,7 @@ func run(args []string) (code int) {
 		return 1
 	}
 	if inst == nil {
-		return reopen(r, *noWindow, log)
+		return reopen(r, noWindow, log)
 	}
 	defer inst.release()
 
@@ -117,16 +104,16 @@ func run(args []string) (code int) {
 	opt := ui.Options{
 		Root:       r,
 		Log:        log,
-		Addr:       fmt.Sprintf("127.0.0.1:%d", *port),
-		OpenWindow: !*noWindow,
-		Dev:        *dev,
+		Addr:       fmt.Sprintf("127.0.0.1:%d", port),
+		OpenWindow: !noWindow,
+		Dev:        dev,
 		Ready: func(baseURL, token string) {
 			if err := inst.writeState(baseURL, token); err != nil {
 				log.Warnf("写不了管理器状态文件（再次打开时找不到这个管理器）: %v", err)
 			}
 		},
 	}
-	if *dev {
+	if dev {
 		opt.IdleExit = -1
 	}
 	if err := ui.Run(ctx, opt); err != nil {
@@ -138,6 +125,41 @@ func run(args []string) (code int) {
 		return errs.ExitCode(err)
 	}
 	return 0
+}
+
+type guiArgs struct {
+	root     string
+	port     int
+	noWindow bool
+	dev      bool
+}
+
+// parseArgs keeps argument validation independent of root lookup and UI startup. The reporter receives the
+// destination requested by the caller: help is stdout, errors are stderr.
+func parseArgs(args []string, report func(string, bool)) (guiArgs, int, bool) {
+	fs := flag.NewFlagSet("ModAVD", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	rootFlag := fs.String("root", "", "魔改 AVD 根目录")
+	port := fs.Int("port", 0, "监听端口（0 = 随机）")
+	noWindow := fs.Bool("no-window", false, "不打开窗口")
+	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			report(usage, false)
+			return guiArgs{}, 0, false
+		}
+		report("命令行参数不对："+err.Error()+"\n\n"+usage, true)
+		return guiArgs{}, 2, false
+	}
+	if fs.NArg() > 0 {
+		report("多余的参数："+strings.Join(fs.Args(), " ")+"\n\n"+usage, true)
+		return guiArgs{}, 2, false
+	}
+	if *port < 0 || *port > 65535 {
+		report(fmt.Sprintf("端口 %d 不对（0–65535，0 = 随机）", *port), true)
+		return guiArgs{}, 2, false
+	}
+	return guiArgs{root: *rootFlag, port: *port, noWindow: *noWindow, dev: *dev}, 0, true
 }
 
 // reopen is the second launch on a root: the running manager gets a new window.

@@ -125,6 +125,8 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 - 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
 - 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标是同人图（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)），不随代码许可授权。
 
+从 PowerShell 或脚本查询用法、查看参数错误时，请重定向输出，或用 `Start-Process -Wait` 等待 GUI 程序退出。例如：`& .\ModAVD.exe --help 2> $null`、`Start-Process .\ModAVD.exe -ArgumentList '--help' -Wait`。直接调用 GUI 程序时 PowerShell 不会等待它退出。
+
 ## 构建
 
 要 Go 1.26.5（`go.mod` 的 `toolchain` 行）和 PowerShell 7（`pwsh`）。在仓库根目录：

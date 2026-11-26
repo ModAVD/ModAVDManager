@@ -17,8 +17,19 @@ const (
 	mbTopmost       = 0x40000
 )
 
-// fatal shows a startup error: a GUI-subsystem process has no console to print it to.
-func fatal(msg string) {
+// reportFatal writes to a redirected stream or the parent's console when possible. It falls back to the dialog
+// used by the desktop launch path.
+func reportFatal(msg string, stderr bool) {
+	if writeFatal(msg, stderr) {
+		return
+	}
+	showFatalDialog(msg)
+}
+
+func fatal(msg string) { reportFatal(msg, true) }
+
+// showFatalDialog shows a startup error when there is no stream and no parent console.
+func showFatalDialog(msg string) {
 	text, err := syscall.UTF16PtrFromString(msg)
 	if err != nil {
 		return
