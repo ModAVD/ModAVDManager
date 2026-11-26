@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/importer"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/win"
@@ -184,6 +186,13 @@ func init() {
 			posNames: []string{"实例编号", "APK 路径"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runInstall, human: humanOf(formatInstall),
+		},
+		{
+			name: "import-games", args: "<目标实例> <源 host:port> <包名...>", summary: "从雷电或 MuMu 实例导入应用和游戏数据",
+			details:  "源实例只通过 adb connect 读取。每个包先用 install-multiple 安装拆分 APK，再把 Android/data 和 Android/obb 通过 tar 直接流到目标数据盘。",
+			posNames: []string{"目标实例", "源 host:port", "包名"}, minPos: 3, maxPos: -1,
+			final: true,
+			run:   runImportGames, human: humanOf(formatImportGames),
 		},
 		{
 			name: "shell", args: "<i> [--timeout 秒] <命令...>", summary: "在实例里执行一条 shell 命令",
@@ -819,6 +828,27 @@ func runInstall(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+func runImportGames(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	worker, ok := m.(interface {
+		ImportGames(context.Context, emu.ImportRequest, func(importer.Progress)) (*emu.ImportResult, error)
+	})
+	if !ok {
+		return nil, errs.New(errs.Unsupported, "当前管理器不支持游戏导入")
+	}
+	req := emu.ImportRequest{Target: i, Source: c.inv.pos[1], Packages: append([]string{}, c.inv.pos[2:]...)}
+	return worker.ImportGames(c.ctx, req, func(p importer.Progress) {
+		c.log.Infof("正在拷贝 %s：%d 字节", p.Path, p.Bytes)
+	})
 }
 
 func runShell(c *cmdCtx) (any, error) {

@@ -8,6 +8,7 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/emu"
+	"modavd/internal/importer"
 )
 
 // backend is the part of emu.Manager the server uses; tests inject a fake. One backend is built per job (its
@@ -56,4 +57,8 @@ func (b managerBackend) RootInfo() emu.RootInfo {
 		info.Build = n
 	}
 	return info
+}
+
+func (b managerBackend) ImportGames(ctx context.Context, req emu.ImportRequest, progress func(importer.Progress)) (*emu.ImportResult, error) {
+	return b.Manager.ImportGames(ctx, req, progress)
 }

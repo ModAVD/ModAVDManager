@@ -72,6 +72,16 @@ export async function install(i, file) {
   if (await run(i, 'install', fd)) toast({ tone: 'info', title: '正在安装', text: `${file.name} → ${quoted(instance(i), i)}` });
 }
 
+export const importGames = safe(async (target) => {
+  const source = window.prompt('源实例地址（host:port，例如 127.0.0.1:5555）');
+  if (!source) return;
+  const text = window.prompt('要导入的包名（多个用逗号分隔）');
+  if (!text) return;
+  const packages = text.split(',').map((x) => x.trim()).filter(Boolean);
+  const result = await api.post('/api/import-games', { target, source, packages });
+  toast({ tone: 'ok', title: '游戏导入完成', text: `${packages.join('、')}，${result.bytes || 0} 字节` });
+});
+
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));
 export const openFolder = safe((what, index) => api.post('/api/open', index == null ? { what } : { what, index }));
 export const input = safe((i, body) => api.post(`/api/instances/${i}/input`, body));

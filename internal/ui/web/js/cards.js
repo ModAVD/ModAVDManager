@@ -277,6 +277,7 @@ function menuItems(c) {
     { sep: true },
     { label: vis ? '隐藏窗口' : '显示窗口', icon: vis ? 'eyeOff' : 'window', disabled: !inst.running, run: () => A.setWindow(i, !vis) },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
+    { label: '导入游戏…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => A.importGames(i) },
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },

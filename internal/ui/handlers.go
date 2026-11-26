@@ -13,6 +13,7 @@ import (
 	"modavd/internal/buildinfo"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/importer"
 	"modavd/internal/root"
 )
 
@@ -200,6 +201,43 @@ func (s *server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		return b.Start(ctx, i, emu.StartOptions{Window: body.Window, Progress: s.progressFn(j)})
 	}))
+}
+
+func (s *server) handleImportGames(w http.ResponseWriter, r *http.Request) {
+	var body emu.ImportRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	worker, ok := s.mgr.(interface {
+		ImportGames(context.Context, emu.ImportRequest, func(importer.Progress)) (*emu.ImportResult, error)
+	})
+	if !ok {
+		writeError(w, errs.New(errs.Unsupported, "当前管理器不支持游戏导入"))
+		return
+	}
+	if body.Target < 0 || !root.ValidIndex(body.Target) || body.Source == "" || len(body.Packages) == 0 {
+		writeError(w, errs.New(errs.InvalidArgument, "target、source 和 packages 都必须填写"))
+		return
+	}
+	v, err := worker.ImportGames(detached(r), body, func(p importer.Progress) {
+		s.log.Infof("游戏导入 %s：%d 字节", p.Path, p.Bytes)
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) handleImportSources(w http.ResponseWriter, r *http.Request) {
+	providers, err := importer.DiscoverInstalled()
+	if err != nil {
+		writeError(w, errs.Wrap(errs.Internal, err, "读取雷电 / MuMu 安装信息失败"))
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Providers []importer.Provider `json:"providers"`
+	}{providers})
 }
 
 // respondJob answers a job request: 202 with the job, or the error.

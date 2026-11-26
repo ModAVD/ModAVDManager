@@ -515,6 +515,11 @@ func formatInstall(w io.Writer, r *emu.InstallResult) {
 	}
 }
 
+func formatImportGames(w io.Writer, r *emu.ImportResult) {
+	fmt.Fprintf(w, "已从 %s 导入到实例 %d：%s\n", r.Source, r.Target, strings.Join(r.Packages, "、"))
+	fmt.Fprintf(w, "流式拷贝 %d 字节，数据未落宿主盘\n", r.Bytes)
+}
+
 func formatBridge(w io.Writer, r *emu.BridgeResult) {
 	state := "没装"
 	if r.Installed {
