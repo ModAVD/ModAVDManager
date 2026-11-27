@@ -180,6 +180,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	closing := false
 	if p != nil {
 		info.Running = true
+		m.RecoverOverlay(i) // layer 4 of overlay.go: windows left disabled by an overlay that is gone
 		info.Window, _ = qemuWindowed(*p)
 		info.PID = int(p.PID)
 		if t := p.StartedAt(); !t.IsZero() {

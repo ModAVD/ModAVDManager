@@ -96,6 +96,7 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	if err != nil {
 		return nil, err
 	}
+	m.RecoverOverlay(i) // a boot screen that is gone must not leave the windows disabled (overlay.go)
 	c := &logx.Collector{}
 	mm := m.withLog(c.Sink())
 	l, err := mm.lock(ctx, i, "stop", stopLockWait, "正由另一次关闭在关")

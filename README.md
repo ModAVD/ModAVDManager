@@ -174,6 +174,9 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 最多等 60 秒：从做设置的那次 `start` 开始做设置算起，到点 `status` 就是 `online`，设置照常做下去，`setup_unfinished` 写还在做的那一步（日志里也有一行），平时是 `""`。
   - 不会一直卡在 `starting`：不是 modavd 拉起的模拟器，或者做设置的那次 `start` 被取消、被结束了（没人再做），安卓一开完就是 `online`。客体自己重启时，开机守护跑同一条 `start` 补做设置，这期间同样是 `starting`；客体重启后到开机守护发现之间的几秒（最多一个检查间隔），`status` 还报 `online`。已经开着、设置做过的实例再 `start` 一次（接管）不改状态。
   - **脚本和工具等 `status` 是 `online` 再操作，或者直接用 `start`：它返回就是准备好了。** 这只是状态，不拦着直连 adb 端口的工具。
+- **开机画面**（只有 Windows，带窗口开机时）：`start --window` 和管理器开机都会在模拟器窗口出现时盖上一层画面（品牌头像、进度条、一行字说在做什么），盖到上面说的 `online`（安卓开完、开机后设置做完）那一刻才撤，不加固定等待；这期间模拟器的画面区和旁边的工具栏点不到，键盘也进不了（模拟器的窗口被设成不可用，像弹了模态对话框）。无头开机没有画面。管理器里「看画面」页在开机中显示同一张画面和进度。
+  - 到了 60 秒上限（见上）也撤：窗口先恢复能操作，画面再留 3 秒，写明哪一步还没做完。窗口随时能挪、缩放、最小化、用老板键或 `window` 命令藏起来和叫回来，画面跟着走；不抢你正在用的窗口的焦点。
+  - 窗口一定会恢复能操作：开机画面的进程（`modavd.exe __bootoverlay`，内部用，不要手动运行）退出前先恢复；`start`（或管理器）每 0.5 秒看它的进程，没了就立刻恢复，一般一秒内；`start` 被取消、失败、被结束或管理器退出，画面一两秒内自己撤掉并恢复；两边都被结束的话，窗口留着不可用，直到下一次 `modavd` 查这台实例（`status`、`list`、`info`、`start`、`stop`、`window`；管理器开着时每隔几秒就查一次）发现并恢复，记录在 `<根目录>\avd\.mas_<编号>.overlay`。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。单实例 `stop` 也返回 busy，`--force` 不绕过保护。确实要取消，用 `stop <i> --cancel-create`，或 MCP `stop_instance` 的 `cancel_create: true`；照常先 sync、正常关机，创建流程收到取消后记为 `create_failed`，结果带 `interrupted_create: true`。`stop --all` 自动允许取消，结果逐台标记；不在新建中的实例为 `false`。

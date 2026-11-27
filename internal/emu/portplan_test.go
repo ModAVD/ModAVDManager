@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,10 +21,12 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/testutil"
 	"modavd/internal/win"
+	"modavd/internal/win/wintest"
 )
 
 // The fake adb and qemu of the port plan tests (ModAVD/ModAVD#75): this test binary copied as adb.exe or as
@@ -38,6 +41,13 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if wintest.IsChild() {
+		os.Exit(wintest.ChildMain()) // the stand-in for the emulator's windows (overlay_test.go)
+	}
+	// no test starts a real boot screen process
+	spawnBootOverlay = func(*Manager, int) (host.Process, error) {
+		return host.Process{}, errors.New("no boot overlay in tests")
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case LogcatCaptureArg:

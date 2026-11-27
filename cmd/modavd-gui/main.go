@@ -57,7 +57,7 @@ import (
 
 func main() {
 	// Hidden subcommands first, before any flag parsing or root lookup: emu and host re-run this executable as the
-	// spawn helper of host.StartOrphan, as the Vulkan probe child and as the boot watch (same routing as internal/cli
+	// spawn helper of host.StartOrphan, as the Vulkan probe child, as the boot watch and as the boot overlay (same routing as internal/cli
 	// Main).
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -67,6 +67,8 @@ func main() {
 			os.Exit(emu.RunVulkanProbe(os.Stdout))
 		case emu.BootWatchArg:
 			os.Exit(emu.RunBootWatch(os.Args[2:], os.Stderr))
+		case emu.BootOverlayArg:
+			os.Exit(emu.RunBootOverlay(os.Args[2:], os.Stderr))
 		case versionArg:
 			os.Exit(printVersion())
 		}

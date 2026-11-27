@@ -138,6 +138,7 @@ func (m *Manager) startBooted(ctx context.Context, i int, opt StartOptions) (*St
 	if err != nil {
 		return nil, err
 	}
+	m.RecoverOverlay(i)
 	if opt.creating && m.createCanceled(i) {
 		return nil, errs.New(errs.Canceled, "新建初始化已被关机打断")
 	}
@@ -258,6 +259,15 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	var mode bootSetup
 	var qemu host.Process
 	earlyRestarted := false // earlyGuestFixes restarted zygote during the boot
+	// The boot screen over the emulator's window (overlay.go): started once, by the first point at which this start knows
+	// it works on a boot that has a window; the guard that goes with it ends with the start.
+	var overlay *overlayHandle
+	defer func() { overlay.release() }()
+	coverWindow := func(windowed bool) {
+		if windowed && overlay == nil {
+			overlay = m.startBootOverlay(i)
+		}
+	}
 	// owed: errors from here on leave a boot whose setup the next start finishes
 	owed := func(err error) error {
 		if marker == nil {
@@ -335,6 +345,8 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				m.writeSetupMarker(i, mk)
 				marker = &mk
 				mode = setupOwed
+				windowed, known := qemuWindowed(p)
+				coverWindow(known && windowed)
 				if regularFile(mk.LogFile) {
 					res.LogFile = mk.LogFile // exactly this boot's emulator log (the IME channel is read from it)
 				}
@@ -393,6 +405,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			res.Launched = true
 			res.launchWindow = launchWindow
 			mode = setupLaunched
+			coverWindow(launchWindow)
 			res.LogFile = plan.logPath
 			// written before qemu shows up (a cancel may come first): until then it names qemu by its parent
 			// emulator.exe, and the deadline counts from the launch (qemu starts right after it; onQemu moves it to
@@ -443,6 +456,8 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			m.Log.Infof("实例 %d 的客体在模拟器没退出时自己重启过（boot_id %s → %s），这次开机后的设置按没做处理", i,
 				shortBootID(rec.BootID), shortBootID(bootID))
 			mode = setupOwed
+			windowed, known := qemuWindowed(qemu)
+			coverWindow(known && windowed)
 			marker = &setupMarker{QemuPID: qemu.PID, QemuCreated: qemu.Created, LogFile: res.LogFile,
 				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix(), AliveMS: readyClockMS()}
 			m.writeSetupMarker(i, *marker)

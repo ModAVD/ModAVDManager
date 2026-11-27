@@ -8,6 +8,7 @@ import { openDialog } from './ui.js';
 import { label } from './format.js';
 import * as A from './actions.js';
 import { displayTap } from './display.js';
+import { createBootScreen } from './bootview.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -22,7 +23,8 @@ export function openViewer(i) {
   const startBtn = btn('btn btn-tonal', [icon('power'), t('开机')], () => { if (startBtn.getAttribute('aria-disabled') !== 'true') A.start(i); });
   const ph = h('div', { class: 'ph vph' }, h('span', { class: 'ph-tile' }, h('span', { class: 'ph-num', text: String(i) })),
     h('p', { class: 'vph-text' }, phLead, phMsg), phSub, startBtn);
-  const frame = h('div', { class: 'viewer-frame off', role: 'group', 'aria-label': t('「{name}」的画面', { name: label(inst) }) }, img, ph);
+  const boot = createBootScreen();
+  const frame = h('div', { class: 'viewer-frame off', role: 'group', 'aria-label': t('「{name}」的画面', { name: label(inst) }) }, img, ph, boot.el);
   const dot = h('span', { class: 'live-dot off' });
   const status = h('span');
   const keys = [['back', t('返回')], ['home', t('主页')], ['recents', t('最近任务')]].map(([k, name]) =>
@@ -44,7 +46,9 @@ export function openViewer(i) {
     state = s + text + sub + blocked;
     const live = s === 'live';
     frame.classList.toggle('off', !live);
-    ph.hidden = live;
+    ph.hidden = live || s === 'boot';
+    boot.el.hidden = s !== 'boot';
+    frame.classList.toggle('booting', s === 'boot');
     img.hidden = !live;
     dot.classList.toggle('off', !live);
     setText(status, live ? t('实时 · 约 2 帧/秒') : s === 'wait' ? t('正在取画面…') : t('没有画面'));
@@ -66,7 +70,7 @@ export function openViewer(i) {
       let wait = 500;
       const cur = instance(i);
       if (!cur) { setState('off', t('这台实例已经不在了')); break; }
-      if (cur.status === 'starting' || S.pending[i] === 'start') setState('boot', t('正在开机，开好后这里会显示画面'));
+      if (cur.status === 'starting' || S.pending[i] === 'start') { setState('boot', t('正在开机，开好后这里会显示画面')); boot.update(cur); }
       else if (cur.status !== 'online') setState('off', OFF, t('开机后这里会显示实时画面'));
       else if (document.visibilityState === 'visible') {
         let u = null;

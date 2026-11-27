@@ -111,7 +111,7 @@
 //
 // Hidden subcommands, routed before any flag parsing or root lookup: __spawn (host.SpawnHelperMain, the helper of
 // host.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
-// (emu.RunBootWatch), and __logcat (emu.RunLogcatCapture, the host logcat writer).
+// (emu.RunBootWatch), __bootoverlay (emu.RunBootOverlay, the boot screen over the emulator's window) and __logcat (emu.RunLogcatCapture, the host logcat writer).
 package cli
 
 import (
@@ -258,6 +258,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
 			return emu.RunBootWatch(args[1:], stderr)
+		case emu.BootOverlayArg:
+			return emu.RunBootOverlay(args[1:], stderr)
 		case emu.LogcatCaptureArg:
 			return emu.RunLogcatCapture(args[1:], stderr)
 		case emu.DiagnosticArchiveArg:

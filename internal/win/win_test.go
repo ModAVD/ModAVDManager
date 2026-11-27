@@ -21,6 +21,7 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/testutil"
+	"modavd/internal/win/wintest"
 )
 
 // The test binary doubles as the processes the tests start: TestMain routes these first arguments before any test
@@ -34,6 +35,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if wintest.IsChild() {
+		os.Exit(wintest.ChildMain()) // the stand-in for the emulator's windows (cover_windows_test.go)
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case SpawnHelperArg:

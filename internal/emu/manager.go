@@ -367,11 +367,12 @@ func (m *Manager) guestLockPath(i int) string {
 // removeLockFiles deletes the lock files, the setup marker, create's progress / cancellation files, the clock source
 // record and the boot record (after Delete); best effort.
 func (m *Manager) removeLockFiles(i int) {
-	for _, kind := range []string{"start", "boot", "stop", "watch", "logcat", "bridge", "create", "proxy", "disk"} {
+	for _, kind := range []string{"start", "boot", "stop", "watch", "logcat", "bridge", "create", "proxy", "disk", "overlay"} {
 		os.Remove(m.lockPath(i, kind))
 	}
 	os.Remove(m.setupMarkerPath(i))
 	os.Remove(m.readyPath(i))
+	os.Remove(m.overlayMarkPath(i))
 	os.Remove(m.createProgressPath(i))
 	os.Remove(m.createCancelPath(i))
 	os.Remove(m.guestLockPath(i))

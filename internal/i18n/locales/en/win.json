@@ -12,6 +12,7 @@
   "启动 %s 失败：中转进程没有正常回报（退出码 %d）: %s": "Failed to start %s: the relay process did not report back properly (exit code %d): %s",
   "建不了锁文件目录 %s: %v": "Cannot create lock file folder %s: %v",
   "建托盘窗口失败: %v": "Failed to create the tray window: %v",
+  "建遮罩控制窗口失败: %v": null,
   "打不开%s，无法%s: %v": "Cannot open %s, so cannot %s: %v",
   "打不开锁文件 %s: %v": "Cannot open lock file %s: %v",
   "打开管理器": "Open manager",
@@ -24,6 +25,7 @@
   "枚举窗口失败: %v": "Failed to enumerate windows: %v",
   "没有给出要启动的程序": "No program to start was given",
   "注册托盘窗口类失败: %v": "Failed to register the tray window class: %v",
+  "注册遮罩窗口类失败: %v": null,
   "源路径不可用: %v": "Source path unavailable: %v",
   "目标路径不可用: %v": "Target path unavailable: %v",
   "系统句柄表太大，没读": "The system handle table is too large; not read",
@@ -55,6 +57,7 @@
   "这台电脑上用不了窗口操作: %v": "Window operations are not available on this computer: %v",
   "进程 %d": "process %d",
   "退出": "Exit",
+  "遮罩已经在这个进程里开着": null,
   "锁文件 %s 加锁失败: %v": "Failed to lock lock file %s: %v",
   "锁文件 %s 查询失败: %v": "Failed to query lock file %s: %v"
 }

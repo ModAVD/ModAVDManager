@@ -1164,3 +1164,16 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
   .fields { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
   .f-label { padding-top: 10px; }
 }
+
+/* the boot screen of the viewer (js/bootview.js): the brand avatar on the brand brown, a bar, what is being done */
+.viewer-frame.booting { background: #36211e; }
+.vboot { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; color: #f6e7d8; }
+.vboot[hidden] { display: none; }
+.vboot-avatar { width: min(46%, 300px); max-height: 52%; object-fit: contain; -webkit-user-drag: none; }
+.vboot-title { font-weight: 600; font-size: 15px; text-align: center; }
+.vboot-bar { position: relative; width: min(60%, 380px); height: 8px; border-radius: 4px; background: #55372f; overflow: hidden; }
+.vboot-fill { position: relative; height: 100%; width: 3%; border-radius: 4px; background: #f2a65a; transition: width .6s ease; overflow: hidden; }
+.vboot-fill::after { content: ''; position: absolute; top: 0; bottom: 0; width: 40%; left: -40%; background: linear-gradient(90deg, transparent, #ffe2b8, transparent); animation: vboot-glint 1.8s linear infinite; }
+.vboot-pct { font-size: 13px; color: #c9a894; }
+@keyframes vboot-glint { to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .vboot-fill::after { animation: none; } .vboot-fill { transition: none; } }
