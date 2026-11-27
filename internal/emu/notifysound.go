@@ -19,8 +19,10 @@ package emu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"modavd/internal/adb"
 	"modavd/internal/jsonord"
@@ -30,47 +32,68 @@ import (
 // was turned off.
 const notificationSoundMutedKey = "notificationSoundMuted"
 
+const notificationSoundTimeout = 15 * time.Second
+
 // muteNotificationSoundCommand unsets the setting and reads it back (an unset one reads "null").
-const muteNotificationSoundCommand = "settings delete system notification_sound ; settings get system notification_sound"
+const muteNotificationSoundCommand = "settings delete system notification_sound && settings get system notification_sound"
 
 // notificationSoundUnset judges the output of muteNotificationSoundCommand: the read-back (its last line) is "null".
 func notificationSoundUnset(out string) bool {
 	return lastNonEmptyLine(out) == "null"
 }
 
-// notificationSoundDone: instances.<i>.notificationSoundMuted is true.
-func (m *Manager) notificationSoundDone(i int) bool {
-	meta := m.Root.InstanceMeta(i)
-	return meta != nil && jsonTruthy(meta.Get(notificationSoundMutedKey))
-}
-
 // setupNotificationSound is the first step of afterBoot: it runs before the guest can post anything the user would
 // hear. Only warnings: a failure leaves the marker unset and the next boot tries again.
 func (m *Manager) setupNotificationSound(ctx context.Context, i int) {
-	m.muteNotificationSound(ctx, i, func(command string) adb.Result { return m.shell(ctx, i, command, 0) })
+	m.muteNotificationSound(ctx, i, func(ctx context.Context, command string) adb.Result { return m.shell(ctx, i, command, 0) })
 }
 
-// muteNotificationSound is setupNotificationSound over run, the guest shell.
-func (m *Manager) muteNotificationSound(ctx context.Context, i int, run func(command string) adb.Result) {
-	if !m.initialized(i) || m.notificationSoundDone(i) {
-		return
+// muteNotificationSound bounds the whole step, including adb cleanup and metadata I/O.
+func (m *Manager) muteNotificationSound(ctx context.Context, i int, run func(context.Context, string) adb.Result) {
+	ctx, cancel := context.WithTimeout(ctx, notificationSoundTimeout)
+	defer cancel()
+	type result struct {
+		muted bool
+		err   error
 	}
-	res := run(muteNotificationSoundCommand)
-	if ctx.Err() != nil {
-		return
+	done := make(chan result, 1)
+	go func() {
+		muted, err := m.tryMuteNotificationSound(ctx, i, run)
+		done <- result{muted, err}
+	}()
+	select {
+	case res := <-done:
+		switch {
+		case res.err != nil && res.muted:
+			m.Log.Warnf("实例 %d 通知提示音已关，但结果没写进 mas-avd.json，下次开机再关一次: %v", i, res.err)
+		case res.err != nil:
+			m.Log.Warnf("实例 %d 没关掉通知提示音（下次开机重试）: %s", i, res.err.Error())
+		case res.muted:
+			m.Log.Infof("实例 %d 已关掉通知提示音（通知照常显示）", i)
+		}
+	case <-ctx.Done():
+		m.Log.Warnf("实例 %d 没关掉通知提示音（下次开机重试）: %s", i, ctx.Err().Error())
 	}
+}
+
+func (m *Manager) tryMuteNotificationSound(ctx context.Context, i int, run func(context.Context, string) adb.Result) (bool, error) {
+	meta, err := m.Root.ReadInstanceMeta(i)
+	if err != nil {
+		return false, err
+	}
+	if !jsonTruthy(meta.Get("initialized")) || jsonTruthy(meta.Get(notificationSoundMutedKey)) {
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	res := run(ctx, muteNotificationSoundCommand)
 	if res.Code != 0 || !notificationSoundUnset(res.Out) {
-		m.Log.Warnf("实例 %d 没关掉通知提示音（下次开机重试）: %s", i,
-			orText(tail(strings.Join(strings.Fields(res.Out), " "), 200), fmt.Sprintf("退出码 %d", res.Code)))
-		return
+		return false, errors.New(orText(tail(strings.Join(strings.Fields(res.Out), " "), 200), fmt.Sprintf("退出码 %d", res.Code)))
 	}
-	err := m.Root.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
+	err = m.Root.EditInstanceMetaContext(ctx, i, func(meta *jsonord.Obj) error {
 		meta.Set(notificationSoundMutedKey, jsonord.NewBool(true))
 		return nil
 	})
-	if err != nil {
-		m.Log.Warnf("实例 %d 通知提示音已关，但结果没写进 mas-avd.json，下次开机再关一次: %v", i, err)
-		return
-	}
-	m.Log.Infof("实例 %d 已关掉通知提示音（通知照常显示）", i)
+	return true, err
 }
