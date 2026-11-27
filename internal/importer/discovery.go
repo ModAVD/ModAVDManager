@@ -252,6 +252,7 @@ func DiscoverInstalled() ([]Provider, error) {
 		return nil, registryError()
 	}
 	var roots []string
+	versions := map[string]string{}
 	for _, key := range []string{
 		`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\leidian14`,
 		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\MuMuPlayer`,
@@ -260,7 +261,9 @@ func DiscoverInstalled() ([]Provider, error) {
 		if err == nil {
 			values := ParseRegistryOutput(string(out))
 			if r := firstNonEmpty(values["InstallLocation"], values["DisplayIcon"]); r != "" {
-				roots = append(roots, trimExe(r))
+				root := trimExe(r)
+				roots = append(roots, root)
+				versions[strings.ToLower(filepath.Clean(root))] = values["DisplayVersion"]
 			}
 		}
 	}
@@ -271,5 +274,9 @@ func DiscoverInstalled() ([]Provider, error) {
 		`C:\Program Files\Netease\MuMu`,
 		`C:\Program Files\Netease\MuMuPlayer`,
 	)
-	return Discover(Snapshot{Roots: roots}), nil
+	providers := Discover(Snapshot{Roots: roots})
+	for i := range providers {
+		providers[i].Version = versions[strings.ToLower(filepath.Clean(providers[i].InstallRoot))]
+	}
+	return providers, nil
 }
