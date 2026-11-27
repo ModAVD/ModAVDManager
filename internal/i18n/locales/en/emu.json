@@ -617,6 +617,7 @@
   "整理所需空间超出可表示范围，无法整理": "The space needed for compacting is out of the representable range; cannot compact",
   "整理期间原数据盘已变化，保留原盘，未替换": "The original data disk changed during compacting; keeping the original, not replaced",
   "整理磁盘大约需要 %s 可用空间，%s 所在磁盘只剩 %s，请先腾出约 %s 再整理": "Compacting the disk needs about %s of free space, but the drive of %s has only %s; free up about %s first, then compact",
+  "断开与 %s 的 adb 连接失败：%v": "Could not disconnect adb from %s: %v",
   "新建初始化已取消，已关机": "Create initial setup cancelled; shut down",
   "新建初始化已被关机打断": "Create initial setup was interrupted by a shutdown",
   "新建它的程序中途退出了": "The program that was creating it exited halfway",

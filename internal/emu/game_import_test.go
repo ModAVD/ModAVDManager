@@ -307,3 +307,33 @@ func TestCheckGamesStopped(t *testing.T) {
 		})
 	}
 }
+
+// ModAVD/ModAVD#274: after an import our connection to the source is dropped from the script adb server. The
+// command names the endpoint and is not bound to it with -s; a failure is logged and does not panic.
+func TestImportDeviceDisconnect(t *testing.T) {
+	var calls [][]string
+	var logged []string
+	log := logx.New(func(_ logx.Level, msg string) { logged = append(logged, msg) })
+	fail := false
+	d := importDevice{m: &Manager{Log: log}, serial: "127.0.0.1:16384", exec: func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, args)
+		if fail {
+			return "", errors.New("adb: boom")
+		}
+		return "disconnected 127.0.0.1:16384\n", nil
+	}}
+	d.disconnect()
+	if len(calls) != 1 || !slices.Equal(calls[0], []string{"disconnect", "127.0.0.1:16384"}) || len(logged) != 0 {
+		t.Fatalf("calls=%q logged=%q", calls, logged)
+	}
+	fail = true
+	d.disconnect()
+	if len(calls) != 2 || len(logged) != 1 || !strings.Contains(logged[0], "127.0.0.1:16384") || !strings.Contains(logged[0], "boom") {
+		t.Fatalf("calls=%q logged=%q", calls, logged)
+	}
+	// A device that never connected has nothing to drop.
+	importDevice{m: &Manager{Log: log}, exec: d.exec}.disconnect()
+	if len(calls) != 2 {
+		t.Fatalf("disconnected an unconnected device: %q", calls)
+	}
+}

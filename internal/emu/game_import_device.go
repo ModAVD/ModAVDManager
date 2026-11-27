@@ -129,7 +129,29 @@ func (m *Manager) connectImportDevice(ctx context.Context, port int) (importDevi
 	return d, nil
 }
 
-func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (importDevice, error) {
+// disconnect drops this device's transport from the script adb server, which every script on the machine shares.
+// Failing only leaves the connection where it was, so it is logged.
+func (d importDevice) disconnect() {
+	if d.serial == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	server := d
+	server.serial = ""
+	if _, err := server.output(ctx, "disconnect", d.serial); err != nil {
+		d.m.Log.Warnf("断开与 %s 的 adb 连接失败：%v", d.serial, err)
+	}
+}
+
+// gameSource connects to the source emulator on the script adb server. A failure drops the connection it made.
+func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (_ importDevice, failure error) {
+	var connected importDevice
+	defer func() {
+		if failure != nil {
+			connected.disconnect()
+		}
+	}()
 	p, err := gamesource.Ready(ctx, source)
 	if err != nil {
 		return importDevice{}, err
@@ -144,6 +166,9 @@ func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (imp
 	var last error
 	for {
 		d, err := m.connectImportDevice(deadline, p.Port)
+		if d.serial != "" {
+			connected = d
+		}
 		if err == nil {
 			var state string
 			state, err = d.shell(deadline, "getprop sys.boot_completed; pm path --user 0 android")

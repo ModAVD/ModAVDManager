@@ -330,6 +330,8 @@ func (m *Manager) ImportGames(ctx context.Context, target int, source gamesource
 	if err != nil {
 		return nil, err
 	}
+	// The source emulator stays as it was (its own start is not undone); only our connection to it is dropped.
+	defer src.disconnect()
 	pkgs, err := packageList(ctx, src, "-3")
 	if err != nil {
 		return nil, err
