@@ -82,7 +82,7 @@ export function viewState(inst) {
 }
 
 const PILL = { online: ['运行中', 'ok'], starting: ['开机中', 'warn'], stopping: ['关机中', 'warn'], offline: ['已关机', 'idle'], error: ['开机失败', 'err'] };
-const FAIL = { start: '开机失败', restart: '重启失败', stop: '关机失败', install: '安装失败' };
+const FAIL = { start: '开机失败', restart: '重启失败', stop: '关机失败', install: '安装失败', 'import-games': '导入失败' };
 
 function skeletonFor(v) {
   const sk = (cls) => h('div', { class: 'sk ' + cls });
@@ -197,14 +197,14 @@ function updateCard(c, inst) {
     c.next = 0;
     c.hold = null;
   }
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.kind === 'install';
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.kind === 'install' || v.kind === 'import-games';
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
   setText(c.phText, v.key === 'error' ? '上次开机没有成功' : live ? '正在取画面…' : '未开机');
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.kind === 'install' ? '正在安装 APK…' : '正在开机…');
+    const msg = (p && stripInst(p.message)) || (v.key === 'stopping' ? '正在关机…' : v.kind === 'install' ? '正在安装 APK…' : v.kind === 'import-games' ? '正在导入游戏…' : '正在开机…');
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
     const n = pct(p);
@@ -277,7 +277,7 @@ function menuItems(c) {
     { sep: true },
     { label: vis ? '隐藏窗口' : '显示窗口', icon: vis ? 'eyeOff' : 'window', disabled: !inst.running, run: () => A.setWindow(i, !vis) },
     { label: '安装 APK…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
-    { label: '导入游戏…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => A.importGames(i) },
+    { label: '导入游戏…', icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install' || v.kind === 'import-games', run: () => A.importGames(i) },
     { label: '查看日志', icon: 'file', run: () => openLogs(i) },
     { label: '打开目录', icon: 'folder', run: () => A.openFolder('instance', i) },
     { sep: true },

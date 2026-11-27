@@ -43,6 +43,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | POST | `/api/instances/{i}/restart` | `{window?: bool, force?: bool}` | 202 `Job` |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
 | POST | `/api/import-games` | `{"target": 1, "source": "127.0.0.1:5555", "packages": ["com.example.game"]}` | 200 `ImportResult`（APK 经临时文件安装，游戏数据通过 tar 流式传输） |
+| POST | `/api/instances/{i}/import-games` | `{"source":"127.0.0.1:5555","packages":["com.example.game"]}` | 202 `Job`（通过事件流报告进度） |
 | GET | `/api/import-sources` | | 200 `{"providers":[...]}`（只读注册表和安装配置，不启动第三方实例） |
 | POST | `/api/instances/{i}/window` | `{visible: bool}` | `WindowResult` |
 | POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是 1280×720 显示的像素）或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |

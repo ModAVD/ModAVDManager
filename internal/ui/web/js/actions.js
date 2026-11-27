@@ -6,7 +6,7 @@ import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur } from './format.js';
 import { openActivity } from './panels.js';
 
-const VERB = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK' };
+const VERB = { start: '开机', stop: '关机', restart: '重启', install: '安装 APK', 'import-games': '导入游戏' };
 const isBoot = (j) => j.kind === 'start' || j.kind === 'restart';
 const activity = { label: '查看活动', run: () => openActivity() };
 // wraps an API action: errors become a toast with the message and advice
@@ -38,6 +38,7 @@ function notify(job) {
       text: [r.first_boot && '首次初始化已完成', r.total_seconds && `用时 ${dur(r.total_seconds)}`, w && `有 ${w} 个设置步骤没成功`].filter(Boolean).join('，') });
   } else if (job.kind === 'stop') toast({ title: `${who}已关机` });
   else if (job.kind === 'install') toast({ title: '安装完成', text: `${who}装好了 ${r.package || 'APK'}` });
+  else if (job.kind === 'import-games') toast({ title: '游戏导入完成', text: `${who}导入了 ${(r.packages || []).join('、')}` });
 }
 
 async function run(i, kind, body) {
@@ -78,8 +79,7 @@ export const importGames = safe(async (target) => {
   const text = window.prompt('要导入的包名（多个用逗号分隔）');
   if (!text) return;
   const packages = text.split(',').map((x) => x.trim()).filter(Boolean);
-  const result = await api.post('/api/import-games', { target, source, packages });
-  toast({ tone: 'ok', title: '游戏导入完成', text: `${packages.join('、')}，${result.bytes || 0} 字节` });
+  await run(target, 'import-games', { source, packages });
 });
 
 export const cancelJob = safe(async (id) => onJob(await api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`)));

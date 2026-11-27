@@ -36,6 +36,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/instances/{i}/restart", s.handleRestart)
 	m.HandleFunc("POST /api/instances/{i}/install", s.handleInstall)
 	m.HandleFunc("POST /api/import-games", s.handleImportGames)
+	m.HandleFunc("POST /api/instances/{i}/import-games", s.handleInstanceImportGames)
 	m.HandleFunc("GET /api/import-sources", s.handleImportSources)
 	m.HandleFunc("POST /api/instances/{i}/window", s.handleWindow)
 	m.HandleFunc("POST /api/instances/{i}/input", s.handleInput)

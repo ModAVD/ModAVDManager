@@ -229,6 +229,52 @@ func (s *server) handleImportGames(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+func (s *server) handleInstanceImportGames(w http.ResponseWriter, r *http.Request) {
+	i, ok := pathIndex(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Source   string   `json:"source"`
+		Packages []string `json:"packages"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	_, supported := s.mgr.(interface {
+		ImportGames(context.Context, emu.ImportRequest, func(importer.Progress)) (*emu.ImportResult, error)
+	})
+	if !supported {
+		writeError(w, errs.New(errs.Unsupported, "当前管理器不支持游戏导入"))
+		return
+	}
+	if body.Source == "" || len(body.Packages) == 0 {
+		writeError(w, errs.New(errs.InvalidArgument, "source 和 packages 都必须填写"))
+		return
+	}
+	if err := s.checkFree(kindImport, i); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.respondJob(w)(s.startJob(kindImport, i, func(ctx context.Context, j *job, b backend) (any, error) {
+		jobWorker, ok := b.(interface {
+			ImportGames(context.Context, emu.ImportRequest, func(importer.Progress)) (*emu.ImportResult, error)
+		})
+		if !ok {
+			return nil, errs.New(errs.Unsupported, "当前管理器不支持游戏导入")
+		}
+		s.setProgress(j, jobProgress{Step: "import", Message: fmt.Sprintf("实例 %d 正在导入游戏", i)})
+		res, err := jobWorker.ImportGames(ctx, emu.ImportRequest{Target: i, Source: body.Source, Packages: body.Packages}, func(p importer.Progress) {
+			s.setProgress(j, jobProgress{Step: "copy", Message: fmt.Sprintf("正在拷贝 %s：%d 字节", p.Path, p.Bytes)})
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.setProgress(j, jobProgress{Step: "done", Message: fmt.Sprintf("实例 %d 游戏导入完成", i), Done: progressTotal, Total: progressTotal})
+		return res, nil
+	}))
+}
+
 func (s *server) handleImportSources(w http.ResponseWriter, r *http.Request) {
 	providers, err := importer.DiscoverInstalled()
 	if err != nil {
