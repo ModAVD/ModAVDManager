@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/win"
 )
@@ -240,6 +241,17 @@ func TestResumePublishedBeforeQemuProbe(t *testing.T) {
 	startFindQemu = func(*Manager, int) (win.Process, bool, error) {
 		probed = true
 		return win.Process{}, false, nil
+	}
+	// The error details read the process list too (errorRunning); no real process may change them.
+	savedRunning := errorRunning
+	t.Cleanup(func() { errorRunning = savedRunning })
+	errorRunning = func(*Manager, int) string { return "false" }
+	// Nothing in this test may list the machine's real processes.
+	savedList := listQemuProcesses
+	t.Cleanup(func() { listQemuProcesses = savedList })
+	listQemuProcesses = func() ([]host.Process, error) {
+		t.Error("the test listed real processes")
+		return nil, nil
 	}
 	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
 		// No watcher scheduling is needed: the next boot must synchronously see the marker.
