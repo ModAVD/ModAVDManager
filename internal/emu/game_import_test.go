@@ -337,3 +337,56 @@ func TestImportDeviceDisconnect(t *testing.T) {
 		t.Fatalf("disconnected an unconnected device: %q", calls)
 	}
 }
+
+// A batch is checked again before each later game: one started on either side after the batch began stops the
+// import there, with the games before it imported.
+func TestImportEachChecksBeforeEveryLaterGame(t *testing.T) {
+	games := []ImportGame{{Package: "example.one"}, {Package: "example.two"}, {Package: "example.three"}}
+	for _, tc := range []struct {
+		name        string
+		startAfter  int // number of games imported when the game below starts running
+		onTarget    bool
+		running     string
+		wantImports []string
+		wantErr     string
+	}{
+		{"nothing starts", -1, true, "", []string{"example.one", "example.two", "example.three"}, ""},
+		{"target game starts during the first", 1, true, "example.two", []string{"example.one"}, "目标实例上的 example.two 正在运行"},
+		{"source game starts during the second", 2, false, "example.three:push", []string{"example.one", "example.two"}, "源模拟器上的 example.three 正在运行"},
+		{"a game already imported may run", 1, true, "example.one", []string{"example.one", "example.two", "example.three"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var imported []string
+			names := func() string { return "NAME\ninit\nexit:0\n" }
+			reply := func(string) (string, error) { return names(), nil }
+			dst, src := &scriptedGuest{reply: reply}, &scriptedGuest{reply: reply}
+			guest := src
+			if tc.onTarget {
+				guest = dst
+			}
+			guest.reply = func(string) (string, error) {
+				if tc.startAfter >= 0 && len(imported) >= tc.startAfter {
+					return "NAME\ninit\n" + tc.running + "\nexit:0\n", nil
+				}
+				return names(), nil
+			}
+			saved := importGameFunc
+			t.Cleanup(func() { importGameFunc = saved })
+			importGameFunc = func(_ context.Context, _, _ importDevice, g ImportGame, _ func(Progress)) (GameImportResult, error) {
+				imported = append(imported, g.Package)
+				return GameImportResult{Package: g.Package}, nil
+			}
+			m := &Manager{Log: logx.Nop()}
+			results, err := m.importEach(context.Background(), src.device(), dst.device(), games, nil)
+			if tc.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantErr != "" && (errs.CodeOf(err) != errs.PrecheckFailed || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("err=%v", err)
+			}
+			if !slices.Equal(imported, tc.wantImports) || len(results) != len(tc.wantImports) {
+				t.Fatalf("imported %q, results %d, want %q", imported, len(results), tc.wantImports)
+			}
+		})
+	}
+}

@@ -344,9 +344,23 @@ func (m *Manager) ImportGames(ctx context.Context, target int, source gamesource
 	if err := checkGamesStopped(ctx, src, dst, games); err != nil {
 		return nil, err
 	}
+	return m.importEach(ctx, src, dst, games, progress)
+}
+
+// importGameFunc is replaced in tests.
+var importGameFunc = importGame
+
+// importEach imports the games one after another. checkGamesStopped has already looked at all of them; a batch can
+// run for a long time, so each later game is looked at again right before its turn.
+func (m *Manager) importEach(ctx context.Context, src, dst importDevice, games []ImportGame, progress func(Progress)) ([]GameImportResult, error) {
 	results := make([]GameImportResult, 0, len(games))
-	for _, g := range games {
-		r, err := importGame(ctx, src, dst, g, progress)
+	for k, g := range games {
+		if k > 0 {
+			if err := checkGamesStopped(ctx, src, dst, games[k:k+1]); err != nil {
+				return results, err
+			}
+		}
+		r, err := importGameFunc(ctx, src, dst, g, progress)
 		if e := ctxErr(ctx); e != nil {
 			return results, e
 		}
