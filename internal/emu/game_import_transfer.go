@@ -22,6 +22,9 @@ type importProgress struct {
 	done, total int64
 	last        time.Time
 	report      func(Progress)
+	// links and special files the tar copy left out since the last reset, and the first of them
+	skipped        int
+	skippedExample string
 }
 
 func (p *importProgress) Write(b []byte) (int, error) {
@@ -75,7 +78,9 @@ func importStream(ctx context.Context, src, dst importDevice, read, write string
 	return nil
 }
 
-// Forward only ordinary entries below the selected name. Discard ownership, links and extended metadata.
+// Forward only ordinary entries below the selected name. Discard ownership and extended metadata. Symbolic links and
+// special files (devices, pipes) are left out, as importSize leaves them out of the size, and counted in p.skipped;
+// any other kind of entry is an error.
 func copyImportTar(w io.Writer, r io.Reader, name string, p *importProgress) error {
 	in := tar.NewReader(r)
 	out := tar.NewWriter(w)
@@ -97,6 +102,11 @@ func copyImportTar(w io.Writer, r io.Reader, name string, p *importProgress) err
 		case tar.TypeDir:
 			mode = 0770
 		case tar.TypeReg:
+		case tar.TypeSymlink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			if p.skipped++; p.skipped == 1 {
+				p.skippedExample = rel
+			}
+			continue
 		default:
 			return fmt.Errorf("tar: %q (type %d)", rel, h.Typeflag)
 		}
@@ -260,8 +270,12 @@ func copyResource(ctx context.Context, src, dst importDevice, full string, want 
 	read := importPublicCD(parent) + " && tar -cf - " + importQuote("./"+name)
 	write := "tar -xomf - -C " + importQuote(dir)
 	before := p.done
+	p.skipped, p.skippedExample = 0, ""
 	if err := importStreamFunc(ctx, src, dst, read, write, func(w io.Writer, r io.Reader) error { return copyImportTar(w, r, name, p) }); err != nil {
 		return err
+	}
+	if p.skipped > 0 {
+		dst.m.Log.Warnf("导入 %s 时跳过了 %d 个符号链接或特殊文件（例如 %s）", full, p.skipped, p.skippedExample)
 	}
 	// A source that changed while it was copied must not reach the final directory: a retry would find it there
 	// with other content and stop at already_exists. The deferred cleanup removes only this item's staging directory.
