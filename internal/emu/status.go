@@ -202,7 +202,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	// Booted is Android's own state and stays as it is; online also needs the after-boot setup of this boot to be done
 	// (bootready.go). Not for the result of Start itself (booted known): it is built right after the setup.
 	if info.Status == StatusOnline && booted == nil {
-		setup := m.bootSetupOf(i, *p, startHeld, time.Now())
+		setup := m.bootSetupOf(i, *p, startHeld, time.Now(), m.guestBootIDOf(ctx, i))
 		if !setup.Ready {
 			info.Status, info.SetupStep, info.SetupProgress = StatusStarting, setup.Step, setup.Progress
 		}
@@ -216,8 +216,10 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	switch info.Creation {
 	case creationCreating:
 		info.Status, info.Busy = StatusCreating, "creating"
+		info.SetupStep, info.SetupProgress, info.SetupUnfinished = "", 0, ""
 	case creationFailed:
 		info.Status = StatusCreateFailed
+		info.SetupStep, info.SetupProgress, info.SetupUnfinished = "", 0, ""
 	}
 
 	cfg := InstanceConfig{MemoryMB: avd.MemoryFor(m.Root, i), FPS: in.FPS(), Resolution: in.Resolution()}
@@ -325,8 +327,15 @@ func (m *Manager) bridgeState(ctx context.Context, i int, cfg *avd.Ini, booted, 
 }
 
 // lockHeld: some process (this one included: the lock is per handle) holds lock kind of instance i right now.
+//
+// It looks with a shared byte-range lock (host.ExclusiveLockHeld), so concurrent queries never take each other for
+// the process that holds the lock. Where that probe is not available it takes the lock itself for an instant.
 func (m *Manager) lockHeld(i int, kind string) bool {
-	l, ok, err := host.TryLock(m.lockPath(i, kind))
+	path := m.lockPath(i, kind)
+	if held, err := host.ExclusiveLockHeld(path); err == nil {
+		return held
+	}
+	l, ok, err := host.TryLock(path)
 	if err != nil {
 		return false
 	}

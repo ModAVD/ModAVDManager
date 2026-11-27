@@ -257,14 +257,15 @@ func (m *Manager) setupHostIme(ctx context.Context, i int, launched bool, logPat
 	}
 	prog.emit("ime", fmt.Sprintf("实例 %d 宿主输入法", i), progressIme)
 	// hashed once per boot (about 20 KB); "" (unreadable) makes the same versionCode count as up to date
-	return m.runHostIme(i, apkPath, man.VersionCode, fileSHA256(apkPath), m.guestIO(ctx, i))
+	return m.runHostIme(i, apkPath, man.VersionCode, fileSHA256(apkPath), m.guestIO(ctx, i), prog.needReady)
 }
 
 // runHostIme is the guest part of setupHostIme; apkSHA is the APK's SHA-256 ("" = unknown). Skipped with a warning
 // when pm / settings cannot be read (never taken as "not installed" / "unset"). A signer change (dev build vs
 // release) is an uninstall + install: the IME keeps no data; when the uninstall fails the old one stays and the step
-// goes on with it. Failures are warnings; the result is one log line.
-func (m *Manager) runHostIme(i int, apkPath string, apkVersion int64, apkSHA string, g guestIO) bool {
+// goes on with it. Failures are warnings; the result is one log line. onInstall is called just before the package is
+// installed or replaced (the one step of a take-over that is real work: status then waits for it, see bootready.go).
+func (m *Manager) runHostIme(i int, apkPath string, apkVersion int64, apkSHA string, g guestIO, onInstall ...func()) bool {
 	started := time.Now()
 	out := g.shell(hostImeProbeScript, 0).Out
 	probe, ok := parseHostImeProbe(out)
@@ -288,6 +289,9 @@ func (m *Manager) runHostIme(i int, apkPath string, apkVersion int64, apkSHA str
 	case imeHashUnknown:
 		state = fmt.Sprintf("%d 已是最新（哈希读不出，没比内容）", installed)
 	case imeInstall, imeReplace:
+		for _, f := range onInstall {
+			f()
+		}
 		res := g.adb(installLauncherTimeout, "install", "-r", apkPath)
 		signerChanged := strings.Contains(res.Out, "INSTALL_FAILED_UPDATE_INCOMPATIBLE")
 		if signerChanged {

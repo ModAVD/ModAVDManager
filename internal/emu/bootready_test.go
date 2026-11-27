@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"modavd/internal/errs"
 	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
@@ -60,85 +63,219 @@ func setCap(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { bootSetupCap = saved })
 }
 
+// fakeClock replaces the counter the deadlines are on; the returned pointer is its value in milliseconds.
+func fakeClock(t *testing.T, start int64) *atomic.Int64 {
+	t.Helper()
+	var now atomic.Int64
+	now.Store(start)
+	saved := readyClockMS
+	readyClockMS = now.Load
+	t.Cleanup(func() { readyClockMS = saved })
+	return &now
+}
+
+// ownerOfTests is this process as the record names its writer.
+func ownerOfTests(t *testing.T) (uint32, uint64) {
+	t.Helper()
+	me, ok := host.FindProcess(uint32(os.Getpid()))
+	if !ok {
+		t.Fatal("cannot read self")
+	}
+	return me.PID, me.Created
+}
+
+// putRecord writes a record naming q, written by this process, with the deadline cap from the counter now unless mut
+// changes it.
+func putRecord(t *testing.T, m *Manager, i int, q win.Process, mut func(*readyRecord)) readyRecord {
+	t.Helper()
+	pid, created := ownerOfTests(t)
+	rec := readyRecord{QemuPID: q.PID, QemuCreated: q.Created, OwnerPID: pid, OwnerCreated: created,
+		DeadlineMS: readyClockMS() + bootSetupCap.Milliseconds(), Step: "tune", Percent: 40}
+	if mut != nil {
+		mut(&rec)
+	}
+	tr := &readyTracker{m: m, i: i, rec: rec}
+	tr.mu.Lock()
+	err := tr.write()
+	tr.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
 // TestBootSetupOf: what the readers (status, list, info) make of the record, the start lock and the setup marker.
 func TestBootSetupOf(t *testing.T) {
+	setCap(t, time.Minute)
+	clock := fakeClock(t, 5_000_000)
 	m := markerTestManager(t)
 	const i = 3
 	q := win.Process{PID: 4242, PPID: 3000, Created: 1_000_500}
 	other := win.Process{PID: 4243, Created: 1_000_900}
 	now := time.Now()
-	rec := func(p win.Process, started time.Time, step string, pct int, done bool) {
-		t.Helper()
-		b := &readyTracker{m: m, i: i, rec: readyRecord{QemuPID: p.PID, QemuCreated: p.Created, StartedAtMS: started.UnixMilli(),
-			Step: step, Percent: pct, Done: done}}
-		b.mu.Lock()
-		b.write()
-		b.mu.Unlock()
+	deadAt := func() win.Process { // a process that is gone
+		dead, kill := startSleeper(t)
+		kill()
+		return dead
 	}
-	marker := func(until time.Time) {
+	marker := func(until time.Time, alive int64) {
 		t.Helper()
-		m.writeSetupMarker(i, setupMarker{QemuPID: q.PID, QemuCreated: q.Created, ValidUntil: until.Unix()})
+		m.writeSetupMarker(i, setupMarker{QemuPID: q.PID, QemuCreated: q.Created, ValidUntil: until.Unix(), AliveMS: alive})
 	}
 	reset := func() {
 		m.removeReady(i)
 		m.removeSetupMarker(i)
+		clock.Store(5_000_000)
 	}
+	left := func(d time.Duration) func(*readyRecord) {
+		return func(r *readyRecord) { r.DeadlineMS = clock.Load() + d.Milliseconds() }
+	}
+	var idReads int
+	sameBoot := func() string { idReads++; return testBootA }
+	otherBoot := func() string { idReads++; return testBootB }
 
 	for _, c := range []struct {
 		name  string
 		setup func()
 		held  bool
+		boot  func() string
 		want  bootSetupState
 	}{
-		{"qemu no modavd start works on: nothing to wait for", func() {}, false, bootSetupState{Ready: true}},
-		{"adopt of a qemu from another tool: no marker, no record", func() {}, true, bootSetupState{Ready: true}},
-		{"launched, record not written yet: marker and the start running", func() { marker(now.Add(time.Hour)) }, true,
-			bootSetupState{Step: readyStepBoot}},
-		{"launched, but the start is gone: nobody finishes it", func() { marker(now.Add(time.Hour)) }, false,
+		{"qemu no modavd start works on: nothing to wait for", func() {}, false, nil, bootSetupState{Ready: true}},
+		{"adopt of a qemu from another tool: no marker, no record", func() {}, true, nil, bootSetupState{Ready: true}},
+		{"launched, record not written yet: marker, heartbeat and the start running", func() { marker(now.Add(time.Hour), clock.Load()-3000) },
+			true, nil, bootSetupState{Step: readyStepBoot}},
+		{"launched, the heartbeat is older than the cap: not waited for (not the marker's own deadline)",
+			func() { marker(now.Add(time.Hour), clock.Load()-60_000) }, true, nil, bootSetupState{Ready: true}},
+		{"launched, marker without a heartbeat", func() { marker(now.Add(time.Hour), 0) }, true, nil, bootSetupState{Ready: true}},
+		{"launched, but the start is gone: nobody finishes it", func() { marker(now.Add(time.Hour), clock.Load()) }, false, nil,
 			bootSetupState{Ready: true}},
-		{"marker past its deadline", func() { marker(now.Add(-time.Minute)) }, true, bootSetupState{Ready: true}},
-		{"setup running", func() { rec(q, now.Add(-5*time.Second), "tune", 40, false) }, true,
-			bootSetupState{Step: "tune", Progress: 40}},
-		{"setup running, the start was cancelled or killed", func() { rec(q, now.Add(-5*time.Second), "tune", 40, false) }, false,
+		{"marker past its deadline", func() { marker(now.Add(-time.Minute), clock.Load()) }, true, nil, bootSetupState{Ready: true}},
+		{"setup running", func() { putRecord(t, m, i, q, nil) }, true, sameBoot, bootSetupState{Step: "tune", Progress: 40}},
+		{"setup running, the start was cancelled or killed", func() { putRecord(t, m, i, q, nil) }, false, sameBoot,
 			bootSetupState{Ready: true}},
-		{"setup running past the cap", func() { rec(q, now.Add(-bootSetupCap-time.Second), "ime", 60, false) }, true,
-			bootSetupState{Ready: true, Unfinished: "ime"}},
-		{"setup done", func() { rec(q, now.Add(-5*time.Second), "sdcard", 100, true) }, true, bootSetupState{Ready: true}},
-		{"record of another qemu", func() { rec(other, now, "tune", 40, false) }, true, bootSetupState{Ready: true}},
+		{"setup running, the process that wrote the record is gone", func() {
+			dead := deadAt()
+			putRecord(t, m, i, q, func(r *readyRecord) { r.OwnerPID, r.OwnerCreated = dead.PID, dead.Created })
+		}, true, sameBoot, bootSetupState{Ready: true}},
+		{"setup running past the cap", func() { putRecord(t, m, i, q, left(-time.Second)) }, true, sameBoot,
+			bootSetupState{Ready: true, Unfinished: "tune"}},
+		{"setup running, the deadline is on the dot", func() { putRecord(t, m, i, q, left(0)) }, true, sameBoot,
+			bootSetupState{Ready: true, Unfinished: "tune"}},
+		{"setup done", func() { putRecord(t, m, i, q, func(r *readyRecord) { r.Done = true }) }, true, otherBoot, bootSetupState{Ready: true}},
+		{"record of another qemu", func() { putRecord(t, m, i, other, nil) }, true, nil, bootSetupState{Ready: true}},
 		{"record of another qemu, marker of this one", func() {
-			rec(other, now, "tune", 40, false)
-			marker(now.Add(time.Hour))
-		}, true, bootSetupState{Step: readyStepBoot}},
+			putRecord(t, m, i, other, nil)
+			marker(now.Add(time.Hour), clock.Load())
+		}, true, nil, bootSetupState{Step: readyStepBoot}},
 		{"record of this qemu's earlier PID reuse", func() {
-			rec(win.Process{PID: q.PID, Created: q.Created + 1}, now, "tune", 40, false)
-		}, true, bootSetupState{Ready: true}},
+			putRecord(t, m, i, win.Process{PID: q.PID, Created: q.Created + 1}, nil)
+		}, true, nil, bootSetupState{Ready: true}},
+		{"the guest restarted during the setup: the record is of the boot before", func() {
+			putRecord(t, m, i, q, func(r *readyRecord) { r.BootID = testBootA })
+		}, true, otherBoot, bootSetupState{Ready: true}},
+		{"same boot_id", func() { putRecord(t, m, i, q, func(r *readyRecord) { r.BootID = testBootA }) }, true, sameBoot,
+			bootSetupState{Step: "tune", Progress: 40}},
+		{"boot_id unreadable: the record holds", func() { putRecord(t, m, i, q, func(r *readyRecord) { r.BootID = testBootA }) }, true,
+			func() string { return "" }, bootSetupState{Step: "tune", Progress: 40}},
 	} {
 		reset()
 		c.setup()
-		if got := m.bootSetupOf(i, q, c.held, now); got != c.want {
+		idReads = 0
+		got := m.bootSetupOf(i, q, c.held, now, c.boot)
+		if got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+		if strings.Contains(c.name, "setup done") || c.name == "qemu no modavd start works on: nothing to wait for" {
+			if idReads != 0 {
+				t.Errorf("%s: the guest was asked for its boot_id", c.name)
+			}
 		}
 	}
 	reset()
 	if err := os.WriteFile(m.readyPath(i), []byte(`{"qemu_pid":4242,"qemu_cre`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.bootSetupOf(i, q, true, now); !got.Ready {
+	if got := m.bootSetupOf(i, q, true, now, nil); !got.Ready {
 		t.Errorf("a torn record held the instance back: %+v", got)
 	}
 }
 
-// TestReadyTrackerFile: the record names the qemu, only moves forward, ends Done, and a tracker that is closed without
-// finishing leaves the setup not done.
+// The deadline is on the machine's counter, set once: a wall clock set back or forward (the counter is not the wall
+// clock) cannot lengthen the wait, release it early or turn an "online" back into "starting"; a counter that is not
+// the one the deadline was set on (restarted machine, damaged record) is no wait either.
+func TestReadyDeadlineIsOnTheCounter(t *testing.T) {
+	setCap(t, time.Minute)
+	clock := fakeClock(t, 9_000_000)
+	m := markerTestManager(t)
+	const i = 3
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	tr := m.beginReady(i, q, testBootA)
+	defer tr.close()
+	rec, ok := m.readReady(i)
+	if !ok || rec.DeadlineMS != 9_000_000+60_000 {
+		t.Fatalf("deadline %d, want the counter + the cap", rec.DeadlineMS)
+	}
+	state := func() bootSetupState { return m.bootSetupOf(i, q, true, time.Now(), nil) }
+	if s := state(); s.Ready || s.Step != readyStepBoot {
+		t.Fatalf("at the start: %+v", s)
+	}
+	clock.Store(9_000_000 + 59_999)
+	if s := state(); s.Ready {
+		t.Fatalf("1 ms before the deadline: %+v", s)
+	}
+	// the wall clock changes do not touch the counter: nothing to do here but read the same number
+	clock.Store(9_000_000 + 60_000)
+	if s := state(); !s.Ready || s.Unfinished != readyStepBoot {
+		t.Fatalf("at the deadline: %+v", s)
+	}
+	// a reading that is not on this record's timeline (the machine restarted: the counter is small again; a damaged
+	// record) does not bring "starting" back
+	for _, at := range []int64{9_000_000 - 3_600_000, 1_000, 9_000_000 + 3_600_000} {
+		clock.Store(at)
+		if s := state(); !s.Ready {
+			t.Errorf("counter at %d: %+v, want released", at, s)
+		}
+	}
+}
+
+// The cap's log line goes by the same deadline: a timer that fires before the counter reached it waits again.
+func TestReadyCapLogFollowsTheDeadline(t *testing.T) {
+	setCap(t, 120*time.Millisecond)
+	clock := fakeClock(t, 700_000)
+	logs := &logx.Collector{}
+	m := markerTestManager(t)
+	m.Log = logx.New(logs.Sink())
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	tr := m.beginReady(3, q, "")
+	defer tr.close()
+	tr.step("ime")
+	time.Sleep(400 * time.Millisecond) // the real timer has fired; the counter has not moved
+	if msgs := logs.Messages(); len(msgs) != 0 {
+		t.Fatalf("logged before the counter reached the deadline: %q", msgs)
+	}
+	clock.Store(700_000 + 120)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(logs.Messages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if msgs := logs.Messages(); len(msgs) != 1 || !strings.Contains(msgs[0], "宿主输入法") {
+		t.Fatalf("after the deadline: %q", msgs)
+	}
+}
+
+// TestReadyTrackerFile: the record names the qemu and its writer, only moves forward, ends Done, and a tracker that is
+// closed without finishing leaves the setup not done. A new tracker deletes the earlier boot's record first.
 func TestReadyTrackerFile(t *testing.T) {
 	setCap(t, time.Hour)
 	m := markerTestManager(t)
 	const i = 3
 	q := win.Process{PID: 4242, Created: 1_000_500}
+	pid, created := ownerOfTests(t)
 	tr := m.beginReady(i, q, testBootA)
 	rec, ok := m.readReady(i)
 	if !ok || !rec.names(q) || rec.BootID != testBootA || rec.Step != readyStepBoot || rec.Percent != 0 || rec.Done ||
-		time.Since(time.UnixMilli(rec.StartedAtMS)) > time.Minute {
+		rec.OwnerPID != pid || rec.OwnerCreated != created || rec.ownerGone() {
 		t.Fatalf("after begin: %+v", rec)
 	}
 	tr.step("vulkan_fix")
@@ -148,6 +285,10 @@ func TestReadyTrackerFile(t *testing.T) {
 	rec, _ = m.readReady(i)
 	if rec.Step != "vulkan_fix" || rec.Percent != 10*readyAfterBootMax/40 {
 		t.Fatalf("after steps: %+v", rec)
+	}
+	tr.step(readyStepTune)
+	if rec, _ = m.readReady(i); rec.Step != readyStepTune {
+		t.Fatalf("back to tune: %+v", rec)
 	}
 	tr.percent(40, 40)
 	tr.sdcard()
@@ -163,7 +304,14 @@ func TestReadyTrackerFile(t *testing.T) {
 		t.Fatalf("after finish: %+v", rec)
 	}
 
+	// the next round: the earlier "done" is gone before the new record is written, and reads as this round's activity
 	tr2 := m.beginReady(i, q, testBootB)
+	if rec, _ = m.readReady(i); rec.Done || rec.BootID != testBootB || rec.Step != readyStepBoot {
+		t.Fatalf("new round: %+v", rec)
+	}
+	if s := m.bootSetupOf(i, q, true, time.Now(), nil); s.Ready {
+		t.Fatalf("an old done record overruled the new round: %+v", s)
+	}
 	tr2.step("tune")
 	tr2.close()
 	tr2.step("ime")
@@ -177,52 +325,144 @@ func TestReadyTrackerFile(t *testing.T) {
 	nilTracker.sdcard()
 	nilTracker.finish()
 	nilTracker.close()
+	var nilProg *progressor
+	nilProg.needReady()
+	nilProg.readyStep("tune")
+	nilProg.readyPercent(1, 2)
 }
 
-// TestReadyCapLogsTheStep: a setup that runs on past the cap says which step it was at; one that is done, or whose
-// start returned, says nothing.
-func TestReadyCapLogsTheStep(t *testing.T) {
-	setCap(t, 80*time.Millisecond)
+// A record that cannot be written is warned about, nothing is tracked, and the marker's heartbeat stops: status does
+// not wait for a setup it cannot see.
+func TestBeginReadyWriteFailure(t *testing.T) {
 	logs := &logx.Collector{}
 	m := markerTestManager(t)
 	m.Log = logx.New(logs.Sink())
+	const i = 3
 	q := win.Process{PID: 4242, Created: 1_000_500}
-
-	slow := m.beginReady(3, q, "")
-	slow.step("ime")
-	deadline := time.Now().Add(5 * time.Second)
-	for len(logs.Messages()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	m.writeSetupMarker(i, setupMarker{QemuPID: q.PID, QemuCreated: q.Created, ValidUntil: time.Now().Add(time.Hour).Unix(),
+		AliveMS: readyClockMS()})
+	// a folder with a file in it where the record goes: it can be neither deleted nor replaced
+	if err := os.MkdirAll(m.readyPath(i), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if msgs := logs.Messages(); len(msgs) != 1 || !strings.Contains(msgs[0], "实例 3 开机后调优超过") || !strings.Contains(msgs[0], "宿主输入法") {
-		t.Fatalf("after the cap: %q", msgs)
+	if err := os.WriteFile(filepath.Join(m.readyPath(i), "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	slow.close()
+	if tr := m.beginReady(i, q, testBootA); tr != nil {
+		t.Fatal("a tracker for a record that cannot be written")
+	}
+	var warned bool
+	for _, msg := range logs.Messages() {
+		warned = warned || strings.Contains(msg, "记不下开机调优进度") && strings.Contains(msg, "安卓一开完就报在线")
+	}
+	if !warned {
+		t.Errorf("no warning in %q", logs.Messages())
+	}
+	if mk, ok := m.readSetupMarker(i); !ok || mk.AliveMS != 0 {
+		t.Errorf("marker after the failure: %+v %v", mk, ok)
+	}
+	if s := m.bootSetupOf(i, q, true, time.Now(), nil); !s.Ready {
+		t.Errorf("held back with no record: %+v", s)
+	}
+}
 
-	n := len(logs.Messages())
-	done := m.beginReady(3, q, "")
-	done.finish()
-	closed := m.beginReady(3, q, "")
-	closed.close()
-	time.Sleep(300 * time.Millisecond)
-	if got := len(logs.Messages()); got != n {
-		t.Fatalf("finished or closed setups logged: %q", logs.Messages()[n:])
+// The take-over's one real step: the host input method is installed or replaced (not when it is up to date), and only
+// then does the record start.
+func TestProgressorNeedReadyIsLazyAndOnce(t *testing.T) {
+	var made int
+	var prog *progressor
+	prog = &progressor{lazyReady: func() *readyTracker { made++; return &readyTracker{m: markerTestManager(t), i: 3} }}
+	prog.emit("ime", "m", 700)
+	if prog.ready != nil || made != 0 {
+		t.Fatal("tracking began before there was real work")
+	}
+	prog.needReady()
+	prog.needReady()
+	if prog.ready == nil || made != 1 || prog.lazyReady != nil {
+		t.Fatalf("tracker after needReady: %v made %d", prog.ready, made)
+	}
+	if prog.ready.rec.Step != "ime" {
+		t.Errorf("the step already emitted was lost: %q", prog.ready.rec.Step)
+	}
+}
+
+// Concurrent queries do not take each other for a start: with no start running, any number of them at once never see
+// the instance held back or busy.
+func TestConcurrentInfoNeverSeesAStart(t *testing.T) {
+	setCap(t, time.Hour)
+	m, i := opsTestInstance(t)
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	putRecord(t, m, i, q, nil) // not done: only a start running would hold the instance back
+	savedScan, savedBooted := qemuScan, statusBooted
+	t.Cleanup(func() { qemuScan, statusBooted = savedScan, savedBooted })
+	qemuScan = func([]int) map[int]win.Process { return map[int]win.Process{i: q} }
+	statusBooted = func(*Manager, context.Context, int) (bool, bool) { return true, true }
+	var wg sync.WaitGroup
+	var bad atomic.Int32
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 25; k++ {
+				in, err := m.Info(context.Background(), i)
+				if err != nil || in.Status != StatusOnline || in.Busy != "" {
+					bad.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := bad.Load(); n != 0 {
+		t.Fatalf("%d of 200 concurrent queries saw a start that was not there", n)
+	}
+	// and a real one is seen by all of them
+	unlock := lockStart(t, m, i)
+	defer unlock()
+	for g := 0; g < 4; g++ {
+		if in, err := m.Info(context.Background(), i); err != nil || in.Status != StatusStarting || in.Busy != "starting" {
+			t.Fatalf("with the start lock held: %+v %v", in, err)
+		}
+	}
+}
+
+// A creating or failed creation shows no setup fields, whatever the boots of that setup left.
+func TestCreationClearsSetupFields(t *testing.T) {
+	setCap(t, time.Hour)
+	m, i := opsTestInstance(t)
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	putRecord(t, m, i, q, nil)
+	unlock := lockStart(t, m, i)
+	defer unlock()
+	if in := infoOf(t, m, i, &q); in.Status != StatusStarting || in.SetupStep != "tune" {
+		t.Fatalf("before: %s %q", in.Status, in.SetupStep)
+	}
+	if err := m.setCreation(i, creationFailed, "boom", ""); err != nil {
+		t.Fatal(err)
+	}
+	if in := infoOf(t, m, i, &q); in.Status != StatusCreateFailed || in.SetupStep != "" || in.SetupProgress != 0 || in.SetupUnfinished != "" {
+		t.Errorf("failed creation: %s %q %d %q", in.Status, in.SetupStep, in.SetupProgress, in.SetupUnfinished)
+	}
+	if err := m.setCreation(i, creationCreating, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	cl, ok, err := win.TryLock(m.lockPath(i, "create"))
+	if err != nil || !ok {
+		t.Fatalf("create lock: %v %v", ok, err)
+	}
+	defer cl.Unlock()
+	if in := infoOf(t, m, i, &q); in.Status != StatusCreating || in.SetupStep != "" || in.SetupProgress != 0 || in.SetupUnfinished != "" {
+		t.Errorf("creating: %s %q %d %q", in.Status, in.SetupStep, in.SetupProgress, in.SetupUnfinished)
 	}
 }
 
 // The four ways status must not stay "starting" for good, through Info (what status, list and the manager read), with a
 // start lock held by this process standing for the start that works on the boot.
 func TestInfoNeverStuckStarting(t *testing.T) {
+	setCap(t, time.Minute)
+	clock := fakeClock(t, 8_000_000)
 	m, i := opsTestInstance(t)
 	q := win.Process{PID: 4242, Created: 1_000_500}
 	now := time.Now()
-	writeRec := func(started time.Time, step string, pct int, done bool) {
-		tr := &readyTracker{m: m, i: i, rec: readyRecord{QemuPID: q.PID, QemuCreated: q.Created,
-			StartedAtMS: started.UnixMilli(), Step: step, Percent: pct, Done: done}}
-		tr.mu.Lock()
-		tr.write()
-		tr.mu.Unlock()
-	}
 	check := func(label string, held bool, want Status, wantStep string) InstanceInfo {
 		t.Helper()
 		var unlock func()
@@ -244,8 +484,8 @@ func TestInfoNeverStuckStarting(t *testing.T) {
 	check("foreign qemu, adopt running", true, StatusOnline, "")
 
 	// 2. the start that was doing the setup is gone: marker and record are still there, the lock is not
-	m.writeSetupMarker(i, setupMarker{QemuPID: q.PID, QemuCreated: q.Created, ValidUntil: now.Add(time.Hour).Unix()})
-	writeRec(now.Add(-2*time.Second), "tune", 35, false)
+	m.writeSetupMarker(i, setupMarker{QemuPID: q.PID, QemuCreated: q.Created, ValidUntil: now.Add(time.Hour).Unix(), AliveMS: clock.Load()})
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent = "tune", 35 })
 	in := check("setup being done", true, StatusStarting, "tune")
 	if in.SetupProgress != 35 || in.Busy != "starting" || in.SetupUnfinished != "" {
 		t.Errorf("progress %d busy %q unfinished %q", in.SetupProgress, in.Busy, in.SetupUnfinished)
@@ -256,7 +496,8 @@ func TestInfoNeverStuckStarting(t *testing.T) {
 	}
 
 	// 3. the cap
-	writeRec(now.Add(-bootSetupCap-time.Second), "ime", 60, false)
+	clock.Add(bootSetupCap.Milliseconds())
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent, r.DeadlineMS = "ime", 60, clock.Load()-1 })
 	in = check("past the cap", true, StatusOnline, "")
 	if in.SetupUnfinished != "ime" || in.Busy != "starting" {
 		t.Errorf("unfinished %q busy %q", in.SetupUnfinished, in.Busy)
@@ -265,14 +506,14 @@ func TestInfoNeverStuckStarting(t *testing.T) {
 	// 4. the guest restarted by itself: the boot watch's start sets the new boot up (record of that boot, lock held),
 	// then it is done; and a retune whose start died is not waited for either
 	m.writeBootRecord(i, bootRecord{QemuPID: q.PID, QemuCreated: q.Created, BootID: testBootA})
-	writeRec(now.Add(-time.Minute), "sdcard", 100, true)
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent, r.Done = "sdcard", 100, true })
 	check("before the guest restarted", true, StatusOnline, "")
-	writeRec(time.Now(), readyStepBoot, 0, false)
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent = readyStepBoot, 0 })
 	check("guest restarted, retune running", true, StatusStarting, readyStepBoot)
-	writeRec(time.Now(), "first_boot", 50, false)
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent = "first_boot", 50 })
 	check("guest restarted, retune further", true, StatusStarting, "first_boot")
 	check("guest restarted, retune start died", false, StatusOnline, "")
-	writeRec(time.Now(), "sdcard", 100, true)
+	putRecord(t, m, i, q, func(r *readyRecord) { r.Step, r.Percent, r.Done = "sdcard", 100, true })
 	check("retune done", true, StatusOnline, "")
 
 	// Android not booted is starting whatever the record says, and a qemu that is gone is offline
@@ -288,8 +529,43 @@ func TestInfoNeverStuckStarting(t *testing.T) {
 	}
 }
 
+// The guest restarting again during the setup: the new boot does not inherit the step and the deadline of the one
+// before. The guest is asked for its boot_id only while a record that is not done would hold the instance.
+func TestInfoGuestRestartedDuringSetup(t *testing.T) {
+	setCap(t, time.Minute)
+	fakeClock(t, 3_000_000)
+	m, i := opsTestInstance(t)
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	var reads atomic.Int32
+	id := testBootA
+	saved := guestBootRead
+	t.Cleanup(func() { guestBootRead = saved })
+	guestBootRead = func(int, bool) (bool, string, bool) { reads.Add(1); return true, id, false }
+
+	putRecord(t, m, i, q, func(r *readyRecord) { r.BootID = testBootA })
+	unlock := lockStart(t, m, i)
+	defer unlock()
+	if in := infoOf(t, m, i, &q); in.Status != StatusStarting || in.SetupStep != "tune" || reads.Load() == 0 {
+		t.Fatalf("same boot: %s %q (boot_id read %d times)", in.Status, in.SetupStep, reads.Load())
+	}
+	id = testBootB
+	if in := infoOf(t, m, i, &q); in.Status != StatusOnline || in.SetupStep != "" || in.SetupProgress != 0 || in.SetupUnfinished != "" {
+		t.Errorf("the guest restarted: %s %q %d %q", in.Status, in.SetupStep, in.SetupProgress, in.SetupUnfinished)
+	}
+	// not asked when there is nothing to decide: done, or no record
+	putRecord(t, m, i, q, func(r *readyRecord) { r.BootID, r.Done = testBootA, true })
+	reads.Store(0)
+	if in := infoOf(t, m, i, &q); in.Status != StatusOnline || reads.Load() != 0 {
+		t.Errorf("done record: %s, boot_id read %d times", in.Status, reads.Load())
+	}
+	m.removeReady(i)
+	if in := infoOf(t, m, i, &q); in.Status != StatusOnline || reads.Load() != 0 {
+		t.Errorf("no record: %s, boot_id read %d times", in.Status, reads.Load())
+	}
+}
+
 // The start of an instance on a root with the fake adb: its status while the setup runs, what is on disk, and what the
-// four cases of "stuck at starting" look like through the real Start.
+// cases of "stuck at starting" look like through the real Start.
 type startRun struct {
 	t    *testing.T
 	m    *Manager
@@ -337,6 +613,11 @@ func (s *startRun) guestBoot(id string) {
 	guestBootRead = func(int, bool) (bool, string, bool) { return true, id, false }
 }
 
+func (s *startRun) owedMarker() {
+	s.m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix(),
+		AliveMS: readyClockMS()})
+}
+
 // start runs Start; at each progress step (vulkan_fix, tune, done) at, it records the status the manager would show.
 func (s *startRun) start(ctx context.Context, at func(step string, in InstanceInfo)) (*StartResult, error) {
 	s.t.Helper()
@@ -357,11 +638,13 @@ func (s *startRun) start(ctx context.Context, at func(step string, in InstanceIn
 
 // A start that sets a boot up (the marker of an interrupted start is there: an owed boot) keeps status at starting
 // with the step and percentage until the setup is done, and the boot record that makes the boot watch register the
-// instance with the default adb server (5037) is only written by then.
+// instance with the default adb server (5037) is only written by then. The record of the boot before, "done", does not
+// count as this round's.
 func TestStartOwedBootIsStartingUntilSetupDone(t *testing.T) {
 	s := newStartRun(t)
 	setCap(t, time.Hour)
-	s.m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix()})
+	s.owedMarker()
+	putRecord(t, s.m, s.i, s.q, func(r *readyRecord) { r.Done, r.Step, r.Percent = true, "sdcard", 100 })
 	seen := map[string]InstanceInfo{}
 	var recordAtTune bool
 	res, err := s.start(context.Background(), func(step string, in InstanceInfo) {
@@ -402,8 +685,8 @@ func TestStartOwedBootIsStartingUntilSetupDone(t *testing.T) {
 	}
 }
 
-// An ordinary adopt of a boot that is up and was set up (no marker, record of the same boot) only checks: nothing is
-// held back, no record is written; likewise for a qemu modavd never set up.
+// An ordinary adopt of a boot that is up and was set up (no marker, record of the same boot, initialized) only checks:
+// nothing is held back, no record is written; likewise for a qemu modavd never set up.
 func TestStartPlainAdoptStaysOnline(t *testing.T) {
 	s := newStartRun(t)
 	setCap(t, time.Hour)
@@ -422,6 +705,35 @@ func TestStartPlainAdoptStaysOnline(t *testing.T) {
 	}
 	if _, ok := s.m.readReady(s.i); ok {
 		t.Error("an adopt that owes nothing wrote a setup record")
+	}
+}
+
+// A take-over that has real work to do is tracked: the instance is not initialized (the first-boot setup runs).
+func TestStartAdoptOfUninitializedInstanceIsTracked(t *testing.T) {
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	if err := s.m.Root.EditInstanceMeta(s.i, func(meta *jsonord.Obj) error {
+		meta.Set("initialized", jsonord.NewBool(false))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]InstanceInfo{}
+	if _, err := s.m.Start(context.Background(), s.i, StartOptions{NoBridge: true, Timeout: time.Minute, Progress: func(p Progress) {
+		if p.Step == "first_boot" || p.Step == "done" {
+			in, err := s.m.Info(context.Background(), s.i)
+			if err == nil {
+				seen[p.Step] = *in
+			}
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if in, ok := seen["first_boot"]; !ok || in.Status != StatusStarting || in.SetupStep != "first_boot" {
+		t.Errorf("at first_boot: %+v", seen["first_boot"])
+	}
+	if in := seen["done"]; in.Status != StatusOnline {
+		t.Errorf("at done: %s", in.Status)
 	}
 }
 
@@ -456,14 +768,14 @@ func TestStartPastTheCapReportsOnline(t *testing.T) {
 	s := newStartRun(t)
 	const capFor = 2 * time.Second
 	setCap(t, capFor)
-	s.m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix()})
+	s.owedMarker()
 	seen := map[string]InstanceInfo{}
 	if _, err := s.start(context.Background(), func(step string, in InstanceInfo) {
 		seen[step] = in
 		if step == "tune" {
-			// the setup takes longer than the cap: wait until it has passed (counted from the record's start)
+			// the setup takes longer than the cap: wait until it has passed (counted from the record's deadline)
 			rec, _ := s.m.readReady(s.i)
-			time.Sleep(time.Until(time.UnixMilli(rec.StartedAtMS).Add(capFor + 200*time.Millisecond)))
+			time.Sleep(time.Duration(rec.DeadlineMS-readyClockMS())*time.Millisecond + 200*time.Millisecond)
 			late, err := s.m.Info(context.Background(), s.i)
 			if err != nil {
 				t.Error(err)
@@ -489,12 +801,41 @@ func TestStartPastTheCapReportsOnline(t *testing.T) {
 	}
 }
 
+// A record that cannot be written: the start warns, goes on, and status never waits for it.
+func TestStartWithoutARecordIsNotWaitedFor(t *testing.T) {
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	s.owedMarker()
+	if err := os.MkdirAll(s.m.readyPath(s.i), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.m.readyPath(s.i), "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]InstanceInfo{}
+	if _, err := s.start(context.Background(), func(step string, in InstanceInfo) { seen[step] = in }); err != nil {
+		t.Fatal(err)
+	}
+	for step, in := range seen {
+		if in.Status != StatusOnline || in.SetupStep != "" {
+			t.Errorf("at %s: %s step %q", step, in.Status, in.SetupStep)
+		}
+	}
+	var warned bool
+	for _, msg := range s.logs.Messages() {
+		warned = warned || strings.Contains(msg, "记不下开机调优进度")
+	}
+	if !warned {
+		t.Errorf("no warning in %q", s.logs.Messages())
+	}
+}
+
 // A start that is cancelled in the middle of the setup leaves a record that is not done and releases the lock: status
 // does not wait for a setup nobody does, and the next start of that boot sets it up again.
 func TestStartCancelledMidSetupDoesNotStickAtStarting(t *testing.T) {
 	s := newStartRun(t)
 	setCap(t, time.Hour)
-	s.m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix()})
+	s.owedMarker()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var during InstanceInfo
@@ -521,5 +862,43 @@ func TestStartCancelledMidSetupDoesNotStickAtStarting(t *testing.T) {
 	}
 	if rec, _ := s.m.readReady(s.i); !rec.Done {
 		t.Errorf("record after the second start: %+v", rec)
+	}
+}
+
+// Cancelled during the wait for /sdcard (the last part of the setup): that is no completed setup: no "done" record, no
+// boot record (so the default adb server is not told), and Start returns the cancellation.
+func TestStartCancelledDuringSdcardWaitIsNotDone(t *testing.T) {
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	s.owedMarker()
+	t.Setenv(fakeAdbSdcardFailEnv, "1") // /sdcard never accepts a file: the wait runs until cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var cancelAt atomic.Int64
+	go func() {
+		for ctx.Err() == nil {
+			if rec, ok := s.m.readReady(s.i); ok && rec.Step == readyStepSDCard {
+				time.AfterFunc(700*time.Millisecond, cancel)
+				cancelAt.Store(time.Now().UnixMilli())
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	_, err := s.start(ctx, nil)
+	if errs.CodeOf(err) != errs.Canceled {
+		t.Fatalf("Start returned %v (%s), want a cancellation", err, errs.CodeOf(err))
+	}
+	if cancelAt.Load() == 0 {
+		t.Fatal("never reached the /sdcard wait")
+	}
+	if rec, ok := s.m.readReady(s.i); !ok || rec.Done || rec.Step != readyStepSDCard {
+		t.Errorf("record: %+v %v", rec, ok)
+	}
+	if _, ok := s.m.readBootRecord(s.i); ok {
+		t.Error("a boot record was written for a setup that was cancelled")
+	}
+	if in := infoOf(t, s.m, s.i, &s.q); in.Status != StatusOnline || in.Busy != "" {
+		t.Errorf("after: %s busy %q", in.Status, in.Busy)
 	}
 }

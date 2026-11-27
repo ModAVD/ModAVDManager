@@ -41,8 +41,11 @@ const (
 type progressor struct {
 	fn   func(Progress)
 	last int
-	// ready, once the setup of the boot has begun (Start), is told which step of it is running (readyTracker)
-	ready *readyTracker
+	// ready, once the setup of the boot has begun (Start), is told which step of it is running (readyTracker);
+	// lazyReady starts it for a take-over at the first real work (needReady)
+	ready     *readyTracker
+	lazyReady func() *readyTracker
+	lastStep  string // the last of those steps that was emitted
 }
 
 // readyPercent tells the setup's record that done of total after-boot steps are done.
@@ -58,6 +61,7 @@ func (p *progressor) emit(step, msg string, done int) {
 	}
 	switch step {
 	case "vulkan_fix", "tune", "ime", "first_boot":
+		p.lastStep = step
 		p.ready.step(step)
 	}
 	if p.fn == nil {
@@ -262,12 +266,20 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		return withSetupAdvice(err, setupAdvice(marker.until(), time.Now()))
 	}
 	onQemu := func(q host.Process) {
-		if marker != nil && marker.QemuPID == 0 && q.Created != 0 {
+		if marker == nil {
+			return
+		}
+		if marker.QemuPID == 0 && q.Created != 0 {
 			marker.QemuPID, marker.QemuCreated = q.PID, q.Created
 			// only a launched boot gets here (an owed marker has its qemu recorded already): count from qemu itself
 			if started := q.StartedAt(); mode == setupLaunched && !started.IsZero() {
 				marker.ValidUntil = started.Add(window).Unix()
 			}
+			marker.AliveMS = readyClockMS()
+			m.writeSetupMarker(i, *marker)
+		} else if now := readyClockMS(); heartbeatDue(marker.AliveMS, now) {
+			// the boot wait says it is alive: what status waits for before the setup's own record exists (bootready.go)
+			marker.AliveMS = now
 			m.writeSetupMarker(i, *marker)
 		}
 	}
@@ -310,20 +322,17 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			switch use, stale := setupMarkerUse(mk, ok, p, now); {
 			case use:
 				m.Log.Infof("实例 %d 这次开机后的设置还没做完（拉起它的那次启动被取消或超时了），这次接着做完", i)
-				dirty := false
 				if mk.QemuPID == 0 {
 					// matched by its parent emulator.exe: from now on by qemu itself
 					mk.QemuPID, mk.QemuCreated = p.PID, p.Created
-					dirty = true
 				}
 				if mk.ValidUntil == 0 {
 					// written by an older modavd: keep the deadline it was just judged by, so the messages can name it
 					mk.ValidUntil = mk.deadline(p).Unix()
-					dirty = true
 				}
-				if dirty {
-					m.writeSetupMarker(i, mk)
-				}
+				// this start works on the boot now: what status waits for until the setup's record comes (bootready.go)
+				mk.AliveMS = readyClockMS()
+				m.writeSetupMarker(i, mk)
 				marker = &mk
 				mode = setupOwed
 				if regularFile(mk.LogFile) {
@@ -389,7 +398,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			// emulator.exe, and the deadline counts from the launch (qemu starts right after it; onQemu moves it to
 			// qemu's own start)
 			marker = &setupMarker{EmulatorPID: p.PID, EmulatorCreated: p.Created, LogFile: plan.logPath,
-				ValidUntil: launchedAt.Add(window).Unix()}
+				ValidUntil: launchedAt.Add(window).Unix(), AliveMS: readyClockMS()}
 			m.writeSetupMarker(i, *marker)
 			prog.emit("launch", fmt.Sprintf("实例 %d 的模拟器已拉起（pid %d），等安卓开机", i, p.PID), progressLaunch)
 		}
@@ -435,17 +444,22 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				shortBootID(rec.BootID), shortBootID(bootID))
 			mode = setupOwed
 			marker = &setupMarker{QemuPID: qemu.PID, QemuCreated: qemu.Created, LogFile: res.LogFile,
-				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix()}
+				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix(), AliveMS: readyClockMS()}
 			m.writeSetupMarker(i, *marker)
 		}
 	}
 
 	// A boot this start sets up is "starting" for status until that is done (bootready.go); an adopt that owes
 	// nothing only checks, and the instance stays online.
-	if mode != setupAdopted {
-		prog.ready = m.beginReady(i, qemu, bootID)
-		defer prog.ready.close()
+	// A take-over that finds it has real work to do (the first-boot setup, installing the host input method) starts
+	// the record at that point (progressor.needReady).
+	begin := func() *readyTracker { return m.beginReady(i, qemu, bootID) }
+	if mode != setupAdopted || !m.initialized(i) {
+		prog.ready = begin()
+	} else {
+		prog.lazyReady = begin
 	}
+	defer func() { prog.ready.close() }()
 
 	var owedUntil time.Time // the deadline the deferred-mount warning names
 	if marker != nil {
@@ -483,7 +497,11 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// takes it
 	// away again for about 7 s. Usually ready long before the setup is done, so this costs nothing then.
 	prog.ready.sdcard()
-	if !m.waitSDCard(ctx, i) && ctx.Err() == nil {
+	if !m.waitSDCard(ctx, i) {
+		if err := ctxErr(ctx); err != nil {
+			// cancelled in the middle of it: the setup is not done (no record of that, no boot record) and nobody does it now
+			return nil, m.startFailure(ctx, i, owed(err), unknownState)
+		}
 		m.Log.Warnf("实例 %d 开机后 /sdcard 在 %.0f 秒内一直写不进文件；先返回，稍后再写", i, sdcardMountWait.Seconds())
 	}
 	// The setup is done: status reports online from here, and the boot record below lets the boot watch register the
@@ -798,6 +816,10 @@ type setupMarker struct {
 	// ValidUntil (Unix seconds) is the deadline set by the start that launched the boot: qemu's start plus
 	// setupMarkerWindow of that start's boot timeout. 0 in markers of an older modavd (SetupMarkerMaxAge then).
 	ValidUntil int64 `json:"valid_until,omitempty"`
+	// AliveMS (host.MonotonicMS): the last time a start working on this boot said so (written at the launch or the take-over
+	// and refreshed during the boot wait). While no ready record of the boot exists, the marker holds status at starting
+	// only for bootSetupCap after it (bootready.go). 0: not held.
+	AliveMS int64 `json:"alive_ms,omitempty"`
 }
 
 // until is ValidUntil as a time; zero when unset.

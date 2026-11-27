@@ -471,6 +471,7 @@
   "实例 %d 记不下 Google Play 商店只装了一部分：%s": "Instance %d: could not record that Google Play Store is only partly installed: %s",
   "实例 %d 记不下「这次开机后的设置还没做完」（%v）：这次启动要是被打断，再启动一次补不上客体库补丁": "Instance %d: could not record \"post-boot setup of this start is not finished\" (%v): if this start is interrupted, starting again cannot make up the guest library patch",
   "实例 %d 记不下开机调优进度: %v": "Instance %d: could not record post-boot tuning progress: %v",
+  "实例 %d 记不下开机调优进度（%v）：状态不再等调优，安卓一开完就报在线": "Instance %d: could not record post-boot tuning progress (%v); status no longer waits for the tuning and reads online as soon as Android has booted",
   "实例 %d 记不下数据盘剩余空间: %v": "Instance %d: could not record the free space of the data disk: %v",
   "实例 %d 记不下新建进度: %v": "Instance %d: could not record create progress: %v",
   "实例 %d 记不下这次开机的客体 boot_id（%v）：客体自己重启后不会自动补做开机调优": "Instance %d: could not record the guest boot_id of this start (%v): post-boot tuning will not be redone automatically if the guest restarts itself",

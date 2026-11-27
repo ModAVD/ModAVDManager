@@ -64,3 +64,8 @@ func RenameNoReplace(src, dst string) error              { return macos.RenameNo
 
 func Protect(data, entropy []byte) ([]byte, error)   { return macos.Protect(data, entropy) }
 func Unprotect(data, entropy []byte) ([]byte, error) { return macos.Unprotect(data, entropy) }
+
+// MonotonicMS is the wall clock here: only Windows has a counter that every process reads alike and that clock changes
+// do not move. A clock set back or forward during a setup then lengthens or shortens the wait for it once; nothing
+// else depends on it.
+func MonotonicMS() int64 { return time.Now().UnixMilli() }

@@ -99,3 +99,7 @@ func TerminateRefused(p Process) bool { return win.TerminateRefused(p) }
 
 // InfoBox displays an informational message with the Windows backend.
 func InfoBox(message string) error { return win.InfoBox(message) }
+
+// MonotonicMS is a millisecond counter that every process reads the same way and that wall-clock changes do not move
+// (Windows: GetTickCount64, which counts the time the computer slept).
+func MonotonicMS() int64 { return win.TickCount64() }

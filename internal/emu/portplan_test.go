@@ -172,6 +172,8 @@ func fakeAdbClientMain(args []string) int {
 	}
 	all := strings.Join(args, " ")
 	switch {
+	case strings.Contains(all, sdcardProbeMarker) && os.Getenv(fakeAdbSdcardFailEnv) != "":
+		return 1 // /sdcard never accepts a file
 	case strings.Contains(all, "org.modavd.regional.Regional"):
 		fmt.Print(os.Getenv(fakeAdbRegionalAppliedEnv))
 		code, _ := strconv.Atoi(os.Getenv(fakeAdbRegionalExitEnv))
@@ -204,7 +206,9 @@ func fakeAdbClientMain(args []string) int {
 const (
 	fakeAdbHomeEnv               = "MODAVD_EMU_FAKE_ADB_HOME"
 	fakeAdbSvcExitEnv            = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
-	fakeAdbNoBootEnv             = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
+	fakeAdbNoBootEnv             = "MODAVD_EMU_FAKE_ADB_NOBOOT"      // set: sys.boot_completed stays empty (a boot that never ends)
+	fakeAdbSdcardFailEnv         = "MODAVD_EMU_FAKE_ADB_SDCARD_FAIL" // set: the /sdcard write probe fails
+	sdcardProbeMarker            = ".modavd-sdcard-check"
 	fakeAdbRegionalPropertiesEnv = "MODAVD_EMU_FAKE_REGIONAL_PROPERTIES"
 	fakeAdbRegionalAppliedEnv    = "MODAVD_EMU_FAKE_REGIONAL_APPLIED"
 	fakeAdbRegionalExitEnv       = "MODAVD_EMU_FAKE_REGIONAL_EXIT"

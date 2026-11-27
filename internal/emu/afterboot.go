@@ -210,7 +210,10 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		},
 		// 7d) host input method: install, enable, make it the default by the rules (every boot)
 		// (logPath is this boot's emulator log unless the instance was simply adopted)
-		func() { r.HostIME = m.setupHostIme(ctx, i, mode != setupAdopted, logPath, prog) },
+		func() {
+			r.HostIME = m.setupHostIme(ctx, i, mode != setupAdopted, logPath, prog)
+			prog.readyStep(readyStepTune)
+		},
 		// 8) network: Wi-Fi always on (games then skip "not on Wi-Fi" prompts); fastpath sends bulk traffic over
 		//    eth0 (the virtual Wi-Fi alone does about 6 MB/s). The Wi-Fi switch persists in /data: set every boot
 		func() { m.setupNetwork(ctx, i) },
@@ -225,9 +228,11 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		},
 		func() {
 			if !m.initialized(i) {
+				prog.needReady()
 				prog.emit("first_boot", fmt.Sprintf("实例 %d 首次开机初始化", i), progressFirstBoot)
 				m.firstBootInit(ctx, i)
 				r.FirstBoot = true
+				prog.readyStep(readyStepTune)
 				return
 			}
 			// 9b) the stock launcher stays removed (pixellauncher.go): an older start lost its removal to a restart

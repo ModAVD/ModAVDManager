@@ -105,3 +105,8 @@ func OddListenerState(int) (uint32, bool) { return 0, false }
 
 func DiskFree(string) (uint64, error)                { return 0, errUnsupported }
 func MetalDevices(context.Context) ([]string, error) { return nil, errUnsupported }
+
+// MonotonicMS is the wall clock here: only Windows has a counter that every process reads alike and that clock changes
+// do not move. A clock set back or forward during a setup then lengthens or shortens the wait for it once; nothing
+// else depends on it.
+func MonotonicMS() int64 { return time.Now().UnixMilli() }

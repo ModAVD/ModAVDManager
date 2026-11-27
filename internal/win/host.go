@@ -292,3 +292,12 @@ func FileChangeStamp(f *os.File) string {
 	}
 	return fmt.Sprintf("%x-%x-%x-%x-%x-%x", id.VolumeSerialNumber, id.FileIndexHigh, id.FileIndexLow, basic.Creation, basic.Write, basic.Change)
 }
+
+var procGetTickCount64 = modkernel32.NewProc("GetTickCount64")
+
+// TickCount64 is the milliseconds since the computer started (GetTickCount64): one counter for every process, not
+// moved by changing the clock, and counting the time the computer slept.
+func TickCount64() int64 {
+	r, _, _ := procGetTickCount64.Call()
+	return int64(r)
+}
