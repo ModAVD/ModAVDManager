@@ -43,7 +43,7 @@ export async function openGameImport(i) {
   try { players = await api.get('/api/game-sources'); } catch (e) { toastError(e); return; }
   const source = h('select', { 'aria-label': t('源模拟器实例') },
     h('option', { value: '', text: t('选择源模拟器实例') }),
-    players.map((p, i) => h('option', { value: String(i), disabled: !!p.error_code, text: (p.kind === 'mumu' ? 'MuMu' : t('雷电')) + ' ' + p.index + ' · ' + p.name })));
+    players.map((p, i) => h('option', { value: String(i), disabled: !!p.error_code, text: p.index < 0 ? (p.kind === 'mumu' ? 'MuMu' : t('雷电')) + ' · ' + p.error : (p.kind === 'mumu' ? 'MuMu' : t('雷电')) + ' ' + p.index + ' · ' + p.name })));
   const list = h('div');
   const error = h('div', { class: 'form-error', hidden: true });
   const ok = h('button', { class: 'btn btn-primary', type: 'submit', disabled: true, text: t('导入') });

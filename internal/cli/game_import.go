@@ -46,6 +46,10 @@ func humanGameImport(w io.Writer, data any) {
 	switch r := data.(type) {
 	case []gamesource.Player:
 		for _, p := range r {
+			if p.Message != "" {
+				fmt.Fprintf(w, "%s\t-\t%s\n", p.Kind, p.Message)
+				continue
+			}
 			fmt.Fprintf(w, "%s\t%d\t%s\n", p.Kind, p.Index, p.Name)
 		}
 	case []string:

@@ -32,10 +32,30 @@ type Player struct {
 	Ready     bool   `json:"ready"`
 	Port      int    `json:"adb_port,omitempty"`
 	Error     int    `json:"error_code,omitempty"`
+	Message   string `json:"error,omitempty"` // only on the placeholder row of a player that could not be read (Index -1)
 	enginePID uint32
 }
 
-type installation struct{ kind, exe, data string }
+// run replaces the control program in tests.
+type installation struct {
+	kind, exe, data string
+	run             func(ctx context.Context, args ...string) ([]byte, error)
+}
+
+// mumuExe finds the control program in the first install directory that has one. Older versions keep it in shell\.
+func mumuExe(dirs []string) string {
+	for _, dir := range dirs {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		for _, sub := range []string{"nx_main", "shell"} {
+			if exe := filepath.Join(dir, sub, "MuMuManager.exe"); isFile(exe) {
+				return exe
+			}
+		}
+	}
+	return ""
+}
 
 func locate(kind string) (installation, error) {
 	if runtime.GOOS != "windows" {
@@ -43,11 +63,8 @@ func locate(kind string) (installation, error) {
 	}
 	pf := os.Getenv("ProgramFiles")
 	if kind == "mumu" {
-		for _, dir := range append(mumuDirs(), filepath.Join(pf, "NetEase", "MuMu Player 12"), filepath.Join(pf, "NetEase", "MuMuPlayer")) {
-			exe := filepath.Join(dir, "nx_main", "MuMuManager.exe")
-			if filepath.IsAbs(dir) && isFile(exe) {
-				return installation{kind: kind, exe: exe}, nil
-			}
+		if exe := mumuExe(append(mumuDirs(), filepath.Join(pf, "NetEase", "MuMu Player 12"), filepath.Join(pf, "NetEase", "MuMuPlayer"))); exe != "" {
+			return installation{kind: kind, exe: exe}, nil
 		}
 	} else if kind == "ldplayer" {
 		for _, i := range ldInstallations() {
@@ -63,6 +80,9 @@ func locate(kind string) (installation, error) {
 func isFile(name string) bool { s, err := os.Stat(name); return err == nil && s.Mode().IsRegular() }
 
 func (i installation) command(ctx context.Context, args ...string) ([]byte, error) {
+	if i.run != nil {
+		return i.run(ctx, args...)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, i.exe, args...)
@@ -82,8 +102,10 @@ func (i installation) command(ctx context.Context, args ...string) ([]byte, erro
 	return out, nil
 }
 
+// List returns the instances of every installed player. A player that cannot be read gets one placeholder row
+// (Index -1, Error and Message set), so the other players are still listed.
 func List(ctx context.Context) ([]Player, error) {
-	players := []Player{}
+	var found []installation
 	for _, kind := range []string{"mumu", "ldplayer"} {
 		i, err := locate(kind)
 		if errs.CodeOf(err) == errs.NotFound {
@@ -92,11 +114,23 @@ func List(ctx context.Context) ([]Player, error) {
 		if err != nil {
 			return nil, err
 		}
+		found = append(found, i)
+	}
+	return listAll(ctx, found)
+}
+
+func listAll(ctx context.Context, found []installation) ([]Player, error) {
+	players := []Player{}
+	for _, i := range found {
 		list, err := i.list(ctx)
 		if err != nil {
-			return nil, err
+			if errs.CodeOf(err) == errs.Canceled {
+				return nil, err
+			}
+			players = append(players, Player{Source: Source{Kind: i.kind, Index: -1}, Error: -1, Message: err.Error()})
+			continue
 		}
-		if kind == "ldplayer" {
+		if i.kind == "ldplayer" {
 			for pos, p := range list {
 				if p.Ready {
 					list[pos].Port = ldPort(i.data, p)
@@ -120,28 +154,8 @@ func (i installation) list(ctx context.Context) ([]Player, error) {
 	if err != nil {
 		return nil, err
 	}
-	var rows map[string]struct {
-		Index   int    `json:"index,string"`
-		Name    string `json:"name"`
-		Running bool   `json:"is_process_started"`
-		Ready   bool   `json:"is_android_started"`
-		Port    int    `json:"adb_port"`
-		Error   int    `json:"error_code"`
-	}
-	if err = json.Unmarshal(out, &rows); err != nil {
-		return nil, err
-	}
-	result := make([]Player, 0, len(rows))
-	for key, r := range rows {
-		if key != strconv.Itoa(r.Index) || r.Index < 0 {
-			return nil, fmt.Errorf("MuMu info: %q", key)
-		}
-		result = append(result, Player{Source: Source{i.kind, r.Index}, Name: r.Name, Ready: r.Ready, Running: r.Running, Port: r.Port, Error: r.Error})
-	}
-	sort.Slice(result, func(a, b int) bool { return result[a].Index < result[b].Index })
-	return result, nil
+	return parseMuMuPlayers(out)
 }
-
 func (i installation) launch(ctx context.Context, index int) error {
 	n := strconv.Itoa(index)
 	if i.kind == "ldplayer" {
@@ -173,6 +187,10 @@ func Ready(ctx context.Context, s Source) (Player, error) {
 	if err != nil {
 		return Player{}, err
 	}
+	return i.ready(ctx, s)
+}
+
+func (i installation) ready(ctx context.Context, s Source) (Player, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	launched := false

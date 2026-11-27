@@ -1,5 +1,6 @@
 {
   "%s 命令超时": "The %s command timed out",
+  "MuMu info：输出里没有可读的实例信息：%s": "MuMu info: no readable instance information in the output: %s",
   "MuMu 实例 %d 启动失败：%s": "Could not start MuMu instance %d: %s",
   "从模拟器导入游戏需要 Windows": "Importing games from an emulator requires Windows",
   "已取消": "Canceled",
