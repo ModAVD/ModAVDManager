@@ -28,6 +28,9 @@ type importDevice struct {
 	bootID   string
 	identity string
 	exec     func(ctx context.Context, args ...string) (string, error) // replaces adb in tests
+	// fresh: this import made the connection to serial. One that was already on the script adb server belongs to
+	// whoever made it and is not ours to drop.
+	fresh bool
 }
 
 func (d importDevice) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -116,6 +119,7 @@ func (m *Manager) connectImportDevice(ctx context.Context, port int) (importDevi
 		return d, err
 	}
 	d.serial = serial
+	d.fresh = connectIsNew(msg)
 	id, err := d.shell(ctx, "cat /proc/sys/kernel/random/boot_id")
 	if err != nil {
 		return d, errs.Newf(errs.NotReady, "连不上 %s：%s", serial, strings.TrimSpace(msg)+" "+err.Error())
@@ -135,10 +139,17 @@ func importPortConflict(port int, instancePorts map[int]bool, reserved ...int) b
 	return instancePorts[port] || port == 5037 || slices.Contains(reserved, port)
 }
 
-// disconnect drops this device's transport from the script adb server, which every script on the machine shares.
-// Failing only leaves the connection where it was, so it is logged.
+// connectIsNew reads the reply of `adb connect`: "connected to <serial>" made the connection,
+// "already connected to <serial>" found one.
+func connectIsNew(reply string) bool {
+	return strings.HasPrefix(strings.TrimSpace(reply), "connected to ")
+}
+
+// disconnect drops the transport this import created from the script adb server, which every script on the machine
+// shares; a connection that was there already is left alone. Failing only leaves the connection where it was, so it
+// is logged.
 func (d importDevice) disconnect() {
-	if d.serial == "" {
+	if d.serial == "" || !d.fresh {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -152,9 +163,12 @@ func (d importDevice) disconnect() {
 
 // gameSource connects to the source emulator on the script adb server. A failure drops the connection it made.
 func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (_ importDevice, failure error) {
+	// created: one of the connects of the retry loop below made the connection (the later ones find it).
 	var connected importDevice
+	created := false
 	defer func() {
 		if failure != nil {
+			connected.fresh = created
 			connected.disconnect()
 		}
 	}()
@@ -174,11 +188,13 @@ func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (_ i
 		d, err := m.connectImportDevice(deadline, p.Port)
 		if d.serial != "" {
 			connected = d
+			created = created || d.fresh
 		}
 		if err == nil {
 			var state string
 			state, err = d.shell(deadline, "getprop sys.boot_completed; pm path --user 0 android")
 			if err == nil && strings.HasPrefix(strings.ReplaceAll(strings.TrimSpace(state), "\r", ""), "1\npackage:") {
+				d.fresh = created
 				return d, nil
 			}
 		} else if errs.CodeOf(err) != errs.NotReady && deadline.Err() == nil {
