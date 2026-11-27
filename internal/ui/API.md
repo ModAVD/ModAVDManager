@@ -48,9 +48,9 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
 | POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
 | POST | `/api/instances/{i}/stop` | `{force?: bool, cancel_create?: bool}` | 202 `Job`；新建中默认 busy，显式 `cancel_create: true` 才取消；`force` 只管是否跳过 Android 正常关机。被取消的新建在结果里标记 `interrupted_create: true` |
-| GET | `/api/mumu` | | 本机 MuMu 实例的编号、名称和运行状态 |
-| POST | `/api/mumu/browse` | MuMu 编号 `source`，可选 `package`、`path` | 按需启动源实例。返回第三方包名，指定包名时返回公开数据目录下一级的 `name`、`directory`。 |
-| POST | `/api/instances/{i}/import-mumu` | `source`、`games`（每项含 `package` 和可选的相对资源路径数组 `data`） | 202 `Job`，目标为开机的实例。结果按游戏列出 `package`、`apk_bytes`、`resource_bytes`。 |
+| GET | `/api/game-sources` | | 本机 MuMu 和雷电实例的类型 `kind`、编号、名称和运行状态 |
+| POST | `/api/game-sources/browse` | `player`（`mumu` 或 `ldplayer`）、源编号 `source`，可选 `package`、`path` | 按需启动源实例。返回第三方包名，指定包名时返回公开数据目录下一级的 `name`、`directory`。 |
+| POST | `/api/instances/{i}/import-game` | `player`、`source`、`games`（每项含 `package` 和可选的相对资源路径数组 `data`） | 202 `Job`，目标为开机的实例。结果按游戏列出 `package`、`apk_bytes`、`resource_bytes`。 |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
 | POST | `/api/instances/{i}/disk-info` | `{}` | 202 `Job`（`kind` 是 `disk-info`）：数据盘的占用，随时可以查（开机时 `allocated_bytes`、`reclaimable_bytes` 不返回，`needs_shutdown` 为 `true`）；结果是 emu 的 `DiskInfoResult`。整理中或锁不可用时返回可读取的文件信息及 `warnings`，不运行 qemu-img；读不到宿主占用时省略 `on_disk_bytes` |
 | POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：请求开着的安卓回收空间；`done` 和 100% 仅表示触发请求已返回，不等待或确认客体 FITRIM 完成，任务耗时也是请求耗时；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |

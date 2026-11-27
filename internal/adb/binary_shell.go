@@ -21,12 +21,14 @@ type BinaryShell struct {
 	exited    bool
 }
 
-func OpenBinaryShell(ctx context.Context, port int, transport, command string) (*BinaryShell, error) {
+func OpenBinaryShell(ctx context.Context, port int, serial, command string) (*BinaryShell, error) {
 	if port <= 0 || port == 5037 || port > 65535 {
 		return nil, fmt.Errorf("invalid private adb port %d", port)
 	}
-	if id, err := strconv.ParseUint(transport, 10, 64); err != nil || id == 0 {
-		return nil, fmt.Errorf("invalid adb transport %q", transport)
+	addr, service, err := net.SplitHostPort(serial)
+	devicePort, portErr := strconv.ParseUint(service, 10, 16)
+	if err != nil || addr != "127.0.0.1" || portErr != nil || devicePort == 0 {
+		return nil, fmt.Errorf("invalid adb endpoint %q", serial)
 	}
 	dial := net.Dialer{Timeout: 5 * time.Second}
 	c, err := dial.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -34,7 +36,7 @@ func OpenBinaryShell(ctx context.Context, port int, transport, command string) (
 		return nil, err
 	}
 	s := &BinaryShell{conn: c, stop: context.AfterFunc(ctx, func() { c.Close() })}
-	for _, service := range []string{"host:transport-id:" + transport, "shell,v2,raw:" + command} {
+	for _, service := range []string{"host:transport:" + serial, "shell,v2,raw:" + command} {
 		if err := s.request(service); err != nil {
 			s.Close()
 			return nil, err

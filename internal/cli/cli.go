@@ -115,6 +115,7 @@ import (
 	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/gamesource"
 	"modavd/internal/host"
 	"modavd/internal/i18n"
 	"modavd/internal/logx"
@@ -125,9 +126,9 @@ import (
 
 // manager is the part of *emu.Manager the commands use; tests substitute a fake.
 type manager interface {
-	MuMuPackages(context.Context, int) ([]string, error)
-	MuMuFiles(context.Context, int, string, string) ([]emu.MuMuEntry, error)
-	ImportMuMu(context.Context, int, int, []emu.MuMuGame, func(emu.Progress)) ([]emu.MuMuImportResult, error)
+	SourcePackages(context.Context, gamesource.Source) ([]string, error)
+	SourceFiles(context.Context, gamesource.Source, string, string) ([]emu.ResourceEntry, error)
+	ImportGames(context.Context, int, gamesource.Source, []emu.ImportGame, func(emu.Progress)) ([]emu.GameImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)

@@ -2,9 +2,9 @@ import { t, comma, semi, stop, gap, quote, paren } from './i18n.js';
 
 // Formatting for people (text through t(); the Chinese text is the key).
 
-export const KIND = { 'import-mumu': t('从 MuMu 导入游戏'), start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), components: t('补全组件'), 'collect-info': t('收集问题信息'), 'disk-info': t('磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'), clone: t('复制实例'),
+export const KIND = { 'import-game': t('从模拟器导入游戏'), start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), components: t('补全组件'), 'collect-info': t('收集问题信息'), 'disk-info': t('磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'), clone: t('复制实例'),
   'playstore-install': t('补全 Google Play 商店'), 'playstore-uninstall': t('移除 Google Play 商店'), 'playstore-import': t('导入 Google Play 商店的文件'), 'gles32-on': t('开启报告 GLES 3.2'), 'gles32-off': t('关闭报告 GLES 3.2') };
-export const KIND_ICON = { 'import-mumu': 'download', start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk', clone: 'copy',
+export const KIND_ICON = { 'import-game': 'download', start: 'power', stop: 'stop', install: 'download', create: 'plus', components: 'download', 'collect-info': 'file', 'disk-info': 'disk', 'disk-trim': 'disk', 'disk-compact': 'disk', clone: 'copy',
   'playstore-install': 'plus', 'playstore-uninstall': 'x', 'playstore-import': 'download', 'gles32-on': 'plus', 'gles32-off': 'x' };
 export const STATE = { running: t('进行中'), done: t('完成'), failed: t('失败'), canceled: t('已取消') };
 export const STATE_TONE = { running: 'warn', done: 'ok', failed: 'err', canceled: 'idle' };

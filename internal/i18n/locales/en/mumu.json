@@ -1,9 +1,0 @@
-{
-  "MuMu 实例 %d 启动失败：%s": "Could not start MuMu instance %d: %s",
-  "MuMu 导入需要 Windows": "MuMu import requires Windows",
-  "MuMuManager %s 超时": "MuMuManager %s timed out",
-  "已取消": "Canceled",
-  "找不到 MuMu 实例 %d": "MuMu instance %d was not found",
-  "找不到 MuMuManager.exe，请先安装 MuMu 模拟器": "MuMuManager.exe was not found. Install MuMu Player first",
-  "等待 MuMu 实例 %d 开机超时": "Timed out waiting for MuMu instance %d to start"
-}

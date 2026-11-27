@@ -888,9 +888,9 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .dlg-check { --w: 640px; --top: clamp(24px, 6vh, 56px); height: min(760px, calc(100vh - 48px)); margin: var(--top) auto auto; max-height: calc(100vh - var(--top) - 24px); }
 /* the manager's own update */
 .dlg-update { --w: 560px; }
-.mumu-tree { margin-inline-start: 1rem; overflow-wrap: anywhere; }
-.mumu-tree summary { cursor: pointer; padding-block: .25rem; }
-.mumu-folder { display: flex; align-items: baseline; gap: .4rem; }
+.game-resource-tree { margin-inline-start: 1rem; overflow-wrap: anywhere; }
+.game-resource-tree summary { cursor: pointer; padding-block: .25rem; }
+.game-resource-folder { display: flex; align-items: baseline; gap: .4rem; }
 .dlg-update .dlg-body { display: grid; gap: 12px; }
 .upd-msg { margin: 0; color: var(--text); }
 .upd-cdk { display: flex; gap: 8px; align-items: center; }

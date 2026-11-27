@@ -12,15 +12,16 @@ import (
 	"strings"
 
 	"modavd/internal/errs"
+	"modavd/internal/gamesource"
 	"modavd/internal/host"
 	"modavd/internal/root"
 )
 
-type MuMuGame struct {
+type ImportGame struct {
 	Package string   `json:"package"`
 	Data    []string `json:"data,omitempty"`
 }
-type MuMuImportResult struct {
+type GameImportResult struct {
 	Package       string `json:"package"`
 	APKBytes      int64  `json:"apk_bytes"`
 	ResourceBytes int64  `json:"resource_bytes"`
@@ -98,7 +99,7 @@ func copyAPKs(ctx context.Context, src, dst importDevice, pkg string, files []st
 	return nil
 }
 
-func resourcePaths(ctx context.Context, src importDevice, g MuMuGame) ([]string, error) {
+func resourcePaths(ctx context.Context, src importDevice, g ImportGame) ([]string, error) {
 	var files []string
 	for i, s := range g.Data {
 		if !resourcePath(s) {
@@ -173,8 +174,8 @@ func checkImportSpace(ctx context.Context, dst importDevice, need int64) error {
 	return nil
 }
 
-func importGame(ctx context.Context, src, dst importDevice, g MuMuGame, progress func(Progress)) (MuMuImportResult, error) {
-	result := MuMuImportResult{Package: g.Package}
+func importGame(ctx context.Context, src, dst importDevice, g ImportGame, progress func(Progress)) (GameImportResult, error) {
+	result := GameImportResult{Package: g.Package}
 	apks, err := apkPaths(ctx, src, g.Package)
 	if err != nil {
 		return result, err
@@ -263,7 +264,7 @@ func importGame(ctx context.Context, src, dst importDevice, g MuMuGame, progress
 	return result, nil
 }
 
-func (m *Manager) ImportMuMu(ctx context.Context, target, source int, games []MuMuGame, progress func(Progress)) ([]MuMuImportResult, error) {
+func (m *Manager) ImportGames(ctx context.Context, target int, source gamesource.Source, games []ImportGame, progress func(Progress)) ([]GameImportResult, error) {
 	runtime, err := m.Root.SnapshotRuntime()
 	if err != nil {
 		return nil, err
@@ -280,7 +281,7 @@ func (m *Manager) ImportMuMu(ctx context.Context, target, source int, games []Mu
 		return nil, err
 	}
 	defer lock.Unlock()
-	// A stop can interrupt an import. The pinned transport then fails, and
+	// A stop can interrupt an import. The pinned device session then fails, and
 	// a retry compares installed APKs and already published resources.
 	_, running, err := m.qemuOf(target)
 	if err != nil {
@@ -300,7 +301,7 @@ func (m *Manager) ImportMuMu(ctx context.Context, target, source int, games []Mu
 	if !slices.Equal(strings.Fields(id), []string{root.AvdName(target), "1"}) {
 		return nil, errs.New(errs.NotReady, "目标实例未就绪或设备编号不符")
 	}
-	src, err := m.mumuSource(ctx, source)
+	src, err := m.gameSource(ctx, source)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +314,7 @@ func (m *Manager) ImportMuMu(ctx context.Context, target, source int, games []Mu
 			return nil, errs.New(errs.InvalidArgument, "请选择第三方应用")
 		}
 	}
-	results := make([]MuMuImportResult, 0, len(games))
+	results := make([]GameImportResult, 0, len(games))
 	for _, g := range games {
 		r, err := importGame(ctx, src, dst, g, progress)
 		if e := ctxErr(ctx); e != nil {

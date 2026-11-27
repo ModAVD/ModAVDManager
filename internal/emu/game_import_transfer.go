@@ -40,12 +40,12 @@ func (p *importProgress) update() {
 
 // Use shell v2 without a PTY so binary data and each guest command's exit status arrive separately.
 func importStream(ctx context.Context, src, dst importDevice, read, write string, copyData func(io.Writer, io.Reader) error) error {
-	from, err := adb.OpenBinaryShell(ctx, src.m.Root.ScriptAdbServerPort(), src.transport, read)
+	from, err := adb.OpenBinaryShell(ctx, src.m.Root.ScriptAdbServerPort(), src.serial, src.script(read))
 	if err != nil {
 		return err
 	}
 	defer from.Close()
-	to, err := adb.OpenBinaryShell(ctx, dst.m.Root.ScriptAdbServerPort(), dst.transport, dst.script(write))
+	to, err := adb.OpenBinaryShell(ctx, dst.m.Root.ScriptAdbServerPort(), dst.serial, dst.script(write))
 	if err != nil {
 		return err
 	}
@@ -117,8 +117,27 @@ func copyImportTar(w io.Writer, r io.Reader, name string, p *importProgress) err
 	return out.Close()
 }
 
+// Android and the download-disk watcher can create a new package directory before
+// its final ownership and access mode are visible through shared storage. Retry
+// only the mkdir/mktemp step, before any file has been transferred.
+func (d importDevice) prepareImportDir(ctx context.Context, cmd string) (string, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out, err := d.shell(ctx, cmd)
+		var exit *exec.ExitError
+		if err == nil || d.identity == "" || !errors.As(err, &exit) || !strings.Contains(err.Error(), "Permission denied") || time.Now().After(deadline) {
+			return out, err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctxErr(ctx)
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
 func (d importDevice) stage(ctx context.Context, parent string) (string, func(), error) {
-	out, err := d.shell(ctx, "mkdir -p "+importQuote(parent)+" && mktemp -d "+importQuote(parent+"/.modavd-import.XXXXXXXX"))
+	out, err := d.prepareImportDir(ctx, "mkdir -p "+importQuote(parent)+" && mktemp -d "+importQuote(parent+"/.modavd-import.XXXXXXXX"))
 	dir := strings.TrimSpace(out)
 	if err != nil {
 		return "", nil, err
@@ -183,7 +202,7 @@ func copyResource(ctx context.Context, src, dst importDevice, full string, p *im
 		mkdir.identity += ",1078"
 	}
 	base := importQuote(pkgRoot)
-	if _, err := mkdir.shell(ctx, "[ ! -L "+base+" ] && mkdir -p "+base); err != nil {
+	if _, err := mkdir.prepareImportDir(ctx, "[ ! -L "+base+" ] && mkdir -p "+base); err != nil {
 		return err
 	}
 	// Refuse links in an existing target's ancestors before creating the next level.

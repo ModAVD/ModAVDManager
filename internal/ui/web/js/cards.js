@@ -89,7 +89,7 @@ export function viewState(inst) {
 
 const PILL = { online: [t('运行中'), 'ok'], starting: [t('开机中'), 'warn'], stopping: [t('关机中'), 'warn'], offline: [t('已关机'), 'idle'], error: [t('开机失败'), 'err'],
   creating: [t('新建中'), 'warn'], createfail: [t('新建失败'), 'err'] };
-const FAIL = { 'import-mumu': t('导入游戏失败'), start: t('开机失败'), stop: t('关机失败'), install: t('安装失败'), create: t('新建失败'), 'disk-info': t('查看磁盘占用失败'), 'disk-trim': t('回收磁盘空间失败'), 'disk-compact': t('整理磁盘失败'), clone: t('复制实例失败'),
+const FAIL = { 'import-game': t('导入游戏失败'), start: t('开机失败'), stop: t('关机失败'), install: t('安装失败'), create: t('新建失败'), 'disk-info': t('查看磁盘占用失败'), 'disk-trim': t('回收磁盘空间失败'), 'disk-compact': t('整理磁盘失败'), clone: t('复制实例失败'),
   'playstore-install': t('补全 Google Play 商店失败'), 'playstore-uninstall': t('移除 Google Play 商店失败'),
   'gles32-on': t('开启报告 GLES 3.2 失败'), 'gles32-off': t('关闭报告 GLES 3.2 失败') };
 // 补全 / 移除 Google Play 商店: stops and boots the instance cold; the card is busy with it the whole time
@@ -224,14 +224,14 @@ function updateCard(c, inst) {
     c.hold = null;
   }
   const store = STORE_JOB[v.kind];
-  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'import-mumu' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact' || v.kind === 'clone' || !!store;
+  const busy = v.key === 'starting' || v.key === 'stopping' || v.key === 'creating' || v.kind === 'import-game' || v.kind === 'install' || v.kind === 'disk-trim' || v.kind === 'disk-compact' || v.kind === 'clone' || !!store;
   c.el.classList.toggle('is-busy', busy);
   c.screen.classList.toggle('has-shot', live && !!c.url);
   c.screen.classList.toggle('busy', busy);
   setText(c.phText, v.key === 'error' ? t('上次开机没有成功') : v.key === 'createfail' ? t('新建时的初始化没做完') : live ? t('正在取画面…') : t('未开机'));
   if (busy) {
     const p = v.job && v.job.progress;
-    const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? t('正在关机…') : v.key === 'creating' ? t('正在新建：后台开机做初始化…') : v.kind === 'import-mumu' ? t('正在导入游戏…') : v.kind === 'install' ? t('正在安装 APK…')
+    const msg = (p && stripInst(p.message)) || (store ? store[1] : v.key === 'stopping' ? t('正在关机…') : v.key === 'creating' ? t('正在新建：后台开机做初始化…') : v.kind === 'import-game' ? t('正在导入游戏…') : v.kind === 'install' ? t('正在安装 APK…')
       : v.kind === 'disk-trim' ? t('正在触发磁盘回收…') : v.kind === 'disk-compact' ? t('正在整理磁盘…') : v.kind === 'clone' ? t('正在复制实例…') : t('正在开机…'));
     setText(c.progMsg, msg);
     setText(c.lmsg, msg);
@@ -314,7 +314,7 @@ function menuItems(c) {
     v.key === 'creating' ? { label: t('取消新建'), icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.cancelCreate(i)) }
       : { label: t('强制关机'), icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
-    { label: t('从 MuMu 导入游戏…'), icon: 'download', disabled: inst.status !== 'online' || !!v.kind, run: async () => (await import('./mumu.js')).openMuMu(i) },
+    { label: t('从模拟器导入游戏…'), icon: 'download', disabled: inst.status !== 'online' || !!v.kind, run: async () => (await import('./game-import.js')).openGameImport(i) },
     { label: t('安装 APK…'), icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     ...storeItems(inst, i, fresh || busy || !!v.kind),
     glesItem(inst, i, fresh || busy || !!v.kind),

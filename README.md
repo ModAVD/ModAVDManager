@@ -79,8 +79,8 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）。除模拟器日志外，还收管理器、开机守护和私有 adb server 的日志（`modavd-ui.log`、`modavd-bootwatch.log`、`adb-server.log` 及其 `.1`，各取最后 5 MB）、所有 adb.exe 进程和 adb server 日志（`%TEMP%\adb.log` 最后 2 MB）、Windows 保留的 TCP 端口（netsh），并指出本目录要用的端口有没有落在里面；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
 | `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`、`components import-playstore <文件或文件夹>…` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」）；`--play-store`、`import-playstore` 补全可选的 Google Play 商店（见下） |
-| `mumu-list` / `mumu-apps <源>` / `mumu-files <源> <包名> [路径]` | 查看 MuMu 实例、第三方应用和应用的公开资源。读取应用时按需启动源实例。 |
-| `import-mumu <源> <目标> <包名> [--data 路径]` | 先开目标实例，也可以先按常规流程新建。复制 base、所有 split APK 和公开的 OBB。用 `--data` 选择 `Android/data/<包名>` 下的资源文件或目录，可写多次。管理器入口在目标实例的「更多操作 → 从 MuMu 导入游戏」。 |
+| `game-sources` / `game-apps <类型> <源>` / `game-files <类型> <源> <包名> [路径]` | 查看 MuMu 和雷电实例、第三方应用和应用的公开资源。类型为 `mumu` 或 `ldplayer`；读取应用时按需启动源实例。 |
+| `import-game <类型> <源> <目标> <包名> [--data 路径]` | 先开目标实例，也可以先按常规流程新建。复制 base、所有 split APK 和公开的 OBB。用 `--data` 选择 `Android/data/<包名>` 下的资源文件或目录，可写多次。管理器入口在目标实例的「更多操作 → 从模拟器导入游戏」。 |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
 | `update [status\|check\|prepare\|install\|recover] [--source github\|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源，或调用方这次传的更新源和 CDK（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
@@ -224,11 +224,13 @@ DPI 默认跟随分辨率，也可以在管理器设置、CLI `--dpi`、MCP `dpi
 
 AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。
 
-### 从 MuMu 导入游戏
+### 从 MuMu 或雷电导入游戏
 
-在目标实例的「更多操作」里选「从 MuMu 导入游戏」，再选 MuMu 实例和游戏。勾选游戏会复制安装包和 OBB。展开 Android/data，选游戏资源文件或目录，跳过账号、存档和设置。导入期间退出两边的游戏。完成后可自行关闭源实例。
+在目标实例的「更多操作」里选「从模拟器导入游戏」，再选对应的源实例和游戏。勾选游戏会复制安装包和 OBB。展开 Android/data，选游戏资源文件或目录，跳过账号、存档和设置。导入期间退出两边的游戏。完成后可自行关闭源实例。雷电同时安装了 14 和 9 时优先读取 14。
 
-已有目标可以继续用：安装包相同时复用，不同则提示换一台实例。资源逐项写入，已有同名文件内容不同时停止。取消或失败后可用原来的选择重试。命令行的 `apk_bytes` 和 `resource_bytes` 是本次传送的文件字节数。游戏可能仍需补下载，登录请在目标游戏中完成。
+《明日方舟》官服 2.7.91 的已下载资源在 `files/Bundles`。例如，从雷电实例 1 复制到已开机的 ModAVD 实例 2，可运行 `modavd import-game ldplayer 1 2 com.hypergryph.arknights --data files/Bundles`。MuMu 源使用 `mumu`。
+
+已有目标可以继续用：安装包相同时复用，不同则提示换一台实例。资源逐项写入，已有同名文件内容不同时停止。取消或失败后可用原来的选择重试。正常取消会清理临时文件，电脑断电可能留下本次的 `.modavd-import.*` 临时目录。命令行的 `apk_bytes` 和 `resource_bytes` 是本次传送的文件字节数。游戏可能仍需补下载，登录请在目标游戏中完成。
 
 ## 语言和时区（Windows）
 
