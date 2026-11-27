@@ -253,7 +253,7 @@ func importGame(ctx context.Context, src, dst importDevice, g ImportGame, progre
 		if err := checkGuestSpace(ctx, dst, f, sizes[f]); err != nil {
 			return result, err
 		}
-		if err := copyResource(ctx, src, dst, f, &p); err != nil {
+		if err := copyResource(ctx, src, dst, f, sizes[f], &p); err != nil {
 			return result, errs.Newf(errs.CodeOf(err), "导入 %s 失败：%v", f, err)
 		}
 	}

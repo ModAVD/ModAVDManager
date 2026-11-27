@@ -27,6 +27,7 @@ type importDevice struct {
 	serial   string
 	bootID   string
 	identity string
+	exec     func(ctx context.Context, args ...string) (string, error) // replaces adb in tests
 }
 
 func (d importDevice) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -42,6 +43,9 @@ func (d importDevice) command(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 func (d importDevice) output(ctx context.Context, args ...string) (string, error) {
+	if d.exec != nil {
+		return d.exec(ctx, args...)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	cmd := d.command(ctx, args...)

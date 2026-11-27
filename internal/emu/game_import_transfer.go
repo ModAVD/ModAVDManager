@@ -187,7 +187,12 @@ const publishResources = `publish() {
  fi
 }`
 
-func copyResource(ctx context.Context, src, dst importDevice, full string, p *importProgress) error {
+// importStreamFunc is replaced in tests.
+var importStreamFunc = importStream
+
+// copyResource transfers one selected resource into a staging directory next to its destination and publishes it.
+// want is the size counted before the transfer: an item whose transferred bytes differ is not published.
+func copyResource(ctx context.Context, src, dst importDevice, full string, want int64, p *importProgress) error {
 	parent, name := path.Split(full)
 	parent = strings.TrimSuffix(parent, "/")
 	// pkgRoot is exactly /sdcard/Android/{data,obb}/<validated package>.
@@ -218,8 +223,14 @@ func copyResource(ctx context.Context, src, dst importDevice, full string, p *im
 	defer cleanup()
 	read := importPublicCD(parent) + " && tar -cf - " + importQuote("./"+name)
 	write := "tar -xomf - -C " + importQuote(dir)
-	if err := importStream(ctx, src, dst, read, write, func(w io.Writer, r io.Reader) error { return copyImportTar(w, r, name, p) }); err != nil {
+	before := p.done
+	if err := importStreamFunc(ctx, src, dst, read, write, func(w io.Writer, r io.Reader) error { return copyImportTar(w, r, name, p) }); err != nil {
 		return err
+	}
+	// A source that changed while it was copied must not reach the final directory: a retry would find it there
+	// with other content and stop at already_exists. The deferred cleanup removes only this item's staging directory.
+	if got := p.done - before; got != want {
+		return errs.New(errs.Internal, "源文件大小在导入期间发生变化，请退出游戏后重试")
 	}
 	// Stage and destination share a filesystem, so each newly published file arrives whole.
 	staged, final := importQuote(path.Join(dir, name)), importQuote(full)
