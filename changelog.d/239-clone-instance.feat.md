@@ -1,1 +1,2 @@
 管理器和命令行能复制实例，新实例带着游戏、登录状态和设置 (ModAVD/ModAVD#239)
+The manager and command line can copy an instance, with its games, login state and settings

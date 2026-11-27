@@ -20,7 +20,7 @@ The general rules for contributing, branches, commits, privacy and releases are 
 ## Working
 
 - Scripts and tests use a temporary root folder; they never read a production root folder or real user data.
-- A manager change that users can see adds `changelog.d/<name>.<feat|fix|change|remove>.md` in the same PR.
+- A manager change that users can see adds `changelog.d/<name>.<feat|fix|change|remove>.md` in the same PR, with two lines: Chinese, then English.
 - The Chinese text the manager and the CLI show is the translation key: when you add or change a Chinese string, add its English translation as described in `internal/i18n/README.md` (`TestCatalog` checks this).
 - Change both files of a Chinese / English document pair (`X.md`, `X.en.md`) together.
 - `scripts/privacy.py`, `scripts/repo_checks.py` and `scripts/test_repo_checks.py` are byte for byte the same as in the ModAVD main repository (CI checks this): change them in ModAVD first. Only `scripts/privacy-allowlist.json` belongs to this repository.
