@@ -87,6 +87,26 @@ func TestParseMuMuReadyWithoutAdministrator(t *testing.T) {
 	}
 }
 
+// Output without a single instance row is an error row in the list, unless it is the empty object of a MuMu that has no
+// instance.
+func TestParseMuMuOutputWithoutInstanceRows(t *testing.T) {
+	for _, tc := range []struct{ name, out string }{
+		{"only tracking", `add record:{"event":"info","count":1}` + "\n"},
+		{"error reply", `{"errcode":-1,"errmsg":"no such command"}`},
+		{"tracking and logs", "[INFO] start\n" + `add record:{"event":"info"}` + "\n" + `add record:{"event":"exit"}` + "\n"},
+		{"dict without names", `{"0":{"index":"0"},"1":{"index":"1"}}`},
+	} {
+		if rows, err := parseMuMuPlayers([]byte(tc.out)); err == nil {
+			t.Errorf("%s: read as %v", tc.name, rows)
+		}
+	}
+	for _, out := range []string{"{}", "{}\r\n", `add record:{}` + "\n{}"} {
+		if rows, err := parseMuMuPlayers([]byte(out)); err != nil || len(rows) != 0 {
+			t.Errorf("%q: rows=%v err=%v", out, rows, err)
+		}
+	}
+}
+
 func TestParseMuMuRejectsOutputWithoutJSON(t *testing.T) {
 	if _, err := parseMuMuPlayers([]byte("access denied")); err == nil {
 		t.Fatal("accepted output without JSON")
