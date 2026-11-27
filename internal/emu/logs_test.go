@@ -16,6 +16,9 @@ import (
 	"modavd/internal/win"
 )
 
+// Keep the fixtures inside diagnostic retention, with stable ordering throughout a test run.
+var logFixtureTime = time.Now().Add(-24 * time.Hour).Truncate(time.Minute)
+
 // mkLog writes a file of size bytes with mtime base + age minutes.
 func mkLog(t *testing.T, dir, name string, size int, minute int) string {
 	t.Helper()
@@ -23,7 +26,7 @@ func mkLog(t *testing.T, dir, name string, size int, minute int) string {
 	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mt := time.Date(2026, 10, 28, 12, 0, 0, 0, time.Local).Add(time.Duration(minute) * time.Minute)
+	mt := logFixtureTime.Add(time.Duration(minute) * time.Minute)
 	if err := os.Chtimes(path, mt, mt); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func mkDiag(t *testing.T, dir, name string, minute int) {
 	}
 	mkLog(t, d, "logcat.txt", 25, minute)
 	mkLog(t, d, "summary.txt", 25, minute)
-	mt := time.Date(2026, 10, 28, 12, 0, 0, 0, time.Local).Add(time.Duration(minute) * time.Minute)
+	mt := logFixtureTime.Add(time.Duration(minute) * time.Minute)
 	if err := os.Chtimes(d, mt, mt); err != nil {
 		t.Fatal(err)
 	}
