@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -154,6 +155,41 @@ func (d importDevice) stage(ctx context.Context, parent string) (string, func(),
 	}, nil
 }
 
+// as returns the device running its commands as the given su identity.
+func (d importDevice) as(identity string) importDevice {
+	d.identity = identity
+	return d
+}
+
+// resourceParents lists, without repeats, the directories the staging directories of resources are made in.
+func resourceParents(resources []string) []string {
+	var parents []string
+	for _, f := range resources {
+		if dir := path.Dir(f); !slices.Contains(parents, dir) {
+			parents = append(parents, dir)
+		}
+	}
+	return parents
+}
+
+// removeStaleImportDirs deletes the staging directories (see stage) an interrupted import left in parents. It runs
+// under the instance lock, so no other import can own one. Only directories directly in a parent whose name is
+// exactly .modavd-import. and eight more characters are removed. Failing to remove them only wastes space, so it is
+// logged and the import goes on.
+func removeStaleImportDirs(ctx context.Context, d importDevice, parents []string) error {
+	for _, parent := range parents {
+		p := importQuote(parent)
+		_, err := d.shell(ctx, "[ ! -d "+p+" ] || find "+p+" -mindepth 1 -maxdepth 1 -type d -name '.modavd-import.????????' -exec rm -rf {} +")
+		if e := ctxErr(ctx); e != nil {
+			return e
+		}
+		if err != nil {
+			d.m.Log.Warnf("清理上次导入留下的临时目录失败：%v", err)
+		}
+	}
+	return nil
+}
+
 // An existing directory may already hold settings or completed items from an
 // earlier attempt. Add missing items atomically and compare collisions byte for byte.
 const publishResources = `publish() {
@@ -187,7 +223,12 @@ const publishResources = `publish() {
  fi
 }`
 
-func copyResource(ctx context.Context, src, dst importDevice, full string, p *importProgress) error {
+// importStreamFunc is replaced in tests.
+var importStreamFunc = importStream
+
+// copyResource transfers one selected resource into a staging directory next to its destination and publishes it.
+// want is the size counted before the transfer: an item whose transferred bytes differ is not published.
+func copyResource(ctx context.Context, src, dst importDevice, full string, want int64, p *importProgress) error {
 	parent, name := path.Split(full)
 	parent = strings.TrimSuffix(parent, "/")
 	// pkgRoot is exactly /sdcard/Android/{data,obb}/<validated package>.
@@ -218,8 +259,14 @@ func copyResource(ctx context.Context, src, dst importDevice, full string, p *im
 	defer cleanup()
 	read := importPublicCD(parent) + " && tar -cf - " + importQuote("./"+name)
 	write := "tar -xomf - -C " + importQuote(dir)
-	if err := importStream(ctx, src, dst, read, write, func(w io.Writer, r io.Reader) error { return copyImportTar(w, r, name, p) }); err != nil {
+	before := p.done
+	if err := importStreamFunc(ctx, src, dst, read, write, func(w io.Writer, r io.Reader) error { return copyImportTar(w, r, name, p) }); err != nil {
 		return err
+	}
+	// A source that changed while it was copied must not reach the final directory: a retry would find it there
+	// with other content and stop at already_exists. The deferred cleanup removes only this item's staging directory.
+	if got := p.done - before; got != want {
+		return errs.New(errs.Internal, "源文件大小在导入期间发生变化，请退出游戏后重试")
 	}
 	// Stage and destination share a filesystem, so each newly published file arrives whole.
 	staged, final := importQuote(path.Join(dir, name)), importQuote(full)

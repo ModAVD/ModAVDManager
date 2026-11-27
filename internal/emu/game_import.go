@@ -83,7 +83,7 @@ func copyAPKs(ctx context.Context, src, dst importDevice, pkg string, files []st
 	args := []string{"pm install -R --user 0 --pkg", pkg}
 	for _, f := range files {
 		target := importQuote(path.Join(dir, path.Base(f)))
-		err := importStream(ctx, src, dst, "cat "+importQuote(f), "cat > "+target, func(w io.Writer, r io.Reader) error { _, err := io.Copy(io.MultiWriter(w, p), r); return err })
+		err := importStreamFunc(ctx, src, dst, "cat "+importQuote(f), "cat > "+target, func(w io.Writer, r io.Reader) error { _, err := io.Copy(io.MultiWriter(w, p), r); return err })
 		if err != nil {
 			return err
 		}
@@ -174,6 +174,24 @@ func checkImportSpace(ctx context.Context, dst importDevice, need int64) error {
 	return nil
 }
 
+// appIdentity is the su argument that runs a command as the app's UID, with AID_EVERYBODY so it can traverse /storage.
+func appIdentity(ctx context.Context, dst importDevice, pkg string) (string, error) {
+	out, err := dst.shell(ctx, "pm list packages -U --user 0 "+pkg)
+	if err != nil {
+		return "", err
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "package:"+pkg {
+			uid, e := strconv.Atoi(strings.TrimPrefix(f[1], "uid:"))
+			if e == nil && uid >= 10000 && uid < 100000 {
+				return fmt.Sprintf("%d,%d,9997", uid, uid), nil
+			}
+		}
+	}
+	return "", errs.Newf(errs.NotReady, "无法确认 %s 的应用 UID", pkg)
+}
+
 func importGame(ctx context.Context, src, dst importDevice, g ImportGame, progress func(Progress)) (GameImportResult, error) {
 	result := GameImportResult{Package: g.Package}
 	apks, err := apkPaths(ctx, src, g.Package)
@@ -220,6 +238,20 @@ func importGame(ctx context.Context, src, dst importDevice, g ImportGame, progre
 		sizes[f] = n
 		result.ResourceBytes += n
 	}
+	// Staging directories left by an interrupted import still hold their data. Remove them before the space check.
+	// The package's own directories belong to its app UID, so they wait for the UID unless the app is installed.
+	if err := removeStaleImportDirs(ctx, dst, []string{"/data/local/tmp"}); err != nil {
+		return result, err
+	}
+	var identity string
+	if reuse && len(resources) > 0 {
+		if identity, err = appIdentity(ctx, dst, g.Package); err != nil {
+			return result, err
+		}
+		if err := removeStaleImportDirs(ctx, dst.as(identity), resourceParents(resources)); err != nil {
+			return result, err
+		}
+	}
 	// pm holds its own copy of the APKs while installing them. Allow space for small files and dex optimization.
 	if err := checkImportSpace(ctx, dst, 2*result.APKBytes+result.ResourceBytes+(64<<20)); err != nil {
 		return result, err
@@ -232,28 +264,21 @@ func importGame(ctx context.Context, src, dst importDevice, g ImportGame, progre
 		}
 	}
 	if len(resources) > 0 {
-		out, err := dst.shell(ctx, "pm list packages -U --user 0 "+g.Package)
-		if err != nil {
-			return result, err
-		}
-		for line := range strings.SplitSeq(out, "\n") {
-			f := strings.Fields(line)
-			if len(f) == 2 && f[0] == "package:"+g.Package {
-				uid, e := strconv.Atoi(strings.TrimPrefix(f[1], "uid:"))
-				if e == nil && uid >= 10000 && uid < 100000 {
-					dst.identity = fmt.Sprintf("%d,%d,9997", uid, uid) // AID_EVERYBODY can traverse /storage.
-				}
+		if identity == "" {
+			if identity, err = appIdentity(ctx, dst, g.Package); err != nil {
+				return result, err
+			}
+			if err := removeStaleImportDirs(ctx, dst.as(identity), resourceParents(resources)); err != nil {
+				return result, err
 			}
 		}
-		if dst.identity == "" {
-			return result, errs.Newf(errs.NotReady, "无法确认 %s 的应用 UID", g.Package)
-		}
+		dst.identity = identity
 	}
 	for _, f := range resources {
 		if err := checkGuestSpace(ctx, dst, f, sizes[f]); err != nil {
 			return result, err
 		}
-		if err := copyResource(ctx, src, dst, f, &p); err != nil {
+		if err := copyResource(ctx, src, dst, f, sizes[f], &p); err != nil {
 			return result, errs.Newf(errs.CodeOf(err), "导入 %s 失败：%v", f, err)
 		}
 	}
@@ -313,6 +338,9 @@ func (m *Manager) ImportGames(ctx context.Context, target int, source gamesource
 		if !slices.Contains(pkgs, g.Package) {
 			return nil, errs.New(errs.InvalidArgument, "请选择第三方应用")
 		}
+	}
+	if err := checkGamesStopped(ctx, src, dst, games); err != nil {
+		return nil, err
 	}
 	results := make([]GameImportResult, 0, len(games))
 	for _, g := range games {

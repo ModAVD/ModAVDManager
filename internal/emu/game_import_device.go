@@ -27,6 +27,7 @@ type importDevice struct {
 	serial   string
 	bootID   string
 	identity string
+	exec     func(ctx context.Context, args ...string) (string, error) // replaces adb in tests
 }
 
 func (d importDevice) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -42,6 +43,9 @@ func (d importDevice) command(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 func (d importDevice) output(ctx context.Context, args ...string) (string, error) {
+	if d.exec != nil {
+		return d.exec(ctx, args...)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	cmd := d.command(ctx, args...)
@@ -184,6 +188,54 @@ func packageList(ctx context.Context, d importDevice, flags string) ([]string, e
 	return pkgs, nil
 }
 
+// appRunning asks the guest, read-only, for the names of its processes (Toybox ps; NAME is argv[0], so a service of
+// the app is "<package>:<service>"). The app runs when one of them is the package or starts with "<package>:". An
+// answer that is not a process list (no ps -A, adb trouble) is an error rather than a guess.
+func appRunning(ctx context.Context, d importDevice, pkg string) (bool, error) {
+	out, err := d.shell(ctx, "ps -A -o NAME; echo exit:$?")
+	if err != nil {
+		return false, err
+	}
+	var names []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" && line != "NAME" {
+			names = append(names, line)
+		}
+	}
+	if n := len(names); n < 2 || names[n-1] != "exit:0" {
+		return false, fmt.Errorf("ps: %q", tail(out, 200))
+	}
+	for _, name := range names {
+		if name == pkg || strings.HasPrefix(name, pkg+":") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// checkGamesStopped refuses to start while any of the games is running on the target (it would be writing the
+// resources being merged) or on the source (its files would change during the copy). It never stops a game.
+func checkGamesStopped(ctx context.Context, src, dst importDevice, games []ImportGame) error {
+	for _, g := range games {
+		running, err := appRunning(ctx, dst, g.Package)
+		if err != nil {
+			return err
+		}
+		if running {
+			return errs.Newf(errs.PrecheckFailed, "目标实例上的 %s 正在运行，请先退出游戏再导入", g.Package)
+		}
+	}
+	for _, g := range games {
+		running, err := appRunning(ctx, src, g.Package)
+		if err != nil {
+			return err
+		}
+		if running {
+			return errs.Newf(errs.PrecheckFailed, "源模拟器上的 %s 正在运行，请先退出游戏再导入", g.Package)
+		}
+	}
+	return nil
+}
 func (m *Manager) SourcePackages(ctx context.Context, source gamesource.Source) ([]string, error) {
 	d, err := m.gameSource(ctx, source)
 	if err != nil {
