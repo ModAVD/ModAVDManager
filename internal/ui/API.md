@@ -193,7 +193,7 @@ Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，�
 
 ### 语言和时区（Windows）`RegionalResult`
 
-`RootInfo.regional_supported` 在支持这组设置时为 `true`，否则可省略。Windows 的 `InstanceInfo.regional` 是只读配置概要：`{language, time_zone, pending_language?, last_language?, error?}`。缺少 `instances.<i>.regional` 的旧实例返回两个 `preserve`，普通开机不会替它补默认值。
+`RootInfo.game_import_supported` 在能从模拟器导入游戏时（Windows）为 `true`，否则可省略，页面据此决定显示不显示「从模拟器导入游戏」。`RootInfo.regional_supported` 在支持这组设置时为 `true`，否则可省略。Windows 的 `InstanceInfo.regional` 是只读配置概要：`{language, time_zone, pending_language?, last_language?, error?}`。缺少 `instances.<i>.regional` 的旧实例返回两个 `preserve`，普通开机不会替它补默认值。
 
 新建、修改接口接受 `language` 和 `time_zone`。语言是 `host`、`preserve` 或 `zh-CN`、`en-US` 等语言标识；时区是 `host`、`preserve` 或 IANA 名称，`UTC` 归一为 `Etc/UTC`。Windows 新建默认两项 `host`。语言每次显式选择只生成一次请求；之后不覆盖安卓里的更改。`preserve` 取消待应用语言。时区 `host` 每次冷启动解析，`preserve` 沿用原来的模拟器检测。运行中修改等下次冷启动生效，接管运行中的实例不会应用刚保存的语言。
 

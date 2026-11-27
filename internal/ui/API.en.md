@@ -193,7 +193,7 @@ Some games require GLES 3.2 in their manifest, and the Play store judges ModAVD 
 
 ### Language and time zone on Windows, `RegionalResult`
 
-`RootInfo.regional_supported` is `true` when these settings are supported and may be omitted otherwise. On Windows, `InstanceInfo.regional` summarizes saved configuration: `{language, time_zone, pending_language?, last_language?, error?}`. A legacy instance without `instances.<i>.regional` returns two `preserve` choices. Ordinary boots do not write new defaults to it.
+`RootInfo.game_import_supported` is `true` when games can be imported from an emulator (Windows) and may be omitted otherwise; the page shows "Import games from an emulator" only then. `RootInfo.regional_supported` is `true` when these settings are supported and may be omitted otherwise. On Windows, `InstanceInfo.regional` summarizes saved configuration: `{language, time_zone, pending_language?, last_language?, error?}`. A legacy instance without `instances.<i>.regional` returns two `preserve` choices. Ordinary boots do not write new defaults to it.
 
 The create and update endpoints accept `language` and `time_zone`. Language is `host`, `preserve`, or a tag such as `zh-CN` or `en-US`. Time zone is `host`, `preserve`, or an IANA name; `UTC` normalizes to `Etc/UTC`. New Windows instances default to `host` for both. Each explicit language choice creates one request. Later Android language changes survive ordinary boots. `preserve` cancels a pending language request. Host time zone resolves on each cold launch; `preserve` uses the original emulator detection. Changes saved while running wait for the next cold launch. Adopting a running instance does not apply a newly saved language choice.
 

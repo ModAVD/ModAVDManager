@@ -96,6 +96,7 @@ func (b managerBackend) RootInfo() emu.RootInfo {
 	r := b.Root
 	info := emu.RootInfo{
 		RegionalSupported:   root.CurrentPlatform().Windows(),
+		GameImportSupported: root.CurrentPlatform().Windows(),
 		Root:                r.Dir,
 		SDK:                 r.RuntimeSDK(),
 		LocalSDK:            r.LocalSDKRoot() != "",

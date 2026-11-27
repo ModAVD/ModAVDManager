@@ -314,7 +314,7 @@ function menuItems(c) {
     v.key === 'creating' ? { label: t('取消新建'), icon: 'x', run: () => (v.job && v.job.kind === 'create' ? A.cancelJob(v.job.id) : A.cancelCreate(i)) }
       : { label: t('强制关机'), icon: 'bolt', disabled: !running || v.key === 'stopping', run: () => A.stop(i, true) },
     { sep: true },
-    { label: t('从模拟器导入游戏…'), icon: 'download', disabled: inst.status !== 'online' || !!v.kind, run: async () => (await import('./game-import.js')).openGameImport(i) },
+    !!(S.list && S.list.game_import_supported) && { label: t('从模拟器导入游戏…'), icon: 'download', disabled: inst.status !== 'online' || !!v.kind, run: async () => (await import('./game-import.js')).openGameImport(i) },
     { label: t('安装 APK…'), icon: 'download', disabled: inst.status !== 'online' || v.kind === 'install', run: () => pickApk(i) },
     ...storeItems(inst, i, fresh || busy || !!v.kind),
     glesItem(inst, i, fresh || busy || !!v.kind),

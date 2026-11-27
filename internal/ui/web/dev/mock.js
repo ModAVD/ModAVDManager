@@ -29,7 +29,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 function rootInfo() {
   return {
     root: ROOT, sdk: ROOT + '\\sdk', local_sdk: false, adb_exe: ROOT + '\\sdk\\platform-tools\\adb.exe',
-    adb_server_port: 20050, script_adb_server_port: 20049,
+    adb_server_port: 20050, script_adb_server_port: 20049, game_import_supported: true,
     version: db.ready ? '0.35.0' : '', build: db.ready ? 35 : 0, ...(db.ready ? { build_id: 'mas-35' } : {}),
   };
 }
