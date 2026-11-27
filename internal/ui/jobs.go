@@ -18,6 +18,7 @@ import (
 const (
 	kindStart      = "start"
 	kindStop       = "stop"
+	kindGameImport = "import-game"
 	kindInstall    = "install"
 	kindCreate     = "create"
 	kindComponents = "components"
@@ -57,6 +58,8 @@ func kindLabel(kind string) string {
 		return "开机"
 	case kindStop:
 		return "关机"
+	case kindGameImport:
+		return "从模拟器导入游戏"
 	case kindInstall:
 		return "安装 APK"
 	case kindCreate:

@@ -238,6 +238,10 @@ func init() {
 			run: runRegional, human: humanOf(formatRegional),
 		},
 		proxyCommand(),
+		{name: "game-sources", summary: "列出本机 MuMu 和雷电实例", run: runGameImport, human: humanGameImport},
+		{name: "game-apps", args: "<mumu|ldplayer> <source>", summary: "启动所选源实例并列出第三方应用", minPos: 2, maxPos: 2, run: runGameImport, human: humanGameImport},
+		{name: "game-files", args: "<mumu|ldplayer> <source> <package> [path]", summary: "查看游戏公开数据目录中的文件", minPos: 3, maxPos: 4, run: runGameImport, human: humanGameImport},
+		{name: "import-game", args: "<mumu|ldplayer> <source> <target> <package> [--data PATH]", summary: "从源模拟器导入 APK、OBB 和选定的资源", minPos: 4, maxPos: 4, flags: []flagSpec{{"data", kindStrings, "PATH", "Android/data/包名 下要复制的资源路径，可重复指定"}}, final: true, run: runGameImport, human: humanGameImport},
 		{
 			name: "delete", args: "<i> [<j> …] --yes", summary: "删除已关机的实例（连同游戏数据）",
 			details: "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。" +

@@ -1,0 +1,11 @@
+{
+  "%s 命令超时": "The %s command timed out",
+  "MuMu 实例 %d 启动失败：%s": "Could not start MuMu instance %d: %s",
+  "从模拟器导入游戏需要 Windows": "Importing games from an emulator requires Windows",
+  "已取消": "Canceled",
+  "找不到 %s 实例 %d": "Could not find %s instance %d",
+  "找不到模拟器 %s 的控制程序": "Could not find the control program for %s",
+  "模拟器类型须为 mumu 或 ldplayer": "The emulator type must be mumu or ldplayer",
+  "等待 %s 实例 %d 的本机 ADB 连接超时": "Timed out waiting for a local ADB connection to %s instance %d",
+  "请选择源模拟器和实例": "Select a source emulator and instance"
+}
