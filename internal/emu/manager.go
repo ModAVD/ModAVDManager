@@ -385,6 +385,7 @@ func (m *Manager) removeLockFiles(i int) {
 		os.Remove(m.lockPath(i, kind))
 	}
 	os.Remove(m.setupMarkerPath(i))
+	os.Remove(m.readyPath(i))
 	os.Remove(m.createProgressPath(i))
 	os.Remove(m.createCancelPath(i))
 	os.Remove(m.guestLockPath(i))

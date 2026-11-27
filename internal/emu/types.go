@@ -14,8 +14,8 @@ type Status string
 
 const (
 	StatusOffline      Status = "offline"       // no qemu process for this instance
-	StatusStarting     Status = "starting"      // qemu runs, Android has not finished booting (sys.boot_completed != 1)
-	StatusOnline       Status = "online"        // booted
+	StatusStarting     Status = "starting"      // qemu runs, Android has not finished booting (sys.boot_completed != 1), or its after-boot setup is not done
+	StatusOnline       Status = "online"        // booted and set up (or 60 s after a start began setting it up)
 	StatusCreating     Status = "creating"      // create is running its first headless boot
 	StatusCreateFailed Status = "create_failed" // create stopped with an error; resume or delete is allowed
 )
@@ -93,7 +93,16 @@ type InstanceInfo struct {
 	// CreationProgress is how much of create's setup is done while Creation is "creating", 0–100, counted by the steps
 	// done (createinit.go); 0 otherwise.
 	CreationProgress int `json:"creation_progress"`
-	PID              int `json:"pid"`
+	// SetupStep and SetupProgress: while status is "starting" only because the after-boot setup of the booted guest
+	// is not done (status is online once it is, or once 60 s have passed since a start began it; see bootready.go).
+	// SetupStep is the step it is at: "boot" (just started), "vulkan_fix", "tune", "ime", "first_boot" or "sdcard";
+	// SetupProgress is 0–100, counted by the steps done, not by time. "" and 0 otherwise.
+	SetupStep     string `json:"setup_step"`
+	SetupProgress int    `json:"setup_progress"`
+	// SetupUnfinished: status is online only because the 60 s passed while a start was still setting the boot up; it
+	// names the step that is still running (as SetupStep). "" otherwise.
+	SetupUnfinished string `json:"setup_unfinished"`
+	PID             int    `json:"pid"`
 	// StartedAt is the qemu process start, local time RFC 3339 ("2026-10-28T15:04:05+01:00").
 	StartedAt string `json:"started_at"`
 	// StartedAtMS is the same moment in Unix milliseconds; 0 when not running.

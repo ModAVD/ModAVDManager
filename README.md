@@ -170,6 +170,10 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 取消（Ctrl+C、MCP 取消）、开机中途被关机、模拟器已经不在时不收。
   - 每台实例留最新 3 个这样的目录，大小算进 `logs\` 的 1 GiB 总量。`collect-info` 把最新的 3 个收进问题包，合计到了 100 MB 就不再往下收。
   - 这些文件可能带账号信息，只存在本机。文本模式出错时，最后一行写这个目录。
+- **什么时候是 `online`**：安卓开完，**并且**这次开机后的设置（客体库补丁、宿主调度、宿主输入法、首次初始化、`/sdcard` 能写进文件等）也做完了，`status` / `list` / `info` 才是 `online`。中间这段 `status` 仍是 `starting`（没有新取值），`busy` 也是 `starting`；`setup_step`（`boot`、`vulkan_fix`、`tune`、`ime`、`first_boot`、`sdcard`）说在做哪一步，`setup_progress`（0–100，按做完的步骤算，不是按时间）说做到哪，其余时候分别是 `""` 和 `0`。`booted` 只说安卓自己开完没有，不等这些设置。
+  - 最多等 60 秒：从做设置的那次 `start` 开始做设置算起，到点 `status` 就是 `online`，设置照常做下去，`setup_unfinished` 写还在做的那一步（日志里也有一行），平时是 `""`。
+  - 不会一直卡在 `starting`：不是 modavd 拉起的模拟器，或者做设置的那次 `start` 被取消、被结束了（没人再做），安卓一开完就是 `online`。客体自己重启时，开机守护跑同一条 `start` 补做设置，这期间同样是 `starting`；客体重启后到开机守护发现之间的几秒（最多一个检查间隔），`status` 还报 `online`。已经开着、设置做过的实例再 `start` 一次（接管）不改状态。
+  - **脚本和工具等 `status` 是 `online` 再操作，或者直接用 `start`：它返回就是准备好了。** 这只是状态，不拦着直连 adb 端口的工具。
 - 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
 - **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
   - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。单实例 `stop` 也返回 busy，`--force` 不绕过保护。确实要取消，用 `stop <i> --cancel-create`，或 MCP `stop_instance` 的 `cancel_create: true`；照常先 sync、正常关机，创建流程收到取消后记为 `create_failed`，结果带 `interrupted_create: true`。`stop --all` 自动允许取消，结果逐台标记；不在新建中的实例为 `false`。

@@ -9,7 +9,7 @@
 //
 //	list                                                  emu.ListResult
 //	info <i>                                              emu.InstanceInfo
-//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,serial,adb_address,ports,data_space}
+//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,setup_step,setup_progress,setup_unfinished,serial,adb_address,ports,data_space}
 //	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb auto|N] [--fps 1-60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
 //	proxy <i> [on|off] [--server URL|auto] [--add P] [--remove P] [--apps P]   emu.AppProxyResult
@@ -99,6 +99,15 @@
 //
 // Before Main returns, a command that used a manager waits up to backgroundWait for the manager's background work
 // (emu.Manager.Wait: the logcat restart after a re-registration), after its output is written.
+//
+// status "online" means Android has booted and the after-boot setup of that boot is done (emu bootready.go); status has
+// no new value for the time in between, it stays "starting" (busy "starting" too while a modavd start works on it), and
+// setup_step ("boot", "vulkan_fix", "tune", "ime", "first_boot", "sdcard") and setup_progress (0-100, counted by the
+// steps done) say how far it is; both are "" / 0 otherwise. booted is Android's own state and does not wait for the
+// setup. The wait for it ends at the latest 60 s after the start began the setup: status is then "online" although it
+// goes on, and setup_unfinished names the step still running ("" otherwise). A qemu that no start sets up (started
+// by another tool, or by a start that was cancelled or killed) is online once Android has booted. A script waits for
+// status "online" before it works on the instance, or calls start, which returns when the instance is ready.
 //
 // Hidden subcommands, routed before any flag parsing or root lookup: __spawn (host.SpawnHelperMain, the helper of
 // host.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch

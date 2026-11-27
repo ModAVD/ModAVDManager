@@ -198,7 +198,17 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 		info.Screencap.ShmReady = host.SharedMemoryExists(info.Screencap.Shm)
 	}
 	info.Status = statusOf(info.Running, info.Booted)
-	info.Busy = busyOf(m.stopping(i), m.lockHeld(i, "start"), m.lockHeld(i, "bridge"))
+	startHeld := m.lockHeld(i, "start")
+	// Booted is Android's own state and stays as it is; online also needs the after-boot setup of this boot to be done
+	// (bootready.go). Not for the result of Start itself (booted known): it is built right after the setup.
+	if info.Status == StatusOnline && booted == nil {
+		setup := m.bootSetupOf(i, *p, startHeld, time.Now())
+		if !setup.Ready {
+			info.Status, info.SetupStep, info.SetupProgress = StatusStarting, setup.Step, setup.Progress
+		}
+		info.SetupUnfinished = setup.Unfinished
+	}
+	info.Busy = busyOf(m.stopping(i), startHeld, m.lockHeld(i, "bridge"))
 	if info.Busy == "" && closing {
 		info.Busy = "stopping"
 	}

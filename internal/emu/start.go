@@ -41,10 +41,26 @@ const (
 type progressor struct {
 	fn   func(Progress)
 	last int
+	// ready, once the setup of the boot has begun (Start), is told which step of it is running (readyTracker)
+	ready *readyTracker
+}
+
+// readyPercent tells the setup's record that done of total after-boot steps are done.
+func (p *progressor) readyPercent(done, total int) {
+	if p != nil {
+		p.ready.percent(done, total)
+	}
 }
 
 func (p *progressor) emit(step, msg string, done int) {
-	if p == nil || p.fn == nil {
+	if p == nil {
+		return
+	}
+	switch step {
+	case "vulkan_fix", "tune", "ime", "first_boot":
+		p.ready.step(step)
+	}
+	if p.fn == nil {
 		return
 	}
 	if done <= p.last {
@@ -332,6 +348,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		} else {
 			// no qemu: a marker left here names a boot that is over
 			m.removeSetupMarker(i)
+			m.removeReady(i)
 			if opt.bridgeMarker {
 				// the execution bridge (bridge.go): an instance about to be launched boots writable already, so the
 				// install after the setup needs one cold boot fewer
@@ -423,6 +440,13 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		}
 	}
 
+	// A boot this start sets up is "starting" for status until that is done (bootready.go); an adopt that owes
+	// nothing only checks, and the instance stays online.
+	if mode != setupAdopted {
+		prog.ready = m.beginReady(i, qemu, bootID)
+		defer prog.ready.close()
+	}
+
 	var owedUntil time.Time // the deadline the deferred-mount warning names
 	if marker != nil {
 		owedUntil = marker.until()
@@ -458,9 +482,13 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// takes another 1–3 s to accept a new file after it is mounted, and the zygote restart of the guest library fixes
 	// takes it
 	// away again for about 7 s. Usually ready long before the setup is done, so this costs nothing then.
+	prog.ready.sdcard()
 	if !m.waitSDCard(ctx, i) && ctx.Err() == nil {
 		m.Log.Warnf("实例 %d 开机后 /sdcard 在 %.0f 秒内一直写不进文件；先返回，稍后再写", i, sdcardMountWait.Seconds())
 	}
+	// The setup is done: status reports online from here, and the boot record below lets the boot watch register the
+	// instance with the default adb server.
+	prog.ready.finish()
 	res.SetupPending = ab.SetupPending
 	res.LanguagePending = ab.LanguagePending
 	// The boot read before the setup, so a guest that rebooted during it is set up again by the watch. Unknown (adb

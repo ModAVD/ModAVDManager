@@ -255,12 +255,14 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 		//     tsc (clocksource.go, ModAVD#110). Last: the later the one read, the more of a fallback during boot it sees
 		func() { m.recordClocksource(ctx, inst) },
 	}
-	for _, step := range steps {
+	for k, step := range steps {
 		if err := ctxErr(ctx); err != nil {
 			return r, err
 		}
+		prog.readyPercent(k, len(steps))
 		step()
 	}
+	prog.readyPercent(len(steps), len(steps))
 	return r, ctxErr(ctx)
 }
 
