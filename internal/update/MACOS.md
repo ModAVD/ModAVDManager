@@ -1,5 +1,9 @@
 # macOS 更新包约定
 
+**简体中文** | [English](MACOS.en.md)
+
+<!-- MACOS.md 和 MACOS.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
 原生 Darwin/ARM64 构建使用 `modavd-macos-update-v1`，与 Windows/AUTO-MAS 的事务格式相互独立。只有 `update prepare` 或 `update install` 可以选择本地更新包，而且必须同时指定 `--package ZIP` 和 `--sha256 HEX`。SHA256 摘要须从可信的独立渠道取得。安装已暂存的更新包、恢复中断的事务，都不需要联网或读取已保存的凭据。
 
 ZIP 根目录须直接包含 `modavd-update-manifest.json`，不得在外面再包一层目录。这份传输清单不会安装到目标目录。其 JSON 对象包含以下字段：

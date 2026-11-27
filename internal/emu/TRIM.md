@@ -1,5 +1,9 @@
 # trim 时机测量
 
+**简体中文** | [English](TRIM.en.md)
+
+<!-- TRIM.md 和 TRIM.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
 本文记录 trim 请求的异步契约及复跑方法。具体版本的测量结果保存在 [ModAVD/ModAVD#95 的评论](https://github.com/ModAVD/ModAVD/issues/95#issuecomment-6654569636)中。
 
 ## 返回和日志分别表示什么
