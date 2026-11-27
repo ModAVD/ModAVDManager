@@ -330,6 +330,7 @@ Double-click `ModAVD.exe` in the package root: it starts a local server that lis
 - One root folder gets one server; double-clicking again just reopens the window. The state file is in `%LOCALAPPDATA%\ModAVD\`, and the log is at `<root>\logs\modavd-ui.log`.
 - After the window is closed: on Windows it stays in the tray (see above); on macOS it waits for the running tasks to finish and exits. The latter also applies when the tray icon cannot be put up.
 - Options: `--root`, `--port`, `--no-window` (start only the server), `--dev` (exposes a fake backend under `/dev/`, for adjusting page styles).
+- Usage and argument errors (Windows): `--help` exits with 0, wrong arguments with 2. When stdout and stderr are redirected to a file or a pipe, the usage goes to stdout and errors to stderr; without redirection but started from a terminal, they go to that terminal; started by a double click or a shortcut, a box shows them as before. Errors after the start (root folder not found and so on) go the same way. PowerShell does not wait for a GUI program to exit: to get the output and the exit code, use `Start-Process -Wait -PassThru` with redirection, for example `(Start-Process .\ModAVD.exe '--help' -Wait -PassThru -RedirectStandardOutput help.txt).ExitCode`.
 - The front end / back end API is in `internal/ui/API.en.md`. The pages are in `internal/ui/web/`; the icons are not licensed under the code license (see `internal/ui/web/assets/README.md` and [NOTICE](NOTICE)).
 
 ## Updating ModAVD

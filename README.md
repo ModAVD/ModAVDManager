@@ -333,6 +333,7 @@ Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目�
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
 - 关掉窗口后：Windows 上留在托盘（见上）；macOS 上等正在跑的任务做完再退出。托盘图标放不成时也按后者。
 - 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
+- 用法和参数错误（Windows）：`--help` 退出码 0，参数不对 2。标准输出、标准错误重定向到文件或管道时，用法写进标准输出、错误写进标准错误；没重定向但从终端启动的，写到那个终端；双击、快捷方式启动的照旧弹框。启动以后的错误（找不到根目录等）也这样输出。PowerShell 不等 GUI 程序退出，要拿输出和退出码就用 `Start-Process -Wait -PassThru` 加重定向，例如 `(Start-Process .\ModAVD.exe '--help' -Wait -PassThru -RedirectStandardOutput help.txt).ExitCode`。
 - 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标不随代码许可授权（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)）。
 
 ## 更新 ModAVD

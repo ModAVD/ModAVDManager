@@ -8,6 +8,9 @@
 //	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
 //	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
 //
+// On Windows the usage (--help) and startup errors go to a redirected stdout / stderr, or else to the console of
+// the parent (a terminal); only a launch with neither, such as a double click, shows a box (ModAVD/ModAVD#258).
+//
 // Build (GUI subsystem: no console window):
 //
 //	go build -trimpath -buildvcs=false -ldflags "-H=windowsgui" -o ModAVD.exe ./cmd/modavd-gui
@@ -124,51 +127,24 @@ func run(args []string) (code int) {
 		}
 	}()
 
-	fs := flag.NewFlagSet("ModAVD", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	rootFlag := fs.String("root", "", "ModAVD 根目录")
-	port := fs.Int("port", 0, "监听端口（0 = 随机）")
-	noWindow := fs.Bool("no-window", false, "不打开窗口")
-	var chromeWindow bool
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		fs.BoolVar(&chromeWindow, "chrome-window", false, "用独立 Chrome 应用窗口打开（默认使用系统浏览器）")
-	}
-	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
-	handoffArg := fs.String(strings.TrimPrefix(update.HandoffArg, "--"), "", "更新交接 ID")
-	if err := fs.Parse(args); err != nil {
-		// --help / -h / -help ask for the usage: an information box and exit code 0, not an error (ModAVD/ModAVD#115).
-		if errors.Is(err, flag.ErrHelp) {
-			notice(helpText(fs))
-			return 0
+	a, exitCode, ok := parseArgs(args, func(msg string, isErr bool) {
+		if isErr {
+			fatal(msg)
+		} else {
+			notice(msg)
 		}
-		fatal("命令行参数不对：" + err.Error() + "\n\n" + usage)
-		return 2
+	})
+	if !ok {
+		return exitCode
 	}
-	if fs.NArg() > 0 {
-		fatal("多余的参数：" + strings.Join(fs.Args(), " ") + "\n\n" + usage)
-		return 2
-	}
-	if *port < 0 || *port > 65535 {
-		fatal(fmt.Sprintf("端口 %d 不对（0–65535，0 = 随机）", *port))
-		return 2
-	}
-	var handoffID update.HandoffID
-	if *handoffArg != "" {
-		var err error
-		handoffID, err = update.ParseHandoffID(*handoffArg)
-		if err != nil {
-			fatal(err.Error())
-			return 2
-		}
-	}
-	r, err := root.Resolve(*rootFlag)
+	r, err := root.Resolve(a.root)
 	if err != nil {
 		fatalErr("找不到 ModAVD 根目录", err)
 		return errs.ExitCode(err)
 	}
 
 	minLevel := logx.Info
-	if *dev {
+	if a.dev {
 		minLevel = logx.Debug
 	}
 	// Not closed by a defer: the crash handler above still writes to it, and the process exit closes it anyway.
@@ -182,7 +158,7 @@ func run(args []string) (code int) {
 	}
 	if updating {
 		log.Infof("%s", update.UpdatingMessage)
-		if !*noWindow {
+		if !a.noWindow {
 			if err := updatingNotice(); err != nil {
 				log.Warnf("显示更新提示失败: %v", err)
 			}
@@ -198,7 +174,7 @@ func run(args []string) (code int) {
 		return 1
 	}
 	if inst == nil {
-		return reopen(r, *noWindow, chromeWindow, log, handoffID)
+		return reopen(r, a.noWindow, a.chromeWindow, log, a.handoffID)
 	}
 	defer inst.release()
 
@@ -207,11 +183,11 @@ func run(args []string) (code int) {
 	opt := ui.Options{
 		Root:         r,
 		Log:          log,
-		Addr:         fmt.Sprintf("127.0.0.1:%d", *port),
-		OpenWindow:   !*noWindow,
-		ChromeWindow: chromeWindow,
-		Dev:          *dev,
-		HandoffID:    handoffID,
+		Addr:         fmt.Sprintf("127.0.0.1:%d", a.port),
+		OpenWindow:   !a.noWindow,
+		ChromeWindow: a.chromeWindow,
+		Dev:          a.dev,
+		HandoffID:    a.handoffID,
 		// the tray icon and the boss keys (Windows): closing the window leaves the manager in the tray
 		Tray: runtime.GOOS == "windows",
 		Ready: func(baseURL, token string) {
@@ -220,10 +196,10 @@ func run(args []string) (code int) {
 			}
 		},
 	}
-	if *dev {
+	if a.dev {
 		opt.IdleExit = -1
 	}
-	opt.Reopen = reopenArgs(r, *port, *noWindow, *dev, log)
+	opt.Reopen = reopenArgs(r, a.port, a.noWindow, a.dev, log)
 	if err := ui.Run(ctx, opt); err != nil {
 		log.Errorf("%v", err)
 		// let go of the root first: the message box stays up until it is clicked away, and a new launch meanwhile
@@ -233,6 +209,60 @@ func run(args []string) (code int) {
 		return errs.ExitCode(err)
 	}
 	return 0
+}
+
+// guiArgs is the parsed command line of the manager.
+type guiArgs struct {
+	root         string
+	port         int
+	noWindow     bool
+	chromeWindow bool // only an option on macOS arm64
+	dev          bool
+	handoffID    update.HandoffID
+}
+
+// parseArgs reads the command line without looking up the root or starting anything. When the manager is not to
+// start, ok is false and report gets what to show: the usage for --help / -h / -help (isErr false, exit code 0, not
+// an error: ModAVD/ModAVD#115), anything wrong on the command line with isErr true and exit code 2.
+func parseArgs(args []string, report func(msg string, isErr bool)) (a guiArgs, exitCode int, ok bool) {
+	fs := flag.NewFlagSet("ModAVD", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	rootFlag := fs.String("root", "", "ModAVD 根目录")
+	port := fs.Int("port", 0, "监听端口（0 = 随机）")
+	noWindow := fs.Bool("no-window", false, "不打开窗口")
+	var chromeWindow bool
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		fs.BoolVar(&chromeWindow, "chrome-window", false, "用独立 Chrome 应用窗口打开（默认使用系统浏览器）")
+	}
+	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
+	handoffArg := fs.String(strings.TrimPrefix(update.HandoffArg, "--"), "", "更新交接 ID")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			report(helpText(fs), false)
+			return guiArgs{}, 0, false
+		}
+		report("命令行参数不对："+err.Error()+"\n\n"+usage, true)
+		return guiArgs{}, 2, false
+	}
+	if fs.NArg() > 0 {
+		report("多余的参数："+strings.Join(fs.Args(), " ")+"\n\n"+usage, true)
+		return guiArgs{}, 2, false
+	}
+	if *port < 0 || *port > 65535 {
+		report(fmt.Sprintf("端口 %d 不对（0–65535，0 = 随机）", *port), true)
+		return guiArgs{}, 2, false
+	}
+	var handoffID update.HandoffID
+	if *handoffArg != "" {
+		var err error
+		handoffID, err = update.ParseHandoffID(*handoffArg)
+		if err != nil {
+			report(err.Error(), true)
+			return guiArgs{}, 2, false
+		}
+	}
+	return guiArgs{root: *rootFlag, port: *port, noWindow: *noWindow, chromeWindow: chromeWindow, dev: *dev,
+		handoffID: handoffID}, 0, true
 }
 
 // reopenArgs is how the CLI starts this manager again after 设置 → 更新: this executable on the same root, with the
