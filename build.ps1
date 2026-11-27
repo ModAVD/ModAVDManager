@@ -1,15 +1,16 @@
 # Build tools\modavd.exe reproducibly: the same source and Go version give the same bytes on any machine and path.
 #
-#   pwsh -NoProfile -File tools\modavd\build.ps1             # -> tools\modavd\out\tools\modavd.exe, out\ModAVD.exe
-#   pwsh -NoProfile -File tools\modavd\build.ps1 -Out <dir> -Go <go1.26.5>\bin\go.exe
-#   pwsh -NoProfile -File tools\modavd\build.ps1 -Test      # go vet + go test first
+#   pwsh -NoProfile -File build.ps1                         # -> out\tools\modavd.exe, out\ModAVD.exe (both embed
+#                                                           #    internal\guest\proxyd\modavd-proxyd, built first)
+#   pwsh -NoProfile -File build.ps1 -Out <dir> -Go <go1.26.5>\bin\go.exe
+#   pwsh -NoProfile -File build.ps1 -Test                    # go vet + go test first
 #
 # modavd.exe is the console program (CLI, MCP); ModAVD.exe is the manager, a GUI-subsystem exe (-H=windowsgui, no
 # console window when double-clicked) built from cmd/modavd-gui. In the package: <root>\tools\modavd.exe and
 # <root>\ModAVD.exe.
 #
 # -trimpath keeps local paths (GOROOT under C:\Users, the source dir) out of the binary, which the release privacy scan
-# would flag; -buildvcs=false keeps the private repo's commit and dirty flag out. GOTOOLCHAIN=local plus the check
+# would flag; -buildvcs=false keeps repository metadata and dirty flags out. GOTOOLCHAIN=local plus the check
 # against go.mod's toolchain line makes sure no other Go version builds it silently. No -X version stamp (see
 # internal/buildinfo).
 
@@ -40,25 +41,38 @@ try {
     if ($have -ne $want) { throw "Go version $have does not match go.mod toolchain $want ($Go)" }
     Push-Location $src
     try {
+        # A modavd-proxyd.gz from a build before the daemon went in uncompressed would be embedded too.
+        Remove-Item -LiteralPath (Join-Path $src 'internal\guest\proxyd\modavd-proxyd.gz') -Force -ErrorAction SilentlyContinue
         if ($Test) {
             & $Go vet ./...
             if ($LASTEXITCODE) { throw "go vet failed ($LASTEXITCODE)" }
             & $Go test ./...
             if ($LASTEXITCODE) { throw "go test failed ($LASTEXITCODE)" }
         }
+        # The guest daemon of the per-app proxy (cmd/modavd-proxyd), a static linux/amd64 binary that both exes embed
+        # as is (internal/guest/proxyd, gitignored; not compressed, see the README there).
+        try {
+            $env:GOOS = 'linux'
+            & $Go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $src 'internal\guest\proxyd\modavd-proxyd') ./cmd/modavd-proxyd
+            if ($LASTEXITCODE) { throw "go build modavd-proxyd failed ($LASTEXITCODE)" }
+        } finally {
+            $env:GOOS = 'windows'
+        }
         # The package layout: <root>\tools\modavd.exe and <root>\ModAVD.exe. Never side by side: Windows names are
         # case-insensitive, so modavd.exe and ModAVD.exe in one directory are the same file.
         New-Item -ItemType Directory -Force (Join-Path $Out 'tools') | Out-Null
-        & $Go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $Out 'tools\modavd.exe') .
+        # No -s -w: the exes keep their symbol table and DWARF. Stripped, unsigned Go binaries are what the machine-learning
+        # detections of antivirus programs flag most (0.38.2's tools\modavd.exe was quarantined as Bearfoos.A!ml); the
+        # version information in the .syso files (cmd/modavd-gui/winres) is there for the same reason.
+        & $Go build -trimpath -buildvcs=false -o (Join-Path $Out 'tools\modavd.exe') .
         if ($LASTEXITCODE) { throw "go build modavd.exe failed ($LASTEXITCODE)" }
-        & $Go build -trimpath -buildvcs=false '-ldflags=-s -w -H=windowsgui' -o (Join-Path $Out 'ModAVD.exe') ./cmd/modavd-gui
+        & $Go build -trimpath -buildvcs=false '-ldflags=-H=windowsgui' -o (Join-Path $Out 'ModAVD.exe') ./cmd/modavd-gui
         if ($LASTEXITCODE) { throw "go build ModAVD.exe failed ($LASTEXITCODE)" }
     } finally { Pop-Location }
 } finally {
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
 }
-foreach ($name in 'tools\modavd.exe', 'ModAVD.exe') {
-    $f = Join-Path $Out $name
+foreach ($f in (Join-Path $src 'internal\guest\proxyd\modavd-proxyd'),(Join-Path $Out 'tools\modavd.exe'), (Join-Path $Out 'ModAVD.exe')) {
     $hash = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-Host ("{0}  {1} bytes  sha256 {2}  ({3})" -f $f, (Get-Item -LiteralPath $f).Length, $hash, $want)
 }

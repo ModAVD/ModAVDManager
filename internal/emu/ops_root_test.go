@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"modavd/internal/avd"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
@@ -52,7 +53,7 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	m, _ := opsTestManager(t)
 	ctx := context.Background()
 
-	created, err := m.Create(ctx, CreateRequest{Title: "测试实例"})
+	created, err := m.Create(ctx, CreateRequest{filesOnly: true, Title: "测试实例"})
 	opsSkipIfNotImplemented(t, err)
 	if err != nil {
 		t.Fatal(err)
@@ -61,27 +62,28 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 	if !root.ValidIndex(i) || created.Title != "测试实例" || created.Status != StatusOffline || created.Running || created.PID != 0 {
 		t.Fatalf("created = %+v", created)
 	}
-	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 64, Width: 1280, Height: 720, DPI: 240}
+	want := InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, DataPartitionGB: 256, DataDiskMode: "auto", Resolution: 1080, Width: 1920, Height: 1080, DPI: 280, Orientation: "landscape"}
 	if created.Config != want {
 		t.Fatalf("config = %+v, want %+v", created.Config, want)
 	}
-	if created.Serial != root.Serial(i) || created.AdbAddress != "127.0.0.1:"+strconv.Itoa(root.AdbPort(i)) ||
-		created.Ports.Grpc != root.GrpcPort(i) || created.Screencap.Shm != shmName(i) || created.Screencap.ShmReady {
+	def := root.PortPlan{Base: root.DefaultPortBase}
+	if created.Serial != def.Serial(i) || created.AdbAddress != "127.0.0.1:"+strconv.Itoa(def.Adb(i)) ||
+		created.Ports.Grpc != def.Grpc(i) || created.Screencap.Shm != shmName(def, i) || created.Screencap.ShmReady {
 		t.Fatalf("addresses = %+v", created)
 	}
 	if created.Initialized || !fileOrDirExists(created.Path) {
 		t.Fatalf("initialized / path: %+v", created)
 	}
 
-	if _, err := m.Create(ctx, CreateRequest{Index: &i}); errs.CodeOf(err) != errs.AlreadyExists {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &i}); errs.CodeOf(err) != errs.AlreadyExists {
 		t.Fatalf("same index again: %v", err)
 	}
 	five := 5
-	if _, err := m.Create(ctx, CreateRequest{Index: &five}); errs.CodeOf(err) != errs.InvalidArgument {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, Index: &five}); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Fatalf("index 5: %v", err)
 	}
 	bad := 1000
-	if _, err := m.Create(ctx, CreateRequest{MemoryMB: &bad}); errs.CodeOf(err) != errs.InvalidArgument {
+	if _, err := m.Create(ctx, CreateRequest{filesOnly: true, MemoryMB: &bad}); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Fatalf("memory 1000: %v", err)
 	}
 
@@ -93,16 +95,35 @@ func TestOpsInstanceLifecycle(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	mem, cpu, fps := 4096, 4, 30
-	up, err := m.Update(ctx, i, UpdateRequest{MemoryMB: &mem, CPU: &cpu, FPS: &fps})
+	mem, cpu, fps, resolution := 4096, 4, 30, 720
+	up, err := m.Update(ctx, i, UpdateRequest{MemoryMB: &mem, CPU: &cpu, FPS: &fps, Resolution: &resolution})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if up.AppliesNextBoot || up.Instance.Config.MemoryMB != 4096 || up.Instance.Config.CPU != 4 || up.Instance.Config.FPS != 30 {
+	if up.AppliesNextBoot || up.Instance.Config.MemoryMB != 4096 || up.Instance.Config.CPU != 4 || up.Instance.Config.FPS != 30 || up.Instance.Config.Resolution != 720 || up.Instance.Config.Width != 1280 || up.Instance.Config.DPI != 240 {
 		t.Fatalf("update = %+v", up)
 	}
 	if len(up.Applied) == 0 {
 		t.Fatalf("applied empty: %+v", up)
+	}
+	// DPI and orientation (ModAVD/ModAVD#247): the setting is shown, the next boot's density follows it, and back
+	dpi, portrait := 320, "portrait"
+	up, err = m.Update(ctx, i, UpdateRequest{DPI: &dpi, Orientation: &portrait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := up.Instance.Config; c.DPISetting != 320 || c.DPI != 320 || c.Orientation != "portrait" ||
+		c.Width != 1280 || c.Height != 720 || up.Applied["dpi"] != 320 || up.Applied["orientation"] != "portrait" {
+		t.Fatalf("dpi/orientation = %+v", up)
+	}
+	auto, landscape := 0, "landscape"
+	up, err = m.Update(ctx, i, UpdateRequest{DPI: &auto, Orientation: &landscape})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := up.Instance.Config; c.DPISetting != 0 || c.DPI != 240 || c.Orientation != "landscape" ||
+		m.Root.InstanceMeta(i).Has(avd.DPIKey) {
+		t.Fatalf("dpi/orientation back = %+v", up)
 	}
 
 	// A start in progress (lock held, here by this process) shows as busy and blocks the delete.
@@ -183,7 +204,8 @@ func TestOpsCheckOnEmptyRoot(t *testing.T) {
 		ids = append(ids, it.ID)
 		byID[it.ID] = it
 	}
-	if got := strings.Join(ids, ","); got != "path,components,emulator,acceleration,vulkan,disk,memory" {
+	// no memory item: host memory is not checked before a boot
+	if got := strings.Join(ids, ","); got != "path,components,emulator,acceleration,vulkan,disk" {
 		t.Fatalf("items = %s", got)
 	}
 	if res.Ready {
@@ -215,7 +237,7 @@ func TestOpsCheckOnEmptyRoot(t *testing.T) {
 	}
 	t.Logf("check: %s", b)
 
-	err = m.precheckBeforeLaunch(ctx, 6144)
+	err = m.precheckBeforeLaunch(ctx)
 	if errs.CodeOf(err) != errs.NotReady {
 		t.Fatalf("precheck on an empty root: %v (%s)", err, errs.CodeOf(err))
 	}

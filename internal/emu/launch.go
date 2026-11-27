@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 import (
@@ -9,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,29 +15,41 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/avd"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // adbServerStartTimeout is how long a launch waits for the private server (AUTO-MAS ensure_adb_server default).
 const adbServerStartTimeout = 20 * time.Second
 
-// buildLaunchArgs is the emulator.exe argument list, item for item AUTO-MAS build_launch_args (each switch was
-// verified on real instances; the long reasons are in its docstring):
+// buildLaunchArgs is the emulator.exe argument list: AUTO-MAS build_launch_args item for item, then no netsim (each
+// switch was verified on real instances; the long reasons for AUTO-MAS's switches are in its docstring):
 //   - cold boot (-no-snapshot), like MAS does with LDPlayer / MuMu every round;
 //   - the boot animation is turned off only when headless: a window has something to show meanwhile;
 //   - -audio none and -feature -VirtioSndCard: no host sound and no guest sound card (the image's virtio-snd ignores
-//     hw.audio*); qemu CPU on the 1999 main screen 147% -> 104%;
+//     hw.audio*); qemu CPU on the 1999 main screen 147% -> 104%. Both are left out only for an instance whose sound
+//     switch is on (o.sound, avd.SoundMeta; ModAVD/ModAVD#226), headless or not; the emulator shows its volume button
+//     exactly when it was not started with -audio none;
+//   - -save-path: the folder the emulator's screenshot button saves to (o.savePath, screenshotSavePath;
+//     ModAVD/ModAVD#231); left out when empty, and the emulator keeps its own default;
 //   - -memory: the instance's own setting (avd.MemoryFor), hw.ramSize is left alone;
-//   - the balloon (free page reporting) is always on; QuickbootFileBacked has to be off for it, or the guest RAM is
+//   - the Windows balloon (free page reporting) is on; QuickbootFileBacked has to be off for it, or the guest RAM is
 //     a file mapping whose pages qemu cannot drop;
 //   - VulkanBatchedDescriptorSetUpdate: without it Endfield's render thread spent 67.5% in synchronous
 //     vkAllocateDescriptorSets round trips;
 //   - disk write-through: the guest sends no flushes, yet a hard kill keeps what was written (nobarrier broke 3/3
-//     AVDs, this 6/6 survived). Everything after -qemu belongs to QEMU, so it comes last.
+//     AVDs, this 6/6 survived). Everything after -qemu belongs to QEMU, so it comes last;
+//   - no netsim (-WiFiPacketStream, -BluetoothEmulation, -Uwb): all emulators of a Windows user share one netsimd
+//     (found in TMPDIR, else %LOCALAPPDATA%\Temp), and once it wedges no instance on the machine boots (ModAVDManager
+//     #32). Wi-Fi then comes from the emulator's own hostapd and slirp, where it falls back when netsim is unreachable;
+//     no Bluetooth, which the first boot turns off anyway. Uwb is on in the SDK defaults, only the image keeps it off.
+//
+// qemuExtra comes last, still inside the -qemu part: the manager's own QEMU arguments (syncIOQemuArgs).
+//
+// On Windows the guest kernel also gets tsc=nowatchdog (tscNoWatchdogArgs).
 //
 // The window is not an instance option: it is decided at boot by whoever starts it.
-func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []string {
+func buildLaunchArgs(avdName string, console, memoryMB int, o launchOptions, qemuExtra ...string) []string {
 	args := []string{
 		"-avd", avdName,
 		"-no-snapshot",
@@ -46,22 +57,64 @@ func buildLaunchArgs(avdName string, console, memoryMB int, headless bool) []str
 		"-ports", fmt.Sprintf("%d,%d", console, console+1),
 		"-grpc", strconv.Itoa(console + 2),
 		"-grpc-use-token",
-		"-audio", "none",
-		"-memory", strconv.Itoa(memoryMB),
 	}
-	if headless {
+	if !o.sound {
+		args = append(args, "-audio", "none")
+	}
+	args = append(args, "-memory", strconv.Itoa(memoryMB))
+	if o.savePath != "" {
+		args = append(args, "-save-path", o.savePath)
+	}
+	if o.headless {
 		args = append(args, "-no-window", "-no-boot-anim")
 	}
-	return append(args,
-		"-feature", "-QuickbootFileBacked",
-		"-feature", "-VirtioSndCard",
+	if p := root.CurrentPlatform(); p.MirrorOS == "macos" && p.GuestABI == "arm64-v8a" {
+		// API35 uses guest ANGLE over Vulkan/MoltenVK for GLES3.1 on Apple
+		// Silicon. -gpu host alone selects the older host GLES translation path.
+		args = append(args, "-feature", "GuestAngle,Vulkan")
+	}
+	args = append(args, "-feature", "-QuickbootFileBacked")
+	if !o.sound {
+		args = append(args, "-feature", "-VirtioSndCard")
+	}
+	args = append(args,
 		"-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream",
+		"-feature", "-BluetoothEmulation",
+		"-feature", "-Uwb",
 		"-qemu",
 		"-global", "virtio-blk-device.write-cache=off",
 		"-global", "virtio-blk-device.config-wce=off",
-		"-device", "virtio-balloon-pci,free-page-reporting=on",
 	)
+	// Google's ARM64 QEMU does not implement ModAVD's custom balloon property.
+	// Keep the Windows argv byte-for-byte; native macOS has no reporting balloon.
+	if root.CurrentPlatform().MirrorOS != "macos" {
+		args = append(args, "-device", "virtio-balloon-pci,free-page-reporting=on")
+	}
+	if root.CurrentPlatform().MirrorOS == "win" {
+		args = append(args, tscNoWatchdogArgs...)
+	}
+	return append(args, qemuExtra...)
 }
+
+// launchOptions are the per-boot choices of buildLaunchArgs. The zero value is a windowed boot without sound or
+// screenshot folder.
+type launchOptions struct {
+	headless bool   // no window, no boot animation
+	sound    bool   // the instance's sound switch (avd.SoundMeta): host sound and a guest sound card
+	savePath string // -save-path; "" leaves it out
+}
+
+// tscNoWatchdogArgs keeps the guest on the TSC clocksource for the whole run (ModAVD/ModAVD#110). WHPX gives the
+// guest no kvm-clock, so when the kernel's clocksource watchdog drops the TSC the only clock left is the HPET, which
+// QEMU emulates: every clock read exits to the host. The watchdog compares the TSC against that HPET and gives up on
+// the TSC when an HPET read is slow three times in a row ("hpet read-back delay ..., attempt 3, marking unstable"),
+// which a busy host eventually causes. On a production instance it happened after 13.8 hours; from then on
+// Arknights' render thread spent 72% of its time in read_hpet and the game fell to about 5 fps until the next cold
+// boot. tsc=nowatchdog only takes the TSC out of the watchdog; the boot-time TSC synchronization check still runs, so
+// vCPUs whose TSCs really differ are still caught (unlike tsc=reliable, which skips that check too). "-append" after
+// -qemu is merged into the kernel command line by the emulator, not passed on to QEMU as a replacement.
+var tscNoWatchdogArgs = []string{"-append", "tsc=nowatchdog"}
 
 // launchPlan is what prepareLaunch settled before emulator.exe is started.
 type launchPlan struct {
@@ -70,36 +123,54 @@ type launchPlan struct {
 	memoryMB int
 }
 
-// prepareLaunch is AUTO-MAS _launch up to the Popen: components, host checks against the memory -memory will get,
-// free ports, the private adb server, the fixed 720p display, old logs, the log file name. Errors stop the start.
+// prepareLaunch is AUTO-MAS _launch up to the Popen: the root's ports, components, another root's instance on our
+// ports, host checks against the memory -memory will get, then launchPlanFor. Errors stop the start.
 func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window bool) (*launchPlan, error) {
 	i := inst.Index
+	// mas-avd.json's portBase and adb server ports (root.CheckPorts): nothing is started on ports that are not this
+	// root's to use. Every boot comes through here: start, create's setup, the bridge's cold boot.
+	if err := m.Root.CheckPorts(); err != nil {
+		return nil, err
+	}
+	if err := m.prepareBridgeBackings(ctx, inst); err != nil {
+		return nil, err
+	}
 	if missing := m.Root.Missing(); len(missing) > 0 {
 		return nil, m.Root.MissingError(missing)
 	}
-	// The same-numbered instance of another root (production D:\ModAVD next to a test root) runs on exactly our
-	// ports. Said before the host checks, which would otherwise fail first (it takes the memory) with a message that
-	// does not name the real cause.
-	if p, where, found := m.otherRootInstance(i); found {
+	ports := m.Root.Ports()
+	// The same-numbered instance of another root without a port plan of its own (production D:\ModAVD next to a test
+	// root that sets no portBase) runs on exactly our ports. Said before the host checks, which would otherwise fail
+	// first with a message that does not name the real cause.
+	if p, where, found := m.otherRootInstance(ports, i); found {
 		return nil, otherRootBusy(i, p, where)
 	}
-	// the host check uses exactly the memory -memory passes below: the instance's own, not one guessed per game
-	memoryMB := avd.MemoryFor(m.Root, i)
-	if err := m.precheckBeforeLaunch(ctx, memoryMB); err != nil {
+	if err := m.precheckBeforeLaunch(ctx); err != nil {
 		return nil, err
 	}
+	// 自动扩盘: an automatic data disk below the automatic size is raised now, the emulator grows the disk at this
+	// launch (autogrow.go; never stops the start)
+	m.applyAutoDisk(i)
+	// -memory is the instance's own setting, not one guessed per game
+	memoryMB := avd.MemoryFor(m.Root, i)
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
+	return m.launchPlanFor(ctx, inst, memoryMB, window)
+}
 
-	port := root.ConsolePort(i)
-	busy, err := win.BusyPorts([]int{port, port + 1, port + 2})
+// launchPlanFor is the rest of prepareLaunch, once the checks passed: the instance's ports in the root's plan (free?),
+// the private adb server, the selected display preset, old logs, the log file name, the emulator's arguments.
+func (m *Manager) launchPlanFor(ctx context.Context, inst *avd.Instance, memoryMB int, window bool) (*launchPlan, error) {
+	i := inst.Index
+	port := m.Root.Ports().Console(i)
+	busy, err := host.BusyPorts([]int{port, port + 1, port + 2})
 	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("魔改 AVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
+		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("ModAVD 实例 %d 读不出系统的 TCP 监听表: %v", i, err))
 	}
 	if len(busy) > 0 {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
-			i, joinInts(busy, ", "))
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 要用的端口 %s 已被占用，请先关闭占用它们的程序",
+			i, joinInts(busy, ", ")), map[string]string{errs.Reason: "port_in_use"})
 	}
 
 	// The emulator registers with the private server once, at the end of its boot: it has to be up first.
@@ -122,14 +193,25 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %d 写显示设置（config.ini）失败: %v", i, err))
 	}
 	if wrote {
-		m.Log.Infof("实例 %d 显示改回 720p、不显示导航栏（已写入 config.ini）", i)
+		// Display normalizes the config read before the write the same way ApplyDisplay did
+		w, h, dpi := inst.Display(avd.DPIMeta(m.Root.InstanceMeta(i)))
+		m.Log.Infof("实例 %d 显示设为 %d×%d、DPI %d、不显示导航栏（已写入 config.ini）", i, w, h, dpi)
 	}
 
 	headless := !window
-	args := buildLaunchArgs(inst.Name, port, memoryMB, headless)
+	sound := avd.SoundMeta(m.Root.InstanceMeta(i))
+	args := buildLaunchArgs(inst.Name, port, memoryMB,
+		launchOptions{headless: headless, sound: sound, savePath: m.screenshotSavePath()}, m.syncIOQemuArgs(inst)...)
+	regionalArgs, err := m.regionalLaunch(i)
+	if err != nil {
+		return nil, err
+	}
+	args = slices.Insert(args, slices.Index(args, "-qemu"), regionalArgs...)
 	m.pruneLogs(i)
-	stamp := time.Now().Format("20060102-150405")
-	logPath := filepath.Join(m.Root.LogsDir(), inst.Name+"-"+stamp+".log")
+	logPath, err := emulatorLogPath(m.Root.LogsDir(), inst.Name)
+	if err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "创建模拟器日志失败: "+err.Error())
+	}
 
 	mode := "带窗口"
 	if headless {
@@ -139,22 +221,30 @@ func (m *Manager) prepareLaunch(ctx context.Context, inst *avd.Instance, window 
 	if n, ok := inst.CPU(); ok {
 		cpu = strconv.Itoa(n)
 	}
-	m.Log.Infof("启动魔改 AVD 实例 %d（%s，720p %d Hz，%d MB / %s 核，气球开，不带声卡，ANDROID_EMU_VK_HIDE_REBAR=1）: emulator %s",
-		i, mode, inst.FPS(), memoryMB, cpu, strings.Join(args, " "))
+	balloon := "气球开，"
+	if root.CurrentPlatform().MirrorOS == "macos" {
+		balloon = ""
+	}
+	card := "不带声卡"
+	if sound {
+		card = "带声卡"
+	}
+	m.Log.Infof("启动 ModAVD 实例 %d（%s，%dp %d Hz，%d MB / %s 核，%s%s，ANDROID_EMU_VK_HIDE_REBAR=%s）: emulator %s",
+		i, mode, inst.Resolution(), inst.FPS(), memoryMB, cpu, balloon, card, hideRebar, strings.Join(args, " "))
 	return &launchPlan{args: args, logPath: logPath, memoryMB: memoryMB}, nil
 }
 
-// otherRootInstance is the process listening on one of instance i's ports (console, adb, gRPC) when it is the
-// same-numbered instance of another root: a qemu-system* whose command line has "-avd mas_<i>" and "-ports
-// <console>,..." (cmdlineMatches) that adb.QemuBelongsTo does not give to m.Root. where names that instance: the
-// avd.dir of its emulator runtime file (in adb.EmulatorDiscoveryDir, where qemu writes it and adb.QemuBelongsTo
+// otherRootInstance is the process listening on one of instance i's ports in plan (console, adb, gRPC) when it is the
+// same-numbered instance of another root on the same ports: a qemu-system* whose command line has "-avd mas_<i>" and
+// "-ports <console>,..." (cmdlineMatches) that adb.QemuBelongsTo does not give to m.Root. where names that instance:
+// the avd.dir of its emulator runtime file (in adb.EmulatorDiscoveryDir, where qemu writes it and adb.QemuBelongsTo
 // reads it), else its executable. found=false also when the listener table or a process cannot be read: the port
 // check after the host checks still reports busy ports.
-func (m *Manager) otherRootInstance(i int) (p win.Process, where string, found bool) {
-	console := root.ConsolePort(i)
-	ls, err := win.Listeners()
+func (m *Manager) otherRootInstance(plan root.PortPlan, i int) (p host.Process, where string, found bool) {
+	console := plan.Console(i)
+	ls, err := host.Listeners()
 	if err != nil {
-		return win.Process{}, "", false
+		return host.Process{}, "", false
 	}
 	seen := map[uint32]bool{}
 	for _, l := range ls {
@@ -162,7 +252,7 @@ func (m *Manager) otherRootInstance(i int) (p win.Process, where string, found b
 			continue
 		}
 		seen[l.PID] = true
-		q, ok := win.FindProcess(l.PID)
+		q, ok := host.FindProcess(l.PID)
 		if !ok {
 			continue
 		}
@@ -170,23 +260,23 @@ func (m *Manager) otherRootInstance(i int) (p win.Process, where string, found b
 		if err != nil {
 			continue
 		}
-		if otherRootQemu(q, cmdline, i, func(q win.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
+		if otherRootQemu(q, cmdline, i, console, func(q host.Process) bool { return adb.QemuBelongsTo(m.Root, q, i) }) {
 			return q, qemuWhere(runtimeAvdDir(adb.EmulatorDiscoveryDir(), q), cmdline), true
 		}
 	}
-	return win.Process{}, "", false
+	return host.Process{}, "", false
 }
 
-// otherRootQemu: q (with its command line) is instance i of some root by name and ports, and ours says it is not
-// m.Root's.
-func otherRootQemu(q win.Process, cmdline []string, i int, ours func(win.Process) bool) bool {
-	return isQemuName(q.Name) && cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i)) && !ours(q)
+// otherRootQemu: q (with its command line) is instance i of some root by name and console port, and ours says it is
+// not m.Root's.
+func otherRootQemu(q host.Process, cmdline []string, i, console int, ours func(host.Process) bool) bool {
+	return isQemuName(q.Name) && cmdlineMatches(cmdline, root.AvdName(i), console) && !ours(q)
 }
 
 // otherRootBusy is the error of a start whose ports the same-numbered instance of another root holds.
-func otherRootBusy(i int, p win.Process, where string) *errs.Error {
-	return errs.Newf(errs.Busy, "魔改 AVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
-		WithAdvice("先在那个根目录把它关掉再启动")
+func otherRootBusy(i int, p host.Process, where string) *errs.Error {
+	return errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 的端口被另一个根目录的同编号实例占用（pid %d，%s）", i, p.PID, where).
+		WithAdvice("先在那个根目录把它关掉再启动"), map[string]string{errs.Reason: "port_other_root"})
 }
 
 // qemuWhere names a qemu for the messages: avdDir when known, else its executable (argv[0]), else "路径读不到".
@@ -202,7 +292,7 @@ func qemuWhere(avdDir string, cmdline []string) string {
 
 // runtimeAvdDir is the avd.dir= of q's runtime file pid_<pid>.ini in dir; "" when there is no current one (missing,
 // unreadable, without that line, or older than q: a leftover of an earlier process with that PID).
-func runtimeAvdDir(dir string, q win.Process) string {
+func runtimeAvdDir(dir string, q host.Process) string {
 	path := filepath.Join(dir, "pid_"+strconv.FormatUint(uint64(q.PID), 10)+".ini")
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() {
@@ -228,24 +318,24 @@ func runtimeAvdDir(dir string, q win.Process) string {
 // startEmulator starts emulator.exe with StartOrphan (AUTO-MAS launch_emulator): never as our child, so whoever ends
 // modavd's process tree (an MCP client disconnecting, a job object) cannot cut the guest's power. Output goes to
 // plan.logPath, the working directory is the emulator's own.
-func (m *Manager) startEmulator(i int, plan *launchPlan) (win.Process, error) {
+func (m *Manager) startEmulator(i int, plan *launchPlan) (host.Process, error) {
 	exe := m.Root.EmulatorExe()
 	cache := m.Root.ShaderCacheDir()
 	if err := os.MkdirAll(cache, 0o755); err != nil {
-		return win.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建着色器缓存目录 %s 失败: %v", cache, err))
+		return host.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建着色器缓存目录 %s 失败: %v", cache, err))
 	}
 	if err := os.MkdirAll(filepath.Dir(plan.logPath), 0o755); err != nil {
-		return win.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建日志目录 %s 失败: %v",
+		return host.Process{}, errs.Wrap(errs.Internal, err, fmt.Sprintf("建日志目录 %s 失败: %v",
 			filepath.Dir(plan.logPath), err))
 	}
-	p, err := win.StartOrphan(exe, plan.args, win.StartOptions{
+	p, err := host.StartOrphan(exe, plan.args, host.StartOptions{
 		Dir:        filepath.Dir(exe),
 		Env:        m.emulatorEnv(cache),
 		OutputPath: plan.logPath,
 	})
 	if err != nil {
-		return win.Process{}, errs.Wrap(errs.LaunchFailed, err,
-			fmt.Sprintf("魔改 AVD 实例 %d 启动失败（emulator.exe 没能运行）: %v", i, err))
+		return host.Process{}, errs.Wrap(errs.LaunchFailed, err,
+			fmt.Sprintf("ModAVD 实例 %d 启动失败（%s 没能运行）: %v", i, root.CurrentPlatform().Emulator, err))
 	}
 	return p, nil
 }
@@ -257,15 +347,11 @@ func (m *Manager) startEmulator(i int, plan *launchPlan) (win.Process, error) {
 //     the guest as device local only. Endfield waited for write-combine drains on every vertex write there (title
 //     screen 14.6 -> 60 fps); games that never touch that memory are unaffected, emulators before mas-27 ignore it.
 //
-// Appended after the private adb environment: win.StartOrphan / StartDetached keep the last of entries with the same
-// name (compared case-insensitively), so these override a user's own values, as AUTO-MAS env.update does.
+// Darwin keeps unified memory host-visible and does not inject the NVIDIA cache
+// settings. The backend keeps the last environment entry for each name, using
+// the platform's case rules, so these override inherited values.
 func (m *Manager) emulatorEnv(shaderCache string) []string {
-	return append(m.ADB.Env(),
-		"__GL_SHADER_DISK_CACHE=1",
-		"__GL_SHADER_DISK_CACHE_PATH="+shaderCache,
-		"__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1",
-		"ANDROID_EMU_VK_HIDE_REBAR=1",
-	)
+	return append(m.ADB.Env(), emulatorGPUEnv(shaderCache)...)
 }
 
 // logTail is the last n non-empty lines of the emulator log joined by " | " (AUTO-MAS _log_tail), for the error when
@@ -299,6 +385,37 @@ func logTail(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// emulatorMemoryMarkers are what the emulator writes before it quits for lack of host memory: util/oslib-win32.c and
+// oslib-posix.c (the guest RAM does not fit in what the host can still commit), exec.c (the guest RAM could not be set
+// up), qemu_oom_check and android/utils (any other allocation).
+var emulatorMemoryMarkers = []string{
+	"Insufficient RAM free for launching emulator",
+	"cannot set up guest memory",
+	"Failed to allocate memory",
+	"PANIC: not enough memory",
+}
+
+// bootOutOfMemory: the emulator log of this boot (a new file per boot) says the host could not give it memory.
+func bootOutOfMemory(logPath string) bool {
+	for _, marker := range emulatorMemoryMarkers {
+		if fileContains(logPath, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// emulatorExitedError is the error of a boot whose emulator.exe exited before qemu showed up (code: its exit code, or
+// "未知"): insufficient memory when its log says so (bootOutOfMemory), else launch failed. Host memory is not checked
+// before a boot, so this is where a boot that does not get its memory is told apart.
+func emulatorExitedError(i int, code, logPath string) error {
+	if bootOutOfMemory(logPath) {
+		return errs.Newf(errs.InsufficientMemory, "ModAVD 实例 %d 启动失败：电脑内存不足，模拟器分不到实例的内存（emulator.exe 退出码 %s）：%s",
+			i, code, logTail(logPath, 8)).WithAdvice("请关闭部分程序、调小实例内存，或调大虚拟内存（页面文件）")
+	}
+	return errs.Newf(errs.LaunchFailed, "ModAVD 实例 %d 启动失败（emulator.exe 退出码 %s）：%s", i, code, logTail(logPath, 8))
 }
 
 // fileContains reports whether the file holds needle (the emulator log's modavd_ime line).

@@ -1,0 +1,4 @@
+summary.txt
+crash/emu-crash-37.2.10-mas.db/a.dmp
+crash/emu-crash-37.2.10-mas.db/b.dmp
+crash/emu-crash-37.2.10-mas.db/c.dmp

@@ -1,0 +1,187 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, "release/**"]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  checks:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # go.mod's go line is "go 1.26", which setup-go resolves to the newest 1.26.x; build.ps1 wants the exact
+      # toolchain line.
+      - name: go version
+        id: go
+        shell: pwsh
+        run: |
+          $v = (Select-String -LiteralPath go.mod -Pattern '^toolchain\s+go(\S+)' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $v) { throw 'go.mod has no toolchain line' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # nothing is installed with a package manager; zizmor flags the default cache on release branches
+          package-manager-cache: false
+      - name: display coordinate tests
+        run: node --test scripts/test_display_tap.mjs
+      - name: disk UI tests
+        run: node --test scripts/test_disk_info.mjs scripts/test_compact_format.mjs scripts/test_card_cfg.mjs
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $bad = gofmt -l .
+          if ($bad) { $bad; throw 'gofmt required' }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: cross-platform vet
+        shell: pwsh
+        run: |
+          $env:GOOS = 'darwin'; $env:GOARCH = 'arm64'; go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go vet darwin/arm64 failed' }
+          $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go vet linux/amd64 failed' }
+      - name: build
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File build.ps1
+          Get-FileHash out\tools\modavd.exe -Algorithm SHA256
+          Get-FileHash out\ModAVD.exe -Algorithm SHA256
+      - name: privacy scan
+        run: python -B -I -X utf8 scripts/privacy.py . --allowlist scripts/privacy-allowlist.json
+      # PR 里的提交在 pull_request 时已经查过。push 和 merge_group 下要查的只剩 GitHub 生成的 squash 提交，
+      # 它的作者邮箱取自贡献者 GitHub 账号的设置，不归作者检查管；查了会让合并队列和 main 无端变红。
+      - name: author check
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          REPO_CHECK_BASE: ${{ github.event.pull_request.base.sha }}
+          REPO_CHECK_HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO_CHECK_EVENT: ${{ github.event_name }}
+        run: |
+          if ($env:REPO_CHECK_EVENT -eq 'workflow_dispatch') {
+            Remove-Item Env:REPO_CHECK_BASE -ErrorAction SilentlyContinue
+            Remove-Item Env:REPO_CHECK_HEAD -ErrorAction SilentlyContinue
+          }
+          python -B -I -X utf8 scripts/repo_checks.py
+      - name: script tests
+        run: python -B -I -X utf8 scripts/test_repo_checks.py
+      - name: trim measurement tests
+        run: python -B -I -X utf8 scripts/test_measure_trim.py
+
+  shared-scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout ModAVD for the shared scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ModAVD/ModAVD
+          ref: main
+          path: .modavd
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/privacy.py
+            scripts/repo_checks.py
+            scripts/test_repo_checks.py
+          sparse-checkout-cone-mode: false
+      - name: Shared scripts are ModAVD's
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in scripts/privacy.py scripts/repo_checks.py scripts/test_repo_checks.py; do
+            if ! cmp -s "$f" ".modavd/$f"; then
+              echo "::error file=$f::$f differs from ModAVD/ModAVD main. These scripts are changed in ModAVD first; copy its $f here byte for byte (only privacy-allowlist.json is this repository's own)."
+              exit 1
+            fi
+          done
+          echo "privacy.py, repo_checks.py and test_repo_checks.py are the same as ModAVD/ModAVD main $(git -C .modavd rev-parse --short HEAD)"
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: go version
+        id: go
+        shell: bash
+        run: |
+          v=$(sed -nE 's/^toolchain[[:space:]]+go//p' go.mod | head -n 1)
+          test -n "$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+
+  create-cancel:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # nothing is installed with a package manager; zizmor flags the default cache on release branches
+          package-manager-cache: false
+      - name: create cancellation menu tests
+        run: node --experimental-vm-modules --test scripts/test_create_cancel.mjs
+
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout without persistent credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install zizmor 1.32.0 (version and wheel hash pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          printf '%s\n' 'zizmor==1.32.0 --hash=sha256:84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071' > "$RUNNER_TEMP/zizmor-requirements.txt"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --disable-pip-version-check --no-deps --only-binary=:all: \
+            --require-hashes -r "$RUNNER_TEMP/zizmor-requirements.txt"
+      - name: Audit workflows and Dependabot config
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format=github --no-progress .'

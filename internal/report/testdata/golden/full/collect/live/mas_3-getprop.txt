@@ -1,0 +1,2 @@
+[sys.boot_completed]: [0]
+warning: no shell_v2

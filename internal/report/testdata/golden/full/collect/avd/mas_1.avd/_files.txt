@@ -1,0 +1,9 @@
+{{BOM}}snapshots                                <DIR>
+config.ini                                            170  2026-01-14 21:30:05
+emulator-user.ini                                      28  2026-01-10 08:00:00
+encryptionkey.img                                     100  2026-01-10 08:00:00
+hardware-qemu.ini                                      22  2026-01-15 11:58:01
+multiinstance.lock                                      0  2026-01-10 08:00:00
+userdata-qemu.img                                   4,096  2026-01-10 08:00:00
+userdata-qemu.img.qcow2                         1,234,567  2026-01-10 08:00:00
+这是一个非常非常长的中文文件名用来检查四十个字符宽度的列在名字更长的时候不会被截断.txt                1  2026-01-10 08:00:00

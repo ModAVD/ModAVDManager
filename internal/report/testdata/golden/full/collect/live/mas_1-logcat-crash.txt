@@ -1,0 +1,3 @@
+
+# stderr:
+logcat: Unable to open log device '/dev/log/crash'

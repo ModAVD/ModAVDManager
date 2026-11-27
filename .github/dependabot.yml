@@ -1,0 +1,23 @@
+# 每月一次，每个生态合成一个 PR（Refs ModAVD/ModAVD#127）。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      gomod:
+        patterns:
+          - "*"

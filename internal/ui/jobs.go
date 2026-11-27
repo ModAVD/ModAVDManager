@@ -1,5 +1,3 @@
-//go:build windows
-
 package ui
 
 import (
@@ -8,6 +6,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +16,31 @@ import (
 )
 
 const (
-	kindStart   = "start"
-	kindStop    = "stop"
-	kindRestart = "restart"
-	kindInstall = "install"
+	kindStart      = "start"
+	kindStop       = "stop"
+	kindGameImport = "import-game"
+	kindInstall    = "install"
+	kindCreate     = "create"
+	kindComponents = "components"
+	kindCollect    = "collect-info"
+	kindSettings   = "instance-settings"
+	kindDelete     = "delete"
+	kindClone      = "clone"
+	kindInput      = "input"
+	rootJobIndex   = -1
+
+	kindDiskInfo    = "disk-info"
+	kindDiskTrim    = "disk-trim"
+	kindDiskCompact = "disk-compact"
+
+	// the Google Play Store (playstore.go): an instance's install and uninstall, the root's import of its files
+	kindPlayStoreInstall   = "playstore-install"
+	kindPlayStoreUninstall = "playstore-uninstall"
+	kindPlayStoreImport    = "playstore-import"
+
+	// the reported GLES 3.2 (gles32.go): an instance's switch on and off
+	kindGLES32On  = "gles32-on"
+	kindGLES32Off = "gles32-off"
 
 	stateRunning  = "running"
 	stateDone     = "done"
@@ -28,7 +48,7 @@ const (
 	stateCanceled = "canceled"
 
 	maxJobs = 50
-	// progressTotal matches emu's start progress scale, so a restart (stop, then start) stays on one scale.
+	// progressTotal matches emu's start progress scale.
 	progressTotal = 1000
 )
 
@@ -38,19 +58,66 @@ func kindLabel(kind string) string {
 		return "开机"
 	case kindStop:
 		return "关机"
-	case kindRestart:
-		return "重启"
+	case kindGameImport:
+		return "从模拟器导入游戏"
 	case kindInstall:
 		return "安装 APK"
+	case kindCreate:
+		return "新建"
+	case kindComponents:
+		return "补全组件"
+	case kindCollect:
+		return "收集问题信息"
+	case kindSettings:
+		return "修改设置"
+	case kindDelete:
+		return "删除"
+	case kindClone:
+		return "复制实例"
+	case kindInput:
+		return "发送操作"
+	case kindDiskInfo:
+		return "查看磁盘占用"
+	case kindDiskTrim:
+		return "回收磁盘空间"
+	case kindDiskCompact:
+		return "整理磁盘"
+	case kindPlayStoreInstall:
+		return "补全 Google Play 商店"
+	case kindPlayStoreUninstall:
+		return "移除 Google Play 商店"
+	case kindPlayStoreImport:
+		return "导入 Google Play 商店的文件"
+	case kindGLES32On:
+		return "开启报告 GLES 3.2"
+	case kindGLES32Off:
+		return "关闭报告 GLES 3.2"
+	case kindUpdate:
+		return "整包更新"
 	}
 	return kind
 }
 
+// sdkJob: a root job that writes the root's sdk\ (components fetch, the store's import). bootJob: an instance job that
+// boots the instance, so reads sdk\. The two never run at the same time.
+func sdkJob(kind string) bool { return kind == kindComponents || kind == kindPlayStoreImport }
+
+func bootJob(kind string) bool {
+	switch kind {
+	case kindStart, kindCreate, "restart", kindPlayStoreInstall, kindPlayStoreUninstall, kindGLES32On, kindGLES32Off:
+		return true
+	}
+	return false
+}
+
 type jobProgress struct {
-	Step    string `json:"step"`
-	Message string `json:"message"`
-	Done    int    `json:"done"`
-	Total   int    `json:"total"`
+	Step      string  `json:"step"`
+	Name      string  `json:"name,omitempty"`
+	Message   string  `json:"message"`
+	Done      int     `json:"done"`
+	Total     int     `json:"total"`
+	Speed     float64 `json:"speed,omitempty"`
+	Remaining float64 `json:"remaining,omitempty"`
 }
 
 // jobView is the Job of API.md.
@@ -69,15 +136,34 @@ type jobView struct {
 
 // job: view is guarded by jobTable.mu; cancel and done never change.
 type job struct {
-	view   jobView
-	cancel context.CancelFunc
-	done   chan struct{} // closed when the job function returned
+	view          jobView
+	cancel        context.CancelFunc
+	done          chan struct{} // closed when the job function returned
+	progressAt    time.Time
+	progressStage string
+	progressName  string
+	updatePhase   updateAdmission // guarded by jobTable.mu
+}
+
+type updateAdmission uint8
+
+const (
+	updatePreparing updateAdmission = iota
+	updateExclusive
+)
+
+// instanceAction covers synchronous mutations too: an update cannot pass its
+// admission check while a delete or settings write is still using the root.
+type instanceAction struct {
+	kind  string
+	index int
 }
 
 type jobTable struct {
-	mu   sync.Mutex
-	seq  int
-	list []*job // oldest first
+	mu      sync.Mutex
+	seq     int
+	list    []*job // oldest first
+	actions map[*instanceAction]struct{}
 }
 
 // snapshot copies the view (caller holds mu).
@@ -146,8 +232,97 @@ func busyError(o *job) error {
 func (s *server) checkFree(kind string, i int) error {
 	s.jobs.mu.Lock()
 	defer s.jobs.mu.Unlock()
+	return s.admissionError(kind, i)
+}
+
+// admissionError is called with jobs.mu held, for both preflight and admission.
+func (s *server) admissionError(kind string, i int) error {
+	if err := s.updateAdmissionError(i); err != nil {
+		return err
+	}
+	for a := range s.jobs.actions {
+		if a.kind == kindDelete && a.index == i {
+			return errs.Newf(errs.Busy, "实例 %d 正在%s，等它做完再试", i, kindLabel(a.kind))
+		}
+	}
+	for _, o := range s.jobs.list {
+		if o.view.State != stateRunning {
+			continue
+		}
+		if kind == kindUpdate && o.view.Index == rootJobIndex {
+			return errs.Newf(errs.Busy, "%s还没做完（任务 %s），等它做完再更新", kindLabel(o.view.Kind), o.view.ID)
+		}
+		if (sdkJob(kind) && o.view.Index != rootJobIndex && bootJob(o.view.Kind)) ||
+			(i != rootJobIndex && sdkJob(o.view.Kind) && bootJob(kind)) {
+			return errs.Newf(errs.Busy, "任务 %s 正在运行（任务 %s），等它做完再试", kindLabel(o.view.Kind), o.view.ID)
+		}
+	}
 	if o := s.jobs.busyWith(kind, i); o != nil {
 		return busyError(o)
+	}
+	return nil
+}
+
+func (s *server) updateAdmissionError(i int) error {
+	if s.handingOff.Load() {
+		return errs.New(errs.Busy, "正在交给命令行换上新版，管理器马上关闭，换好后会自动重新打开")
+	}
+	for _, o := range s.jobs.list {
+		if o.view.State != stateRunning {
+			continue
+		}
+		if o.view.Kind == kindUpdate && (i == rootJobIndex || o.updatePhase == updateExclusive) {
+			return errs.Newf(errs.Busy, "正在整包更新（任务 %s），等它做完再试", o.view.ID)
+		}
+	}
+	return nil
+}
+
+func (s *server) beginInstanceAction(kind string, i int) (func(), error) {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	err := s.updateAdmissionError(i)
+	if kind == kindDelete {
+		err = s.admissionError(kind, i)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.jobs.actions == nil {
+		s.jobs.actions = make(map[*instanceAction]struct{})
+	}
+	a := &instanceAction{kind: kind, index: i}
+	s.jobs.actions[a] = struct{}{}
+	return func() {
+		s.jobs.mu.Lock()
+		delete(s.jobs.actions, a)
+		s.jobs.mu.Unlock()
+	}, nil
+}
+
+// enterUpdateExclusive closes admission atomically with checking existing work.
+// Already admitted work is left alone. A retry can use the downloaded stage.
+func (s *server) enterUpdateExclusive(ctx context.Context, j *job, version string) error {
+	s.jobs.mu.Lock()
+	defer s.jobs.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return errs.Wrap(errs.Canceled, err, "已取消")
+	}
+	j.updatePhase = updateExclusive
+	advice := version + " 已下载并核对好；等它做完再点「更新」，不用重新下载"
+	for _, o := range s.jobs.list {
+		if o != j && o.view.State == stateRunning {
+			return errs.Newf(errs.Busy, "%s正在%s（任务 %s），一台实例都没关", strings.TrimSpace(jobTarget(o.view.Index)),
+				kindLabel(o.view.Kind), o.view.ID).WithAdvice(advice)
+		}
+	}
+	for a := range s.jobs.actions {
+		// One tap or key already on its way ends by itself in a moment and changes nothing a shutdown cares about;
+		// new ones are refused from here on (updateAdmissionError).
+		if a.kind == kindInput {
+			continue
+		}
+		return errs.Newf(errs.Busy, "实例 %d 正在%s，一台实例都没关", a.index, kindLabel(a.kind)).WithAdvice(advice)
 	}
 	return nil
 }
@@ -174,9 +349,9 @@ type jobFunc func(ctx context.Context, j *job, b backend) (any, error)
 // job (file log with the job id, log events, warnings). errs.Busy when the instance has a conflicting job.
 func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Lock()
-	if o := s.jobs.busyWith(kind, i); o != nil {
+	if err := s.admissionError(kind, i); err != nil {
 		s.jobs.mu.Unlock()
-		return jobView{}, busyError(o)
+		return jobView{}, err
 	}
 	s.jobs.seq++
 	ctx, cancel := context.WithCancel(s.jobCtx)
@@ -198,10 +373,23 @@ func (s *server) startJob(kind string, i int, fn jobFunc) (jobView, error) {
 	s.jobs.mu.Unlock()
 
 	b := s.newBackend(logx.New(s.jobLogSink(j)))
-	s.log.Infof("[%s] 开始%s实例 %d", view.ID, kindLabel(kind), i)
+	s.log.Infof("[%s] 开始%s%s", view.ID, kindLabel(kind), strings.TrimSpace(jobTarget(i)))
 	s.publishJob(view, true)
 	go s.runJob(ctx, j, b, fn)
 	return view, nil
+}
+
+// jobTarget is what a job works on, for the log lines: "实例 3 " (with the space the lines had), nothing for a root
+// job (components, collect-info).
+func jobTarget(i int) string {
+	if i == rootJobIndex {
+		return ""
+	}
+	return "实例 " + strconv.Itoa(i) + " "
+}
+
+func (s *server) startRootJob(kind string, fn jobFunc) (jobView, error) {
+	return s.startJob(kind, rootJobIndex, fn)
 }
 
 func (s *server) runJob(ctx context.Context, j *job, b backend, fn jobFunc) {
@@ -241,14 +429,20 @@ func (s *server) finishJob(ctx context.Context, j *job, res any, err error) {
 	v.Error = newErrorBody(err)
 	view := j.snapshot()
 	s.jobs.mu.Unlock()
+	if sdkJob(view.Kind) {
+		s.check.mu.Lock()
+		s.check.res, s.check.at = nil, time.Time{}
+		s.check.generation++
+		s.check.mu.Unlock()
+	}
 
 	switch view.State {
 	case stateDone:
-		s.log.Infof("[%s] %s实例 %d 完成", view.ID, kindLabel(view.Kind), view.Index)
+		s.log.Infof("[%s] %s%s完成", view.ID, kindLabel(view.Kind), jobTarget(view.Index))
 	case stateCanceled:
-		s.log.Infof("[%s] %s实例 %d 已取消", view.ID, kindLabel(view.Kind), view.Index)
+		s.log.Infof("[%s] %s%s已取消", view.ID, kindLabel(view.Kind), jobTarget(view.Index))
 	default:
-		s.log.Warnf("[%s] %s实例 %d 失败: %s", view.ID, kindLabel(view.Kind), view.Index, errs.As(err).Error())
+		s.log.Warnf("[%s] %s%s失败: %s", view.ID, kindLabel(view.Kind), jobTarget(view.Index), errs.As(err).Error())
 	}
 	s.publishJob(view, true)
 }
@@ -271,6 +465,24 @@ func (s *server) setProgress(j *job, p jobProgress) {
 	view := j.snapshot()
 	s.jobs.mu.Unlock()
 	s.publishJob(view, true)
+}
+
+func (s *server) setDiagProgress(j *job, p DiagProgress) {
+	s.jobs.mu.Lock()
+	if j.view.State != stateRunning {
+		s.jobs.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if !j.progressAt.IsZero() && now.Sub(j.progressAt) < 500*time.Millisecond && j.progressStage == p.Stage && j.progressName == p.Name {
+		s.jobs.mu.Unlock()
+		return
+	}
+	j.progressAt, j.progressStage, j.progressName = now, p.Stage, p.Name
+	j.view.Progress = &jobProgress{Step: p.Stage, Name: p.Name, Message: p.Message, Done: int(p.Done), Total: int(p.Total), Speed: p.Speed, Remaining: p.Remaining}
+	view := j.snapshot()
+	s.jobs.mu.Unlock()
+	s.publishJob(view, false)
 }
 
 // progressFn forwards emu's start progress into the job.
@@ -337,10 +549,16 @@ func (s *server) cancelJob(id string) (jobView, error) {
 	}
 	s.jobs.mu.Lock()
 	running := j.view.State == stateRunning
+	if running && j.view.Kind == kindUpdate && s.handingOff.Load() {
+		s.jobs.mu.Unlock()
+		return jobView{}, errs.New(errs.Busy, "已经交给命令行换上新版，换好后会自动重新打开管理器")
+	}
+	if running {
+		j.cancel()
+	}
 	s.jobs.mu.Unlock()
 	if running {
 		s.log.Infof("[%s] 请求取消", id)
-		j.cancel()
 	}
 	return s.jobView(j), nil
 }

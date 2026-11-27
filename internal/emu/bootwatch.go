@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 // Guest-only reboots. `adb reboot`, Restart in the guest's power menu or a guest kernel panic restart Android inside
@@ -20,24 +18,29 @@ package emu
 // The watch never waits: while another start or a stop runs it looks again at the next tick, and a start that sets up
 // a boot writes its record, so a boot is never set up twice. Its messages go to <root>\logs\modavd-bootwatch.log (one
 // JSON object per line, as `--json` on stderr).
+//
+// Being the one process that lives as long as the emulator, the watch also writes the emulator's memory to that log
+// at start, on a large change and at least every ten minutes (watchMemory).
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"modavd/internal/adb"
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
 // BootWatchArg is the hidden subcommand both executables route to RunBootWatch.
@@ -73,7 +76,7 @@ func (m *Manager) guestBoot(ctx context.Context, i int, reregister bool) (booted
 	if guestBootRead != nil {
 		return guestBootRead(i, reregister)
 	}
-	serial := root.Serial(i)
+	serial := m.Root.Ports().Serial(i)
 	res := m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: guestBootTimeout, Reregister: reregister}, "shell",
 		guestBootScript)
 	booted, bootID = parseGuestBoot(res.Out)
@@ -125,12 +128,12 @@ type bootRecord struct {
 }
 
 // names: q is the qemu process this record was written for.
-func (r bootRecord) names(q win.Process) bool {
+func (r bootRecord) names(q host.Process) bool {
 	return r.QemuPID != 0 && r.QemuCreated != 0 && r.QemuPID == q.PID && r.QemuCreated == q.Created
 }
 
 // guestRebooted: the record names q and the guest now runs another kernel boot (bootID; "" = unknown, no reboot).
-func (r bootRecord) guestRebooted(q win.Process, bootID string) bool {
+func (r bootRecord) guestRebooted(q host.Process, bootID string) bool {
 	return r.names(q) && r.BootID != "" && bootID != "" && bootID != r.BootID
 }
 
@@ -170,7 +173,7 @@ func shortBootID(id string) string {
 }
 
 // bootWatchArgv is the watch's command line: this executable with BootWatchArg (tests replace it).
-var bootWatchArgv = func(rootDir string, i int, q win.Process) ([]string, error) {
+var bootWatchArgv = func(rootDir string, i int, q host.Process) ([]string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -182,7 +185,7 @@ var bootWatchArgv = func(rootDir string, i int, q win.Process) ([]string, error)
 // startBootWatch starts the boot watch of qemu q (RunBootWatch), detached and out of our process tree, unless one runs
 // for this instance already (its lock is held: the watch of this same qemu, since a watch ends with its qemu). A
 // failure is a warning.
-func (m *Manager) startBootWatch(i int, q win.Process) {
+func (m *Manager) startBootWatch(i int, q host.Process) {
 	if m.lockHeld(i, "watch") {
 		return
 	}
@@ -190,8 +193,8 @@ func (m *Manager) startBootWatch(i int, q win.Process) {
 	if err == nil {
 		logPath := filepath.Join(m.Root.LogsDir(), bootWatchLogName)
 		rotateLog(logPath, bootWatchLogMax)
-		var p win.Process
-		if p, err = win.StartOrphan(argv[0], argv[1:], win.StartOptions{OutputPath: logPath}); err == nil {
+		var p host.Process
+		if p, err = host.StartOrphan(argv[0], argv[1:], host.StartOptions{OutputPath: logPath}); err == nil {
 			m.Log.Debugf("实例 %d 开机守护已起（pid %d，日志 %s）", i, p.PID, logPath)
 			return
 		}
@@ -231,12 +234,12 @@ func RunBootWatch(args []string, w io.Writer) int {
 	}
 	// the emulator's re-registration and logcat capture start detached processes through this executable too
 	if exe, err := os.Executable(); err == nil {
-		win.OrphanHelper = exe
+		host.SetOrphanHelper(exe)
 	}
 	m := New(r, log)
-	q := win.Process{PID: uint32(pid), Created: created}
+	q := host.Process{PID: uint32(pid), Created: created}
 
-	l, free, err := win.TryLock(m.lockPath(i, "watch"))
+	l, free, err := host.TryLock(m.lockPath(i, "watch"))
 	if err != nil {
 		log.Errorf("实例 %d 开机守护的锁文件打不开: %v", i, err)
 		return 1
@@ -263,9 +266,33 @@ func RunBootWatch(args []string, w io.Writer) int {
 		}
 		cancel()
 	}()
+	memoryDone := make(chan struct{})
+	go func() {
+		defer close(memoryDone)
+		if runtime.GOOS != "windows" {
+			return // these counters are not implemented on other hosts
+		}
+		if ctx.Err() == nil {
+			watch.logMemory(time.Now())
+		}
+		// Start the timer after the first read, so its tenth tick is not just before that sample's ten-minute mark.
+		ticker := time.NewTicker(bootWatchMemorySampleInterval)
+		defer ticker.Stop()
+		watch.watchMemory(ctx, ticker.C)
+	}()
+	shareDone := make(chan struct{})
+	go func() {
+		defer close(shareDone)
+		ticker := time.NewTicker(bootWatchShareInterval)
+		defer ticker.Stop()
+		watch.shareDefaultAdb(ctx, ticker.C)
+	}()
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
 	}
+	cancel()
+	<-shareDone
+	<-memoryDone // write the summary before releasing the watch lock or ending the log
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
 	return 0
@@ -275,10 +302,162 @@ func RunBootWatch(args []string, w io.Writer) int {
 type bootWatch struct {
 	m *Manager
 	i int
-	q win.Process
+	q host.Process
 	// missingSince: since when the private server has not known the instance (zero: it did at the last look), or
 	// since the watch last registered it again (bootWatchReregisterAfter).
 	missingSince time.Time
+	// Owned only by watchMemory, independently of guest reboot setup in tick.
+	memory bootWatchMemory
+	// shareFailing: the last registration with the default adb server failed (warned once). Owned by shareDefaultAdb.
+	shareFailing bool
+}
+
+const (
+	bootWatchMemorySampleInterval = time.Minute
+	bootWatchMemoryInterval       = 10 * time.Minute
+	bootWatchMemoryChange         = 256 << 20
+)
+
+type bootWatchMemorySample struct {
+	at time.Time
+	pm host.ProcessMemory
+}
+
+type bootWatchMemory struct {
+	last, logged             *bootWatchMemorySample
+	samples, failures        uint64
+	maxCommit, maxWorkingSet uint64
+	readErr                  error
+}
+
+// The memory counters behind logMemory; tests replace them.
+var (
+	processMemory = host.GetProcessMemory
+	systemMemory  = host.GetSystemMemory
+)
+
+// watchMemory continues sampling after the initial read. Guest reboot setup may block tick for minutes, so it must
+// not own this timer. Cancellation means qemu has exited; do not reopen a PID to try to recover final counters then.
+func (w *bootWatch) watchMemory(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		select {
+		case <-ctx.Done():
+			w.logMemorySummary()
+			return
+		case <-ticks:
+			if ctx.Err() == nil {
+				w.logMemory(time.Now()) // the read time, not a queued tick's old timestamp after suspend or slow I/O
+			}
+		}
+	}
+}
+
+// logMemory samples once. Only a first/recovered sample, an absolute change >256 MiB from the last written commit,
+// or ten minutes since that line writes process and system counters. Failed reads do not move either baseline.
+func (w *bootWatch) logMemory(now time.Time) {
+	m := &w.memory
+	pm, err := processMemory(w.q)
+	if err != nil {
+		m.failures++
+		if m.readErr == nil {
+			w.m.Log.Warnf("实例 %d 模拟器内存采样失败（qemu pid %d）：%v；一分钟后重试", w.i, w.q.PID, err)
+		}
+		m.readErr = err
+		return
+	}
+	recovered := m.readErr != nil
+	m.readErr = nil
+	m.last = &bootWatchMemorySample{at: now, pm: pm}
+	m.samples++
+	m.maxCommit = max(m.maxCommit, pm.Commit)
+	m.maxWorkingSet = max(m.maxWorkingSet, pm.WorkingSet)
+	if m.logged != nil && !recovered && now.Sub(m.logged.at) < bootWatchMemoryInterval &&
+		max(pm.Commit, m.logged.pm.Commit)-min(pm.Commit, m.logged.pm.Commit) <= bootWatchMemoryChange {
+		return
+	}
+	m.logged = m.last
+	const mb = 1 << 20
+	msg := fmt.Sprintf("实例 %d 模拟器内存（qemu pid %d）：提交 %d MB（OS 提交峰值 %d MB），工作集 %d MB", w.i, w.q.PID,
+		pm.Commit/mb, pm.PeakCommit/mb, pm.WorkingSet/mb)
+	if sm, err := systemMemory(); err == nil {
+		msg += fmt.Sprintf("；电脑：物理内存可用 %d / %d MB，提交 %d / %d MB", sm.AvailPhys/mb, sm.TotalPhys/mb,
+			sm.Committed/mb, sm.CommitLimit/mb)
+	}
+	if recovered {
+		msg += "；内存采样已恢复"
+	}
+	w.m.Log.Infof("%s", msg)
+}
+
+// logMemorySummary reports observations, not an exact lifetime peak. GetProcessMemoryInfo is not guaranteed to
+// yield counters after exit, even with a retained process handle. The OS peak below is exact only up to last.at;
+// sampled maxima can miss changes between samples. Neither includes an unobserved interval before exit.
+func (w *bootWatch) logMemorySummary() {
+	m := &w.memory
+	msg := fmt.Sprintf("实例 %d 模拟器内存退出汇总（qemu pid %d）：成功采样 %d 次，读取失败 %d 次", w.i, w.q.PID,
+		m.samples, m.failures)
+	if m.last == nil {
+		msg += "；没有成功样本"
+	} else {
+		const mb = 1 << 20
+		pm := m.last.pm
+		msg += fmt.Sprintf("；最后成功采样 %s：提交 %d MB，OS 提交峰值 %d MB，工作集 %d MB；采样最大提交 %d MB，工作集 %d MB",
+			m.last.at.Format(time.RFC3339), pm.Commit/mb, pm.PeakCommit/mb, pm.WorkingSet/mb,
+			m.maxCommit/mb, m.maxWorkingSet/mb)
+	}
+	if m.readErr != nil {
+		msg += fmt.Sprintf("；最近读取失败：%v", m.readErr)
+	}
+	w.m.Log.Infof("%s；精确退出峰值未知", msg)
+}
+
+// bootWatchShareInterval: how often the watch makes sure the default adb server (5037) knows the instance. A tool that
+// starts that server finds the instance at most this long after.
+var bootWatchShareInterval = 30 * time.Second
+
+// shareDefaultAdbServer is adb.ShareWithDefaultServer; tests replace it.
+var shareDefaultAdbServer = adb.ShareWithDefaultServer
+
+// shareDefaultAdb registers the instance with the default adb server now and at every tick, until ctx ends (qemu
+// exited). Its own goroutine: tick may block for minutes in a guest reboot setup. Skipped while a stop runs, before a
+// start has finished on q, and when mas-avd.json turns it off; a failure is logged once until it works again.
+func (w *bootWatch) shareDefaultAdb(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		w.shareDefaultAdbOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+	}
+}
+
+// shareDefaultAdbOnce is one look of shareDefaultAdb; it reports whether it asked the default server.
+func (w *bootWatch) shareDefaultAdbOnce(ctx context.Context) bool {
+	m, i := w.m, w.i
+	rec, ok := m.readBootRecord(i)
+	if !ok || !rec.names(w.q) || m.stopping(i) || !m.Root.ShareDefaultAdbServer() {
+		return false
+	}
+	console := m.Root.Ports().Console(i)
+	registered, err := shareDefaultAdbServer(ctx, console)
+	switch {
+	case err != nil:
+		if !w.shareFailing && ctx.Err() == nil {
+			m.Log.Warnf("实例 %d 没能登记到默认的 adb server（端口 %d），别的工具里可能看不到它: %v", i,
+				adb.DefaultServerPort, err)
+		}
+		w.shareFailing = true
+	case registered:
+		m.Log.Infof("实例 %d 已登记到默认的 adb server（端口 %d），那边是 emulator-%d", i, adb.DefaultServerPort, console)
+		w.shareFailing = false
+	default:
+		w.shareFailing = false
+	}
+	return true
 }
 
 // tick is one look of the watch at now: nothing while a start or a stop of the instance runs, or while the record does
@@ -326,18 +505,18 @@ func (m *Manager) removeBootRecord(i int) {
 
 // watchStartLock takes the start lock for the watch's start without waiting, and checks that no stop runs: errs.Busy
 // otherwise (the watch looks again later).
-func (m *Manager) watchStartLock(i int) (*win.FileLock, error) {
+func (m *Manager) watchStartLock(i int) (*host.FileLock, error) {
 	path := m.lockPath(i, "start")
-	l, free, err := win.TryLock(path)
+	l, free, err := host.TryLock(path)
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 	}
 	if !free {
-		return nil, errs.Newf(errs.Busy, "实例 %d 正由另一次启动开机或做开机后设置", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正由另一次启动开机或做开机后设置", i), map[string]string{errs.Reason: "locked", errs.Lock: "start"})
 	}
 	if m.stopping(i) {
 		l.Unlock()
-		return nil, errs.Newf(errs.Busy, "实例 %d 正在关机", i)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正在关机", i), map[string]string{errs.Reason: "locked", errs.Lock: "stop"})
 	}
 	return l, nil
 }

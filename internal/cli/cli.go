@@ -1,8 +1,6 @@
-//go:build windows
-
 // Package cli is the command line of modavd: a thin layer over emu.Manager, plus mcp.Serve for `modavd mcp`.
 //
-// Contract (also printed by `modavd help`; part of buildinfo.Protocol):
+// Contract (also printed by `modavd help`; part of buildinfo.Protocol, 2 since 0.3.0: what changed is listed there):
 //
 //	modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 //
@@ -11,49 +9,97 @@
 //
 //	list                                                  emu.ListResult
 //	info <i>                                              emu.InstanceInfo
-//	status <i>                                            StatusResult {index,name,status,running,booted,busy,pid}
-//	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb N] [--fps 30|60]   emu.InstanceInfo
+//	status <i>                                            StatusResult {index,name,status,running,booted,window,busy,pid,creation,creation_error,creation_log,creation_progress,serial,adb_address,ports,data_space}
+//	create [--index N] [--title T] [--memory M] [--cpu N] [--data-gb auto|N] [--fps 1-60]   emu.InstanceInfo
 //	set <i> [--title T] [--memory M] [--cpu N] [--fps F]  emu.UpdateResult (at least one option)
+//	proxy <i> [on|off] [--server URL|auto] [--add P] [--remove P] [--apps P]   emu.AppProxyResult
+//	proxy <i> test                                        emu.AppProxyTestResult
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)
-//	start <i> [--window] [--timeout 300]                  emu.StartResult
+//	clone <i> [--title T]                                 emu.CloneResult {source,instance,copied_bytes}
+//	start <i> [--window|--headless] [--timeout 300]       emu.StartResult (running the other way than asked: busy)
 //	stop <i> [--force]                                    emu.StopResult
 //	stop --all [--force]                                  StopAllResult {"results":[StopResult],"failed":[{index,error}]}
-//	restart <i> [--window] [--timeout 300] [--force]      emu.StartResult (stop, wait for qemu to exit, then start)
 //	check [--memory M]                                    emu.CheckResult (exit 0 even when not ready: see "ready")
+//	components [status]                                   ComponentsStatusResult {"root","components":[emu.ComponentStatus]}
+//	components fetch [--accept-license] [--mirror ID] [--mirror-url URL]... [--keep-downloads]   components.Result
+//	report-config [--no-clipboard]                        read-only configuration and installed-game report
+//	collect-info [--out-dir D] [--stage-dir D] ...        read-only diagnostics zip
 //	window <i> show|hide                                  emu.WindowResult
+//	disk <i> trim                                         emu.DiskTrimResult {index,discard_max_bytes}
+//	disk <i> info                                         emu.DiskInfoResult {index,overlay,running,needs_shutdown,logical_bytes,on_disk_bytes?,allocated_bytes?,reclaimable_bytes?}
+//	disk <i> compact                                      emu.DiskCompactResult (host sizes, freed_bytes >= 0, signed on_disk_delta_bytes, skipped, estimate/threshold)
 //	install <i> <apk>                                     emu.InstallResult
 //	shell <i> [--timeout S] <command...>                  emu.ShellResult
 //	adb <i> [--] <adb args...>                            no envelope: adb's own stdio and exit code
 //	servers                                               emu.ServersResult
 //	version                                               VersionResult {"version","protocol","go"} (no root needed)
+//	update [status|check|prepare|install|recover]         update.Status (the ModAVD package of the root; see update)
+//	update status|check|prepare|install [--source github|mirrorchyan] [--cdk-dpapi B64]   the same with this run's
+//	                                                      source / MirrorChyan CDK instead of the saved settings
+//	update install --after-pid P --reopen EXE [--reopen-arg A]...   the same, for the manager's 更新 (update/handoff.go)
 //	mcp                                                   MCP server on stdin / stdout
 //	help [command]                                        HelpResult
+//
+// restart went away in 0.3.0 (Protocol 2; no restart: stop, then start); calling it is a usage error that says so
+// (removedCommands).
 //
 // <i> is 3 or mas_3. --memory takes what avd.ParseMemoryMB takes (6144, 6144M, 6G ...). The root is
 // root.Resolve(--root), looked up only by commands that need it, after their arguments were checked.
 //
 // Output. With --json, stdout carries exactly one line, {"ok":true,"data":<result>} or
-// {"ok":false,"error":{"code","message","advice"}} (advice omitted when empty), and stderr carries NDJSON logs
+// {"ok":false,"error":{"code","message","advice","details"}} (advice/details omitted when empty), and stderr carries NDJSON logs
 // (logx.JSONSink). Without --json, stdout gets a Chinese summary, errors go to stderr as "错误：…" / "建议：…" lines
 // and logs go to stderr as text (logx.TextSink). Log level Info; --quiet Warn; --verbose Debug (and the cause of an
 // error). adb and mcp never print an envelope (their stdout belongs to adb / the protocol): their errors go to
 // stderr only.
 //
-// Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument, 3 not found, 4 not ready / precheck
-// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled), except:
+// update's --source and --cdk-dpapi are never saved; status / check report them as source and cdk_set. --cdk-dpapi
+// is the base64 of a Windows DPAPI blob (CryptProtectData of the UTF-8 CDK, no entropy, user or machine scope):
+// not base64, not decryptable or not a valid CDK is invalid_argument, on other platforms unsupported; "" (or only
+// blanks) means no CDK this run. Neither the value nor the CDK appears in any log line, message or result; a line
+// with --cdk-dpapi never quotes its positional arguments in an error. With --json, every update progress event is a
+// log line with one more key, "progress": {"stage","percent","done_bytes","total_bytes"}. checking (check only),
+// extracting, verifying and installing are one line each when the stage begins, percent -1 and bytes 0.
+// downloading has no such line: its first line, when the download stage begins, already carries the real percent
+// and bytes, then about one every 2 s, and the line of the finished download. Log lines may gain keys like this one.
+//
+// error.details is optional, with string values only. These additions do not change code/message or Protocol 2.
+// busy reasons: running, locked, starting (stop before qemu exists), stopping (start awaiting shutdown),
+// window_mismatch, port_in_use, port_other_root. locked also has lock: start, stop, boot, bridge, create, guest,
+// disk (compact or a shared disk probe), metadata (mas-avd.json), config (per-instance config/metadata writes).
+// Other busy errors may omit reason. Clients must tolerate missing/unknown keys and values.
+// A failed boot wait or after-boot setup adds instance_status and qemu_running. qemu_running is "true", "false" or
+// "unknown"; instance_status is a known lifecycle status, "not_found" or "unknown". The failed boot wait knows
+// "starting"; later setup may restart Android, so its boot state can be unknown. The process observation is shared
+// with the diagnostic decision, before its optional collection (up to 30 s); it is a snapshot, not a liveness lease.
+// Create errors add instance_exists ("true" / "false" / "unknown"), instance_status and qemu_running after cleanup.
+// instance_exists counts any instance files or metadata now occupying the index, even incomplete or pre-existing;
+// it does NOT prove ownership by this call and never authorizes deleting an already_exists/busy instance.
+// Before an index is selected, or when a fact cannot be observed, it is "unknown", never a guessed false.
+// Creating/failing metadata overrides the boot state. An own create is observed while its lock is still held but
+// reports the state after that lock's imminent release; another creator's state can be unknown without probing it.
+// boot_diag_dir, when collected, survives wrappers and the final create state replacing an inner start's state.
+// The manager HTTP responses and failed jobs carry these same details. MCP isError text appends one JSON line,
+// "error.details: {...}", while retaining its message/advice, error code and diagnostic-directory lines.
+//
+// Exit codes are errs.ExitCode (0 ok, 1 internal, 2 usage / invalid argument / license declined, 3 not found, 4 not
+// ready / precheck failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8
+// canceled, 9 update or components unavailable / rejected, proxy unavailable), except:
 // shell without --json exits with the guest command's exit code, adb with adb's, and stop --all with the code of its
 // first failure (its envelope still says ok and lists both results and failed). Ctrl+C cancels the context
 // (errs.Canceled); an emulator that was already launched keeps running (emu guarantees that). A run during which the
 // context ended fails with errs.Canceled even when the command returned a result, unless the command is final (its
-// result reports a change that was made: create, set, delete, start, stop, restart, window, install; or does not
-// depend on the context: version, help): a query whose adb calls were killed half way would report what it saw by
-// then, an online instance as starting.
+// result reports a change that was made: create, set, proxy, delete, start, stop, window, install, components fetch;
+// or does not depend on the context: version, help, components status; also bridge and disk trim / info): a query whose adb calls were killed half way
+// would report what it saw by then, an online instance as starting. components fetch stops at Ctrl+C with
+// errs.Canceled itself, between two reads of a download or an unpack and before the next component.
 //
 // Before Main returns, a command that used a manager waits up to backgroundWait for the manager's background work
 // (emu.Manager.Wait: the logcat restart after a re-registration), after its output is written.
 //
-// Hidden subcommands, routed before any flag parsing or root lookup: __spawn (win.SpawnHelperMain, the helper of
-// win.StartOrphan) and __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process).
+// Hidden subcommands, routed before any flag parsing or root lookup: __spawn (host.SpawnHelperMain, the helper of
+// host.StartOrphan), __vkprobe (emu.RunVulkanProbe, the Vulkan probe child process) and __bootwatch
+// (emu.RunBootWatch), and __logcat (emu.RunLogcatCapture, the host logcat writer).
 package cli
 
 import (
@@ -61,24 +107,38 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"modavd/internal/appproxy"
+	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/gamesource"
+	"modavd/internal/host"
+	"modavd/internal/i18n"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
 	"modavd/internal/root"
-	"modavd/internal/win"
+	"modavd/internal/update"
 )
 
 // manager is the part of *emu.Manager the commands use; tests substitute a fake.
 type manager interface {
+	SourcePackages(context.Context, gamesource.Source) ([]string, error)
+	SourceFiles(context.Context, gamesource.Source, string, string) ([]emu.ResourceEntry, error)
+	ImportGames(context.Context, int, gamesource.Source, []emu.ImportGame, func(emu.Progress)) ([]emu.GameImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
+	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	// FreeIndexes and CreateSpaceError are what create --count takes up front and checks before each instance.
+	FreeIndexes(n int) ([]int, error)
+	CreateSpaceError() error
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
+	Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)
@@ -87,9 +147,18 @@ type manager interface {
 	AdbPassthrough(ctx context.Context, i int, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
 	Bridge(ctx context.Context, i int, action string) (*emu.BridgeResult, error)
+	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
+	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
+	GLES32(ctx context.Context, i int, action string) (*emu.GLES32Result, error)
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
+	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
 	EnsureServers(ctx context.Context) (*emu.ServersResult, error)
-	// Running is the indexes whose qemu runs, from the process table only (no adb).
-	Running(ctx context.Context) ([]int, error)
+	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
+	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
+	TestAppProxy(ctx context.Context, i int) (*emu.AppProxyTestResult, error)
+	// StopTargets is the running or actively creating indexes, without adb.
+	StopTargets(ctx context.Context) ([]int, error)
 	// Wait waits up to timeout for the manager's background work.
 	Wait(timeout time.Duration)
 }
@@ -104,9 +173,16 @@ var _ manager = (*emu.Manager)(nil)
 
 // deps are the outside world of a command run, replaced in tests.
 type deps struct {
-	newManager  func(rootFlag string, log *logx.Logger) (manager, error)
-	resolveRoot func(flag string) (*root.Root, error)
-	serveMCP    func(ctx context.Context, in io.Reader, out io.Writer, opt mcp.Options) error
+	newManager      func(rootFlag string, log *logx.Logger) (manager, error)
+	resolveRoot     func(flag string) (*root.Root, error)
+	serveMCP        func(ctx context.Context, in io.Reader, out io.Writer, opt mcp.Options) error
+	fetchComponents func(ctx context.Context, r *root.Root, opt components.Options) (*components.Result, error)
+	stdinTerminal   func(io.Reader) bool
+	// the manager's update hand-off (update install --after-pid / --reopen)
+	waitExit      func(ctx context.Context, pid int, timeout time.Duration) bool // true when pid is gone
+	updateInstall func(ctx context.Context, u *update.Updater) (*update.Status, error)
+	updateHandoff func(ctx context.Context, u *update.Updater) (*update.Status, error)
+	reopen        func(exe string, args []string) error
 }
 
 func defaultDeps() deps {
@@ -118,30 +194,68 @@ func defaultDeps() deps {
 			}
 			return emu.New(r, log), nil
 		},
-		resolveRoot: root.Resolve,
-		serveMCP:    mcp.Serve,
+		resolveRoot:     root.Resolve,
+		serveMCP:        mcp.Serve,
+		fetchComponents: components.Fetch,
+		stdinTerminal:   readerIsTerminal,
+		waitExit: func(ctx context.Context, pid int, timeout time.Duration) bool {
+			p, ok := host.FindProcess(uint32(pid))
+			if !ok {
+				return true
+			}
+			deadline := time.Now().Add(timeout)
+			for ctx.Err() == nil && time.Now().Before(deadline) {
+				if p.Wait(min(100*time.Millisecond, time.Until(deadline))) {
+					return true
+				}
+			}
+			return false
+		},
+		updateInstall: func(ctx context.Context, u *update.Updater) (*update.Status, error) { return u.Install(ctx) },
+		updateHandoff: func(ctx context.Context, u *update.Updater) (*update.Status, error) { return u.InstallHandoff(ctx) },
+		reopen: func(exe string, args []string) error {
+			_, err := host.StartDetached(exe, args, host.StartOptions{Dir: filepath.Dir(exe)})
+			return err
+		},
 	}
+}
+
+// readerIsTerminal: stdin is someone at a console (components fetch may ask which mirror to use), not a pipe, a
+// file or NUL. Platform part in terminal_*.go.
+func readerIsTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	return ok && f != nil && fileIsTerminal(f)
+}
+
+func writerIsTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && f != nil && fileIsTerminal(f)
 }
 
 // Main runs one command and returns the process exit code (errs.ExitCode, see the package comment).
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
-		case win.SpawnHelperArg:
+		case host.SpawnHelperArg:
 			f, ok := stdout.(*os.File)
 			if !ok {
 				f = os.Stdout
 			}
-			return win.SpawnHelperMain(args[1:], f)
+			return host.SpawnHelperMain(args[1:], f)
 		case emu.VulkanProbeArg:
 			return emu.RunVulkanProbe(stdout)
 		case emu.BootWatchArg:
 			return emu.RunBootWatch(args[1:], stderr)
+		case emu.LogcatCaptureArg:
+			return emu.RunLogcatCapture(args[1:], stderr)
+		case emu.DiagnosticArchiveArg:
+			return emu.RunDiagnosticArchive(args[1:], stderr)
 		}
 	}
+	i18n.Init()
 	// StartOrphan re-runs this executable as the spawn helper.
 	if exe, err := os.Executable(); err == nil {
-		win.OrphanHelper = exe
+		host.SetOrphanHelper(exe)
 	}
 	// SIGTERM is what Go delivers for a console close / logoff on Windows.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -189,14 +303,30 @@ func newLogger(w io.Writer, g globals) *logx.Logger {
 		min = logx.Debug
 	}
 	if g.json {
-		return logx.New(logx.JSONSink(w, min))
+		return logx.NewFields(logx.JSONFieldSink(w, min))
 	}
 	return logx.New(logx.TextSink(w, min))
 }
 
 // run is Main without the process-wide setup.
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, d deps) int {
+	if d.stdinTerminal == nil {
+		d.stdinTerminal = readerIsTerminal
+	}
 	inv, perr := parseArgs(args)
+	// Human output in the language of the user (ModAVD/ModAVD#165), on a console only: what goes to a file or a pipe
+	// (the manager's update log, scripts) stays as before unless MODAVD_LANG asks for a language. --json, adb and
+	// mcp stay byte for byte, and so does what shell prints (the guest's own output).
+	if lang := i18n.Current(); !inv.json {
+		raw := inv.cmd != nil && inv.cmd.raw
+		forced := os.Getenv(i18n.EnvVar) != ""
+		if !raw && (inv.cmd == nil || inv.cmd.name != "shell") && (forced || writerIsTerminal(stdout)) {
+			stdout = i18n.Writer(stdout, lang)
+		}
+		if !raw && (forced || writerIsTerminal(stderr)) {
+			stderr = i18n.Writer(stderr, lang)
+		}
+	}
 	log := newLogger(stderr, inv.globals)
 	out := &output{stdout: stdout, stderr: stderr, json: inv.json, raw: inv.cmd != nil && inv.cmd.raw, log: log}
 	if perr != nil {

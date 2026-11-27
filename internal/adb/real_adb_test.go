@@ -19,10 +19,17 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/host"
 	"modavd/internal/logx"
 	"modavd/internal/root"
 	"modavd/internal/win"
 )
+
+// tableListening: the system listener table has port (never a connection: an emulator's adb port is one of them).
+func tableListening(port int) bool {
+	_, up, _ := host.ListenerPID(port)
+	return up
+}
 
 // Private test ports for the real adb test. Never the production servers (5037, 20049, 20050), the dev launcher's
 // 20089, or an instance port.
@@ -31,12 +38,15 @@ const (
 	testScriptPort = 20076
 )
 
-// testSDK is an SDK whose adb.exe the test may run (only run, never modified).
+// testSDK is an SDK whose adb.exe the test may run (only run, never modified): $MODAVD_TEST_SDK only. There is no
+// fallback to an installed root, so a plain `go test ./...` never reaches a real (production) root.
 func testSDK() string {
-	for _, sdk := range []string{`C:\emu-src\sdk-mas35`, `D:\ModAVD\sdk`} {
-		if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
-			return sdk
-		}
+	sdk := os.Getenv("MODAVD_TEST_SDK")
+	if sdk == "" {
+		return ""
+	}
+	if st, err := os.Stat(filepath.Join(sdk, "platform-tools", "adb.exe")); err == nil && !st.IsDir() {
+		return sdk
 	}
 	return ""
 }
@@ -47,7 +57,7 @@ func realRoot(t *testing.T) (*root.Root, string) {
 	t.Helper()
 	sdk := testSDK()
 	if sdk == "" {
-		t.Skip("没有可用的 adb.exe（C:\\emu-src\\sdk-mas35 / D:\\ModAVD\\sdk）")
+		t.Skip("没有可用的 adb.exe（设 MODAVD_TEST_SDK 指向一个 SDK 才跑）")
 	}
 	dir := tempDir(t)
 	meta, _ := json.Marshal(map[string]any{
@@ -85,7 +95,7 @@ func killServer(t *testing.T, adbExe string, port int) {
 	t.Logf("adb -P %d kill-server: err=%v out=%q", port, err, strings.TrimSpace(string(out)))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if up, _ := listening(port); !up {
+		if !tableListening(port) {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -126,7 +136,7 @@ func TestRealAdb(t *testing.T) {
 	}
 	r, adbExe := realRoot(t)
 	for _, p := range []int{testServerPort, testScriptPort} {
-		up, err := listening(p)
+		_, up, err := host.ListenerPID(p)
 		if err != nil {
 			t.Fatalf("listener table: %v", err)
 		}
@@ -183,7 +193,7 @@ func TestRealAdb(t *testing.T) {
 			t.Fatalf("EnsureServer = %v, %v", ok, err)
 		}
 		t.Logf("EnsureServer took %v", time.Since(start))
-		if n := logs.count(fmt.Sprintf("启动魔改 AVD 私有 adb server（端口 %d）", testServerPort)); n != 1 {
+		if n := logs.count(fmt.Sprintf("启动 ModAVD 私有 adb server（端口 %d）", testServerPort)); n != 1 {
 			t.Errorf("start log lines = %d", n)
 		}
 		pid, up, err := win.ListenerPID(testServerPort)
@@ -202,7 +212,7 @@ func TestRealAdb(t *testing.T) {
 		if err != nil || !ok {
 			t.Errorf("second EnsureServer = %v, %v", ok, err)
 		}
-		if n := logs.count("启动魔改 AVD 私有 adb server"); n != 1 {
+		if n := logs.count("启动 ModAVD 私有 adb server"); n != 1 {
 			t.Errorf("second EnsureServer started again (%d log lines)", n)
 		}
 		// PrepareForClose with the server up asks it first; it does not know emulator-20080, and no qemu of this
@@ -274,7 +284,7 @@ func TestRealAdb(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("EnsureScriptServer = %v, %v", ok, err)
 		}
-		if n := logs.count(fmt.Sprintf("启动魔改 AVD 脚本专用 adb server（端口 %d）", testScriptPort)); n != 1 {
+		if n := logs.count(fmt.Sprintf("启动 ModAVD 脚本专用 adb server（端口 %d）", testScriptPort)); n != 1 {
 			t.Errorf("script start log lines = %d", n)
 		}
 		pid, _, _ := win.ListenerPID(testScriptPort)
@@ -288,7 +298,7 @@ func TestRealAdb(t *testing.T) {
 		// return (WaitDelay) instead of waiting for the server to exit.
 		killServer(t, adbExe, testScriptPort)
 		start := time.Now()
-		res := c.execAdb(ctx, false, 15*time.Second, 15*time.Second, []string{"start-server"},
+		res := c.execAdb(ctx, false, nil, 15*time.Second, 15*time.Second, []string{"start-server"},
 			[]string{"-P", strconv.Itoa(testScriptPort), "start-server"})
 		elapsed := time.Since(start)
 		t.Logf("self-started server: %d %q in %v", res.Code, res.Out, elapsed)
@@ -298,7 +308,7 @@ func TestRealAdb(t *testing.T) {
 		if elapsed > 8*time.Second {
 			t.Errorf("adb with a server holding its pipe took %v", elapsed)
 		}
-		if up, _ := listening(testScriptPort); !up {
+		if !tableListening(testScriptPort) {
 			t.Errorf("script port not listening after start-server")
 		}
 	})
@@ -306,7 +316,7 @@ func TestRealAdb(t *testing.T) {
 	t.Run("prepare for close starts the server", func(t *testing.T) {
 		// Server down, no qemu of ours on the adb port: the server is started, nothing is registered.
 		const console = 20080
-		if up, _ := listening(console + 1); up {
+		if tableListening(console + 1) {
 			t.Skipf("端口 %d 有人在监听，跳过", console+1)
 		}
 		killServer(t, adbExe, testServerPort)
@@ -314,7 +324,7 @@ func TestRealAdb(t *testing.T) {
 		if want := fmt.Sprintf("adb 端口 %d 上不是这台实例的模拟器，不替它登记", console+1); reason != want {
 			t.Errorf("PrepareForClose = %q, want %q", reason, want)
 		}
-		if up, _ := listening(testServerPort); !up {
+		if !tableListening(testServerPort) {
 			t.Errorf("PrepareForClose did not start the server")
 		}
 	})

@@ -1,15 +1,19 @@
 // The HTTP contract (internal/ui/API.md): JSON in and out, errors as {error:{code,message,advice}}.
 
 export class ApiError extends Error {
-  constructor(status, code, message, advice) {
+  // details: the machine-readable extras of some errors (details.reason says which way out to offer)
+  constructor(status, code, message, advice, details) {
     super(message);
     this.status = status;
     this.code = code;
     this.advice = advice || '';
+    this.details = details || {};
   }
 }
 
-const RELOGIN = '关掉这个窗口，再双击 ModAVD 重新打开';
+import { t } from './i18n.js';
+
+const RELOGIN = t('关掉这个窗口，再双击 ModAVD 重新打开');
 
 export async function request(method, path, body, opt = {}) {
   const init = { method, credentials: 'same-origin', cache: 'no-store', headers: {} };
@@ -25,7 +29,7 @@ export async function request(method, path, body, opt = {}) {
   } catch (e) {
     // a caller's own abort or AbortSignal.timeout(): not "the server is gone"
     if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;
-    throw new ApiError(0, 'network', '连不上 ModAVD 的后台服务', '后台可能已经退出。' + RELOGIN);
+    throw new ApiError(0, 'network', t('连不上 ModAVD 的后台服务'), t('后台可能已经退出。关掉这个窗口，再双击 ModAVD 重新打开'));
   }
   if (!res.ok) throw await toError(res);
   if (opt.raw) return res;
@@ -35,17 +39,18 @@ export async function request(method, path, body, opt = {}) {
 }
 
 async function toError(res) {
-  if (res.status === 401) return new ApiError(401, 'unauthorized', '和后台的连接已失效', RELOGIN);
+  if (res.status === 401) return new ApiError(401, 'unauthorized', t('和后台的连接已失效'), RELOGIN);
   let e = null;
   try { e = (await res.json()).error; } catch { /* not JSON */ }
   return new ApiError(res.status, (e && e.code) || 'http_' + res.status,
-    (e && e.message) || `请求没有成功（HTTP ${res.status}）`, e && e.advice);
+    (e && e.message) || t('请求没有成功（HTTP {status}）', { status: res.status }), e && e.advice, e && e.details);
 }
 
 export const api = {
   get: (p, o) => request('GET', p, undefined, o),
   post: (p, b = {}, o) => request('POST', p, b, o),
   patch: (p, b) => request('PATCH', p, b),
+  put: (p, b) => request('PUT', p, b),
   del: (p) => request('DELETE', p, {}), // non-GET bodies are JSON (API.md), even an empty one
 };
 
@@ -67,7 +72,7 @@ export function connectEvents(on) {
         on.lost(true);
       } else on.lost(false);
     };
-    for (const type of ['instances', 'job', 'log']) {
+    for (const type of ['instances', 'job', 'log', 'update', 'proxy']) {
       me.addEventListener(type, (ev) => {
         if (me !== es) return;
         let d;

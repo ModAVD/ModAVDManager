@@ -1,3 +1,5 @@
+//go:build windows
+
 package avd
 
 import (
@@ -16,14 +18,16 @@ import (
 	"testing"
 
 	"modavd/internal/errs"
+	"modavd/internal/jsonord"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // ---- helpers -----------------------------------------------------------------------------------------------------
 
 func newRoot(t *testing.T) *root.Root {
 	t.Helper()
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +190,7 @@ func describe(r *root.Root, list []*Instance) []map[string]any {
 			}
 			return n
 		}
-		w, h, dpi := in.Display()
+		w, h, dpi := in.Display(0)
 		keys := in.Config.Keys()
 		if keys == nil {
 			keys = []string{}
@@ -218,7 +222,7 @@ func goRun(r *root.Root, op refOp) (any, error) {
 		defer func() { nowISO = old }()
 		nowISO = func() string { return op["created_at"].(string) }
 		in, err := Create(r, op["index"].(int), CreateOptions{Title: title, MemoryMB: memory, CPU: cpu,
-			DataPartitionGB: data, FPS: fps})
+			DataPartitionGB: data, DataDiskManual: optInt(op, "data_gb") != nil, FPS: fps})
 		if err != nil {
 			return nil, err
 		}
@@ -281,9 +285,9 @@ func normJSON(t *testing.T, v any) any {
 func compareWithPython(t *testing.T, setup map[string]string, ops []refOp) {
 	t.Helper()
 	py := python(t)
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	resetTree(t, dir, setup)
-	jobDir := t.TempDir()
+	jobDir := testutil.TempDir(t)
 	job, err := json.Marshal(map[string]any{"root": dir, "ops": ops})
 	if err != nil {
 		t.Fatal(err)
@@ -360,13 +364,15 @@ func TestCreateUpdateDeleteMatchPython(t *testing.T) {
 		{"op": "create", "index": 3, "cpu": 3, "created_at": "x", "same_error": true},
 		{"op": "create", "index": 3, "data_gb": 15, "created_at": "x", "same_error": true},
 		{"op": "create", "index": 3, "data_gb": 513, "created_at": "x", "same_error": true},
-		{"op": "create", "index": 3, "fps": 45, "created_at": "x", "same_error": true},
+		{"op": "create", "index": 3, "fps": 0, "created_at": "x", "same_error": true},
+		{"op": "create", "index": 3, "fps": 61, "created_at": "x", "same_error": true},
 		{"op": "list"},
 		{"op": "update", "index": 1, "changes": map[string]any{"memoryMb": 4096}},
 		{"op": "update", "index": 0, "changes": map[string]any{"cpu": 4, "fps": 30}},
 		{"op": "update", "index": 9, "changes": map[string]any{}},
 		{"op": "update", "index": 7, "changes": map[string]any{"cpu": 4}, "same_error": true},
-		{"op": "update", "index": 0, "changes": map[string]any{"fps": 45}, "same_error": true},
+		{"op": "update", "index": 0, "changes": map[string]any{"fps": 61}, "same_error": true},
+		{"op": "update", "index": 9, "changes": map[string]any{"fps": 45}},
 		{"op": "update", "index": 0, "changes": map[string]any{"cpu": 3}, "same_error": true},
 		{"op": "update", "index": 0, "changes": map[string]any{"memoryMb": 8192}, "same_error": true},
 		{"op": "apply_display", "index": 0},
@@ -436,7 +442,7 @@ func TestPropertiesMatchPython(t *testing.T) {
 	titles := []string{"", "  ", "星铁", "a=b", "mas_x"}
 	metas := []string{`{"memoryMb": 4096}`, `{"memoryMb": 4096.0}`, `{"memoryMb": "4096"}`, `{"memoryMb": true}`,
 		`{"memoryMb": 3000}`, `{"memoryMb": null}`, `5`, `{"memoryMb": 5120}`, `{}`, `{"memoryMb": 3072, "x": 1}`,
-		`{"memoryMb": 6144e0}`, `{"memoryMb": -0}`}
+		`{"memoryMb": 6144e0}`, `{"memoryMb": -0}`, `{"memoryMb": 8192}`, `{"memoryMb": 7168}`}
 
 	setup := map[string]string{}
 	var instMeta []string
@@ -475,16 +481,48 @@ func TestPropertiesMatchPython(t *testing.T) {
 	compareWithPython(t, setup, []refOp{{"op": "list"}})
 }
 
-// TestMatchesProductionInstance: an instance created here with the options of D:\ModAVD's mas_1 (made by AUTO-MAS
-// on 10-16; read only) is the same bytes. The template has changed once since: hw.mainKeys no -> yes (ModAVD #1).
+// prodMas1Config is config.ini of a production mas_1 as AUTO-MAS created it on 10-16 (CRLF, no BOM). It is a
+// snapshot: tests never read a real root.
+var prodMas1Config = strings.Join([]string{
+	"PlayStore.enabled=no", "abi.type=x86_64", "avd.ini.encoding=UTF-8", "disk.cachePartition=yes",
+	"disk.cachePartition.size=66MB", "fastboot.forceColdBoot=yes", "fastboot.forceFastBoot=no",
+	"hw.accelerometer=yes", "hw.arc=false", "hw.audioInput=no", "hw.audioOutput=no", "hw.battery=yes",
+	"hw.camera.back=none", "hw.camera.front=none", "hw.cpu.arch=x86_64", "hw.dPad=no", "hw.gps=no",
+	"hw.gpu.enabled=yes", "hw.gpu.mode=host", "hw.gsmModem=yes", "hw.gyroscope=yes",
+	"hw.initialOrientation=landscape", "hw.keyboard=yes", "hw.keyboard.lid=yes", "hw.lcd.depth=32",
+	"hw.lcd.vsync=30", "hw.mainKeys=no", "hw.sdCard=no", "hw.sensors.orientation=yes", "hw.sensors.proximity=no",
+	"hw.trackBall=no", "hw.useext4=yes", "showDeviceFrame=no", "tag.display=Google APIs", "tag.id=google_apis",
+	"target=android-34", "vm.heapSize=192M", "avd.id=mas_1", "avd.name=mas_1", "avd.ini.displayname=二号",
+	"disk.dataPartition.size=256G", "hw.cpu.ncore=4", "hw.ramSize=4096M", "hw.lcd.width=1280",
+	"hw.lcd.height=720", "hw.lcd.density=240", `image.sysdir.1=system-images\android-34\google_apis\x86_64\`, "",
+}, "\r\n")
+
+// prodMas1Ini is the matching avd\mas_1.ini; path= is filled in with the snapshot root's instance directory.
+const prodMas1Ini = "avd.ini.encoding=UTF-8\r\npath=%s\r\npath.rel=avd\\mas_1.avd\r\ntarget=android-34\r\n"
+
+// TestMatchesProductionInstance: an instance created here with the options of a production mas_1 (made by AUTO-MAS
+// on 10-16, kept above as a snapshot in a temp root) is the same bytes. The template has changed once since:
+// hw.mainKeys no -> yes (ModAVD #1). New instances default to 1080p since ModAVD #100; mas_1 is 720p, so its
+// resolution is passed like the others.
 func TestMatchesProductionInstance(t *testing.T) {
-	const prod = `D:\ModAVD`
-	prodIni, err1 := os.ReadFile(prod + `\avd\mas_1.ini`)
-	prodCfg, err2 := os.ReadFile(prod + `\avd\mas_1.avd\config.ini`)
-	if err1 != nil || err2 != nil {
-		t.Skip("no production instance mas_1")
+	pr := newRoot(t)
+	prodCfg := []byte(prodMas1Config)
+	prodIni := []byte(fmt.Sprintf(prodMas1Ini, Dir(pr, 1)))
+	for path, data := range map[string][]byte{
+		ConfigPath(pr, 1): prodCfg,
+		IniPath(pr, 1):    prodIni,
+		// Production's instances.1 as created (later keys trimmed).
+		filepath.Join(pr.Dir, root.MetadataFile): []byte(`{"instances": {"1": {"memoryMb": 4096, "initialized": true, ` +
+			`"createdAt": "2026-10-16T07:41:39", "initializedAt": "2026-10-16T07:42:57"}}}`),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	pr, err := root.New(prod)
+	pr, err := root.New(pr.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +542,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	}
 	r := newRoot(t)
 	created, err := Create(r, 1, CreateOptions{Title: title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB,
-		FPS: in.FPS()})
+		FPS: in.FPS(), Resolution: in.Resolution()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +550,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	if got := readFile(t, ConfigPath(r, 1)); !bytes.Equal(got, wantCfg) {
 		t.Errorf("config.ini differs\n got %q\nwant %q", got, wantCfg)
 	}
-	wantIni := bytes.Replace(prodIni, []byte(`path=D:\ModAVD\avd\mas_1.avd`), []byte(`path=`+Dir(r, 1)), 1)
+	wantIni := []byte(fmt.Sprintf(prodMas1Ini, Dir(r, 1)))
 	if got := readFile(t, IniPath(r, 1)); !bytes.Equal(got, wantIni) {
 		t.Errorf("mas_1.ini differs\n got %q\nwant %q", got, wantIni)
 	}
@@ -524,7 +562,7 @@ func TestMatchesProductionInstance(t *testing.T) {
 	if len(keys) < 3 || strings.Join(keys[:3], ",") != "memoryMb,initialized,createdAt" {
 		t.Errorf("production meta keys %v", keys)
 	}
-	if got := strings.Join(r.InstanceMeta(1).Keys(), ","); got != "memoryMb,initialized,createdAt" {
+	if got := strings.Join(r.InstanceMeta(1).Keys(), ","); got != "memoryMb,initialized,createdAt,dataDiskMode" {
 		t.Errorf("meta keys %s", got)
 	}
 }
@@ -560,7 +598,7 @@ func TestIni(t *testing.T) {
 		t.Fatal("zero Ini")
 	}
 
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "sub", "x.ini")
 	// The directory is never created (a deleted instance must not come back).
 	err := WriteIni(path, c)
@@ -631,7 +669,7 @@ func TestListAndGet(t *testing.T) {
 	os.Remove(r.AvdHome())
 	_, err := Get(r, 0)
 	wantCode(t, err, errs.NotFound)
-	if err.Error() != "魔改 AVD 实例 0 不存在" {
+	if err.Error() != "ModAVD 实例 0 不存在" {
 		t.Fatalf("message: %v", err)
 	}
 	for _, i := range []int{4, 0, 9} {
@@ -656,7 +694,7 @@ func TestListAndGet(t *testing.T) {
 	if d, ok := in.DataPartitionGB(); !ok || d != 64 {
 		t.Errorf("DataPartitionGB %d", d)
 	}
-	if w, h, dpi := in.Display(); in.FPS() != 60 || w != 1280 || h != 720 || dpi != 240 {
+	if w, h, dpi := in.Display(0); in.FPS() != 60 || w != 1920 || h != 1080 || dpi != 280 {
 		t.Errorf("FPS / Display %d %d %d %d", in.FPS(), w, h, dpi)
 	}
 	// An instance whose config.ini cannot be read (opened elsewhere without sharing) is listed with an empty config
@@ -675,7 +713,7 @@ func TestListAndGet(t *testing.T) {
 	if _, ok := empty.MemoryMB(); ok || empty.FPS() != DefaultFPS {
 		t.Error("nil config")
 	}
-	if w, h, _ := empty.Display(); w != 1280 || h != 720 {
+	if w, h, _ := empty.Display(0); w != 1280 || h != 720 {
 		t.Error("nil config display")
 	}
 }
@@ -716,16 +754,16 @@ func TestParseMemoryMB(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	m, c, d, err := ValidateOptions(nil, nil, nil)
-	if err != nil || m != 6144 || c != 6 || d != 64 {
+	if err != nil || m != 6144 || c != 6 || d != AutoDataPartitionGB {
 		t.Fatalf("defaults %d %d %d %v", m, c, d, err)
 	}
 	for _, tc := range []struct {
 		memory, cpu, data *int
 		msg               string
 	}{
-		{ip(1000), nil, nil, "魔改 AVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
-		{ip(0), ip(3), ip(1), "魔改 AVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB"},
-		{nil, ip(3), ip(1), "魔改 AVD 的 CPU 核数只能选 2 / 4 / 6"},
+		{ip(1000), nil, nil, "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB / 8 GB"},
+		{ip(0), ip(3), ip(1), "ModAVD 的内存只能选 3 GB / 4 GB / 5 GB / 6 GB / 8 GB"},
+		{nil, ip(3), ip(1), "ModAVD 的 CPU 核数只能选 2 / 4 / 6"},
 		{nil, nil, ip(15), "数据盘上限只能在 16–512 GB 之间"},
 		{nil, nil, ip(513), "数据盘上限只能在 16–512 GB 之间"},
 	} {
@@ -734,6 +772,12 @@ func TestValidate(t *testing.T) {
 		if err.Error() != tc.msg {
 			t.Errorf("got %q want %q", err.Error(), tc.msg)
 		}
+	}
+	if m, _, _, err := ValidateOptions(ip(8192), nil, nil); err != nil || m != 8192 {
+		t.Errorf("8 GB: %d %v", m, err)
+	}
+	if _, _, _, err := ValidateOptions(ip(7168), nil, nil); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("7 GB: %v", err)
 	}
 	if _, _, d, err := ValidateOptions(nil, nil, ip(16)); err != nil || d != 16 {
 		t.Error("16 GB")
@@ -744,13 +788,17 @@ func TestValidate(t *testing.T) {
 	if f, err := ValidateFPS(nil); err != nil || f != 60 {
 		t.Error("fps default")
 	}
-	if f, err := ValidateFPS(ip(30)); err != nil || f != 30 {
-		t.Error("fps 30")
+	for _, v := range []int{1, 15, 30, 45, 60} {
+		if f, err := ValidateFPS(ip(v)); err != nil || f != v {
+			t.Errorf("fps %d: %d %v", v, f, err)
+		}
 	}
-	_, err = ValidateFPS(ip(0))
-	wantCode(t, err, errs.InvalidArgument)
-	if err.Error() != "魔改 AVD 的帧率只能选 30 / 60" {
-		t.Errorf("fps message %q", err.Error())
+	for _, v := range []int{0, 61, -1} {
+		_, err = ValidateFPS(ip(v))
+		wantCode(t, err, errs.InvalidArgument)
+		if err.Error() != "帧率只能在 1–60 之间" {
+			t.Errorf("fps %d message %q", v, err.Error())
+		}
 	}
 }
 
@@ -781,31 +829,42 @@ func TestFreeIndex(t *testing.T) {
 		}
 		return nil
 	}
-	i, err := FreeIndex(map[int]bool{0: true, 2: true}, busy)
+	def := root.PortPlan{Base: root.DefaultPortBase}
+	i, err := FreeIndex(def, map[int]bool{0: true, 2: true}, busy)
 	if err != nil || i != 4 {
 		t.Fatalf("FreeIndex = %d %v", i, err)
 	}
 	if fmt.Sprint(asked) != "[[20010 20011 20012] [20030 20031 20032] [20040 20041 20042]]" {
 		t.Fatalf("asked %v", asked)
 	}
-	if i, err := FreeIndex(nil, nil); err != nil || i != 0 {
+	if i, err := FreeIndex(def, nil, nil); err != nil || i != 0 {
 		t.Fatalf("empty: %d %v", i, err)
 	}
 	all := map[int]bool{}
 	for k := 0; k <= 9; k++ {
 		all[k] = k != 7
 	}
-	if i, err := FreeIndex(all, nil); err != nil || i != 7 {
+	if i, err := FreeIndex(def, all, nil); err != nil || i != 7 {
 		t.Fatalf("only 7 free: %d %v", i, err)
 	}
-	_, err = FreeIndex(all, func(ports []int) []int { return ports })
+	_, err = FreeIndex(def, all, func(ports []int) []int { return ports })
 	wantCode(t, err, errs.Busy)
-	if err.Error() != "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" {
+	if err.Error() != "ModAVD 实例已满（端口段 20000–20100 最多 9 台）" {
 		t.Fatalf("message %v", err)
+	}
+	// another plan: the ports asked about and the message are the plan's
+	asked = nil
+	if i, err := FreeIndex(root.PortPlan{Base: 21000}, map[int]bool{0: true}, busy); err != nil || i != 1 ||
+		fmt.Sprint(asked) != "[[21010 21011 21012]]" {
+		t.Fatalf("plan 21000: FreeIndex = %d %v, asked %v", i, err, asked)
+	}
+	_, err = FreeIndex(root.PortPlan{Base: 21000}, all, func(ports []int) []int { return ports })
+	if err == nil || err.Error() != "ModAVD 实例已满（端口段 21000–21100 最多 9 台）" {
+		t.Fatalf("plan 21000: message %v", err)
 	}
 	all[7] = true
 	all[5] = false // 5 is never free
-	_, err = FreeIndex(all, nil)
+	_, err = FreeIndex(def, all, nil)
 	wantCode(t, err, errs.Busy)
 }
 
@@ -819,9 +878,11 @@ func TestCreateRefusals(t *testing.T) {
 	_, err := Create(r, 0, CreateOptions{})
 	wantCode(t, err, errs.InvalidArgument)
 	bad := ok
-	bad.FPS = 45
-	_, err = Create(r, 0, bad)
-	wantCode(t, err, errs.InvalidArgument)
+	for _, fps := range []int{0, 61} { // 0 = unset in CreateOptions; Create never defaults it
+		bad.FPS = fps
+		_, err = Create(r, 0, bad)
+		wantCode(t, err, errs.InvalidArgument)
+	}
 	bad = ok
 	bad.Title = "two\nlines"
 	_, err = Create(r, 0, bad)
@@ -934,6 +995,108 @@ func TestUpdateTitleAndApplied(t *testing.T) {
 	}
 }
 
+// TestUpdateSound: the sound switch (ModAVD/ModAVD#226) is off for a new instance, and Update writes it to
+// instances.<i>.sound and config.ini's hw.audioInput / hw.audioOutput in place, nothing else of config.ini changing.
+func TestUpdateSound(t *testing.T) {
+	r := newRoot(t)
+	if _, err := Create(r, 0, CreateOptions{MemoryMB: 4096, CPU: 4, DataPartitionGB: 64, FPS: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if SoundMeta(r.InstanceMeta(0)) {
+		t.Fatal("a new instance has sound")
+	}
+	before := string(readFile(t, ConfigPath(r, 0)))
+	if !strings.Contains(before, "hw.audioInput=no\r\n") || !strings.Contains(before, "hw.audioOutput=no\r\n") {
+		t.Fatalf("new config.ini: %q", before)
+	}
+	for _, on := range []bool{true, false} {
+		applied, err := Update(r, 0, UpdateOptions{Sound: &on})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if applied["sound"] != on || len(applied) != 1 {
+			t.Errorf("sound %v: applied %v", on, applied)
+		}
+		if SoundMeta(r.InstanceMeta(0)) != on {
+			t.Errorf("sound %v: instances.0.sound = %v", on, SoundMeta(r.InstanceMeta(0)))
+		}
+		want := before
+		if on {
+			want = strings.NewReplacer("hw.audioInput=no\r\n", "hw.audioInput=yes\r\n",
+				"hw.audioOutput=no\r\n", "hw.audioOutput=yes\r\n").Replace(before)
+		}
+		if got := string(readFile(t, ConfigPath(r, 0))); got != want {
+			t.Errorf("sound %v: config\n got %q\nwant %q", on, got, want)
+		}
+	}
+
+	// Sound alone neither validates nor rewrites unrelated values: an old 8 GB data disk is not refused, AUTO-MAS's
+	// automatic memory (no memoryMb) stays automatic, hw.ramSize stays as it was.
+	cfg := strings.NewReplacer("disk.dataPartition.size=64G", "disk.dataPartition.size=8G",
+		"hw.ramSize=4096M", "hw.ramSize=3000M").Replace(before)
+	if strings.Count(cfg, "=8G\r\n")+strings.Count(cfg, "=3000M\r\n") != 2 {
+		t.Fatalf("old config: %q", cfg)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(cfg))
+	if err := r.EditInstanceMeta(0, func(meta *jsonord.Obj) error { meta.Delete("memoryMb"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &on}); err != nil || fmt.Sprint(applied) != "map[sound:true]" {
+		t.Fatalf("sound on an old instance: %v %v", applied, err)
+	}
+	want := strings.NewReplacer("hw.audioInput=no\r\n", "hw.audioInput=yes\r\n",
+		"hw.audioOutput=no\r\n", "hw.audioOutput=yes\r\n").Replace(cfg)
+	if got := string(readFile(t, ConfigPath(r, 0))); got != want {
+		t.Errorf("sound on an old instance: config\n got %q\nwant %q", got, want)
+	}
+	if r.InstanceMeta(0).Has("memoryMb") || !SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on an old instance: metadata %v", r.InstanceMeta(0))
+	}
+
+	// Together with a hardware setting it goes the whole way, sound keys included.
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	off := false
+	if applied, err := Update(r, 0, UpdateOptions{Sound: &off, CPU: ip(6)}); err != nil ||
+		fmt.Sprint(applied) != "map[cpu:6 sound:false]" {
+		t.Fatalf("sound with cpu: %v %v", applied, err)
+	}
+	got := string(readFile(t, ConfigPath(r, 0)))
+	if !strings.Contains(got, "hw.cpu.ncore=6\r\n") || !strings.Contains(got, "hw.audioInput=no\r\n") ||
+		!strings.Contains(got, "hw.audioOutput=no\r\n") || SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
+	writeFile(t, ConfigPath(r, 0), []byte(before))
+	if _, err := Update(r, 0, UpdateOptions{Sound: &on, CPU: ip(4)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readFile(t, ConfigPath(r, 0))); !strings.Contains(got, "hw.audioOutput=yes\r\n") ||
+		!SoundMeta(r.InstanceMeta(0)) {
+		t.Errorf("sound on with cpu: sound %v, config %q", SoundMeta(r.InstanceMeta(0)), got)
+	}
+}
+
+// TestSoundMeta: only a JSON true turns sound on.
+func TestSoundMeta(t *testing.T) {
+	if SoundMeta(nil) {
+		t.Error("nil metadata")
+	}
+	for text, want := range map[string]bool{`{}`: false, `{"sound":true}`: true, `{"sound":false}`: false,
+		`{"sound":"true"}`: false, `{"sound":1}`: false} {
+		v, err := jsonord.Parse([]byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := SoundMeta(v.Obj()); got != want {
+			t.Errorf("%s: SoundMeta = %v, want %v", text, got, want)
+		}
+	}
+	if fmt.Sprint(SoundConfig(true)) != "[[hw.audioInput yes] [hw.audioOutput yes]]" ||
+		fmt.Sprint(SoundConfig(false)) != "[[hw.audioInput no] [hw.audioOutput no]]" {
+		t.Errorf("SoundConfig: %v %v", SoundConfig(true), SoundConfig(false))
+	}
+}
+
 func TestUpdateDataPartition(t *testing.T) {
 	r := newRoot(t)
 	if _, err := Create(r, 0, CreateOptions{MemoryMB: 4096, CPU: 4, DataPartitionGB: 64, FPS: 60}); err != nil {
@@ -949,14 +1112,14 @@ func TestUpdateDataPartition(t *testing.T) {
 	}
 	before := readFile(t, ConfigPath(r, 0))
 	applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)})
-	if err != nil || fmt.Sprint(applied) != "map[data_partition_gb:96]" {
+	if err != nil || fmt.Sprint(applied) != "map[data_disk_mode:manual data_partition_gb:96]" {
 		t.Fatalf("raise: %v %v", applied, err)
 	}
 	// changed in place, nothing else touched
 	if want := strings.Replace(string(before), "disk.dataPartition.size=64G\r\n", "disk.dataPartition.size=96G\r\n", 1); string(readFile(t, ConfigPath(r, 0))) != want {
 		t.Fatalf("config after raise:\n%s", readFile(t, ConfigPath(r, 0)))
 	}
-	if applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)}); err != nil || fmt.Sprint(applied) != "map[data_partition_gb:96]" {
+	if applied, err := Update(r, 0, UpdateOptions{DataPartitionGB: ip(96)}); err != nil || fmt.Sprint(applied) != "map[data_disk_mode:manual data_partition_gb:96]" {
 		t.Fatalf("same size: %v %v", applied, err)
 	}
 	cfg := readFile(t, ConfigPath(r, 0))
@@ -1015,7 +1178,7 @@ func TestDelete(t *testing.T) {
 	writeFile(t, r.MetadataPath(), meta)
 
 	// A junction as the instance directory is refused; what it points to stays.
-	target := filepath.Join(t.TempDir(), "elsewhere")
+	target := filepath.Join(testutil.TempDir(t), "elsewhere")
 	writeFile(t, filepath.Join(target, "config.ini"), []byte("avd.ini.displayname=far\n"))
 	if err := os.RemoveAll(Dir(r, 1)); err != nil {
 		t.Fatal(err)
@@ -1053,7 +1216,7 @@ func TestApplyDisplay(t *testing.T) {
 	if err != nil || !wrote {
 		t.Fatalf("first: %v %v", wrote, err)
 	}
-	want := "hw.lcd.width=720\r\nhw.lcd.height=1280\r\nhw.lcd.density=240\r\nx=1\r\nhw.mainKeys=yes\r\n"
+	want := "hw.lcd.width=1080\r\nhw.lcd.height=1920\r\nhw.lcd.density=280\r\nx=1\r\nhw.mainKeys=yes\r\n"
 	if got := string(readFile(t, ConfigPath(r, 0))); got != want {
 		t.Fatalf("got %q", got)
 	}
@@ -1067,7 +1230,7 @@ func TestApplyDisplay(t *testing.T) {
 		"":                                       "1280x720",
 		"hw.lcd.height=720\n":                    "720x1280",
 	} {
-		ch := DisplayChanges(parseIni([]byte(cfg)))
+		ch := DisplayChanges(parseIni([]byte(cfg)), 0)
 		if got := ch[0][1] + "x" + ch[1][1]; got != want || ch[2][1] != "240" || ch[3] != [2]string{"hw.mainKeys", "yes"} ||
 			ch[0][0] != "hw.lcd.width" || ch[1][0] != "hw.lcd.height" || ch[2][0] != "hw.lcd.density" {
 			t.Errorf("%q: %v", cfg, ch)
@@ -1085,12 +1248,29 @@ func TestCreateKeepsOtherMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "{\r\n  \"a\": 1,\r\n  \"instances\": {\r\n    \"2\": {\r\n      \"x\": true\r\n    },\r\n    \"0\": {\r\n" +
-		"      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n      \"createdAt\": \"2026-10-28T16:00:00\"\r\n" +
+		"      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n      \"createdAt\": \"2026-10-28T16:00:00\",\r\n      \"dataDiskMode\": \"auto\"\r\n" +
 		"    }\r\n  },\r\n  \"b\": [\r\n    1000.0\r\n  ]\r\n}"
 	if got := string(readFile(t, r.MetadataPath())); got != want {
 		t.Fatalf("got %q", got)
 	}
 	if v, ok := r.InstanceMeta(0).Get("initialized").BoolVal(); !ok || v {
 		t.Fatal("initialized")
+	}
+}
+
+// TestCreateMarksCreating: Creating writes creationState with the other keys, so the instance is never listed
+// without it.
+func TestCreateMarksCreating(t *testing.T) {
+	r := newRoot(t)
+	old := nowISO
+	nowISO = func() string { return "2026-11-02T21:00:00" }
+	defer func() { nowISO = old }()
+	if _, err := Create(r, 0, CreateOptions{MemoryMB: 3072, CPU: 2, DataPartitionGB: 16, FPS: 30, Creating: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\r\n  \"instances\": {\r\n    \"0\": {\r\n      \"memoryMb\": 3072,\r\n      \"initialized\": false,\r\n" +
+		"      \"createdAt\": \"2026-11-02T21:00:00\",\r\n      \"dataDiskMode\": \"auto\",\r\n      \"creationState\": \"creating\"\r\n    }\r\n  }\r\n}"
+	if got := string(readFile(t, r.MetadataPath())); got != want {
+		t.Fatalf("got %q", got)
 	}
 }

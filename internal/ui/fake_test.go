@@ -8,11 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,35 +23,66 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/appproxy"
+	"modavd/internal/bosskey"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 const testToken = "test-token-0123456789"
 
 // fake is the emu side of the tests: instances in memory, calls recorded, Start / Stop optionally held at a gate.
 type fake struct {
-	mu        sync.Mutex
-	instances map[int]emu.InstanceInfo
-	infoErr   map[int]error
-	created   []emu.CreateRequest
-	updated   []emu.UpdateRequest
-	deleted   []int
-	starts    []emu.StartOptions
-	stops     []emu.StopOptions
-	shells    []string
-	shellCode int
-	installs  []fakeInstall
-	startGate chan struct{} // Start waits here (after its first progress) when set
-	stopGate  chan struct{}
+	mu         sync.Mutex
+	instances  map[int]emu.InstanceInfo
+	infoErr    map[int]error
+	created    []emu.CreateRequest
+	createGate chan struct{} // Create waits here (after recording the request) when set
+	spaceErr   func() error  // CreateSpaceError's answer when set
+	updated    []emu.UpdateRequest
+	deleted    []int
+	starts     []emu.StartOptions
+	stops      []emu.StopOptions
+	shells     []string
+	shellCode  int
+	shellOut   string
+	shellErr   error
+	installs   []fakeInstall
+	disk       []string      // "info 3", "trim 3", "compact 3" in call order
+	diskErr    error         // returned by every disk call when set
+	diskGate   chan struct{} // DiskCompact waits here when set
 
-	shot      adb.Result
-	shotDelay time.Duration
-	adbCalls  atomic.Int32
-	listCalls atomic.Int32
-	checks    atomic.Int32
+	// the per-app proxy: AppProxy answers proxy[i] (a fresh unset one when missing); SetAppProxy records the change,
+	// applies it to proxy[i] and answers with proxyApplied ("next_boot" when "")
+	proxy        map[int]*emu.AppProxyResult
+	proxySets    []appproxy.Change
+	proxyApplied string
+	proxyErr     error // SetAppProxy fails with it
+	proxyCalls   atomic.Int32
+	proxyAsked   []int // the index of each AppProxy call
+	suggest      *emu.AppProxySuggestion
+	suggestErr   error
+	probes       []string // "server udp=true|false"
+	probeErr     error
+	startGate    chan struct{} // Start waits here (after its first progress) when set
+	stopGate     chan struct{}
+	stopErr      error // Stop fails with it (after its gate)
+
+	// boss keys: BossKeyTargets answers bossTargets / bossErr; ToggleBossKey and ShowHiddenWindows are recorded
+	bossTargets []emu.BossKeyTarget
+	bossErr     error
+	toggles     []string
+	showHidden  int
+
+	shot        adb.Result
+	shotDelay   time.Duration
+	shotSerials []string // the serial of each capture
+	adbCalls    atomic.Int32
+	listCalls   atomic.Int32
+	checks      atomic.Int32
 }
 
 type fakeInstall struct {
@@ -58,7 +91,7 @@ type fakeInstall struct {
 }
 
 func newFake() *fake {
-	f := &fake{instances: map[int]emu.InstanceInfo{}, infoErr: map[int]error{}}
+	f := &fake{instances: map[int]emu.InstanceInfo{}, infoErr: map[int]error{}, proxy: map[int]*emu.AppProxyResult{}}
 	f.put(3, emu.StatusOffline)
 	f.put(4, emu.StatusOffline)
 	return f
@@ -69,7 +102,7 @@ func (f *fake) put(i int, st emu.Status) {
 	defer f.mu.Unlock()
 	f.instances[i] = emu.InstanceInfo{
 		Index: i, Name: root.AvdName(i), Title: root.AvdName(i), Status: st,
-		Running: st != emu.StatusOffline, Booted: st == emu.StatusOnline, Serial: root.Serial(i),
+		Running: st != emu.StatusOffline, Booted: st == emu.StatusOnline, Serial: fakePorts.Serial(i),
 		Config: emu.InstanceConfig{MemoryMB: 6144, CPU: 6, FPS: 60, Width: 1280, Height: 720, DPI: 240},
 	}
 }
@@ -81,8 +114,11 @@ func (f *fake) get(i int) (emu.InstanceInfo, bool) {
 	return in, ok
 }
 
-var fakeRoot = emu.RootInfo{Root: `C:\fake-root`, SDK: `C:\fake-root\sdk`, AdbServerPort: 20050,
-	ScriptAdbServerPort: 20049, Version: "0.35.0", Build: 35}
+// The fake root has a port plan of its own (portBase 21000), so a serial counted from 20000 anywhere shows.
+var fakeRoot = emu.RootInfo{Root: `C:\fake-root`, SDK: `C:\fake-root\sdk`, AdbServerPort: 21099,
+	ScriptAdbServerPort: 21098, PortBase: 21000, Version: "0.35.0", BuildID: "mas-35", Build: 35}
+
+var fakePorts = root.PortPlan{Base: fakeRoot.PortBase}
 
 // fakeBackend is one backend built by the server (per job, per request kind) over the shared fake.
 type fakeBackend struct {
@@ -112,15 +148,30 @@ func (b fakeBackend) Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	}
 	in, ok := b.f.instances[i]
 	if !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	return &in, nil
+}
+
+func (b fakeBackend) Regional(ctx context.Context, i int) (*emu.RegionalResult, error) {
+	if _, err := b.Info(ctx, i); err != nil {
+		return nil, err
+	}
+	return &emu.RegionalResult{Index: i, Supported: true, Config: emu.RegionalConfig{Language: "preserve", TimeZone: "preserve"}}, nil
 }
 
 func (b fakeBackend) Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
 	b.f.mu.Lock()
 	b.f.created = append(b.f.created, req)
+	gate := b.f.createGate
 	b.f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, canceledErr(ctx)
+		}
+	}
 	i := 2
 	if req.Index != nil {
 		i = *req.Index
@@ -131,30 +182,126 @@ func (b fakeBackend) Create(ctx context.Context, req emu.CreateRequest) (*emu.In
 	return &in, nil
 }
 
+// FreeIndex is the fake's "smallest free index": 2 when nothing is there, as Create without an index assumes.
+func (b fakeBackend) FreeIndex() (int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	for i := 2; i <= 9; i++ {
+		if _, ok := b.f.instances[i]; !ok && i != 5 {
+			return i, nil
+		}
+	}
+	return 0, errs.New(errs.AlreadyExists, "没有空闲编号")
+}
+
+// FreeIndexes is FreeIndex n times over (2, 6, 7 … with 3 and 4 there); errs.Busy when fewer are free.
+func (b fakeBackend) FreeIndexes(n int) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	var out []int
+	for i := 2; i <= 9 && len(out) < n; i++ {
+		if _, ok := b.f.instances[i]; !ok && i != 5 {
+			out = append(out, i)
+		}
+	}
+	if len(out) < n {
+		return nil, errs.Newf(errs.Busy, "只有 %d 个空闲编号（端口也要空着），建不了 %d 台", len(out), n)
+	}
+	return out, nil
+}
+
+// CreateSpaceError answers spaceErr(): nil unless a test sets it.
+func (b fakeBackend) CreateSpaceError() error {
+	b.f.mu.Lock()
+	fn := b.f.spaceErr
+	b.f.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return nil
+}
+
 func (b fakeBackend) Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error) {
 	b.f.mu.Lock()
 	b.f.updated = append(b.f.updated, req)
 	b.f.mu.Unlock()
 	in, ok := b.f.get(i)
 	if !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	applied := map[string]any{}
 	if req.FPS != nil {
 		applied["fps"] = *req.FPS
 	}
+	if req.Diagnostics != nil {
+		in.Diagnostics = *req.Diagnostics
+		applied["diagnostics"] = *req.Diagnostics
+	}
+	if req.BossKey != nil {
+		key, err := bosskey.Normalize(*req.BossKey)
+		if err != nil {
+			return nil, err
+		}
+		in.BossKey = key
+		applied["boss_key"] = key
+	}
 	return &emu.UpdateResult{Instance: in, Applied: applied}, nil
+}
+
+func (b fakeBackend) BossKeyTargets(ctx context.Context) ([]emu.BossKeyTarget, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	return slices.Clone(b.f.bossTargets), b.f.bossErr
+}
+
+func (b fakeBackend) ToggleBossKey(ctx context.Context, key string) (*emu.BossKeyToggle, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.toggles = append(b.f.toggles, key)
+	return &emu.BossKeyToggle{Key: key}, nil
+}
+
+func (b fakeBackend) ShowHiddenWindows(ctx context.Context) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.showHidden++
+	return nil, nil
+}
+
+func (b fakeBackend) PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error) {
+	if _, ok := b.f.get(i); !ok {
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
+	}
+	return &emu.DiagnosticsPreview{Index: i, DiagnosticsCleanup: emu.DiagnosticsCleanup{Files: 2, Bytes: 1024}}, nil
 }
 
 func (b fakeBackend) Delete(ctx context.Context, i int) (*emu.DeleteResult, error) {
 	b.f.mu.Lock()
 	defer b.f.mu.Unlock()
 	if _, ok := b.f.instances[i]; !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	delete(b.f.instances, i)
 	b.f.deleted = append(b.f.deleted, i)
 	return &emu.DeleteResult{Index: i, Name: root.AvdName(i)}, nil
+}
+
+// Clone copies a fake instance to the next free index (2 up); the copy has the request's title.
+func (b fakeBackend) Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error) {
+	if _, ok := b.f.get(i); !ok {
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
+	}
+	j, err := b.FreeIndex()
+	if err != nil {
+		return nil, err
+	}
+	if req.Progress != nil {
+		req.Progress(emu.Progress{Step: "copy", Message: "copy", Done: 500, Total: 1000})
+	}
+	b.f.put(j, emu.StatusOffline)
+	in, _ := b.f.get(j)
+	in.Title = req.Title
+	return &emu.CloneResult{Source: i, Instance: in, CopiedBytes: 1 << 30}, nil
 }
 
 func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error) {
@@ -163,7 +310,7 @@ func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*e
 	gate := b.f.startGate
 	b.f.mu.Unlock()
 	if _, ok := b.f.get(i); !ok {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i)
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
 	}
 	opt.Progress(emu.Progress{Step: "launch", Message: "实例已拉起", Done: 50, Total: 1000})
 	b.log.Warnf("测试警告 %d", i)
@@ -184,7 +331,7 @@ func (b fakeBackend) Start(ctx context.Context, i int, opt emu.StartOptions) (*e
 func (b fakeBackend) Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error) {
 	b.f.mu.Lock()
 	b.f.stops = append(b.f.stops, opt)
-	gate := b.f.stopGate
+	gate, stopErr := b.f.stopGate, b.f.stopErr
 	b.f.mu.Unlock()
 	if gate != nil {
 		select {
@@ -193,9 +340,26 @@ func (b fakeBackend) Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu
 			return nil, canceledErr(ctx)
 		}
 	}
+	if stopErr != nil {
+		return nil, stopErr
+	}
 	b.f.put(i, emu.StatusOffline)
 	return &emu.StopResult{Index: i, Name: root.AvdName(i), Method: "graceful", Synced: true, Seconds: 1.5,
 		Warnings: []string{}}, nil
+}
+
+// StopTargets: every instance that is not offline, ascending.
+func (b fakeBackend) StopTargets(ctx context.Context) ([]int, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	out := []int{}
+	for i, in := range b.f.instances {
+		if in.Status != emu.StatusOffline {
+			out = append(out, i)
+		}
+	}
+	sort.Ints(out)
+	return out, nil
 }
 
 func (b fakeBackend) Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error) {
@@ -203,15 +367,77 @@ func (b fakeBackend) Check(ctx context.Context, opt emu.CheckOptions) (*emu.Chec
 	return &emu.CheckResult{RootInfo: fakeRoot, Ready: true, Items: []emu.CheckItem{}, Components: []emu.ComponentStatus{}}, nil
 }
 
-func (b fakeBackend) SetWindowVisible(ctx context.Context, i int, visible bool) (*emu.WindowResult, error) {
-	return &emu.WindowResult{Index: i, Visible: visible, Windows: 2}, nil
-}
-
 func (b fakeBackend) Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error) {
 	b.f.mu.Lock()
 	defer b.f.mu.Unlock()
 	b.f.shells = append(b.f.shells, command)
-	return &emu.ShellResult{ExitCode: b.f.shellCode, Output: ""}, nil
+	if b.f.shellErr != nil {
+		return nil, b.f.shellErr
+	}
+	return &emu.ShellResult{ExitCode: b.f.shellCode, Output: b.f.shellOut}, nil
+}
+
+func (b fakeBackend) AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error) {
+	b.f.proxyCalls.Add(1)
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.proxyAsked = append(b.f.proxyAsked, i)
+	if _, ok := b.f.instances[i]; !ok {
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i)
+	}
+	return b.f.proxyOf(i), nil
+}
+
+// proxyOf is a copy of proxy[i] (the caller holds mu).
+func (f *fake) proxyOf(i int) *emu.AppProxyResult {
+	r := &emu.AppProxyResult{Index: i, Apps: []string{}, Notes: []string{}}
+	if p := f.proxy[i]; p != nil {
+		*r = *p
+		r.Apps = append([]string{}, p.Apps...)
+	}
+	return r
+}
+
+func (b fakeBackend) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.proxySets = append(b.f.proxySets, c)
+	if b.f.proxyErr != nil {
+		return nil, b.f.proxyErr
+	}
+	r := b.f.proxyOf(i)
+	if c.Enabled != nil {
+		r.Enabled = *c.Enabled
+	}
+	if c.Server != nil {
+		r.Server = *c.Server
+	}
+	if c.Apps != nil {
+		r.Apps = append([]string{}, *c.Apps...)
+	}
+	r.Applied = b.f.proxyApplied
+	if r.Applied == "" {
+		r.Applied = "next_boot"
+	}
+	b.f.proxy[i] = r
+	return b.f.proxyOf(i), nil
+}
+
+func (b fakeBackend) SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	return b.f.suggest, b.f.suggestErr
+}
+
+func (b fakeBackend) ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error) {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.probes = append(b.f.probes, fmt.Sprintf("%s udp=%t", server, withUDP))
+	if b.f.probeErr != nil {
+		return nil, b.f.probeErr
+	}
+	return &emu.AppProxyProbe{Server: server, HostAddr: "127.0.0.1:7890",
+		ProbeResult: appproxy.ProbeResult{Kind: "socks5", UDP: "ok"}, Notes: []string{}}, nil
 }
 
 func (b fakeBackend) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
@@ -225,10 +451,60 @@ func (b fakeBackend) InstallAPK(ctx context.Context, i int, apkPath string) (*em
 	return &emu.InstallResult{Index: i, APK: apkPath, Package: "com.example", Output: "Success"}, nil
 }
 
+// diskCall records one disk call and returns the injected error, if any.
+func (b fakeBackend) diskCall(what string, i int) error {
+	b.f.mu.Lock()
+	defer b.f.mu.Unlock()
+	b.f.disk = append(b.f.disk, fmt.Sprintf("%s %d", what, i))
+	return b.f.diskErr
+}
+
+func (b fakeBackend) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	if err := b.diskCall("info", i); err != nil {
+		return nil, err
+	}
+	in, _ := b.f.get(i)
+	allocated, reclaimable := int64(10<<30), int64(2<<30)
+	res := &emu.DiskInfoResult{Index: i, Overlay: `C:\fake\userdata-qemu.img.qcow2`, Running: in.Running,
+		LogicalBytes: 64 << 30, OnDiskBytes: new(int64(12 << 30)), ClusterBytes: 65536}
+	if in.Running {
+		res.NeedsShutdown = true
+	} else {
+		res.AllocatedBytes, res.ReclaimableBytes = &allocated, &reclaimable
+	}
+	return res, nil
+}
+
+func (b fakeBackend) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	if err := b.diskCall("trim", i); err != nil {
+		return nil, err
+	}
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 2 << 30}, nil
+}
+
+func (b fakeBackend) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	if err := b.diskCall("compact", i); err != nil {
+		return nil, err
+	}
+	b.f.mu.Lock()
+	gate := b.f.diskGate
+	b.f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, canceledErr(ctx)
+		}
+	}
+	return &emu.DiskCompactResult{Index: i, Overlay: `C:\fake\userdata-qemu.img.qcow2`,
+		BeforeOnDiskBytes: 12 << 30, AfterOnDiskBytes: 10 << 30, FreedBytes: 2 << 30}, nil
+}
+
 func (b fakeBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result {
 	b.f.adbCalls.Add(1)
 	b.f.mu.Lock()
 	res, delay := b.f.shot, b.f.shotDelay
+	b.f.shotSerials = append(b.f.shotSerials, opt.Serial)
 	b.f.mu.Unlock()
 	if delay > 0 {
 		select {
@@ -241,6 +517,8 @@ func (b fakeBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...str
 }
 
 func (b fakeBackend) RootInfo() emu.RootInfo { return fakeRoot }
+
+func (b fakeBackend) Serial(i int) string { return fakePorts.Serial(i) }
 
 // ---- harness -----------------------------------------------------------------------------------------------------
 
@@ -257,7 +535,7 @@ type harness struct {
 
 func newHarness(t *testing.T, mod func(*Options)) *harness {
 	t.Helper()
-	r, err := root.New(t.TempDir())
+	r, err := root.New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,8 +564,12 @@ func newHarness(t *testing.T, mod func(*Options)) *harness {
 	h.s = s
 	h.ts = httptest.NewUnstartedServer(s)
 	s.port = h.ts.Listener.Addr().(*net.TCPAddr).Port
+	if opt.Tray && opt.newTray != nil { // as Run does, before serving
+		s.startTray(opt.newTray)
+	}
 	h.ts.Start()
 	go s.pollLoop()
+	go s.proxyLoop()
 	h.client = &http.Client{
 		Timeout:       15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

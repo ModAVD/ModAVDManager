@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 // adb for callers: one guest shell command (MCP tool) and the `modavd adb <i> ...` passthrough. Both go to the
@@ -12,12 +10,10 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"modavd/internal/errs"
-	"modavd/internal/root"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 const passthroughServerWait = 20 * time.Second
@@ -30,8 +26,10 @@ func (m *Manager) Shell(ctx context.Context, i int, command string, timeout time
 	if strings.TrimSpace(command) == "" {
 		return nil, errs.New(errs.InvalidArgument, "要执行的命令是空的")
 	}
-	if _, ok := m.qemuOf(i); !ok {
-		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 没有在运行", i)
+	if _, ok, err := m.qemuOf(i); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 没有在运行", i)
 	}
 	res := m.shell(ctx, i, command, timeout)
 	if err := ctxErr(ctx); err != nil {
@@ -54,9 +52,11 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	if !up {
 		return 1, errs.Newf(errs.Internal, "私有 adb server（端口 %d）%.0f 秒内没起来", m.Root.AdbServerPort(), passthroughServerWait.Seconds())
 	}
-	serial := root.Serial(i)
+	serial := m.Root.Ports().Serial(i)
 	// What adb.Run does on "device not found": bring a running instance back onto a restarted private server.
-	if _, running := m.qemuOf(i); running && m.ADB.GetState(ctx, serial, statusAdbTimeout) != "device" {
+	if _, running, err := m.qemuOf(i); err != nil {
+		return 1, err
+	} else if running && m.ADB.GetState(ctx, serial, statusAdbTimeout) != "device" {
 		m.ADB.Reregister(ctx, serial)
 	}
 
@@ -66,7 +66,7 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	if !hasConsole() {
 		// Without a console of ours a console child would get a new, visible one.
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: win.HideConsole}
+		host.HideConsoleCmd(cmd)
 	}
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Run()
@@ -86,13 +86,7 @@ func (m *Manager) AdbPassthrough(ctx context.Context, i int, args []string, stdi
 	return 1, errs.Wrap(errs.Internal, err, "adb 运行失败: "+err.Error())
 }
 
-var procGetConsoleWindow = syscall.NewLazyDLL("kernel32.dll").NewProc("GetConsoleWindow")
-
 // hasConsole: this process is attached to a console (a child then shares it and opens no window of its own).
 func hasConsole() bool {
-	if procGetConsoleWindow.Find() != nil {
-		return false
-	}
-	h, _, _ := procGetConsoleWindow.Call()
-	return h != 0
+	return host.GetConsoleWindow() != 0
 }

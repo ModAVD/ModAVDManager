@@ -1,8 +1,12 @@
 # ModAVDManager
 
-[ModAVD（魔改 AVD）](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库，只支持 Windows x64。
+**简体中文** | [English](README.en.md)
 
-> 这是非官方项目，与 Google 没有关联。
+<!-- README.md 和 README.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
+[ModAVD](https://github.com/ModAVD/ModAVD) 的管理程序：图形管理器 `ModAVD.exe`，以及命令行和 MCP 服务 `modavd.exe`。Go 写，只用标准库。目前只支持 Windows x64，平台相关的部分已经拆成平台层，其他平台的安排见 [ModAVD#27](https://github.com/ModAVD/ModAVD/issues/27)。
+
+> **版本提示（`main` 与 Release）**：本文按仓库 `main` 的实现编写，可能比最新发布的版本多出还没发版的改动。已发布的版本见 [Releases](https://github.com/ModAVD/ModAVDManager/releases)；使用已发布包时，请以对应 Release 的说明和包内版本为准。
 
 使用说明和参与开发的说明在 ModAVD 文档站：[管理器和命令行](https://modavd.github.io/components/manager)、[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
@@ -18,14 +22,15 @@
 
 ## 这是什么
 
-- ModAVD 是给 Windows 上的挂机脚本用的安卓模拟器（AOSP Android Emulator 加一批补丁）。本仓库是管理它的程序：新建、修改、删除实例，开机、关机，开机前的电脑检查，装 APK 和 arm64 执行桥，看画面和日志。
+- ModAVD 是基于 AOSP Android Emulator 加一批补丁的安卓模拟器，目前支持 Windows，以后计划支持更多平台。本仓库是管理它的程序：新建、修改、删除实例，开机、关机，开机前的电脑检查，装 APK 和 arm64 执行桥，看画面和日志。
 - 管的是一个 ModAVD 根目录，也就是 ModAVD Release 包解压出来的文件夹（里面有 `mas-avd.json`、`sdk\`、`avd\`）。实例文件和 `mas-avd.json` 的写法与 [AUTO-MAS](https://github.com/AUTO-MAS-Project/AUTO-MAS) 一致，测试里拿 AUTO-MAS 的代码逐字节对照。
 - 给人用的是管理器 `ModAVD.exe`；给脚本、AUTO-MAS 和 AI 助手用的是命令行 `modavd.exe` 和它的 MCP 服务。
 
 ## 和 ModAVD 的关系
 
-- 两个程序随 [ModAVD](https://github.com/ModAVD/ModAVD) 的 Release 包发布：包根目录的 `ModAVD.exe`（管理器）和 `tools\modavd.exe`（命令行、MCP）。只是使用的话，下载 ModAVD 的 Release 就行，不用自己编译。
-- 本仓库只有这两个程序的源码。模拟器本身的补丁、安装说明和发版在 ModAVD 仓库。
+- 本公开仓库是管理器和命令行程序的开发与发版依据，并单独提供 GitHub Release。版本号跟着 ModAVD 整包走：哪一版 ModAVD 重新打包了管理器，管理器就取那一版的版本号（比如随 ModAVD 0.42.3 重编的就是 0.42.3）；没重新打包的不动（[ModAVD#216](https://github.com/ModAVD/ModAVD/issues/216)）。
+- ModAVD 整包仍会带着 `ModAVD.exe` 和 `tools\modavd.exe`，每次 ModAVD 发版会钉住使用的管理器版本与哈希。
+- 单独下载包可在任意目录使用；给 `--root` 或设置 `MODAVD_ROOT` 指向 ModAVD 根目录，并按下面的哈希核对下载内容。不要把它解压到 ModAVD 根目录覆盖整包里的文件。
 
 | 产物 | 源码 | 做什么 |
 | --- | --- | --- |
@@ -42,7 +47,7 @@
 | `emu` | 开机、开机后调优、首次初始化、执行桥、关机、状态、电脑检查 | `manager.py`、`precheck.py` |
 | `adb` | 私有 adb server、重新登记、模拟器控制台 | `host.py` |
 | `win` | 进程、命令行、端口、脱离进程树的启动、文件锁 | `host.py`、`windows/process.py` |
-| `vkfix`、`apk`、`guest` | 客体 Vulkan 驱动补丁、APK 清单、推进客体的脚本 | `vulkanfix.py`、`res/avd/guest/` |
+| `vkfix`、`ndkfix`、`guestpatch`、`apk`、`guest` | 客体 Vulkan 驱动补丁、ARM 转译层补丁（WFE / WFI / SEV / SEVL 当 NOP）和这两个补丁的清单、APK 清单、推进客体的脚本 | `vulkanfix.py`、`res/avd/guest/` |
 | `cli`、`mcp`、`ui` | 命令行、MCP、管理器的 HTTP 服务和页面 | — |
 
 `internal/guest/scripts/*.sh` 和 AUTO-MAS `res/avd/guest/` 下的脚本是同一份，改的时候两边要一起改。
@@ -57,42 +62,210 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | --- | --- |
 | `list` | 全部实例和状态 |
 | `info <i>` / `status <i>` | 一台实例的详细信息 / 状态 |
-| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30\|60] [--no-bridge]` | 新建。默认带 arm64 执行桥，第一次开机时装上；`--no-bridge` 记下这台不要桥，以后开机也不装 |
-| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]` | 修改，下次开机生效。`--data-gb` 只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB） |
+| `create [--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto\|N] [--fps 1-60] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--no-bridge] [--timeout 1200]`、`create --resume N` | 新建（数据盘默认自动扩盘，见下），并在后台无头开机一次把初始化做完再关机（见下）。默认带 arm64 执行桥；`--no-bridge` 记下这台不要桥，以后开机也不装。新建的实例不带 Google Play 商店，要的话建好后用 `playstore <i> install`。`--resume N` 重做新建失败的那台的初始化 |
+| `set <i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080\|720] [--dpi auto\|N] [--orientation landscape\|portrait] [--data-gb auto\|N] [--diagnostics on\|off] [--sound on\|off] [--app-keepalive on\|off] [--boss-key 组合\|none]` | 修改；诊断模式和老板键立即生效，其余设置下次开机生效。`--data-gb auto` 改成自动扩盘，`--data-gb N` 改成指定大小（见下）；大小只能改大，游戏数据不动：模拟器（0.36 起）开机时扩磁盘镜像，开机后在线扩文件系统。0.36 之前按 16 GB 及以下建的盘只能扩到下一个备份组之前（16 GB 约到 30 GB）。`--sound on` 让这台下次开机起有声音（带窗口和无头都是，会多占一些 CPU），默认 `off` 不带声卡；记在 `mas-avd.json` 的 `instances.<i>.sound`。`--boss-key` 是这台的老板键（见「管理器 ModAVD.exe」一节），比如 `Ctrl+Alt+Shift+1`，`none` 是不要，只有 Windows。 |
+| `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
-| `start <i> [--window] [--timeout 300] [--no-bridge]` | 开机，等开完并做完开机后的设置；实例还没有执行桥时接着装上，`--no-bridge` 这次不装 |
-| `stop <i> [--force]`、`stop --all` | 关机：先让安卓正常关机，不成再 sync + kill；`--force` 是 sync + 强杀 |
-| `restart <i> [--window] [--timeout 300] [--force] [--no-bridge]` | 关机再开机，选项同 `stop`、`start` |
+| `clone <i> [--title T]` | 把已关机的实例整份复制成一台新实例（游戏、登录状态、设置都带上）：新实例用最小的空闲编号和它的端口，其余设置照源实例；数据盘整份复制，两台互不影响，可用空间不够时报错（`precheck_failed`）、什么都不复制；失败或取消时复制到一半的会删掉。两台的安卓设备标识（Android ID、GSF ID）相同 |
+| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装；装桥要冷启动一两次，带 `--window` 时这几次准备用的开机都无头，装好后正常关机，最后一次才带窗口开机（实例还没有开机标记、一定要装桥时，第一次开机就无头；有标记的要开起来才知道装没装，第一次照样带窗口）。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
+| `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
-| `check [--memory M]` | 开机前的电脑检查 |
+| `playstore <i> install\|uninstall\|status` | 给实例补全、移除、查看 Google Play 商店（见下） |
+| `gles32 <i> on\|off\|status` | 实验功能：让实例报告 GLES 3.2（见下） |
+| `disk <i> trim` | 磁盘回收：在开着的实例里对数据盘触发一次 FITRIM；成功只表示触发请求已返回，不等待或确认客体回收完成；模拟器太旧、不支持回收时返回不支持（退出码 4） |
+| `disk <i> info` | 看数据盘的大小：逻辑大小、覆盖层在宿主上实际占的空间；关机且取得启动锁后才运行只读的 qcow2 元数据检查，给出已分配和估计可回收大小。整理中或锁不可用时，仅返回可读取的文件头、宿主占用和原因；不可读的数值省略，不修复镜像 |
+| `disk <i> compact` | 整理已关机实例的数据盘；预计收益不足时跳过重写；转换后先校验再原子替换，原盘在替换成功前不动；报告前后占用和增减；大盘预算可达数十小时，正常整理基本不会超时，停止请取消；Windows 支持 NTFS/ReFS，Apple Silicon macOS 支持 APFS，拒绝链接、快照或重写空间不足，详见[预算与结果契约](internal/emu/COMPACT.md) |
+| `check [--memory M]` | 开机前的电脑检查。不查内存（页面文件会补上物理内存的不足），`--memory` 留着兼容、不再起作用；真分不到内存时 `start` 报 `insufficient_memory`（退出码 10） |
+| `report-config [--no-clipboard]` | 复制电脑配置和开着实例里的游戏信息（只读） |
+| `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | 收集问题信息并打包（只读）。除模拟器日志外，还收管理器、开机守护和私有 adb server 的日志（`modavd-ui.log`、`modavd-bootwatch.log`、`adb-server.log` 及其 `.1`，各取最后 5 MB）、所有 adb.exe 进程和 adb server 日志（`%TEMP%\adb.log` 最后 2 MB）、Windows 保留的 TCP 端口（netsh），并指出本目录要用的端口有没有落在里面；ZIP 完成前的 Ctrl+C 返回 `canceled`，删除未完成 ZIP 并清理暂存目录；`--keep-stage` 则保留暂存目录并在错误中给出路径 |
+| `components [status]`、`components source [auto\|googledownloads_cn\|tencent\|google]`、`components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`、`components import-playstore <文件或文件夹>…` | 查看、选择或补全 Google 组件（adb 和系统镜像；见「补全 Google 组件」）；`--play-store`、`import-playstore` 补全可选的 Google Play 商店（见下） |
+| `game-sources` / `game-apps <类型> <源>` / `game-files <类型> <源> <包名> [路径]` | 查看 MuMu 和雷电实例、第三方应用和应用的公开资源。类型为 `mumu` 或 `ldplayer`；读取应用时按需启动源实例。 |
+| `import-game <类型> <源> <目标> <包名> [--data 路径]` | 先开目标实例，也可以先按常规流程新建。复制 base、所有 split APK 和公开的 OBB。用 `--data` 选择 `Android/data/<包名>` 下的资源文件或目录，可写多次。管理器入口在目标实例的「更多操作 → 从模拟器导入游戏」。 |
 | `window <i> show\|hide`、`install <i> <apk>`、`shell <i> <命令>`、`adb <i> -- <参数>` | 窗口、装 APK、客体命令、adb 透传 |
+| `update [status\|check\|prepare\|install\|recover] [--source github\|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V]` | 更新根目录里的整个 ModAVD 包，按「设置」里的更新源，或调用方这次传的更新源和 CDK（见「更新 ModAVD」） |
 | `servers`、`version`、`mcp`、`help [命令]` | |
 
-- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 GB 四档，核数 2 / 4 / 6，帧率 30 / 60。
+实例设置里的「应用保活」下次开机生效。默认 `--app-keepalive off`，第三方应用连续离开前台满 60 秒后由 ModAVD 结束，中途切回就取消计时。桌面、当前输入法、系统包和谷歌服务豁免。`--app-keepalive on` 保留后台应用。设置记在 `mas-avd.json` 的 `instances.<i>.appKeepalive`，旧实例没有这个字段时按关闭处理。MCP 的 `update_instance` 接受布尔参数 `app_keepalive`。
+
+Apple Silicon macOS 支持 `report-config` 和 `collect-info`：读取硬件、macOS、HVF、Metal 和组件版本；游戏列表只向归属已确认的运行实例与现有私有 ADB 查询，不启动服务。问题包只收本目录的实例配置白名单和最多 8 份模拟器日志，每份最多 2 MiB、总文本最多 20 MiB，过滤常见凭据字段、路径和设备标识。macOS 不收截图、系统转储或其他应用日志；分享前请检查问题包。默认复制配置到剪贴板、用 Finder 显示问题包，自动化可用 `--no-clipboard` / `--no-explorer`。
+
+- `<i>` 写成 `3` 或 `mas_3`（0–9，5 除外）；内存写成 `6144`、`6144M` 或 `6G`，只有 3 / 4 / 5 / 6 / 8 GB 五档，核数 2 / 4 / 6，帧率 1–60 的整数（默认 60）。
 - 根目录：`--root`，没给就用环境变量 `MODAVD_ROOT`，再没有就用 `modavd.exe` 所在目录或它的上一级。
+- 0.3.0 起没有 `restart`：先 `stop` 再 `start`。旧的调用报用法错误（退出码 2），提示改用这两步。
+
+`trim` 的 GUI 任务完成、MCP 成功返回和开机后自动回收日志都只表示触发请求已返回。
+自动回收日志里的秒数是 adb/su 命令往返耗时。客体是否完成或失败，需要另看客体信号，
+不能用暂时稳定的 discard 计数判定。
+
+**数据盘**有两种，新建和设置里二选一（命令行 `--data-gb auto|N`）：
+
+- **自动扩盘**（默认）：数据盘一开始就是 256 GB。磁盘镜像按实际写入增长，电脑硬盘只为写进去的数据付空间，客体里一直有很多剩余，不用等开关机，也不用管大小。比 64 GB 的盘一次性多占约 1 GB（新块组的文件系统结构，扩完后几分钟内在后台写完）。没写过模式的旧实例也按自动扩盘处理：下次开机前扩到 256 GB，开机后在线扩文件系统，游戏数据不动；0.36 之前按 16 GB 及以下建的盘只能扩到约 30 GB，照旧在日志里报出来。电脑硬盘剩余不到 20 GB 时，`status`、`info` 和管理器卡片会提醒。
+- **指定大小**：16–512 GB，给多少就是多少，以后只能改大，不自动扩。剩余不到 5 GB 或不到 10% 时（每次开机后读一次），`status`、`info` 和管理器卡片会提醒，带上改大或改成自动扩盘的命令。
+- 模式记在 `mas-avd.json` 这台实例的 `dataDiskMode`（`auto` / `manual`，没写就是 `auto`）；大小照旧在 `config.ini` 的 `disk.dataPartition.size`。`info` 显示数据盘在电脑上实际占多少；JSON 里是 `config.data_disk_mode` 和 `data_space`。
+
+Apple Silicon macOS 使用 SDK 中原生的 `qemu-img`。磁盘占用按宿主已分配块计算，排除稀疏文件空洞；APFS 克隆可能共享数据块，整理前后文件占用的差值不保证等于整个卷增加的可用空间。普通日志清理会检查实际打开的文件，保留正在使用、身份已变化、带链接或意外子目录的候选；macOS 的诊断模式开关仍未开放。
 
 **arm64 执行桥**：
 
 - 只对内置名单里的游戏生效，其余应用照旧走原来的转译层。桥装在实例自己的 system / vendor 覆盖层里，要 0.36 起的模拟器。
-- modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次。只在这次是它拉起的模拟器时装；接管已经在运行的实例时不装。装不上只是警告，实例照常运行，下次开机再试。
-- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` / `restart` 的 `--no-bridge` 只管这一次。
-- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉。`verify`：只读核对，实例要开着。
+- modavd（命令行、MCP）和管理器每次开机都会看一眼：实例还没有桥，就在开机后的设置做完后装上，中间关机再冷启动一两次；已经有桥、但桥的文件和这个包里的不一样（更新过 ModAVD 包），就同样在设置做完后换上新的，再冷启动一次。只在这次是它拉起的模拟器时装或更新；接管已经在运行的实例时不动。更新要冷启动，所以开机后的设置做完时已经有应用在前台、或者正在装 APK，这次就先不更新。装不上、更新不上都只是警告，实例照常运行，下次开机再试。AUTO-MAS 自己开机的实例不经过这一步：要换新文件，先关掉实例，再用 ModAVD.exe 或 `modavd start` 开一次机，或者跑 `bridge <i> install`。
+- 搬根目录前，先在原位置用新版管理器或 `modavd start` 给每台已装桥的实例冷启动一次，再关机。把整个根目录一起搬走，包括实例目录里的 `modavd-bridge-backings.json`。下次开机发现旧路径失效时，管理器会用记录的大小和 SHA-256 核对新 SDK 里的 system / vendor 镜像。老实例已经搬走且没有记录时，请保留覆盖层，将原镜像和根目录恢复到原位置，再按上述步骤搬迁。
+- 不要桥的实例：新建时带 `--no-bridge`，或者之后跑 `bridge <i> uninstall`。两种都会在 `mas-avd.json` 里记下 `instances.<i>.bridge` 为 `false`，以后开机不再自动装；再 `bridge <i> install` 就恢复。`start` 的 `--no-bridge` 只管这一次。
+- `bridge` 调用 ModAVD 包里的 `tools\modavd-bridge.ps1`。`install`：需要时关机再开机，装上；已经装了的只在载荷有变时更新。`uninstall`：卸掉桥、开机标记和装桥时改成的 GL 传输方式（asg）；退回更早的版本之前要先卸。实例原来关着的，做完再关掉；开着的，最后照原来的方式开回来，带窗口的还带窗口，无头的还无头；中间只做准备的开机（装桥时装好之前的几次，卸桥时后面还要再冷启动的那次）都无头。`verify`：只读核对，实例要开着。
+- `info` / `list` / `status` 的 `bridge`：`off`（记了不要桥）、`pending`（下次由 modavd 拉起的开机会装）、`installed`（开着的客体里桥在）、`unknown`。只问已经开完机的客体；关着或还在开机的实例，开机标记在桥装好后一直留着，装失败时也在，所以首次开机做过、标记也在时是 `unknown`，要知道确切结果就开机后再查。
+- 装桥期间（含其中的关机、冷启动）`busy` 为 `bridging`；这时 `delete`、再次 `bridge` 返回实例忙（退出码 5）。调用方不认识的 `busy` 取值一律当忙处理。
 - 不经 modavd 或管理器开机的实例（别的程序直接拉起模拟器）不会自动装，要装就跑一次 `bridge <i> install`。
+
+**Google Play 商店**（`components fetch --play-store`、`components import-playstore`、`playstore`，ModAVD#125）：
+
+Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` r9：官方归档为 `arm64-v8a-35_r09.zip`（约 1.8 GB）。许可确认后下载，或导入自己的归档/五个文件，按该版本的大小和摘要校验后保存到 `sdk/playstore/`。它与下面的 Windows API34 x86_64 文件不混用。当前 macOS 仅准备组件，实例内安装与移除尚未开放，不要求安装执行桥。
+
+- 实例用的 Google APIs 镜像有 Play 服务、没有商店。商店取自 Google 官方的 `system-images;android-34;google_apis_playstore;x86_64` r14（和实例的镜像同一期）里的五个文件：商店、Google 签名的 Play 服务、GSF、合作伙伴设置和商店的 fs-verity 证书。根目录只留这五个文件（`sdk\playstore\`），每台实例要的时候再装进去；新建的实例不带。
+- 根目录的五个文件有两种来法，都是可选的，`components status`、`check` 不把它们算进必需组件：
+  - 下载：`components fetch --play-store`（管理器「补全组件」里勾选「补全 Google Play 商店服务」）同意许可协议后下载这个镜像（约 1.5 GB），从里面的 `system.img` 只读取出五个文件，每个都核对写死的大小和 SHA-256，然后删掉解出的 `system.img` 和下载的压缩包（`--keep-downloads` 时压缩包留着）。已经有了就跳过。
+  - 用自己的文件：`components import-playstore <文件或文件夹>…`（管理器里「使用我自己的文件」）。给 Google 官方的压缩包 `x86_64-34_r14.zip`（名字不限，按 Google 仓库清单核对大小 1,510,752,654 字节和 SHA-1，再像下载的一样取出五个文件），或者那五个文件本身（名字不限，逐个核对大小和 SHA-256，值和[文档站](https://modavd.github.io/guide/playstore)的表一样；给文件夹就取里面同名的几个）。认不出的文件、对不上的哈希、缺了文件，一律拒收（退出码 9，`components_rejected`，`--json` 的 `error.details.reason` 是 `unknown_file`、`mismatch` 或 `incomplete`），什么也不改；只读你的文件，不动它们。不下载，也不问许可协议。
+  - `components status` 列出五个文件在不在、从哪来（`play_store.source`：`download` 或 `import`）。
+- 只放商店不够：镜像自带的 Play 服务和 GSF 是测试证书签的，和商店签名对不上，Google 的组件会拒绝工作，所以一起换成 Play 版镜像里同版本的。
+- 装在执行桥带来的可写系统覆盖层里，所以实例要有执行桥：没有的 `install` 报 `not_ready`（`details.reason` 为 `no_bridge`），根目录还没有五个文件的报 `not_ready`（`playstore_files_missing`），这两种都在动实例之前就拒绝。装了商店的实例不能 `bridge <i> uninstall`，要先 `playstore <i> uninstall`。镜像自带的同名占位应用（LicenseChecker）会被藏起来，卸载时恢复。
+- `install`：放入文件后冷启动一次。`uninstall`：先停用商店，去掉 Google Play 装的更新、删掉放进去的文件，冷启动一次后恢复并启用占位应用。实例原来关着的，做完再关掉，没做成也关掉（关不掉只是警告）；开着的，照原来的方式开回来。`status` 是只读的，要实例开着。
+- `install` 中途失败（比如覆盖层空间不够）时，撤回这次放进去的文件（包括没放到位的 `.new`），恢复占位应用；替换了镜像自带文件的那几个和占位应用要下次冷启动后才完全恢复。撤不干净的，`status` 是 `partial`，实例记为只装了一部分，可以 `uninstall` 移除，也可以再 `install` 补全。
+- 设备没有通过 Play 保护机制认证。登录时提示未认证的，用 `playstore <i> gsfid`（管理器里实例「更多操作」的「复制 GSF ID」）取这台实例的 GSF ID，十进制和十六进制都给（`--json` 是 `decimal`、`hex`），到 <https://www.google.com/android/uncertified/> 登记。实例要开着；还没有 ID 时报 `not_ready`（`details.reason` 为 `no_gsf_id`），开着网等一两分钟再试。查 Play Integrity 的游戏多半过不了（镜像是 userdebug、测试密钥）。
+- 没装过商店的实例什么都不动，`mas-avd.json` 里也不多键。装上后记 `instances.<i>.playStore: true`，卸掉后是 `false`，装到一半撤不干净时是 `"partial"`；`info` / `list` 的 `play_store`（装上了）和 `play_store_partial`（只装了一部分）按这一项。
+
+**报告 GLES 3.2**（`gles32`，实验，ModAVD#131）：
+
+- 有的游戏在清单里要求 GLES 3.2，Play 商店按 `ro.opengles.version` 把 ModAVD（报 3.1）判成不兼容。`gles32 <i> on` 把实例报的版本改成 3.2（196610），让商店放行。**只改报的版本，实际渲染仍是 3.1**：走 Vulkan 的游戏能用，真要 GLES 3.2 渲染的应用会装得上、打不开。默认关，按实例开。
+- 要执行桥：改的是它带来的可写系统覆盖层里的 `/vendor/build.prop`，没有执行桥的报 `not_ready`（`details.reason` 为 `gles32_no_bridge`）。开着的实例不能 `bridge <i> uninstall`，要先 `gles32 <i> off`。
+- `on` / `off` 会冷启动一次，再核对实例报的版本，对不上就报错；原来关着的做完再关，开着的照原来的方式开回来。`status` 只读，实例要开着，给 `on`、`off`，或还没冷启动的 `pending-on` / `pending-off`。
+- 实例装着 Google Play 商店时，商店会记着旧的设备信息：到实例里 设置 → 应用 → Google Play 商店 → 存储，清除数据（账号不会退出），它才会按新版本重新判断兼容。
+- 记在 `instances.<i>.gles32`；`info` / `list` 的 `gles32` 按这一项。管理器里是实例「更多操作」的「开启 / 关闭报告 GLES 3.2（实验）」。
+
+**按应用走代理**（`proxy`）：
+
+- 名单里的应用（按包名）的 TCP、UDP 和 DNS 都走设好的代理，别的应用照旧直连。不用 VPN：客体里一个 root 守护进程（`modavd-proxyd`，随 `modavd.exe` 带进去）按应用的 uid 用策略路由和透明代理接走它们的流量，应用和系统都看不到 VPN。
+- `modavd proxy <i>` 查看：开关、地址、名单；实例开着时附上客体里的实际状态（规则在不在、代理连没连上、名单里哪些还没装）。
+- `on` 打开、`off` 关掉（地址和名单留着）；`--server` 改地址，`--add` / `--remove` 增删，`--apps` 整个换掉名单（可写多次或用逗号隔开，`--apps ""` 清空）；可以和 `on` 一起给。名单最多 64 个。
+- 地址写 `socks5://IP:端口` 或 `http://IP:端口`；`127.0.0.1`、`localhost` 记成实例里看到的 `10.0.2.2`；不写协议就在这台电脑上探测。`--server auto`（第一次 `on` 没给地址时也是）取这台电脑的代理设置：先看 `ALL_PROXY`、`HTTPS_PROXY`、`HTTP_PROXY`，再看 Windows「Internet 选项」里手动设的代理（有 `socks=` 时优先），再探测是 SOCKS5 还是 HTTP。只认 IPv4 地址和 localhost。
+- 代理软件的混合端口（Clash 系的 7890、7897 之类）会被认成 SOCKS5，TCP、UDP、DNS 都能走。只给 HTTP 代理时只转 TCP 和 DNS，名单里的应用的 UDP 不通。
+- **代理断了，名单里的应用就断网**，不会悄悄改走直连。DNS 经代理用 TCP 问 `1.1.1.1`，名单里的应用的 IPv6 一律不通（让它们用 IPv4）。
+- 实例开着时改了马上生效（`applied` 是 `now`），关着就下次开机生效（`next_boot`）。由 modavd、MCP 或管理器开机时，开完机第一件事就是挂上规则；客体自己重启后由开机守护补上。AUTO-MAS 自己开机、不经过 modavd 的实例没有。
+- `test`：在这台电脑上探测设好的地址，是什么协议、经它的 UDP 能不能用。探测不到是退出码 9（`proxy_unavailable`）。
+- 海外游戏用 Google 登录的，把 Google Play 服务（`com.google.android.gms`）也加进名单。
+- 设置存在 `mas-avd.json` 的 `instances.<i>.appProxy`（`enabled`、`server`、`apps`），删除实例时一起删掉。`info` / `list` 的 `app_proxy` 是它的概要（只读配置，不走 adb；没设过是 `null`）。`collect-info` 对开着、又设过的实例另收客体守护进程的状态和日志最后 200 行。
 
 **机读输出**（`--json`）：
 
-- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
-- 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`。调用方不要把 stderr 并进 stdout。
-- `version --json` 的 `protocol` 是契约版本，字段改了含义或删了才加一。
+- stdout 只有一行：`{"ok":true,"data":…}` 或 `{"ok":false,"error":{"code","message","advice","details"}}`。`data` 的字段见 `internal/emu/types.go`，snake_case，所有字段一直出现。
+- 进度日志写 stderr，一行一个 JSON：`{"time","level","msg"}`，可能多出字段（比如 `update` 的进度行带 `progress`，见「更新 ModAVD」），调用方要容忍不认识的键。调用方不要把 stderr 并进 stdout。
+- `version --json` 的 `protocol` 是契约版本，命令或字段删了、改了含义才加一。0.3.0 起是 2：去掉了 `restart`，`start` 加了 `--headless`，运行中的实例和要的开机方式不一样时报 `busy`、不再接管，加了 `window`、`creation_progress` 字段；0.2.0 及以前是 1。
+- **端口**（0.3.1 起）：`list`、`check` 的 `port_base` 是这个根目录实际用的端口段（见下面「约定」里的 `portBase`），`status` 也带上了 `serial`、`adb_address`、`ports`（`list`、`info` 本来就有，关机的实例也有）。脚本要连实例时用这几个字段，不要自己按 20000 + 10 × 编号算。没有 `port_base` 的旧版 modavd 只会用 20000 段。
+- **错误的 `details`**：可选对象，值全部是字符串。增加这些键不改变现有 `code`、`message` 或 protocol；调用方要容忍缺少字段、不认识的键和值。管理器 HTTP 响应和失败任务保留同一份字段；MCP 的 `isError` 文本在原有错误后追加一行 `error.details: {…}`，其中 `{…}` 是 JSON。
+  - `reason` 细分实例操作的 `busy`：`running`（实例未关闭）、`locked`（另一操作持锁）、`starting`（关机时开机还没拉起 qemu）、`stopping`（开机等不到关机退出）、`window_mismatch`（窗口方式不同）、`port_in_use`（端口被占）、`port_other_root`（另一个根目录的同编号实例占端口）。其他 `busy` 可能没有此字段。
+  - `reason=locked` 时另有 `lock`：`start`、`stop`、`boot`、`bridge`、`create`、`guest`、`disk`、`metadata` 或 `config`。`disk` 是整理磁盘或共享磁盘探测用的锁；`metadata` 是根目录 JSON 锁，`config` 是实例配置与元数据写锁。
+  - `start` 的开机等待或开机后设置失败时带 `instance_status`、`qemu_running`。前者使用已知状态（如 `offline`、`starting`、`create_failed`），也可为 `not_found` 或 `unknown`；后者为 `"true"`、`"false"`、`"unknown"`。开机等待没完成时知道是 `starting`；后续设置可能重启安卓，无法确定就报 `unknown`。进程观察与是否收集客体现场共用一次快照，发生在最多 30 秒的现场收集之前；不保证调用方读到时状态未变。
+  - `create` 失败时另带 `instance_exists`（`"true"` / `"false"` / `"unknown"`），并在清理结束后填 `instance_status`、`qemu_running`，覆盖内部 `start` 过时的状态。`instance_exists` 只表示该编号当前存在实例文件或元数据，包括不完整残留和原本已存在的实例，**不表示属于这次创建**；已有实例、并发创建、参数错误时也按此定义，不能只凭它自动删除。未选定编号或读不到事实时用 `unknown`。初始化失败的状态是 `create_failed`；另一个创建者还持锁时不打扰它，状态可能是 `unknown`。
+  - `boot_diag_dir` 是开机超时、开机后设置失败等情况下客体现场存放的目录，错误包装和创建清理不会丢掉此字段。
+  - 开机失败、模拟器还在时，`start` 和 `create`（包括 MCP 和管理器发起的）在返回前把客体的 `logcat -d -b all`、`dmesg`、`getprop`、`ps -A`、`/proc/meminfo`、`dumpsys activity processes` 前 300 行存进 `logs\mas_<i>-<时间>-bootfail\`，各项是否收到写在同目录的 `summary.txt` 里。
+  - 每项单独限时，一共最多 30 秒；超时或出错时，已经读到的部分也留着。
+  - 取消（Ctrl+C、MCP 取消）、开机中途被关机、模拟器已经不在时不收。
+  - 每台实例留最新 3 个这样的目录，大小算进 `logs\` 的 1 GiB 总量。`collect-info` 把最新的 3 个收进问题包，合计到了 100 MB 就不再往下收。
+  - 这些文件可能带账号信息，只存在本机。文本模式出错时，最后一行写这个目录。
+- 运行中的实例增加 `started_at_ms`（Unix 毫秒），原来的 `started_at` 保留。`window`（0.3.0 起）：带窗口运行时为 `true`，无头运行或没开机时为 `false`。`stop --all` 即使部分失败也返回 `ok:true` 和结果列表，同时以第一个失败的退出码结束。
+- **新建（0.2.0 起）**：`create` 建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和执行桥（中间冷启动一两次），再先 sync 后正常关机、确认 qemu 退出，才算新建完成，一般几分钟（`--timeout` 管整个过程，默认 1200 秒，到点先正常关机再记为失败）。之后第一次 `start` 和平常一样快。0.2.0 以前建的实例不受影响，照旧在第一次 `start` 时补做。
+  - 这期间 `status` / `list` / `info` 的 `status` 是 `creating`、`busy` 是 `creating`（这次开机的 `running` / `booted` 可能是 `true`，以 `status` 为准），`creation_progress`（0.3.0 起）是做完的百分比（0–100，按做完的步骤算，不是按时间）；`start`、`set`、`bridge`、`delete`、同编号的 `create` 返回实例忙（退出码 5）。单实例 `stop` 也返回 busy，`--force` 不绕过保护。确实要取消，用 `stop <i> --cancel-create`，或 MCP `stop_instance` 的 `cancel_create: true`；照常先 sync、正常关机，创建流程收到取消后记为 `create_failed`，结果带 `interrupted_create: true`。`stop --all` 自动允许取消，结果逐台标记；不在新建中的实例为 `false`。
+  - 失败（含新建的进程被结束）是 `create_failed`，`creation_error` 写原因、`creation_log` 是那次开机的日志；这时 `start`、`set`、`bridge` 返回 `not_ready`（退出码 4）。用 `create --resume N` 重做初始化（上次留下的模拟器还开着就先正常关掉），或者 `delete N --yes` 删掉。
+  - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
+  - 进度：命令行逐步打印到 stderr，每行带「新建中 NN%」；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示「新建中 NN%」和进度条（别处发起的新建也显示），「更多」里可以取消新建，关掉窗口会在后台做完。
 
-**退出码**：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
+**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到，10 电脑内存不足、模拟器分不到实例的内存而退出（`insufficient_memory`）。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 
-- adb 只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050），不碰 5037。
+- modavd 自己的 adb 命令只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050）。
+  - 实例开着时，开机守护每 30 秒看一下默认的 adb server（5037）。有人开着它、它又不认识这台实例，就替实例登记过去，那边显示成 `emulator-<控制台端口>`。这样用 `adb devices` 找设备的工具（比如 MAA 的自动检测）也能看到 ModAVD 的实例（ModAVD/ModAVD#196）。
+  - 5037 上没有 server 时什么都不做，不替别人起 server。不想登记就在 `mas-avd.json` 里写 `"shareDefaultAdbServer": false`。
+- 端口：实例 i 的控制台端口是 20000 + 10 × i，adb 加 1、gRPC 加 2，编号 0–9、不含 5。
+  - 开发、测试用的根目录可以在 `mas-avd.json` 里写 `"portBase": 21000`，换一段端口（这是 modavd 自己的键，AUTO-MAS 不认）。这样它的实例不会和同一台电脑上日常用的根目录（比如 AUTO-MAS 管的那个）里同编号的实例抢端口，也不会被认成那一台。
+  - `portBase` 只能是 1100–49000 之间 100 的整数倍，且不能是 5500。5500 段会被别的 adb server 自动扫描；49100 及以上会与 Windows 默认临时端口重叠。已有这些配置仍可查状态和关机，但不能再开机，先关掉全部实例再换段。默认值仍是 20000。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。
+  - 值格式不合规时，`status`、`list`、`info` 按 20000 段看；旧版可用的 5500、49100–65400 配置仍按原段看状态和关机。这两种情况都拒绝开机和新建（`invalid_argument`），`check` 多一行「端口段」说明原因。
+  - 改之前先关掉这个根目录的所有实例。设了 `portBase` 的根目录不要加进 AUTO-MAS。
 - 模拟器、adb server、logcat 都经一个立即退出的中间进程拉起，不在 modavd 的进程树里：调用方结束 modavd（Ctrl+C、MCP 客户端断开）不会带走模拟器。
-- 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和 Vulkan 补丁，绝不拉起新的模拟器。
+- 宿主 logcat 由 `tools\modavd.exe` 的独立采集进程写入 `logs\logcat-mas_<i>-<时间>.txt`，启动命令或管理器退出后仍继续；这次开机的 qemu 退出后，采集进程主动结束自己的 adb 并退出。每满 256 MiB 在下一处换行切分，同一条 adb 输出流接着写新文件；关闭的分段每台留最新 10 份，并计入 `logs\` 的 1 GiB 清理上限，正在写的文件不计入。
+- 开机成功后，每台实例另有一个同样不在进程树里的开机守护，随 qemu 退出而结束。客体自己重启（qemu 没退）后，它补做开机调优和客体库补丁（Vulkan 驱动、ARM 转译层），绝不拉起新的模拟器。
 - 同一实例的开机、关机按 `<根>\avd\.mas_<i>.{start,boot,stop}.lock` 排队：开机等前一次开机和关机做完；关机可以打断正在开机的实例。
+
+**开机后调优里的宿主调度**：
+
+- qemu 设为「高于正常」优先级。
+- 绑核只在 L3 分大小几组的处理器（7950X3D 这类 X3D、Ryzen AI 300 等）上做，别的处理器不绑：
+  - 选空余比例（空余核数 ÷ 这组的核数）最大的一组，一样时选 L3 大的；只开一台时就是 L3 大的那组。
+  - 各组都放不下本实例的 vCPU 就不绑。
+  - 空余是扣掉整台机器上所有 qemu 的 vCPU 以后算的，包括别的根目录和 AUTO-MAS 起的。那些进程只读、不改。
+- 下载这类小块密集写盘，在 Windows 上靠开机时多给 QEMU 的两个参数加速，「写完」的含义不变（数据进了宿主文件才算完成）：
+  - `-global virtio-blk-pci.ioeventfd=off`：读写请求由 vCPU 线程直接处理，少几次线程交接。
+  - `-acpitable`：给客体一张空闲状态表（实例目录里的 `modavd-cst.aml`，按核数生成）。客体等读写完成时先忙等一小段（最多 200 µs）再停机，其余时候照常停机。
+  - 设环境变量 `MODAVD_SYNC_IO=off` 再开机，这两个参数都不带。
+- 表没带上时（`MODAVD_SYNC_IO=off`、实例读不出核数，或者表的路径放不进 QEMU 命令行），退回原来的办法：小块密集写盘时客体里每个 vCPU 起一个忙等循环（`mas-idlepoll.sh`），不让 vCPU 停机。
+  - 循环数不超过宿主的余量：逻辑核数减去所有 qemu 的 vCPU 数（含本实例；绑了核就按那一组算）。
+  - 所以逻辑核数不到本实例 vCPU 两倍的电脑上，只开一台也会少开：默认 6 核的实例在 8 线程的电脑上只开 2 个，6 线程及以下不开，下载会比开满时慢（在 7950X3D 上实测，1–2 个循环和不开差不多）。
+  - 这是有意的取舍：给 qemu 自己的线程、Windows 和别的程序留出核。
+- 明日方舟的下载目录放在一块单独的「下载盘」上（客体脚本 `modavd-dldisk.sh`，只在 Windows 上）。游戏下资源时每写 7 KB 就 fsync 一次，在普通目录里每次都要等，约 8–11 MiB/s；在下载盘上 fsync 立即返回，整个目录每 3 秒落一次盘，实测 73–95 MiB/s。
+  - 模拟器被强杀或电脑崩溃以后，下载目录回到最后一次落盘时的样子，最多少 3 秒的进度，游戏接着下。解压出来的资源、账号、设置不在这块盘上，和以前一样。
+  - 守护每 3 秒看一次：游戏装上以后、第一次启动之前就把盘挂好；游戏开着时不动它；普通目录里有下到一半的，等那一轮下完再挂；卸载游戏或清了它的应用数据，盘跟着删。
+  - 盘是客体里的 `/data/local/tmp/modavd-dldisk/<包名>/dl.img`，一个最大 16 GB 的稀疏文件，删掉的包占的空间会还给数据盘。下载比解压快，下好的包会先堆在盘里：下整包资源时，数据盘的占用高峰比以前多约 6 GB。数据盘剩余不到 2 GB 时不建盘。
+  - 名单里是明日方舟官服 `com.hypergryph.arknights`、B 服 `com.hypergryph.arknights.bilibili`（B 服没有实测，目录相同），以及明日方舟：终末地 `com.hypergryph.endfield`（同一套下载器，目录和写法相同）。
+  - 设环境变量 `MODAVD_DL_DISK=off` 再开机：把盘里还没下完的搬回普通目录，删掉盘，不再起守护。
+- 崩坏：星穹铁道（官服 `com.miHoYo.hkrpg`、B 服 `com.miHoYo.hkrpg.bilibili`，B 服没有实测）的显示模式预先设成 Vulkan（客体脚本 `modavd-vkmode.sh`，只在 Windows 上）。游戏第一次启动时自己选 OpenGL ES，在 ModAVD 上十几秒后闪退；在游戏设置里的显示设置（Display Settings）选 Vulkan 模式就正常。
+  - 守护每 3 秒看一次：游戏装上以后、第一次启动之前，在它的 `Android/data/<包名>/files` 里写好 `vulkancaps.bin`、`customvulkancaps.bin`。已经因为闪退停在 OpenGL ES 的，下次开机或游戏退出后也改成 Vulkan。
+  - 在游戏设置里选过显示模式的（`customvulkancaps.bin` 已经在、不是空文件）不动；游戏开着时不动；没装的游戏不建任何目录。
+分辨率只有两档：1080p 为 1920×1080 / DPI 280，720p 为 1280×720 / DPI 240。新建默认 1080p，720p 更省资源。管理器的新建和实例设置、CLI `--resolution 1080|720`、MCP `resolution` 使用同一套档位。已有实例按宽高识别：横屏或竖屏的 1920×1080 保持 1080p，其余配置及缺字段的旧配置保持 720p。换档联动宽、高和默认 DPI，保留方向，下次冷启动生效；不使用运行时 `wm size` 或 `wm density`。自动化工具里的分辨率也要跟着改。
+
+DPI 默认跟随分辨率，也可以在管理器设置、CLI `--dpi`、MCP `dpi` 里选 160 / 240 / 280 / 320 / 400 / 480（`--dpi auto` 改回跟随），换分辨率时保留。方向默认横屏，可以改成竖屏（`--orientation portrait`）：画布仍是横的，config.ini 的 `hw.initialOrientation` 设为 portrait，开机后安卓转到竖屏。两项都下次开机生效。MAA 等自动化任务要横屏，竖屏只适合自己玩。
+
+AUTO-MAS 当前优先调用包内 CLI，这条启动路径保持所选档位。没有可用 CLI 的旧根目录会回退到固定 720p 的 Python 启动路径，使用 1080p 前须更新包内 CLI。AUTO-MAS 的旧新建和显示配置表单仍需配套支持两档；可先在 ModAVD 管理器里设置。
+
+### 从 MuMu 或雷电导入游戏
+
+在目标实例的「更多操作」里选「从模拟器导入游戏」，再选对应的源实例和游戏。勾选游戏会复制安装包和 OBB。展开 Android/data，选游戏资源文件或目录，跳过账号、存档和设置。导入期间退出两边的游戏。完成后可自行关闭源实例。雷电同时安装了 14 和 9 时优先读取 14。
+
+《明日方舟》官服 2.7.91 的已下载资源在 `files/Bundles`。例如，从雷电实例 1 复制到已开机的 ModAVD 实例 2，可运行 `modavd import-game ldplayer 1 2 com.hypergryph.arknights --data files/Bundles`。MuMu 源使用 `mumu`。
+
+已有目标可以继续用：安装包相同时复用，不同则提示换一台实例。资源逐项写入，已有同名文件内容不同时停止。取消或失败后可用原来的选择重试。正常取消会清理临时文件，电脑断电可能留下本次的 `.modavd-import.*` 临时目录。命令行的 `apk_bytes` 和 `resource_bytes` 是本次传送的文件字节数。游戏可能仍需补下载，登录请在目标游戏中完成。
+
+## 语言和时区（Windows）
+
+新实例的语言按 Windows 当前用户的界面语言设置一次。时区默认每次冷启动跟随宿主。之后在安卓里改过语言，普通开机、首次初始化重试和恢复创建都保留。
+
+实例设置里的「语言」「时区」也能指定固定值。命令行示例：
+
+```powershell
+modavd create --language host --timezone host
+modavd set 0 --language en-US --timezone Asia/Shanghai
+modavd set 0 --language host --timezone host
+modavd regional 0 --json
+```
+
+语言接受 `zh-CN`、`en-US` 等语言标识；`host` 重新按此时的宿主语言设置一次，`preserve` 保持安卓语言并取消待应用请求。时区接受 IANA 名称；`UTC` 会转换为模拟器接受的 `Etc/UTC`。`host` 在每次冷启动重新解析，固定值不随宿主变化。运行中保存的改动等下次冷启动生效，不会为语言额外重启安卓。
+
+旧实例没有 `instances.<i>.regional` 时，语言和模拟器原来的时区检测都不变，包括尚未初始化完成的实例。显式选择语言或时区才改变对应项；时区的 `preserve` 恢复原检测行为。切换时区可能影响游戏的每日刷新时间。
+
+Windows 时区使用 `GetDynamicTimeZoneInformation` 的稳定键名，按 [CLDR 49 的 world defaults](https://github.com/unicode-org/cldr/blob/release-49/common/supplemental/windowsZones.xml) 转为 IANA。无法识别时记录警告，并沿用模拟器原检测。新建或显式选 `host` 时读不出宿主界面语言，会在写实例之前报错；可以重试或选 `preserve`。
+
+`regional` 和实例设置将配置、上次设置的语言、待应用语言与安卓当前值分开显示。关机、忙碌或客体无法访问时不把配置当成当前值。语言助手调用 Android 14 的持久配置接口，确认后单独记录完成；后续初始化失败或主机确认记录丢失时不反复覆盖语言。
+
+## 诊断模式
+
+在实例设置里打开「诊断模式」，或运行 `modavd set <i> --diagnostics on`。默认关，只存本机，不自动上传。日志和现场截图可能包含账号信息。`info`、`list` 显示开关，JSON 带 `diagnostics`，开启时另带 `diagnostics_since`。设置和首次开启时间存在 `mas-avd.json` 的 `instances.<i>.diagnostics`、`diagnosticsSince`；重复打开保留原时间。
+
+- 这台的模拟器输出、logcat 和崩溃转储留近 30 天，开机失败现场留最新 20 个，共用这台单独的 4 GiB 历史日志上限；不挤普通实例共用的 1 GiB。诊断期间保留执行桥日志。正在写的文件不参与删除和历史容量计算，logcat 仍按 256 MiB 在换行处切分。
+- 所在盘剩余空间不足 20 GiB 时，清理退回普通规则并提示一次；空间恢复后重新按诊断规则保留。配置读取失败时跳过删除并告警。
+- 客体 main、system、kernel 缓冲区各为 32 MiB，其余为 16 MiB，内存最多增加 48 MiB。宿主采集增加 kernel 和 dmesg。实例开着时立即切换，关着时下次开机应用。
+- 已有 AUTO-MAS 或其它程序抓取同端口、同序列号的 logcat 时，不另起采集，也不结束外部进程；诊断设置结果会提示宿主采集未接管。诊断配置暂时读不了时，采集和客体缓冲区按普通模式继续，每次连续故障只提示一次；历史日志删除仍严格读取配置，失败不删。
+- 已运行的采集固定本次开机已验证的 SDK 和 adb 目标，配置损坏不会把它转到默认端口。首次无法确认目标时，警告并跳过相关采集或客体操作，不猜默认配置。
+- 每次开机前另起短期后台任务，把上次成功扫描以来的 ModAVD 崩溃转储复制到 `logs\mas_<i>-crashdumps\`，不等待复制再开机。共享 crashpad 库中的转储无法精确归属到某台实例，可能顺带归档别台的新转储；不改 crashpad 自己的保留规则。
+- `collect-info` 对每台诊断实例各取最新 30 份模拟器日志和 logcat，连同归档转储合用独立的 1 GiB 复制预算；失败现场另限 300 MiB。转储按内容去重，过大的二进制文件整份跳过。文本只复制所选快照长度，增长或容量截断写进 summary。开着的诊断实例另收全部 logcat 缓冲区、dmesg、meminfo 和 activity processes，summary 记录开关与开启时间。普通实例仍共享原来的 300 MiB 日志预算；普通失败现场保留原有的最新目录完整收取、达到 100 MiB 后停止后续目录的规则。
+
+用 `modavd set <i> --diagnostics off` 关闭时，立即把已关闭的模拟器日志、logcat、执行桥日志各清到最新 10 份，失败现场留 3 个，删除该台转储归档。留下的文件回到普通全根目录 1 GiB 池，超限时也可能淘汰其它普通实例的旧日志。客体缓冲区恢复为 16 MiB，采集恢复普通缓冲区。命令返回实际清理的份数和字节；失败后可再次关闭，继续未完成的清理或客体恢复。管理器在关闭前预览清理数量并确认。
 
 ## MCP
 
@@ -100,7 +273,9 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 modavd mcp --root D:\ModAVD
 ```
 
-同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`。
+同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
+
+诊断字段仅在 `list_instances` 公开，不提供诊断开关参数；关闭会删日志，需在管理器或 CLI 执行。
 
 在 Claude Code 里注册（PowerShell 里 `--` 要加引号，否则会被吞掉）：
 
@@ -114,18 +289,95 @@ claude mcp add --transport stdio --scope user modavd '--' D:\ModAVD\tools\modavd
 {"mcpServers": {"modavd": {"command": "D:\\ModAVD\\tools\\modavd.exe", "args": ["mcp", "--root", "D:\\ModAVD"]}}}
 ```
 
+### 在 Claude Code 里实测过的
+
+2026-11-03，Claude Code 2.1.317（命令行版）连 modavd 0.3.0，用 `claude -p --mcp-config <文件> --strict-mcp-config`，只在这一次调用里加载 modavd，共跑了 5 次：
+
+| 做了什么 | 结果 |
+| --- | --- |
+| 一次按顺序调 7 个工具：`list_instances`、`get_instance`、`create_instance`（3 GB、4 核）、`update_instance`、`start_instance`、`stop_instance`、`delete_instance` | 前 6 个都成功；`delete_instance` 在 `-p` 下被拦（见下） |
+| 只调 `start_instance`，开完机 claude 正常退出（跑了两次） | 模拟器还在，`list` 是 online，它的父进程链里没有 claude 和 modavd；之后 `modavd stop` 正常关机 |
+| `MCP_TOOL_TIMEOUT` 设得比开机短，`start_instance` 开到一半超时，claude 退出 | 模拟器照常开完机，但开机后的设置没做完；再运行一次 `modavd start <i>` 就补完了 |
+| 模拟器起来 8 秒后直接结束 claude 进程 | `modavd mcp` 5 秒内自己退出，模拟器照常开完机 |
+
+- 协商到的协议有 2025-11-25 和 2026-07-28 两种，都能用。
+- `delete_instance` 带 `anthropic/requiresUserInteraction` 标记，在 `-p` 下一定被拦，实例不删，这是这个标记要的效果。在无人值守的脚本里删实例，用命令行 `delete <i> --yes`。
+- 经 MCP 新建时中途断开，新建就做不完，记成失败；用 `create --resume N` 重做。
+- 2026-11-21 又补测一轮：Claude Code 2.1.317，modavd 0.42.0，同样用 `claude -p --mcp-config <文件> --strict-mcp-config`，在 `modavd mcp` 和 claude 之间串了一个只记录、不改内容的转发进程来抓协议。
+
+| 做了什么 | 结果 |
+| --- | --- |
+| 默认协议，按顺序调 7 个工具：`list_instances`、`check_host`、`create_instance`（3 GB、4 核）、`start_instance`、`shell`（`getprop sys.boot_completed`，输出 1）、`stop_instance`、`delete_instance` | 走 2026-07-28（`server/discover`）。前 6 个都成功，`stop_instance` 是正常关机且已 sync；`delete_instance` 在 `-p` 下被拦（`MCPTool requires permission.`），请求没发到 modavd |
+| `MCP_PROTOCOL_NEGOTIATION=legacy`，同样 7 个工具 | 走 2025-11-25（`initialize`）。结果和上一行一致 |
+| 只 `create_instance` + `start_instance`，开完机 claude 就退出（modavd 直接由 claude 拉起，中间没有转发进程） | 模拟器还在，`list` 是 online；它的父进程链是 qemu、emulator，再往上的进程已不存在，没有 claude 和 modavd；之后 `modavd stop` 正常关机（已 sync） |
+
+- 两轮里 `create_instance`、`start_instance` 都带 `progressToken`，新建收到 32 到 33 条 `notifications/progress`，开机 9 条，进度值都严格递增，最后是 1000 / 1000。`-p` 的输出里看不到这些通知，是从转发进程的记录里数的。
+- 之前列的"还没核对"的几项（`check_host`、`shell`、legacy 协议、进度递增）这一轮都核对了。`install_apk`、`set_window_visible` 还没调过。
+
 ## 管理器 ModAVD.exe
 
-双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不联网、不用构建工具。
+Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目录时会自动定位根目录，也可以用 `--root` 指定。默认在系统浏览器打开页面；加 `--chrome-window` 使用独立 Chrome 应用窗口，Chrome 不可用时回到默认浏览器。状态和 Chrome 配置保存在 `~/Library/Application Support/ModAVD`，目录按钮用 Finder 打开。同一根目录再次启动只重开页面；关闭页面后按原有空闲和任务规则退出。实例功能仍受各项平台支持范围限制。
 
-- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
+双击包根的 `ModAVD.exe`：起一个只听 127.0.0.1 的本地服务，再用 Edge 的应用模式开一个窗口（`msedge --app`，Win10 / 11 自带）；找不到 Edge 时用默认浏览器。页面是内嵌在 exe 里的 HTML / CSS / JS，不需要联网；只有在「设置」里点「检查更新」时才联网。
+
+- 功能：实例卡片（在线时有画面缩略图）、开关机（带进度；开机一律带窗口，无头开机只走命令行；不提供重启）、老板键（藏起 / 叫回窗口，见下）、新建、设置、删除、电脑检查、活动面板、画面查看（点击即点按，返回 / 主页 / 最近任务）、日志、安装 APK、打开目录；浅色 / 深色 / 跟随系统。
+- 无头运行的实例在卡片副标题标出「无头」，悬停可看说明；可以在管理器里关机。带窗口启动后隐藏窗口的实例仍算带窗口。
+- 老板键（只有 Windows）：每台实例一个全局快捷键，按一下藏起这台的模拟器窗口，再按一下叫回来。
+  - 在实例的「设置」里改，和诊断模式在一处：点一下输入框，按想用的组合，至少带 Ctrl、Alt、Shift 中的一个，不收 Win 的组合；可以清空（这台不要老板键）。改了马上生效，不用重开实例。
+  - 没设过时，编号 0–9 默认是 Ctrl+Alt+Shift+编号（主键盘那排数字），超过 9 的默认没有。存在 `mas-avd.json` 的 `instances.<i>.bossKey`（空字符串是不要）；命令行 `set <i> --boss-key`，`info` 里显示（JSON 是 `boss_key`）。
+  - 几台设成同一个键不算冲突：按下时，这几台里有一台的窗口显示着就全部藏起来，全都藏着就全部显示。看的是窗口现在显不显示，所以 AUTO-MAS、`modavd window` 藏起来的也能叫回来。
+  - 只管带窗口运行的实例，无头的没有窗口，不受影响。藏着的时候照旧渲染、照旧能截图，任务栏上没有它的按钮；叫回来以后位置、大小和藏之前一样。
+  - 由管理器注册，所以管理器开着（窗口关了、留在托盘也算）才管用。只在用这个键的实例有带窗口运行着的时候才注册，都关了就注销。被别的程序占了注册不上时，设置页那一项旁边标一个警告图标，悬停说明「这个键被别的程序占了，换一个」，不弹窗。
+- 托盘（只有 Windows）：关掉窗口后管理器留在托盘。左键单击图标，等系统双击间隔过去后，把藏着的实例窗口都叫回来。双击切换管理器窗口的隐藏和显示，保留页面状态；同一管理器 Edge 配置的多个窗口一起切换，没有窗口时新开一个。右键「打开管理器」优先显示已有窗口，「退出」等正在跑的任务做完再退出。退出前也会恢复藏着的管理器和实例窗口。用默认浏览器打开时，双击只打开管理器。
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
-- 关掉窗口后，等正在跑的任务做完再退出。
+- 关掉窗口后：Windows 上留在托盘（见上）；macOS 上等正在跑的任务做完再退出。托盘图标放不成时也按后者。
 - 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
-- 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标是同人图（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)），不随代码许可授权。
+- 用法和参数错误（Windows）：`--help` 退出码 0，参数不对 2。标准输出、标准错误重定向到文件或管道时，用法写进标准输出、错误写进标准错误；没重定向但从终端启动的，写到那个终端；双击、快捷方式启动的照旧弹框。启动以后的错误（找不到根目录等）也这样输出。PowerShell 不等 GUI 程序退出，要拿输出和退出码就用 `Start-Process -Wait -PassThru` 加重定向，例如 `(Start-Process .\ModAVD.exe '--help' -Wait -PassThru -RedirectStandardOutput help.txt).ExitCode`。
+- 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标不随代码许可授权（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)）。
 
-从 PowerShell 或脚本查询用法、查看参数错误时，请重定向输出，或用 `Start-Process -Wait` 等待 GUI 程序退出。例如：`& .\ModAVD.exe --help 2> $null`、`Start-Process .\ModAVD.exe -ArgumentList '--help' -Wait`。直接调用 GUI 程序时 PowerShell 不会等待它退出。
+## 更新 ModAVD
+
+`modavd update` 更新根目录里的整个 ModAVD 包（模拟器、组件、脚本，也包括 `ModAVD.exe` 和 `tools\modavd.exe` 自己），和 AUTO-MAS 里的 ModAVD 一键更新做的是同一件事，用的也是同一个 `<根>\.update\` 目录和状态文件：哪边更新到一半被打断，另一边都能接着补完或退回。有自己更新设置的调用方（比如 AUTO-MAS）可以每次用 `--source`、`--cdk-dpapi` 传自己的更新源和 CDK，不必改管理器里的设置。
+
+- 只做明确要求的那一步，不自动联网、不在后台下载：
+  - `modavd update`（`status`）只看本地；`check` 查最新版本；
+  - `prepare` 下载、解包、按包里的 `modavd-manifest.json` 逐文件核对、暂存好，实例开着也行；
+  - `install` 需要时先 `prepare`，再换上 `sdk\emulator` 和包里的其他文件。要先关掉所有实例、管理器（包括托盘里的）和 MCP 客户端，有程序在用就什么都不动（退出码 5），暂存的新版留着，下次直接换；
+  - `recover` 补完或退回上次没做完的换上（每一步开始前也会先做）。
+- 更新源在管理器的「设置」里选：GitHub（`ModAVD/ModAVD` 的最新 Release；先按区间只下变了的文件、没变的从本地复制，服务器不认 Range、变了的超过整包 40% 或 3000 个文件、取回的数据或拼好后的清单核对不过时改下整包，原因写进 `notices`）或 Mirror 酱（填了 CDK 才能下载，能拿到增量包；出错时改从 GitHub 下，并在结果的 `notices` 里写明）。CDK 用 Windows DPAPI 加密存在 `%LOCALAPPDATA%\ModAVD\update-settings.json`，只有这个 Windows 用户能解开，不写日志、不出现在命令行和接口返回里。
+- 调用方传这一次的设置（`status`、`check`、`prepare`、`install` 都可以带，`recover` 不带；只盖过「设置」里的，不保存，`status` 等结果里的 `source`、`cdk_set` 是这次生效的）：
+  - `--source github|mirrorchyan`：这次用的更新源。
+  - `--cdk-dpapi <base64>`：这次用的 Mirror 酱 CDK。值是调用方用 Windows DPAPI 加密好的密文的 base64：`CryptProtectData` 加密 UTF-8 的 CDK，不带 entropy，当前用户或本机作用域都行。modavd 解开后按和「设置」一样的规则检查（去掉首尾空白后不超过 256 个字节，不含空格、制表符、换行和 `&?#=`）。不是 base64、解不开、格式不对都是 `invalid_argument`（退出码 2），错误里不带密文和 CDK；不是 Windows 是 `unsupported`。给空串（`--cdk-dpapi ""`，或只有空白）表示这次不用 CDK，「设置」里存了也不用。
+  - 密文和 CDK 都不进日志、错误、`.update\state.json` 和返回值。
+- 进度（`--json` 时）：每个进度事件在 stderr 上是一行日志，比平常多一个 `progress` 对象：`{"time":"…","level":"info","msg":"…","progress":{"stage":"downloading","percent":12.3,"done_bytes":123,"total_bytes":1000}}`。
+  - `stage` 是 `checking`（只有 `check` 有）、`downloading`、`extracting`、`verifying`、`installing`。
+  - `checking`、`extracting`、`verifying`、`installing` 开始时各一行，`percent` 为 -1、字节数为 0。
+  - `downloading` 没有这样的一行：进入下载阶段的第一行就带真实的 `percent` 和字节数，之后约 2 秒一行，下完那行一定有。
+  - `--quiet` 时不出（进度是 info 级）。不带 `--json` 时照旧是人看的文字。stdout 仍然只有最后一行结果。
+- 管理器「设置」里点「更新」：先下载、核对、暂存，期间可以开机、关机和新建。准备完成后不再接收实例操作；还有任务或设置修改没做完、有实例正在新建，或者其他程序在用这个根目录的 modavd 时，一台实例都不关，保留暂存、提示处理后重试。全部通过才正常关掉运行中的实例，交给 `tools\modavd.exe update install --after-pid <管理器 pid> --reopen <管理器程序> [--reopen-arg 参数]...`，确认命令行接手后管理器退出。交接期间再次打开会提示正在更新并退出；异常退出留下的交接记录不会挡住下次启动。命令行重新核对较新暂存后直接换包，不重复查远端，再按原来的参数打开管理器。本次结果存进 `.update\manager-results\<ID>.json`，只交给对应启动的管理器、提示一次。换不上也重新打开，有效暂存留着，下次不用重下。命令行输出在 `logs\modavd-update.log`。`--after-pid`、`--reopen`、`--reopen-arg`、`--handoff-id` 只和 `install` 一起用，是给管理器用的。
+- macOS 的更新设置和组件下载源分别保存在 `~/Library/Application Support/ModAVD/update-settings.json` 和 `components-settings.json`。CDK 使用 AES-GCM 加密，随机包装密钥留在当前用户的 Keychain；钥匙串锁定或未授权时保存失败，不会降级为明文存储。复制设置文件到其他用户或设备不会同时转移密钥。
+- Apple Silicon 原生构建可用 `modavd update prepare --package /path/update.zip --sha256 <可信渠道取得的64位摘要>` 暂存本地包，再用 `modavd update install` 离线安装；`recover` 也可离线补完或恢复。包须符合 [macOS 更新包协议](internal/update/MACOS.md)，核对 ARM64 Mach-O、代码签名完整性、模式和符号链接，并保留至少 20 GiB 可用空间。签名核对不代表发布者身份可信，SHA256 必须独立取得。原生事务与 Windows/AUTO-MAS 状态隔离；尚无符合协议的 macOS 发布资产时，远端检查返回 `update_unavailable`。发布打包流程由后续阶段接入。
+- 只换包里的文件：`avd\`、`mas-avd.json`（只改 `components.emulator` 并记一条 `updateHistory`）、`sdk\platform-tools`、`sdk\system-images`、`logs\` 等一律不碰；`sdk\emulator` 整个换掉。根目录在 `mas-avd.json` 里设了 `sdkRoot` 的不更新。
+- `--automas-version` 是调用方 AUTO-MAS 的版本：新版的公告第一行要求更高的 AUTO-MAS 时不装。
+- 退出码：查不了（断网、限流、GitHub 出错）是 9（`update_unavailable`），下载的包没通过核对也是 9（`update_rejected`），有程序在用、正在更新是 5。
+- 下载和 `components fetch` 共用续传、响应校验和超时处理，见下一节；默认连接等待 20 秒、读数据停顿 30 秒，`update` 暂不提供超时参数。GitHub 保留 `.part` 供下次续传；Mirror 酱地址按一次性地址处理，每次尝试从头下载。代理规则也相同。
+
+## 补全 Google 组件
+
+ModAVD 的发布包里没有 adb（平台工具 37.0.1）和 Android 14 Google APIs x86_64 系统镜像（r14，约 1.5 GB，解压后约 4.2 GB）：它们属于 Google，受《Android 软件开发套件许可协议》约束，不能再分发。`modavd components fetch` 从官方渠道下载、装进 `sdk\`。管理器检测页的「补全组件」按钮和这个命令共用同一套逻辑；首次交互运行会询问下载源并记住选择：
+
+- 先从镜像取 `repository2-3.xml` 里的许可协议全文并显示（注明取自哪个镜像、要下载哪些组件），输入 `y` 才继续，否则什么也不下，`downloads\` 里也不多出文件。`--accept-license` 不询问，但协议全文照样取回、照样显示，取不到照样退出；`--json` 时必须给，否则一律报 `usage`（退出码 2）：在看根目录之前就报，组件齐不齐都一样（0.3.0 及以前组件齐的时候会成功）。协议和提问不受 `--quiet` 影响。
+- 镜像依次试 googledownloads.cn → 腾讯云镜像 → dl.google.com，要下载时先打一行「下载源：…」说明这次用哪些、为什么（默认 / `--mirror` / `--mirror-url`）；`--mirror` 只用其中一个（不分大小写），`--mirror-url` 用自己的目录地址代替这三个（可写多次或用逗号隔开，按顺序试）。取不到许可协议清单的镜像，下载时排到最后。
+- 组件和更新共用下载实现：先写 `.part`，中断后用 `Range` 续传。200 要大小相符，续传收到 200 时清空旧数据、从 0 计数；206 要核对起点、终点和总大小；416 保留已有部分。请求带 `Accept-Encoding: identity`，拒绝压缩响应；重定向最多 10 次，User-Agent 为 `ModAVDManager/<版本>`。组件写入 `downloads\`，完整的本地 `.part` 先校验，坏的从第一个镜像重下；大小和 SHA-1 都通过才改名。HTTP 4xx、大小不符、压缩过的内容、超时马上换下一个镜像（`.part` 留着让下一个接着下）；其余错误同一个镜像最多试 3 次，中间等 3 秒。
+- 解压到 `sdk\.staging\`，整包解完、核对完（关键文件、adb 三个文件钉住的 SHA-256、版本）再挪到位；缺 `source.properties` 就补写。原来不完整的目录改名为 `<目录>.incomplete-<时间>` 留着，重名时加 `-2`、`-3` 等后缀；后续组件失败时，JSON 错误的 `advice` 也会列出已迁移的位置。确认没用后自己删掉。Ctrl+C 随时能停，不留下装到一半的组件。
+- 已经齐全的组件跳过；默认装好就删 zip，`--keep-downloads` 保留。
+- 路径里有非 ASCII 字符、不是 ModAVD 根目录、`mas-avd.json` 设了 `sdkRoot`、空间不够（下载加解压再留 500 MB），先拒绝。`--test-free-space-mb` 只给测试用，假装只剩这么多 MB。
+- 超时与 `update` 共用，`components fetch` 可用 `--connect-timeout`（连接、TLS 握手、收到响应头，1–600 秒，默认 20）、`--stall-timeout`（一个字节都没收到，1–600 秒，默认 30）、`--manifest-timeout`（取清单整体，1–1800 秒，默认 40）。代理：设了 `HTTPS_PROXY` / `HTTP_PROXY` 就照环境变量，否则用 Windows「Internet 选项」里手动设的代理；`NO_PROXY` 对两者都生效，只设它不会禁用系统代理；自动配置脚本（PAC）不支持，这时请设 `HTTPS_PROXY`。
+- 只写 `downloads\`、`logs\fetch-components.log`（和同目录的 `.lock`，一个根目录同时只跑一个）、`sdk\` 下的两个组件目录（`--play-store` 和 `import-playstore` 再加 `sdk\playstore`）和 `sdk\.staging\`。不碰 adb server，不写注册表，不要管理员。日志里每次下载只记开始和结束，进度只显示不记。
+- 只有 Windows 有组件清单；macOS、Linux 返回 `unsupported`（退出码 4）。
+- 退出码：没同意许可协议是 2（`license_declined`）；路径有中文、空间不够是 4（`precheck_failed`），不是 ModAVD 根目录或设了 `sdkRoot` 也是 4（`not_ready`）；正在补全是 5（`busy`）；许可协议或组件从哪个镜像都没下成是 9（`components_unavailable`），下载的 zip 在每个镜像上 SHA-1 都不对、或者解压后没通过核对也是 9（`components_rejected`）；读不出剩余空间是 1。
+- `components status`（默认）和 `check` 的组件一项是同一份结果，判断规则和 AUTO-MAS 一致（关键文件在就算装了）；`fetch` 判断「齐全」更严（照脚本：关键文件不为空，adb 还要核对钉住的哈希和版本号），所以 `status` 显示已装、`fetch` 仍会重装的情况是有的，旧目录会被改名留着。
 
 ## 构建
 
@@ -139,6 +391,7 @@ pwsh -NoProfile -File build.ps1 -Out <目录> -Go <go1.26.5 的 go.exe>
 
 - 用哪个 go：`-Go`，没给就用环境变量 `MODAVD_GO`，再没有就用 PATH 上的 go。版本和 `go.mod` 的 `toolchain` 不一致就报错，不会悄悄换别的版本编。
 - `-trimpath -buildvcs=false`，不用 `-X` 写版本号：同一份源码在哪台机器、哪个目录编，结果都逐字节相同。
+- 不加 `-s -w`，exe 留着符号表；两个 exe 都带版本信息（产品名、说明、版本号），来自提交在仓库里的 `rsrc_windows_amd64.syso`（根目录一份给 `modavd.exe`，`cmd/modavd-gui/` 一份给 `ModAVD.exe`）。没签名、去了符号的 Go 程序最容易被杀毒软件的机器学习规则误报。改了 `internal/buildinfo` 的版本号、图标或清单，要跑 `go generate ./cmd/modavd-gui` 重新生成两份 syso 一起提交，没重新生成单测会失败。
 - 只用标准库，没有第三方依赖，离线（`GOPROXY=off`）也能编。
 - `.gitattributes` 让仓库里的文本文件一律 LF（图标等二进制文件除外）：`go:embed` 嵌的是工作区里的字节，换成 CRLF 编出来的 exe 就不一样了。
 
@@ -153,28 +406,47 @@ go test ./...
 
 | 变量 | 作用 |
 | --- | --- |
-| `MODAVD_TEST_TMP` | 测试的临时文件放在这个目录下，每个包一个子目录（`adb`、`win`、`emu-ops`）；不设就用 Go 默认的临时目录（`%TEMP%` 下）。想让测试数据不落 C 盘时设它。 |
+| `MODAVD_TEST_TMP` | 测试的临时文件放在这个目录下，每个包一个子目录（`adb`、`win`、`emu-ops`、`report`）；不设就用 Go 默认的临时目录（`%TEMP%` 下）。想让测试数据不落 C 盘时设它。 |
 | `MODAVD_TEST_PYTHON` | 对照用的 Python 3；不设就用 PATH 上的 `python`，找不到就跳过那几个对照测试。 |
 | `MODAVD_TEST_IME_APK_DIR` | ModAVD 输入法 APK（`modavd-ime.apk`、`modavd-ime-testapp.apk`）所在的目录；不设就跳过读这两个 APK 的测试。 |
 | `MODAVD_TEST_LIVE` | 设成 `1` 才跑碰真实环境的测试：看本机正在运行的模拟器、起真的 adb server。会碰到本机正在用的实例，平时不要设。 |
 
 - `internal/avd`、`internal/root`、`internal/jsonord` 有一部分测试用 Python 3 运行 AUTO-MAS 的原始逻辑（如 `internal/avd/testdata/instances_ref.py`），和 Go 的输出逐字节对照，所以要装 Python 3。
-- 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`。
-- CI（`.github/workflows/test.yml`）在 `windows-latest` 上跑 `go vet`、`go test` 和 `build.ps1`。
+- 有几项测试只读本机 `D:\ModAVD` 下的现成文件（`mas-avd.json`、实例配置、组件 APK），没有就跳过；`MODAVD_TEST_METADATA` 可以另指一份 `mas-avd.json`，`MODAVD_TEST_SDK` 另指一个带 `platform-tools\adb.exe` 的 SDK，`MODAVD_TEST_VKLIBS` 指向放着原版和打过补丁的 `libvulkan_enc.so` 的目录（Vulkan 修复的逐字节对照），`MODAVD_TEST_NDKLIBS` 指向放着镜像原版 `libndk_translation.so` 和补丁版 `libndk_translation.hintnop1.so` 的目录（ARM 转译层补丁的逐字节对照）。
+- CI（`.github/workflows/ci.yml`）在 `windows-2025` 上跑格式检查、`go vet`、`go test`、`build.ps1`、隐私扫描和作者检查；只在 PR 或手动触发时运行。
+
+语言/时区的真实客体验收用 `python scripts/test_regional_guest.py --root <本工作树/out/全新测试根> --legacy-cli <旧版命令行> --lock <共享验收锁文件>`。测试根须复制独立 SDK，并明确设置 `portBase: 34100`、`adbServerPort: 34198`、`scriptAdbServerPort: 34199`、`shareDefaultAdbServer: false`。脚本验证这些条件；测试持有独占句柄直到正常关机和清理完成。英文宿主及宿主时区变化采用注入输入，不代替两种真实 Windows 的验收。
+
+在 Android 14 测试实例的 shell 里运行 `sh test_app_keepalive_guest.sh /data/local/tmp/modavd-app-keepalive.sh` 可复测后台应用计时。先将 `scripts/test_app_keepalive_guest.sh` 推到测试实例。脚本用模拟的应用切换和前台查询失败事件验证超时重试、切回取消，约需 70 秒。
+
+`internal/guest/regional/Regional.java` 的 4 KiB 客体助手随源码附带 DEX。普通构建不用 Java 或 Android SDK；修改助手后，用本地 JDK 和指定 D8 重建，并核对字节：`python internal/guest/regional/generate.py --r8 <r8-8.3.37.jar> --check`。脚本记录下载地址和 SHA-256。CLDR 表用 `python internal/regional/generate.py <windowsZones.xml>` 从固定版本重建。
+
+## 单独下载与哈希
+
+- 每个版本的 GitHub Release 附 `ModAVDManager-<版本>-win-x64.zip` 和 `SHA256SUMS.txt`，后者和仓库里的 `release/<版本>.SHA256SUMS.txt` 是同一份。v0.1.0 是第一个独立版本，两个 exe 和 ModAVD 0.36.0 包里的逐字节相同。
+- zip 没有顶层目录，里面是 `ModAVD.exe`、`tools\modavd.exe`、`LICENSE`、`NOTICE`、`LICENSES\Go-LICENSE.txt`，以及单独下载包的标记 `modavd-manager.json`（版本号和其余各文件的 SHA-256）。
+- 核对：`Get-FileHash .\ModAVDManager-0.1.0-win-x64.zip -Algorithm SHA256`，和 `SHA256SUMS.txt` 里那一行比；解压出的两个 exe 也一样比。
+- 自己编出同样的字节：Go 1.26.5、`GOTOOLCHAIN=local`，`pwsh -NoProfile -File build.ps1 -Out out`，再 `go run ./internal/tools/mkzip -dir out -version <版本>` 打 zip。
+- 单独使用时给 `--root` 或设 `MODAVD_ROOT`，否则会提示找不到 ModAVD 根目录。不要把 zip 解压到 ModAVD 根目录里覆盖包里的那份。
+- 单独下载的管理器不会自己更新，新版本要手动下载替换；ModAVD 包里的那份随 ModAVD 更新（见「更新 ModAVD」）。
 
 ## 参与
 
-- 只有一个维护者，回复可能要几天。改代码前先开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
+- 报问题、提建议都到 ModAVD 仓库的 [Issues](https://github.com/ModAVD/ModAVD/issues)，选上「管理器和命令行」；本仓库只收 PR。
+- 只有一个维护者，回复可能要几天。改代码前先在 ModAVD 仓库开 issue，写清要改什么、为什么；没商量过的大 PR 可能不合。
 - 提交署你自己的名字或化名，邮箱用你自己的 GitHub noreply 地址（`<编号>+<登录名>@users.noreply.github.com`，在 GitHub 的邮箱设置里能看到）。
-- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义或删了字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- 机读输出（`--json`、退出码、MCP 工具）是给 AUTO-MAS 等调用方的契约：可以加字段；改了含义、删了命令或字段，要同时把 `internal/buildinfo` 里的 `Protocol` 加一。
+- 给人看的文字在代码里写中文，中文原文就是翻译表的键。新加或改了以后跑 `go test ./internal/i18n -run TestCatalog -update`，再把 `internal/i18n/locales/en/` 里新出现的 `""` 填成英文；不会写中文的，键照意思写一句中文，在 PR 里说一声，由维护者改顺。写法和术语对照表见 [internal/i18n/README.md](internal/i18n/README.md)。
+- README 有中文（`README.md`）和英文（`README.en.md`）两份，逐节对应：改了一份，就在同一个 PR 里把另一份也改了；只会写一种语言的，在 PR 里说一声，由维护者补上。
 - 其余约定（workflow 怎么写、署名与许可、AI 工具、图片类改动）同 ModAVD 的 [CONTRIBUTING.md](https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md)。
 - 环境、硬件、怎么验证和用 AI 工具时的模型建议，见文档站的[开发：管理器和命令行](https://modavd.github.io/develop/manager)。
 
 ## 许可证
 
-- 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)，和 AUTO-MAS 相同。Copyright 2026 qiyinxi。
+- 代码按 GNU Affero General Public License 第 3 版或更新版本发布（AGPL-3.0-or-later），见 [LICENSE](LICENSE)。Copyright 2026 qiyinxi。
 - 分发本程序（改没改都算），或者把改过的版本放到网上给别人用，都要按同样的许可证提供对应源码。别的程序只是调用 `modavd.exe`、MCP 服务或管理器的本地接口，不受影响。
 - 例外见 [NOTICE](NOTICE)：
-  - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是《明日方舟》艾雅法拉的同人图，角色版权归上海鹰角网络所有，不在本仓库的许可范围内；
+  - Windows 时区对照来自 Unicode CLDR 49，按 Unicode-3.0 许可，完整许可随 NOTICE 分发；
+  - 程序图标（`cmd/modavd-gui/modavd.ico`、`cmd/modavd-gui/rsrc_windows_amd64.syso`、`internal/ui/web/assets/` 下的图片）是 ModAVD 自己的图标，不在本仓库的许可范围内；
   - `internal/avd/testdata/instances_ref.py` 复制自 AUTO-MAS（AGPL-3.0-or-later），只供测试、在单独的进程里运行，不编进程序。
 - 编出的 exe 含 Go 标准库和运行时（BSD-3-Clause）。

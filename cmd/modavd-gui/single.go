@@ -1,5 +1,3 @@
-//go:build windows
-
 package main
 
 import (
@@ -13,18 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"modavd/internal/host"
 	"modavd/internal/root"
 	"modavd/internal/ui"
-	"modavd/internal/win"
 )
 
-// One manager per root: a lock file plus a state file under %LOCALAPPDATA%\ModAVD, both named after a hash of the
+// One manager per root: a lock file plus a state file under ui.AppDataDir, both named after a hash of the
 // root path. The lock is held for the manager's whole life and dies with its process, so a crash never blocks the
 // next start; the state file tells a second launch where the running manager listens.
 
-// instanceKey is "ui-<16 hex>" for the root (case-insensitive, like Windows paths).
+// instanceKey is "ui-<16 hex>" for the root (Windows path or macOS directory identity).
 func instanceKey(r *root.Root) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(r.Dir))))
+	sum := sha256.Sum256([]byte(managerRootIdentity(r.Dir)))
 	return "ui-" + hex.EncodeToString(sum[:8])
 }
 
@@ -43,12 +41,12 @@ type state struct {
 
 type instance struct {
 	r    *root.Root
-	lock *win.FileLock
+	lock *host.FileLock
 }
 
 // lockInstance takes the root's manager lock; nil (and no error) when another manager holds it.
 func lockInstance(r *root.Root) (*instance, error) {
-	l, ok, err := win.TryLock(lockPath(r))
+	l, ok, err := host.TryLock(lockPath(r))
 	if err != nil {
 		return nil, err
 	}

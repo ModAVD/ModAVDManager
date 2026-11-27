@@ -69,7 +69,7 @@ func TestFormatListTable(t *testing.T) {
 		!strings.Contains(table[1], "127.0.0.1:20001") || !strings.Contains(table[1], "6 GB") {
 		t.Errorf("row 0 = %q", table[1])
 	}
-	if !strings.Contains(table[2], "mas_3") || !strings.Contains(table[2], "开机中") ||
+	if strings.Contains(table[2], "mas_3") || !strings.Contains(table[2], "emu-3") || !strings.Contains(table[2], "开机中") ||
 		!strings.Contains(table[2], "正在开机，未初始化，软件渲染") || !strings.Contains(table[2], "4 GB") {
 		t.Errorf("row 1 = %q", table[2])
 	}
@@ -84,11 +84,37 @@ func TestFormatListTable(t *testing.T) {
 	}
 
 	buf.Reset()
-	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`, LocalSDK: true, SDK: `C:\emu-src\sdk-mas35`}})
+	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`, LocalSDK: true, SDK: `C:\sdk-src\sdk-mas35`}})
 	out := buf.String()
-	if !strings.Contains(out, "ModAVD 版本未知") || !strings.Contains(out, `SDK：C:\emu-src\sdk-mas35（mas-avd.json 的 sdkRoot）`) ||
+	if !strings.Contains(out, "ModAVD 版本未知") || !strings.Contains(out, `SDK：C:\sdk-src\sdk-mas35（mas-avd.json 的 sdkRoot）`) ||
 		!strings.Contains(out, "还没有实例") {
 		t.Errorf("empty list = %q", out)
+	}
+}
+
+// TestFormatCreating: an instance being created reads 新建中 with its percentage (not "creating", not 未初始化);
+// a failed one 新建失败.
+func TestFormatCreating(t *testing.T) {
+	a := sampleInstance(6)
+	a.Status, a.Busy, a.Running, a.Booted, a.Creation, a.CreationProgress = emu.StatusCreating, "creating", true, true, "creating", 35
+	b := sampleInstance(7)
+	b.Status, b.Creation, b.CreationError = emu.StatusCreateFailed, "failed", "没做完：宿主输入法"
+	var buf bytes.Buffer
+	formatList(&buf, &emu.ListResult{RootInfo: emu.RootInfo{Root: `D:\r`}, Instances: []emu.InstanceInfo{a, b}})
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	rows := lines[len(lines)-2:]
+	if !strings.Contains(rows[0], "新建中 35%") || !strings.Contains(rows[1], "新建失败") {
+		t.Errorf("rows = %q", rows)
+	}
+	for _, bad := range []string{"creating", "create_failed", "未初始化"} {
+		if strings.Contains(buf.String(), bad) {
+			t.Errorf("list shows %q:\n%s", bad, buf.String())
+		}
+	}
+	buf.Reset()
+	formatInfo(&buf, &a)
+	if out := buf.String(); !strings.Contains(out, "状态：新建中 35%\n") || !strings.Contains(out, "首次初始化：还没做完（新建时做）\n") {
+		t.Errorf("info:\n%s", out)
 	}
 }
 
@@ -106,7 +132,7 @@ func TestFormatInfo(t *testing.T) {
 		"状态：运行中（PID 1234，启动于 2026-10-28T15:04:05+01:00，正在关机）\n",
 		"adb 地址：127.0.0.1:20031\n", "序列号：emulator-20030（私有 adb server 上）\n",
 		"端口：控制台 20030，adb 20031，gRPC 20032\n", "截图共享内存：SHM_videmulator20030（已就绪）\n",
-		"内存：6 GB\n", "核数：6\n", "帧率：60\n", "数据盘：64 GB\n", "显示：1280x720，240 dpi\n",
+		"内存：6 GB\n", "核数：6\n", "帧率：60\n", "数据盘：64 GB（指定大小），宿主占用 0.0 GB\n", "显示：1280x720，240 dpi\n",
 		"首次初始化：还没做", "渲染器：SwiftShader 软件渲染", `路径：D:\r\avd\mas_3.avd`,
 	} {
 		if !strings.Contains(out, want) {
@@ -166,7 +192,7 @@ func TestFormatStart(t *testing.T) {
 	want := "实例 3（星铁）已开机：开机 31.2 秒，合计 58.0 秒\n" +
 		"adb 地址：127.0.0.1:20031（私有 adb server 上是 emulator-20030）\n" +
 		"已完成首次初始化\n" +
-		"挂上了客体 Vulkan 修复，zygote 已重启（应用都重新开始）\n" +
+		"挂上了客体库补丁（Vulkan 驱动、ARM 转译层），zygote 已重启（应用都重新开始）\n" +
 		"模拟器日志：D:\\r\\logs\\mas_3-1.log\n" +
 		"警告：idlepoll 没装上\n"
 	if buf.String() != want {
@@ -182,7 +208,7 @@ func TestFormatStart(t *testing.T) {
 	}
 	buf.Reset()
 	formatStart(&buf, &emu.StartResult{Instance: sampleInstance(2), TotalSeconds: 3, SetupPending: true})
-	if !strings.Contains(buf.String(), "\n这次开机的一次性设置（首次初始化、客体 Vulkan 修复）还没做完，再运行一次 modavd start 2 补完\n") {
+	if !strings.Contains(buf.String(), "\n这次开机的一次性设置（首次初始化、客体库补丁）还没做完，再运行一次 modavd start 2 补完\n") {
 		t.Errorf("setup pending: %q", buf.String())
 	}
 }
@@ -191,18 +217,20 @@ func TestFormatStart(t *testing.T) {
 func TestStartHelpTellsWhatCancelDoes(t *testing.T) {
 	start := entryOf(findCommand("start"))
 	for _, s := range []string{"Ctrl+C", "--timeout 到点", "模拟器不会被结束，会接着开机", "再运行一次 start 会接管它",
-		"首次初始化和客体 Vulkan 修复"} {
+		"首次初始化和客体库补丁"} {
 		if !strings.Contains(start.Details, s) {
 			t.Errorf("start details lack %q: %s", s, start.Details)
 		}
 	}
-	if opt := start.Options[1]; opt.Flag != "--timeout 秒" || !strings.Contains(opt.Help, "模拟器不会被结束") {
+	if opt := start.Options[2]; opt.Flag != "--timeout 秒" || !strings.Contains(opt.Help, "模拟器不会被结束") {
 		t.Errorf("timeout option = %+v", opt)
 	}
-	if d := entryOf(findCommand("restart")).Details; !strings.Contains(d, "等 qemu 进程退出（最多 15 秒") {
-		t.Errorf("restart details: %s", d)
+	// no switch between window and headless while it runs
+	if !strings.Contains(start.Details, "运行中不能换") || !strings.Contains(start.Details, "要换先 stop 再 start") ||
+		!strings.Contains(start.Usage, "[--window | --headless]") {
+		t.Errorf("start help on the window: %+v", start)
 	}
-	if d := entryOf(findCommand("stop")).Details; !strings.Contains(d, "按进程表找出") {
+	if d := entryOf(findCommand("stop")).Details; !strings.Contains(d, "所有运行中或新建中的实例（包括两次开机之间）") {
 		t.Errorf("stop details: %s", d)
 	}
 }
@@ -294,7 +322,7 @@ func TestFormatUpdateAndOthers(t *testing.T) {
 	in := sampleInstance(4)
 	in.Title = "方舟"
 	formatCreate(&buf, &in)
-	if !strings.HasPrefix(buf.String(), "已创建实例 4（方舟）：内存 6 GB，6 核，60 帧，数据盘 64 GB\n") {
+	if !strings.HasPrefix(buf.String(), "已创建实例 4（方舟）：内存 6 GB，6 核，60 帧，数据盘 64 GB（指定大小）\n") {
 		t.Errorf("create: %q", buf.String())
 	}
 }
@@ -309,6 +337,22 @@ func TestErrorOutput(t *testing.T) {
 	writeHumanError(&buf, errs.New(errs.Busy, "忙"))
 	if buf.String() != "错误：忙\n" {
 		t.Errorf("no advice: %q", buf.String())
+	}
+
+	// a failed boot's guest state (ModAVD/ModAVD#79), named by the start inside create's wrapper: the last line, and
+	// error.details in JSON (absent without details, see below)
+	diag := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_6-20261104-100000-bootfail`), "实例 6 新建后的初始化 20 分钟没做完")
+	buf.Reset()
+	writeHumanError(&buf, diag)
+	if buf.String() != "错误：实例 6 新建后的初始化 20 分钟没做完\n开机失败时的客体现场：D:\\r\\logs\\mas_6-20261104-100000-bootfail\n" {
+		t.Errorf("human with details: %q", buf.String())
+	}
+	buf.Reset()
+	writeJSONLine(&buf, errEnvelope{Error: errorInfo(diag)})
+	if want := `{"ok":false,"error":{"code":"timeout","message":"实例 6 新建后的初始化 20 分钟没做完",` +
+		`"details":{"boot_diag_dir":"D:\\r\\logs\\mas_6-20261104-100000-bootfail"}}}` + "\n"; buf.String() != want {
+		t.Errorf("json with details:\n%s\nwant\n%s", buf.String(), want)
 	}
 
 	buf.Reset()

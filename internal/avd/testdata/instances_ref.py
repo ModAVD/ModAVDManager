@@ -2,8 +2,10 @@
 # app/utils/common/emulator2/avd/instances.py (and the parts of constants.py, components.py and manager.py it uses)
 # so it runs without the app package. Keep it a copy: when AUTO-MAS changes, copy again.
 #
-# The only change: create_instance_files takes created_at instead of calling datetime.now(), so the output can be
-# compared byte for byte.
+# Intentional differences: created_at is injected for byte comparisons. ModAVD#100
+# defaults new instances to 1080p and preserves either preset on existing instances. ModAVD#180 takes any
+# frame rate in 1–60 instead of 30 / 60. ModAVD#153: no data partition size given is 自动扩盘 (256 GB,
+# dataDiskMode "auto"); a given size is dataDiskMode "manual".
 #
 #   python -I instances_ref.py <job.json> <out.json>
 #
@@ -29,14 +31,14 @@ AVD_NAME_PREFIX = "mas_"
 AVD_DIR = "avd"
 METADATA_FILE = "mas-avd.json"
 SYSTEM_IMAGE_SYSDIR = "system-images\\android-34\\google_apis\\x86_64\\"
-MEMORY_CHOICES_MB = (3072, 4096, 5120, 6144)
+MEMORY_CHOICES_MB = (3072, 4096, 5120, 6144, 8192)  # 8192: added in ModAVDManager, not in AUTO-MAS
 CPU_CHOICES = (2, 4, 6)
 DEFAULT_MEMORY_MB = 6144
 DEFAULT_CPU = 6
-DEFAULT_DATA_PARTITION_GB = 64
+DEFAULT_DATA_PARTITION_GB = 256
 DATA_PARTITION_RANGE_GB = (16, 512)
-SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1280, 720, 240
-FPS_CHOICES = (30, 60)
+SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DENSITY = 1920, 1080, 280
+FPS_RANGE = (1, 60)
 DEFAULT_FPS = 60
 
 
@@ -283,14 +285,17 @@ def remove_instance_meta(root, native_index):
 def display_changes(config):
     width = _int_or_none(config.get("hw.lcd.width")) or 0
     height = _int_or_none(config.get("hw.lcd.height")) or 0
-    if height > width:
-        width, height = SCREEN_HEIGHT, SCREEN_WIDTH
+    portrait = height > width
+    if sorted((width, height)) == [1080, 1920]:
+        width, height, density = 1920, 1080, 280
     else:
-        width, height = SCREEN_WIDTH, SCREEN_HEIGHT
+        width, height, density = 1280, 720, 240
+    if portrait:
+        width, height = height, width
     return {
         "hw.lcd.width": str(width),
         "hw.lcd.height": str(height),
-        "hw.lcd.density": str(SCREEN_DENSITY),
+        "hw.lcd.density": str(density),
         "hw.mainKeys": "yes",
     }
 
@@ -325,12 +330,12 @@ def validate_options(memory_mb, cpu, data_partition_gb):
     )
     if memory not in MEMORY_CHOICES_MB:
         raise ValueError(
-            "魔改 AVD 的内存只能选 "
+            "ModAVD 的内存只能选 "
             + " / ".join(f"{value // 1024} GB" for value in MEMORY_CHOICES_MB)
         )
     if cores not in CPU_CHOICES:
         raise ValueError(
-            "魔改 AVD 的 CPU 核数只能选 " + " / ".join(str(v) for v in CPU_CHOICES)
+            "ModAVD 的 CPU 核数只能选 " + " / ".join(str(v) for v in CPU_CHOICES)
         )
     low, high = DATA_PARTITION_RANGE_GB
     if not low <= data_gb <= high:
@@ -340,15 +345,15 @@ def validate_options(memory_mb, cpu, data_partition_gb):
 
 def validate_fps(fps):
     value = DEFAULT_FPS if fps is None else int(fps)
-    if value not in FPS_CHOICES:
-        raise ValueError(
-            "魔改 AVD 的帧率只能选 " + " / ".join(str(v) for v in FPS_CHOICES)
-        )
+    low, high = FPS_RANGE
+    if not low <= value <= high:
+        raise ValueError(f"帧率只能在 {low}–{high} 之间")
     return value
 
 
 def create_instance_files(
-    root, native_index, *, title, memory_mb, cpu, data_partition_gb, fps=DEFAULT_FPS, created_at
+    root, native_index, *, title, memory_mb, cpu, data_partition_gb, fps=DEFAULT_FPS, created_at,
+    data_disk_mode="auto",
 ):
     if not valid_native_index(native_index):
         raise ValueError(f"原生索引 {native_index} 不可用")
@@ -390,6 +395,7 @@ def create_instance_files(
         memoryMb=memory_mb,
         initialized=False,
         createdAt=created_at,
+        dataDiskMode=data_disk_mode,
     )
     return AvdInstance(str(native_index), name, title or name, config)
 
@@ -420,7 +426,7 @@ def create_instance(root, index, title, memory_mb, cpu, data_gb, fps, created_at
     refresh = validate_fps(fps)
     create_instance_files(
         root, int(index), title=title, memory_mb=memory, cpu=cores, data_partition_gb=data, fps=refresh,
-        created_at=created_at,
+        created_at=created_at, data_disk_mode="auto" if data_gb is None else "manual",
     )
     return str(index)
 
@@ -429,7 +435,7 @@ def write_instance_settings(root, idx, changes):
     """AvdManager.write_instance_settings for cpu / memoryMb / fps (no display keys, no expected values)."""
     instance = list_instances(root).get(str(idx))
     if instance is None:
-        raise RuntimeError(f"魔改 AVD 实例 {idx} 不存在")
+        raise RuntimeError(f"ModAVD 实例 {idx} 不存在")
     fps = validate_fps(changes["fps"]) if "fps" in changes else None
     memory, cpu, _ = validate_options(
         changes.get("memoryMb", memory_for(instance_meta(root, idx))),

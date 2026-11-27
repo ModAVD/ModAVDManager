@@ -137,6 +137,14 @@ func fakeAdbClient(args []string) int {
 		}
 		fmt.Fprintf(os.Stderr, "error: device '%s' not found\n", serial)
 		return 1
+	case "partial-hang": // a command that gives some output, then hangs (RunOptions.Stdout)
+		fmt.Println("first half")
+		time.Sleep(30 * time.Second)
+		return 0
+	case "partial-fail": // some output, a message on stderr, exit code 3
+		fmt.Println("what came")
+		fmt.Fprintln(os.Stderr, "boom")
+		return 3
 	}
 	return 1
 }
@@ -376,6 +384,23 @@ func TestReregisterFakeAdb(t *testing.T) {
 			}
 		default:
 			t.Error("WaitHooks returned before the hook was done")
+		}
+	})
+
+	t.Run("Stdout keeps what came before a timeout or a failure", func(t *testing.T) {
+		var out strings.Builder
+		start := time.Now()
+		res := f.c.Run(ctx, RunOptions{Serial: serial, Timeout: time.Second, Stdout: &out}, "partial-hang")
+		if res.Code != -1 || !strings.Contains(res.Out, "超时") || out.String() != "first half\n" {
+			t.Errorf("hang: %d %q, stdout %q", res.Code, res.Out, out.String())
+		}
+		if d := time.Since(start); d > 10*time.Second {
+			t.Errorf("hang returned after %v", d)
+		}
+		out.Reset()
+		res = f.c.Run(ctx, RunOptions{Serial: serial, Timeout: 10 * time.Second, Stdout: &out}, "partial-fail")
+		if res.Code != 3 || res.Out != "boom" || res.Stderr != "boom" || out.String() != "what came\n" {
+			t.Errorf("fail: %d %q %q, stdout %q", res.Code, res.Out, res.Stderr, out.String())
 		}
 	})
 

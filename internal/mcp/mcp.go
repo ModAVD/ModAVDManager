@@ -1,5 +1,3 @@
-//go:build windows
-
 // Package mcp is the Model Context Protocol server of modavd (`modavd mcp`): JSON-RPC 2.0 over stdio, one tool per
 // basic operation of emu.Manager.
 //
@@ -18,7 +16,8 @@
 //
 // Shutdown, at EOF on in or when ctx ends: nothing more is written, and every call is canceled (start / stop just stop
 // waiting) except the tools that write files without stopping half way (create / update / delete_instance,
-// install_apk). The process exits right after Serve returns, so those get up to shutdownWait (30 s) to finish first:
+// install_apk, compact_disk, set_app_proxy). The process exits right after Serve returns, so those get up to
+// shutdownWait (30 s) to finish first:
 // an avd.Delete cut in the middle leaves an instance directory without config.ini that modavd no longer lists nor
 // deletes, an update cut between config.ini and mas-avd.json leaves the two out of step. Within the same bound Serve
 // waits for the canceled calls to return and for their managers' background work (backend.Wait, at most hookWait each
@@ -64,7 +63,8 @@ var instructions = fmt.Sprintf("Manages the ModAVD (patched Android Emulator) in
 	"is fixed by the server's --root; instances are numbered 0-%d except %d. Always shut instances down with "+
 	"stop_instance, which syncs the guest disk first: never kill emulator or qemu processes, that loses recently "+
 	"written game data. start_instance can take minutes and reports progress; delete_instance permanently removes "+
-	"an instance with all its game data.", root.MaxIndex, root.ReservedIndex)
+	"an instance with all its game data. disk_info shows how big an instance's data disk is; trim_disk requests "+
+	"reclamation in a running instance without waiting for guest completion; compact_disk shrinks the file of a stopped one.", root.MaxIndex, root.ReservedIndex)
 
 // progressEvery throttles progress notifications that do not complete a step.
 const progressEvery = time.Second
@@ -673,6 +673,9 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 		return nil, b, err
 	}
 	data, err := encodeJSON(v)
+	if err == nil {
+		data, err = diagnosticToolResult(t.Name, data)
+	}
 	if err != nil {
 		return nil, b, errs.Wrap(errs.Internal, err, "工具结果无法编码成 JSON")
 	}
@@ -682,9 +685,19 @@ func (s *server) execTool(c *call, t *toolDef, a args) (json.RawMessage, backend
 	return data, b, nil
 }
 
-// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code.
+// errorText is the text of an isError result: the Chinese message and advice, then the machine-readable code,
+// the diagnostic directory and error.details as one JSON object of string values.
 func errorText(e *errs.Error) string {
-	return e.Error() + "\n错误码: " + e.Code
+	text := e.Error() + "\n错误码: " + e.Code
+	details := errs.DetailsOf(e)
+	if dir := details[errs.BootDiagDir]; dir != "" {
+		text += "\n开机失败时的客体现场: " + dir
+	}
+	if len(details) > 0 {
+		data, _ := json.Marshal(details) // map[string]string always encodes
+		text += "\nerror.details: " + string(data)
+	}
+	return text
 }
 
 // progressFunc forwards emu.Progress as notifications/progress. Values must strictly increase: a new step jumps

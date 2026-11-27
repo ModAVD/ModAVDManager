@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 import (
@@ -21,12 +19,10 @@ import (
 // The host input method org.modavd.ime: the guest half of the emulator's modavd_ime channel; what the user types
 // with a Windows IME in the emulator window reaches the app through it. It has no input view and leaves key events
 // alone, so `adb shell input`, maatouch and MaaFW input reach the app as before. Same constants as AUTO-MAS HOST_IME*
-// and the launcher tools/launcher/avd-p0.ps1.
+// and the launcher's embedded setup script.
 const (
-	hostImePackage = "org.modavd.ime"
+	hostImePackage = root.HostImePackage
 	hostImeID      = "org.modavd.ime/.HostImeService"
-	// the emulator has the modavd_ime channel from mas-35 on
-	hostImeMinBuild = 35
 	// The guest marker: this /data has decided whether the host IME becomes the default; the default is not touched
 	// again afterwards. Shared with the launcher and AUTO-MAS: another name and they would take the default back
 	// and forth.
@@ -36,6 +32,9 @@ const (
 	hostImeWaitTimeout = 20 * time.Second
 	uninstallTimeout   = 60 * time.Second
 )
+
+// hostImeMinBuild: the emulator has the modavd_ime channel from mas-35 (0.35.0) on.
+var hostImeMinBuild = root.EmuBuild{Minor: 35}
 
 // hostImeStockDefaults: the image's own keyboards (Gboard, AOSP LatinIME) and unset. Only while the default is one of
 // these (and nothing was decided yet) does it become the host IME.
@@ -198,21 +197,27 @@ func (p hostImePlan) commands() []string {
 	return cmds
 }
 
-// hostImeChannel: the emulator has the modavd_ime channel. AUTO-MAS checks the build (mas-35+); the launcher checks
-// the emulator log of the boot it started. Either is enough (a dev SDK's build id may be anything). why says what
+// hostImeChannel verifies the modavd_ime channel. Windows accepts the 0.35.0+
+// build contract or the current boot's registration log. Other hosts require
+// that registration in the verified current emulator boot's log. why says what
 // is missing.
 func (m *Manager) hostImeChannel(launched bool, logPath string) (ok bool, why string) {
-	build, known := m.Root.ModBuild()
-	if known && build >= hostImeMinBuild {
+	build, known := m.Root.EmulatorBuild()
+	// The build-number contract describes the Windows core. Other hosts need
+	// the registration message from the boot being configured.
+	if root.CurrentPlatform().Windows() && build.AtLeast(hostImeMinBuild) {
 		return true, ""
 	}
 	if launched && fileContains(logPath, hostImeChannelLine) {
 		return true, ""
 	}
-	if known {
-		return false, fmt.Sprintf("内测包 mas-%d 低于 mas-%d", build, hostImeMinBuild)
+	if !root.CurrentPlatform().Windows() {
+		return false, "当前开机日志没有 modavd_ime 通道注册记录"
 	}
-	return false, fmt.Sprintf("读不到内测包编号（要 mas-%d 起），模拟器日志里也没有 modavd_ime 通道", hostImeMinBuild)
+	if known {
+		return false, fmt.Sprintf("内测包 %s 低于 %s", build.VersionText(), hostImeMinBuild.VersionText())
+	}
+	return false, fmt.Sprintf("读不到内测包编号（要 %s 起），模拟器日志里也没有 modavd_ime 通道", hostImeMinBuild.VersionText())
 }
 
 // guestIO is how the IME step reaches the guest: `adb shell <command>` and other adb commands of one instance. The
@@ -226,7 +231,8 @@ func (m *Manager) guestIO(ctx context.Context, i int) guestIO {
 	return guestIO{
 		shell: func(command string, timeout time.Duration) adb.Result { return m.shell(ctx, i, command, timeout) },
 		adb: func(timeout time.Duration, args ...string) adb.Result {
-			return m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: timeout, Reregister: true}, args...)
+			return m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: timeout, Reregister: true},
+				args...)
 		},
 	}
 }
@@ -385,27 +391,4 @@ func installFailure(res adb.Result) string {
 		return lines[len(lines)-1]
 	}
 	return fmt.Sprintf("退出码 %d", res.Code)
-}
-
-// recheckHostIme runs after the zygote restart of the Vulkan fix: the default was the host IME at the end of the IME
-// step; when it is not any more, set it back (AUTO-MAS _recheck_host_ime; the launcher only reports it).
-func (m *Manager) recheckHostIme(i int, g guestIO) {
-	current, ok := defaultImeFrom(g.shell(hostImeReadDefault, 0).Out)
-	if ok && current == hostImeID {
-		return
-	}
-	if !ok {
-		m.Log.Warnf("实例 %d 宿主输入法: 重启 zygote 后读不出默认输入法", i)
-		return
-	}
-	restored, rok := defaultImeFrom(g.shell("ime set "+hostImeID+" >/dev/null; "+hostImeReadDefault, 0).Out)
-	if rok && restored == hostImeID {
-		m.Log.Infof("实例 %d 宿主输入法: 重启 zygote 后默认变成了 %s，已设回", i, orText(current, "没设"))
-		return
-	}
-	now := "读不出"
-	if rok {
-		now = orText(restored, "没设")
-	}
-	m.Log.Warnf("实例 %d 宿主输入法: 重启 zygote 后默认变成了 %s，没能设回（现在 %s）", i, orText(current, "没设"), now)
 }

@@ -11,6 +11,7 @@ import (
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 // The reference strings below were printed by AUTO-MAS's own code (manager._shared_prefs_entry over
@@ -125,7 +126,7 @@ func TestPyList(t *testing.T) {
 // TestWriteInitMeta: the first-boot result lands in instances.<i> in AUTO-MAS's key order, other keys and instances
 // untouched, and initialized reads it back with Python truthiness.
 func TestWriteInitMeta(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)

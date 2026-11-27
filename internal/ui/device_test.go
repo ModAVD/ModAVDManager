@@ -5,6 +5,9 @@ package ui
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -21,7 +24,29 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
+
+// TestManagerBackendSerial: the real backend counts the serial of the screenshot from the root's port plan.
+func TestManagerBackendSerial(t *testing.T) {
+	dir := testutil.TempDir(t)
+	meta := `{"portBase": 21000, "adbServerPort": 21099, "scriptAdbServerPort": 21098}`
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := root.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := managerBackend{emu.New(r, nil)}
+	if got := b.Serial(6); got != "emulator-21060" {
+		t.Errorf("Serial(6) = %s", got)
+	}
+	if got := b.RootInfo().PortBase; got != 21000 {
+		t.Errorf("RootInfo().PortBase = %d", got)
+	}
+}
 
 func TestScreenshot(t *testing.T) {
 	h := newHarness(t, nil)
@@ -55,6 +80,13 @@ func TestScreenshot(t *testing.T) {
 	if n := h.f.adbCalls.Load(); n != 1 {
 		t.Fatalf("%d captures for five concurrent requests", n)
 	}
+	// the serial is the root's (portBase 21000 in the fake), never counted from 20000 here
+	h.f.mu.Lock()
+	serials := append([]string(nil), h.f.shotSerials...)
+	h.f.mu.Unlock()
+	if len(serials) != 1 || serials[0] != "emulator-21030" {
+		t.Fatalf("captured serials %q", serials)
+	}
 	// a capture younger than 300 ms is served again
 	expect(t, h.do("GET", "/api/instances/3/screenshot", nil), 200, nil)
 	if n := h.f.adbCalls.Load(); n != 1 {
@@ -82,9 +114,19 @@ func TestScreenshot(t *testing.T) {
 	expectError(t, h.do("GET", "/api/instances/8/screenshot", nil), http.StatusNotFound, errs.NotFound)
 }
 
+func displayPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
 func TestInputValidation(t *testing.T) {
 	h := newHarness(t, nil)
 	h.f.put(3, emu.StatusOnline)
+	h.f.shot = adb.Result{Code: 0, Stdout: displayPNG(t, 1280, 720)}
 
 	ok := map[string]string{
 		`{"type":"tap","x":100,"y":200}`:      "input tap 100 200",
@@ -199,7 +241,7 @@ func TestLogTail(t *testing.T) {
 }
 
 func TestTailLinesLimits(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	p := filepath.Join(dir, "big.log")
 	var b bytes.Buffer
 	// ~180-byte lines: 1 MB holds fewer than maxLogLines of them, so the byte cap is what cuts
@@ -255,6 +297,23 @@ func TestOpenFolders(t *testing.T) {
 	}
 }
 
+func TestOpenFolderHostErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"ordinary", errors.New("test open failed"), http.StatusInternalServerError, errs.Internal},
+		{"unsupported", errs.New(errs.Unsupported, "test open unsupported"), http.StatusUnprocessableEntity, errs.Unsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(opt *Options) { opt.openPath = func(string) error { return tc.err } })
+			expectError(t, h.do("POST", "/api/open", `{"what":"root"}`), tc.status, tc.code)
+		})
+	}
+}
+
 func multipartBody(t *testing.T, field, name, content string) ([]byte, string) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -270,7 +329,7 @@ func multipartBody(t *testing.T, field, name, content string) ([]byte, string) {
 }
 
 func TestInstallUpload(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := testutil.TempDir(t)
 	t.Setenv("TMP", tmp)
 	t.Setenv("TEMP", tmp)
 	h := newHarness(t, nil)
@@ -344,5 +403,33 @@ func TestCheckCached(t *testing.T) {
 	expect(t, h.do("GET", "/api/check?refresh=1", nil), 200, &res)
 	if n := h.f.checks.Load(); n != 2 {
 		t.Fatalf("refresh=1 did not check again (%d)", n)
+	}
+}
+
+// Next-boot settings must neither scale nor reject taps in the still-running guest.
+func TestInputUsesLiveDisplayAfterPresetChange(t *testing.T) {
+	for _, dimensions := range [][2]int{{1920, 1080}, {1280, 720}, {1080, 1920}, {720, 1280}} {
+		t.Run(fmt.Sprint(dimensions), func(t *testing.T) {
+			h := newHarness(t, nil)
+			h.f.put(3, emu.StatusOnline)
+			h.f.mu.Lock()
+			in := h.f.instances[3]
+			in.Config.Width, in.Config.Height = 720, 1280
+			if dimensions[0] <= 1280 && dimensions[1] <= 1280 {
+				in.Config.Width, in.Config.Height = 1920, 1080
+			}
+			h.f.instances[3] = in
+			h.f.shot = adb.Result{Code: 0, Stdout: displayPNG(t, dimensions[0], dimensions[1])}
+			h.f.mu.Unlock()
+			x, y := dimensions[0]-1, dimensions[1]-1
+			expect(t, h.do("POST", "/api/instances/3/input", fmt.Sprintf(`{"type":"tap","x":%d,"y":%d}`, x, y)), 200, nil)
+			h.f.mu.Lock()
+			got := h.f.shells[len(h.f.shells)-1]
+			h.f.mu.Unlock()
+			if want := fmt.Sprintf("input tap %d %d", x, y); got != want {
+				t.Fatalf("%s, want %s", got, want)
+			}
+			expectError(t, h.do("POST", "/api/instances/3/input", fmt.Sprintf(`{"type":"tap","x":%d,"y":0}`, dimensions[0])), 400, errs.InvalidArgument)
+		})
 	}
 }

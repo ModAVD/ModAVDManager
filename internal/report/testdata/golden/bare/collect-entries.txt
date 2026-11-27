@@ -1,0 +1,3 @@
+summary.txt
+crash/emu-crash-37.2.12-mas.db/new.dmp
+mas-avd.json

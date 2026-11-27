@@ -3,7 +3,8 @@
 // The on-disk contract is shared with AUTO-MAS (app/utils/common/emulator2/avd/{constants,components}.py), which
 // manages the same roots today. Every rule here must stay identical to it, or the two would disagree about the
 // same instance: index 0-9 without 5, ports 20000 + 10*i (+1 adb, +2 gRPC), private adb server 20050, mas-avd.json
-// read with a BOM allowed and written atomically without one.
+// read with a BOM allowed and written atomically without one. The one addition is mas-avd.json's portBase (a
+// development root's own port plan), which AUTO-MAS does not read: a root that sets it is not one for AUTO-MAS.
 //
 //	<root>\
 //	  sdk\emulator\emulator.exe        ModAVD's own emulator (the package)
@@ -65,51 +66,172 @@ var NoLocalScanEnv = map[string]string{"ADB_LOCAL_TRANSPORT_MAX_PORT": "5554"}
 
 func ValidIndex(i int) bool { return i >= 0 && i <= MaxIndex && i != ReservedIndex }
 
-func ConsolePort(i int) int { return PortBase + PortStep*i }
-func AdbPort(i int) int     { return ConsolePort(i) + 1 }
-func GrpcPort(i int) int    { return ConsolePort(i) + 2 }
-func AvdName(i int) string  { return AvdNamePrefix + strconv.Itoa(i) }
-func Serial(i int) string   { return "emulator-" + strconv.Itoa(ConsolePort(i)) }
+func AvdName(i int) string { return AvdNamePrefix + strconv.Itoa(i) }
 
-// IndexOfConsolePort maps 20000 + 10*i back to i; ok=false for any other port.
-func IndexOfConsolePort(port int) (int, bool) {
-	if port < PortBase || (port-PortBase)%PortStep != 0 {
+// The ports of an instance depend on its root (portBase): ask the root, r.Ports().Console(i) and so on. There is
+// deliberately no package-level ConsolePort / Serial, so that nothing silently counts from 20000.
+
+// ---- a root's own port plan (ModAVD/ModAVD#75)--------------------------------------------------------------------
+
+// MetadataPortBase is the mas-avd.json key of a root's own port plan. Development and test roots set it, so that their
+// instances never take the ports of the production root's instance of the same number: AUTO-MAS tells instances
+// apart by port and would take one for the other. AUTO-MAS does not read it (its PORT_BASE is a constant), so a root
+// that sets it is not one to add to AUTO-MAS.
+const MetadataPortBase = "portBase"
+
+const (
+	// DefaultPortBase is the plan of every root without portBase: AUTO-MAS's PORT_BASE.
+	DefaultPortBase = PortBase
+	// A portBase other than DefaultPortBase is a multiple of 100 in minPortBase-maxPortBase: each plan then has a
+	// segment of 100 ports of its own (it uses 93 of them), which never overlaps DefaultPortBase's 20000-20099, and
+	// stays above the privileged ports and below Windows' default ephemeral range, 49152-65535.
+	// The 5500 segment is excluded too: adb scans emulator ports 5555-5585 by default.
+	minPortBase = 1100
+	maxPortBase = 49000
+	// Previously accepted plans remain readable for status and shutdown, but CheckPorts blocks new starts.
+	legacyMaxPortBase = 65400
+)
+
+// PortPlan is the ports of a root's instances: console Base + PortStep*i, adb +1, gRPC +2. The emulator names its
+// screenshot shared memory after the console port (SHM_videmulator<console>), so that follows too.
+type PortPlan struct{ Base int }
+
+func (p PortPlan) Console(i int) int   { return p.Base + PortStep*i }
+func (p PortPlan) Adb(i int) int       { return p.Console(i) + 1 }
+func (p PortPlan) Grpc(i int) int      { return p.Console(i) + 2 }
+func (p PortPlan) Serial(i int) string { return "emulator-" + strconv.Itoa(p.Console(i)) }
+
+// Last is the highest port of the plan: the gRPC port of MaxIndex.
+func (p PortPlan) Last() int { return p.Grpc(MaxIndex) }
+
+// IndexOfConsole maps Base + PortStep*i back to i; ok=false for any other port.
+func (p PortPlan) IndexOfConsole(port int) (int, bool) {
+	if port < p.Base || (port-p.Base)%PortStep != 0 {
 		return 0, false
 	}
-	i := (port - PortBase) / PortStep
+	i := (port - p.Base) / PortStep
 	return i, i <= MaxIndex
 }
 
-// InstancePorts is every console / adb / gRPC port of every valid index; configured server ports must avoid them.
-func InstancePorts() map[int]bool {
+// InstancePorts is every console / adb / gRPC port of every valid index. Index 5 stays out of every plan, as in
+// AUTO-MAS's, although outside the default plan its ports no longer meet the default private adb server.
+func (p PortPlan) InstancePorts() map[int]bool {
 	ports := map[int]bool{}
 	for i := 0; i <= MaxIndex; i++ {
 		if ValidIndex(i) {
-			c := ConsolePort(i)
+			c := p.Console(i)
 			ports[c], ports[c+1], ports[c+2] = true, true, true
 		}
 	}
 	return ports
 }
 
+// Ports is the root's port plan: mas-avd.json's portBase when parseable, else DefaultPortBase. Read each time, like
+// AdbServerPort: change portBase only while none of the root's instances runs. An invalid portBase reads as
+// DefaultPortBase, so that status still finds what runs (an instance is matched by its AVD directory, never by its
+// ports alone); CheckPorts keeps anything from being started with it. Previously accepted 5500 / 49100-65400
+// plans retain their ports for status and shutdown while CheckPorts reports how to migrate them.
+func (r *Root) Ports() PortPlan {
+	p, _ := portPlan(r.runtimeMetadata())
+	return p
+}
+
+// PortPlanOf is Ports for a mas-avd.json read already (o nil: none), for the reports, which read the file themselves;
+// problem says why portBase is not valid ("" when it is, or is not there).
+func PortPlanOf(o *jsonord.Obj) (plan PortPlan, problem string) { return portPlan(o) }
+
+// CheckPorts is nil when instances of this root may be started, else an errs.InvalidArgument error saying what to fix
+// in mas-avd.json:
+//   - portBase is there but not valid (DefaultPortBase, or a multiple of 100 in minPortBase-maxPortBase);
+//   - portBase moves the instances off the default plan while the private or the script adb server is still on a
+//     default port (20050, 20049), or on a port of the default plan's instances: those are the production root's, and
+//     the point of a plan of one's own is to share nothing with it.
+func (r *Root) CheckPorts() *errs.Error {
+	return r.checkPorts(false)
+}
+
+// CheckAdbPorts keeps private adb operations available on previously accepted plans, so existing instances can
+// still report their state and sync before shutdown. It retains all server-port isolation checks.
+func (r *Root) CheckAdbPorts() *errs.Error {
+	return r.checkPorts(true)
+}
+
+func (r *Root) checkPorts(allowLegacy bool) *errs.Error {
+	o := r.runtimeMetadata()
+	p, problem := portPlan(o)
+	legacy := p.Base == 5500 || p.Base > maxPortBase
+	if problem != "" && !(allowLegacy && legacy) {
+		return errs.New(errs.InvalidArgument, problem).WithAdvice(fmt.Sprintf(
+			"先关掉这个根目录的所有实例，再把 portBase 改成 %d（默认值），或者 %d–%d 之间 100 的整数倍，避开 5500（开发和测试用的根目录用 21000）；原配置仍可查状态和关机",
+			DefaultPortBase, minPortBase, maxPortBase))
+	}
+	if p.Base == DefaultPortBase {
+		return nil
+	}
+	production := PortPlan{DefaultPortBase}.InstancePorts()
+	for _, s := range []struct {
+		key  string
+		port int
+	}{{"adbServerPort", adbServerPort(o)}, {"scriptAdbServerPort", scriptAdbServerPort(o)}} {
+		if s.port == DefaultAdbServerPort || s.port == DefaultScriptAdbServerPort || production[s.port] {
+			return errs.Newf(errs.InvalidArgument,
+				"mas-avd.json 设了 %s %d（开发、测试用的端口段），%s 却是 %d：默认的根目录（生产）也用这个端口",
+				MetadataPortBase, p.Base, s.key, s.port).WithAdvice(fmt.Sprintf(
+				"在 mas-avd.json 里把 adbServerPort 和 scriptAdbServerPort 都设成别的端口：不是 %d、%d，也不在 %d–%d 的实例端口上",
+				DefaultAdbServerPort, DefaultScriptAdbServerPort, DefaultPortBase, PortPlan{DefaultPortBase}.Last()))
+		}
+	}
+	return nil
+}
+
+// portPlan reads portBase as Python's int() ("21000" and 21000.0 count too). Malformed plans fall back to the
+// default; previously accepted plans retain their actual ports, with a problem blocking new starts.
+func portPlan(o *jsonord.Obj) (PortPlan, string) {
+	if !o.Has(MetadataPortBase) {
+		return PortPlan{DefaultPortBase}, ""
+	}
+	v := o.Get(MetadataPortBase)
+	if b, ok := pyIntOfValue(v); ok && b%100 == 0 && b >= minPortBase && b <= legacyMaxPortBase {
+		if b == 5500 {
+			return PortPlan{int(b)}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：5500 段会落进 adb 默认扫描的 5555–5585，别的 adb server 可能连上本目录的实例", MetadataPortBase, jsonOneLine(v))
+		}
+		if b > maxPortBase {
+			return PortPlan{int(b)}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：这个段会落进 Windows 默认临时端口 49152–65535，可能被别的程序占用", MetadataPortBase, jsonOneLine(v))
+		}
+		return PortPlan{int(b)}, ""
+	}
+	return PortPlan{DefaultPortBase}, fmt.Sprintf("mas-avd.json 的 %s 不合规（%s）：要 %d，或者 %d–%d 之间 100 的整数倍，避开 5500",
+		MetadataPortBase, jsonOneLine(v), DefaultPortBase, minPortBase, maxPortBase)
+}
+
+var jsonBreak = regexp.MustCompile(`\r?\n\s*`)
+
+// jsonOneLine is v as mas-avd.json would hold it, on one line (for messages): a string never holds a raw line break.
+func jsonOneLine(v *jsonord.Value) string {
+	return jsonBreak.ReplaceAllString(string(v.MarshalPython()), "")
+}
+
 // ---- layout ------------------------------------------------------------------------------------------------------
 
+// SystemImageDir retains the Windows/AUTO-MAS layout; other hosts use Platform.SystemImageDir.
 const (
-	SDKDir          = "sdk"
-	AvdDir          = "avd"
-	ComponentsDir   = "components"
-	MetadataFile    = "mas-avd.json"
-	LogsDir         = "logs"
-	ShaderCacheDir  = "shader-cache"
-	GuestPatchDir   = "guest-patches"
-	ManifestFile    = "modavd-manifest.json"
-	SystemImageDir  = `system-images\android-34\google_apis\x86_64`
-	LauncherAPKName = "de.jrpie.android.launcher_57.apk"
-	ImeAPKName      = "modavd-ime.apk"
+	SDKDir              = "sdk"
+	AvdDir              = "avd"
+	ComponentsDir       = "components"
+	MetadataFile        = "mas-avd.json"
+	LogsDir             = "logs"
+	ShaderCacheDir      = "shader-cache"
+	GuestPatchDir       = "guest-patches"
+	ManifestFile        = "modavd-manifest.json"
+	SystemImageDir      = `system-images\android-34\google_apis\x86_64`
+	MacOSSystemImageDir = "system-images/android-35/google_apis/arm64-v8a"
+	LauncherAPKName     = "de.jrpie.android.launcher_57.apk"
+	ImeAPKName          = "modavd-ime.apk"
 )
 
-// MinModBuild: emulators whose Pkg.BuildId is below mas-<this> refuse to boot (AUTO-MAS MIN_MOD_AVD_BUILD).
-const MinModBuild = 25
+// MinEmulatorBuild: emulators whose Pkg.BuildId is below this refuse to boot (AUTO-MAS MIN_MOD_AVD_BUILD, mas-25; a
+// legacy mas-N compares as 0.N.0, see EmuBuild).
+var MinEmulatorBuild = EmuBuild{Minor: 25}
 
 // SelfBuiltMark is a qemu property only our build has (sdk-mas19+); scanned for in qemu-system-x86_64-headless.exe.
 const SelfBuiltMark = "free-page-reporting"
@@ -119,12 +241,14 @@ const EnvRoot = "MODAVD_ROOT"
 
 // Root is one ModAVD root. Dir is absolute and cleaned.
 type Root struct {
-	Dir string
+	Dir     string
+	runtime *jsonord.Obj // immutable SDK/port keys only; metadata and instance state remain live
 }
 
 // Resolve picks the root: the --root flag when given, else env MODAVD_ROOT, else the directory this executable
 // sits in or its parent, whichever looks like a root (has sdk\ or mas-avd.json; the package puts modavd.exe in
-// <root>\tools). The directory must exist. Error code: NotFound / Usage.
+// <root>\tools). A macOS .app also checks the directory containing the bundle.
+// The directory must exist. Error code: NotFound / Usage.
 func Resolve(flag string) (*Root, error) {
 	exe, _ := os.Executable()
 	return resolve(flag, os.Getenv(EnvRoot), exe)
@@ -132,22 +256,25 @@ func Resolve(flag string) (*Root, error) {
 
 func resolve(flag, env, exe string) (*Root, error) {
 	if s := cleanArg(flag); s != "" {
-		return openDir(s, "--root 指定的")
+		return openDir(s, "--root 指定的 ")
 	}
 	if s := cleanArg(env); s != "" {
-		return openDir(s, "环境变量 "+EnvRoot+" 指定的")
+		return openDir(s, "环境变量 "+EnvRoot+" 指定的 ")
 	}
 	if exe != "" {
-		dir := filepath.Dir(exe)
-		for _, cand := range []string{dir, filepath.Dir(dir)} {
+		for _, cand := range rootCandidates(exe) {
 			if looksLikeRoot(cand) {
 				return openDir(cand, "")
 			}
 		}
 	}
-	return nil, errs.New(errs.Usage, "找不到魔改 AVD 根目录").WithAdvice(
-		"用 --root 指定根目录（里面有 sdk 文件夹和 mas-avd.json），或设置环境变量 " + EnvRoot +
-			"；modavd.exe 放在根目录或根目录的 tools 文件夹里时会自动找到")
+	advice := "用 --root 指定根目录（里面有 sdk 文件夹和 mas-avd.json），或设置环境变量 " + EnvRoot
+	if CurrentPlatform().MirrorOS == "macos" {
+		advice += "；ModAVD.app 放在根目录，或 modavd 放在根目录或 tools 文件夹里时会自动找到"
+	} else {
+		advice += "；modavd.exe 放在根目录或根目录的 tools 文件夹里时会自动找到"
+	}
+	return nil, errs.New(errs.Usage, "找不到 ModAVD 根目录").WithAdvice(advice)
 }
 
 // cleanArg drops surrounding blanks and quotes: `--root "D:\ModAVD\"` reaches us as `D:\ModAVD"` (the backslash
@@ -165,14 +292,14 @@ func looksLikeRoot(dir string) bool {
 func openDir(dir, what string) (*Root, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, errs.Wrap(errs.Usage, err, fmt.Sprintf("%s魔改 AVD 根目录写法不对: %s", what, dir))
+		return nil, errs.Wrap(errs.Usage, err, fmt.Sprintf("%sModAVD 根目录写法不对: %s", what, dir))
 	}
 	fi, err := os.Stat(abs)
 	if err != nil {
-		return nil, errs.Wrap(errs.NotFound, err, fmt.Sprintf("%s魔改 AVD 根目录不存在: %s", what, abs))
+		return nil, errs.Wrap(errs.NotFound, err, fmt.Sprintf("%sModAVD 根目录不存在: %s", what, abs))
 	}
 	if !fi.IsDir() {
-		return nil, errs.Newf(errs.NotFound, "%s魔改 AVD 根目录不是文件夹: %s", what, abs)
+		return nil, errs.Newf(errs.NotFound, "%sModAVD 根目录不是文件夹: %s", what, abs)
 	}
 	return &Root{Dir: abs}, nil
 }
@@ -182,11 +309,11 @@ func New(dir string) (*Root, error) { return openDir(cleanArg(dir), "") }
 
 func (r *Root) SDK() string { return filepath.Join(r.Dir, SDKDir) } // <root>\sdk
 
-// LocalSDKRoot is mas-avd.json's sdkRoot (a dev SDK such as C:\emu-src\sdk-mas35), "" when not set. A relative
+// LocalSDKRoot is mas-avd.json's sdkRoot (a dev SDK such as C:\sdk-src\sdk-mas35), "" when not set. A relative
 // value is taken relative to the root (AUTO-MAS would resolve it against its own working directory, which is
 // never what was meant).
 func (r *Root) LocalSDKRoot() string {
-	s, ok := r.MetadataLoose().Obj().Get("sdkRoot").Str()
+	s, ok := r.runtimeMetadata().Get("sdkRoot").Str()
 	if !ok {
 		return ""
 	}
@@ -207,11 +334,31 @@ func (r *Root) RuntimeSDK() string {
 	return r.SDK()
 }
 
-func (r *Root) EmulatorExe() string { return filepath.Join(r.RuntimeSDK(), "emulator", "emulator.exe") }
-func (r *Root) AdbExe() string      { return filepath.Join(r.RuntimeSDK(), "platform-tools", "adb.exe") }
-func (r *Root) QemuHeadlessExe() string {
-	return filepath.Join(r.RuntimeSDK(), "emulator", "qemu", "windows-x86_64", "qemu-system-x86_64-headless.exe")
+func (r *Root) EmulatorExe() string {
+	return filepath.Join(r.RuntimeSDK(), "emulator", CurrentPlatform().Emulator)
 }
+func (r *Root) AdbExe() string {
+	return filepath.Join(r.RuntimeSDK(), "platform-tools", CurrentPlatform().ADB)
+}
+func (r *Root) QemuHeadlessExe() string {
+	p := CurrentPlatform()
+	return filepath.Join(r.RuntimeSDK(), "emulator", "qemu", p.QemuDir, p.QEMUHeadless)
+}
+
+// QemuImgExe is the SDK's qemu-img (disk info / compact), errs.NotReady when it is not installed.
+func (r *Root) QemuImgExe() (string, error) {
+	name := "qemu-img"
+	if CurrentPlatform().Windows() {
+		name += ".exe"
+	}
+	exe := filepath.Join(r.RuntimeSDK(), "emulator", name)
+	if fi, err := os.Stat(exe); err != nil || fi.IsDir() {
+		return exe, errs.Newf(errs.NotReady, "找不到 qemu-img: %s", exe).
+			WithAdvice("ModAVD 的模拟器组件不完整，请更新组件后再试")
+	}
+	return exe, nil
+}
+
 func (r *Root) AvdHome() string        { return filepath.Join(r.Dir, AvdDir) }
 func (r *Root) LogsDir() string        { return filepath.Join(r.Dir, LogsDir) }
 func (r *Root) ShaderCacheDir() string { return filepath.Join(r.Dir, ShaderCacheDir) }
@@ -282,6 +429,9 @@ func (r *Root) UpdateMetadata(fn func(o *jsonord.Obj) error) error {
 	return r.editMetadata(func(o *jsonord.Obj) (bool, error) { return true, fn(o) })
 }
 
+// EditMetadata is UpdateMetadata where fn also says whether it changed anything: nothing is written when it did not.
+func (r *Root) EditMetadata(fn func(o *jsonord.Obj) (bool, error)) error { return r.editMetadata(fn) }
+
 // editMetadata is UpdateMetadata where fn also says whether it changed anything (no write when not).
 func (r *Root) editMetadata(fn func(o *jsonord.Obj) (bool, error)) error {
 	l, err := r.lockMetadata()
@@ -307,8 +457,8 @@ func (r *Root) lockMetadata() (*fileLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, "mas-avd.json 的锁文件打不开: "+path)
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
-			metadataLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "mas-avd.json 正被另一个 modavd 改写，等了 %.0f 秒仍没改完",
+			metadataLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "metadata"})
 	}
 	return l, nil
 }
@@ -536,8 +686,8 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("实例 %s 的锁文件打不开: %s（%v）", AvdName(i), path, err))
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
-			i, configLockWait.Seconds())
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 正被另一个 modavd 改动（新建、改设置或删除），等了 %.0f 秒仍没改完",
+			i, configLockWait.Seconds()), map[string]string{errs.Reason: "locked", errs.Lock: "config"})
 	}
 	return &InstanceLock{l: l}, nil
 }
@@ -545,13 +695,35 @@ func (r *Root) LockInstanceConfig(i int) (*InstanceLock, error) {
 // AdbServerPort is mas-avd.json adbServerPort when valid (an integer 1024-65535, not 5037, not an instance port),
 // else DefaultAdbServerPort. Same rule as AUTO-MAS adb_server_port.
 func (r *Root) AdbServerPort() int {
-	return adbServerPort(r.MetadataLoose().Obj())
+	return adbServerPort(r.runtimeMetadata())
 }
 
 // ScriptAdbServerPort is mas-avd.json scriptAdbServerPort when valid and different from AdbServerPort, else
 // DefaultScriptAdbServerPort, or FallbackScriptAdbServerPort when that equals the private port.
 func (r *Root) ScriptAdbServerPort() int {
-	o := r.MetadataLoose().Obj()
+	return scriptAdbServerPort(r.runtimeMetadata())
+}
+
+// ShareDefaultAdbServer: also register running instances with the default adb server (port 5037) when one runs, so
+// tools that look there (`adb devices`) find them (ModAVD/ModAVD#196). On unless mas-avd.json has
+// "shareDefaultAdbServer": false.
+func (r *Root) ShareDefaultAdbServer() bool {
+	v := r.runtimeMetadata().Get("shareDefaultAdbServer")
+	if v.Kind() != jsonord.Bool {
+		return true
+	}
+	b, _ := v.BoolVal()
+	return b
+}
+
+func adbServerPort(o *jsonord.Obj) int {
+	if port, ok := metadataPort(o, "adbServerPort"); ok {
+		return port
+	}
+	return DefaultAdbServerPort
+}
+
+func scriptAdbServerPort(o *jsonord.Obj) int {
 	private := adbServerPort(o)
 	if port, ok := metadataPort(o, "scriptAdbServerPort"); ok && port != private {
 		return port
@@ -562,18 +734,14 @@ func (r *Root) ScriptAdbServerPort() int {
 	return FallbackScriptAdbServerPort
 }
 
-func adbServerPort(o *jsonord.Obj) int {
-	if port, ok := metadataPort(o, "adbServerPort"); ok {
-		return port
-	}
-	return DefaultAdbServerPort
-}
-
 // metadataPort is AUTO-MAS _metadata_port: int(raw) (so "20089" and 20089.0 count too), then 1024-65535, not 5037,
-// not an instance port.
+// not a port of the root's instances (its own plan's, see portPlan; AUTO-MAS knows only the default plan).
 func metadataPort(o *jsonord.Obj, key string) (int, bool) {
 	port, ok := pyIntOfValue(o.Get(key))
-	if !ok || port < 1024 || port > 65535 || port == 5037 || InstancePorts()[int(port)] {
+	if !ok || port < 1024 || port > 65535 || port == 5037 {
+		return 0, false
+	}
+	if plan, _ := portPlan(o); plan.InstancePorts()[int(port)] {
 		return 0, false
 	}
 	return int(port), true
@@ -612,37 +780,48 @@ type ComponentStatus struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`         // source.properties Pkg.Revision, "" when not installed
 	Build     string `json:"build,omitempty"` // emulator only: "0.35.0"
-	Installed bool   `json:"installed"`       // emulator: present AND self-built AND build >= MinModBuild
+	Installed bool   `json:"installed"`       // emulator: present AND self-built AND build >= MinEmulatorBuild
 	Optional  bool   `json:"optional"`
 	LocalSDK  bool   `json:"local_sdk"`
 }
 
 // Component names and fixed data (AUTO-MAS constants.py).
+// SystemImageName retains the Windows name; other hosts use Platform.SystemImageName.
 const (
-	PlatformToolsName = "平台工具（adb）"
-	EmulatorName      = "Android 模拟器（emulator）"
-	SystemImageName   = "系统镜像 Android 14 Google APIs x86_64"
-	LauncherName      = "轻量桌面 µLauncher"
-	LauncherVersion   = "0.2.12"
-	LauncherAPKSize   = 4099556
-	ImeName           = "宿主输入法 org.modavd.ime"
+	PlatformToolsName    = "平台工具（adb）"
+	EmulatorName         = "Android 模拟器（emulator）"
+	SystemImageName      = "系统镜像 Android 14 Google APIs x86_64"
+	MacOSSystemImageName = "系统镜像 Android 15 Google APIs arm64-v8a"
+	LauncherName         = "轻量桌面 µLauncher"
+	LauncherVersion      = "0.2.12"
+	LauncherAPKSize      = 4099556
+	ImeName              = "宿主输入法 org.modavd.ime"
 )
+
+// Packages ModAVD itself puts in an instance, in one place so the guest code in emu and report-config (which must not
+// list them as games) cannot drift apart.
+const (
+	LauncherPackage = "de.jrpie.android.launcher" // the light launcher µLauncher
+	HostImePackage  = "org.modavd.ime"            // the host input method
+	// FossifyLauncherPackage: the earlier light launcher; instances created before µLauncher still have it.
+	FossifyLauncherPackage = "org.fossify.home"
+)
+
+// OwnPackages are the packages above: not games.
+var OwnPackages = []string{LauncherPackage, HostImePackage, FossifyLauncherPackage}
 
 // Advice for missing components (AUTO-MAS FETCH_COMPONENTS_ADVICE / PACKAGE_ADVICE; "回来点「检查」" is AUTO-MAS's
 // button, here it is the check command).
 const (
-	FetchComponentsAdvice = "双击魔改 AVD 根目录里的「补全组件.bat」：它会先显示《Android 软件开发套件许可协议》，输入 y 同意后" +
-		"从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），看到「完成」后再运行一次 modavd check"
-	PackageAdvice = "模拟器要用魔改 AVD 的发布包：从 https://github.com/ModAVD/ModAVD/releases 下载 " +
+	FetchComponentsAdvice = "在管理器里点「补全组件」，或运行 tools\\modavd.exe components fetch；它会先显示《Android 软件开发套件许可协议》，输入 y 同意后" +
+		"从官方渠道下载 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），完成后再检查一次"
+	PackageAdvice = "模拟器要用 ModAVD 的发布包：从 https://github.com/ModAVD/ModAVD/releases 下载 " +
 		"ModAVD-<版本>-win-x64.zip，整个解压到这个目录"
 )
 
-// keyFiles: a half-extracted directory exists too, so each component needs these files (AUTO-MAS _KEY_FILES).
-var keyFiles = map[string][]string{
-	"platform-tools": {"adb.exe"},
-	"emulator":       {"emulator.exe", `qemu\windows-x86_64\qemu-system-x86_64.exe`},
-	"system-image":   {"system.img", "vendor.img", "kernel-ranchu", "ramdisk.img"},
-}
+// keyFiles: a half-extracted directory exists too, so the emulator needs these files (AUTO-MAS _KEY_FILES). The
+// Google components' files are in SDKComponents.
+var keyFiles = platformKeyFiles()
 
 func isFile(path string) bool {
 	fi, err := os.Stat(path)
@@ -670,19 +849,25 @@ func readProperties(path string) map[string]string {
 }
 
 // Components lists platform-tools, emulator, system-image (required) and launcher, ime (optional), in that order.
-// Key files: platform-tools adb.exe; emulator emulator.exe + qemu\windows-x86_64\qemu-system-x86_64.exe;
-// system-image system.img, vendor.img, kernel-ranchu, ramdisk.img. Launcher counts when the APK has its exact size
-// 4099556; ime when components\modavd-ime.apk exists.
+// platform-tools and system-image are SDKComponents, installed when Present (on Windows adb.exe; system.img,
+// vendor.img, kernel-ranchu, ramdisk.img); the emulator needs emulator.exe + qemu\windows-x86_64\qemu-system-x86_64.exe.
+// Launcher counts when the APK has its exact size 4099556; ime when components\modavd-ime.apk exists.
 func (r *Root) Components() []ComponentStatus {
 	sdk := r.RuntimeSDK()
 	local := r.LocalSDKRoot() != ""
-	sdkItem := func(id, name, dir string) ComponentStatus {
-		installed := allFiles(dir, keyFiles[id])
+	google := map[string]SDKComponent{}
+	for _, c := range SDKComponents() {
+		google[c.ID] = c
+	}
+	sdkItem := func(id string) ComponentStatus {
+		c := google[id]
+		dir := c.Dir(sdk)
+		installed := c.Present(dir)
 		version := ""
 		if installed {
 			version = readProperties(filepath.Join(dir, "source.properties"))["Pkg.Revision"]
 		}
-		return ComponentStatus{ID: id, Name: name, Version: version, Installed: installed, LocalSDK: local}
+		return ComponentStatus{ID: id, Name: c.Name, Version: version, Installed: installed, LocalSDK: local}
 	}
 	emulator := ComponentStatus{ID: "emulator", Name: EmulatorName, LocalSDK: local}
 	if r.EmulatorPresent() {
@@ -690,17 +875,19 @@ func (r *Root) Components() []ComponentStatus {
 	}
 	if r.EmulatorSelfBuilt() {
 		emulator.Build = r.VersionText()
-		b, ok := r.ModBuild()
-		emulator.Installed = ok && b >= MinModBuild
+		b, _ := r.EmulatorBuild()
+		emulator.Installed = b.AtLeast(MinEmulatorBuild)
+	} else if r.EmulatorPresent() && OfficialEmulatorVersionSupported(emulator.Version) {
+		emulator.Installed = true
 	}
 	launcher := ComponentStatus{ID: "launcher", Name: LauncherName, Version: LauncherVersion, Optional: true}
 	if fi, err := os.Stat(r.LauncherAPK()); err == nil && fi.Size() == LauncherAPKSize {
 		launcher.Installed = true
 	}
 	return []ComponentStatus{
-		sdkItem("platform-tools", PlatformToolsName, filepath.Join(sdk, "platform-tools")),
+		sdkItem("platform-tools"),
 		emulator,
-		sdkItem("system-image", SystemImageName, filepath.Join(sdk, SystemImageDir)),
+		sdkItem("system-image"),
 		launcher,
 		{ID: "ime", Name: ImeName, Installed: isFile(r.ImeAPK()), Optional: true},
 	}
@@ -739,6 +926,12 @@ func (r *Root) MissingError(missing []string) *errs.Error {
 
 func (r *Root) EmulatorPresent() bool {
 	return allFiles(filepath.Join(r.RuntimeSDK(), "emulator"), keyFiles["emulator"])
+}
+
+// OfficialEmulatorVersionSupported is the verified macOS SDK fallback until a
+// native ModAVD package is distributed. Windows keeps requiring the ModAVD build.
+func OfficialEmulatorVersionSupported(version string) bool {
+	return CurrentPlatform().MirrorOS == "macos" && (version == "37.2.13" || version == "37.2.13.0")
 }
 
 // EmulatorSelfBuilt: present and qemu-system-x86_64-headless.exe contains SelfBuiltMark.
@@ -805,14 +998,10 @@ func (r *Root) emulatorProps() map[string]string {
 	return readProperties(filepath.Join(r.RuntimeSDK(), "emulator", "source.properties"))
 }
 
-// ModBuild is N from sdk\emulator\source.properties Pkg.BuildId=mas-N; ok=false when absent or another format.
-func (r *Root) ModBuild() (int, bool) {
-	m := modBuildRe.FindStringSubmatch(PyStrip(r.emulatorProps()["Pkg.BuildId"]))
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	return n, err == nil
+// EmulatorBuild is sdk\emulator\source.properties Pkg.BuildId: legacy mas-N or the version "X.Y.Z" (EmuBuild);
+// ok=false (zero build) when absent or another format.
+func (r *Root) EmulatorBuild() (EmuBuild, bool) {
+	return ParseEmuBuild(r.emulatorProps()["Pkg.BuildId"])
 }
 
 // EmulatorVersion is sdk\emulator\source.properties Pkg.Revision ("37.2.10"), "" when unreadable.
@@ -836,30 +1025,65 @@ func ParseVersion(text string) (major, build, patch int, ok bool) {
 	return 0, 0, 0, false
 }
 
-// manifestVersion is modavd-manifest.json's "version", "" when the file is missing / unreadable / not an object or
-// the value is not a string. Read like readProperties (the updater replaces it).
-func (r *Root) manifestVersion() string {
+// LastCoupledBuild is the last legacy emulator build whose ModAVD version was 0.<build>.<patch> (mas-40 = 0.40.x).
+// Later versions are numbered on their own; the package says its emulator build in modavd-manifest.json's "build".
+const LastCoupledBuild = 40
+
+// manifestInfo is modavd-manifest.json's "version" ("" when missing or not a string) and "build" (ManifestEmuBuild:
+// an integer N for mas-N or a version string; hasBuild=false when missing or anything else); both empty when the file
+// is missing / unreadable / not an object. Read like readProperties (the updater replaces it).
+func (r *Root) manifestInfo() (version string, build EmuBuild, hasBuild bool) {
 	data, err := ReadFileShared(r.ManifestPath())
 	if err != nil {
-		return ""
+		return "", EmuBuild{}, false
 	}
+	data = bytes.TrimPrefix(data, []byte("\xEF\xBB\xBF"))
 	v, err := jsonord.Parse(data)
 	if err != nil {
-		return ""
+		return "", EmuBuild{}, false
 	}
-	s, _ := v.Obj().Get("version").Str()
-	return s
+	o := v.Obj()
+	version, _ = o.Get("version").Str()
+	if n, ok := o.Get("build").Int(); ok {
+		// any integer, as before: one that is not positive matches no emulator
+		return version, LegacyEmuBuild(int(n)), true
+	}
+	build, hasBuild = ManifestEmuBuild(o.Get("build"))
+	return version, build, hasBuild
 }
 
-// VersionText is the ModAVD version for people, "0.35.0": the manifest's version when its build matches ModBuild,
-// else 0.<ModBuild>.0; "" when ModBuild is unknown. Same rule as AUTO-MAS local_version_text.
+// InstalledVersion is the installed package's ModAVD version. It is the manifest's "version" when the manifest
+// belongs to the emulator in sdk\emulator: its "build" is EmulatorBuild in the same form (N for mas-N, or the same
+// "X.Y.Z"), or, for a legacy mas-N, a manifest without "build" (from before the two were separate) whose minor
+// number is N, or EmulatorBuild is unknown. Otherwise (no manifest, or sdk\emulator replaced by hand) it is 0.N.0
+// for a legacy mas-N up to LastCoupledBuild, as those were numbered, and the build itself for an "X.Y.Z" build;
+// else unknown.
+func (r *Root) InstalledVersion() (major, minor, patch int, ok bool) {
+	build, haveBuild := r.EmulatorBuild()
+	text, declared, hasDeclared := r.manifestInfo()
+	if major, minor, patch, ok := ParseVersion(text); ok {
+		n, legacy := build.LegacyNumber()
+		if !haveBuild || (hasDeclared && declared == build) || (!hasDeclared && legacy && minor == n) {
+			return major, minor, patch, true
+		}
+	}
+	if n, legacy := build.LegacyNumber(); legacy && n <= LastCoupledBuild {
+		return 0, n, 0, true
+	}
+	if haveBuild && !build.Legacy {
+		return build.Major, build.Minor, build.Patch, true
+	}
+	return 0, 0, 0, false
+}
+
+// VersionText is the ModAVD version for people, "0.35.0" (InstalledVersion); "" when EmulatorBuild or the version
+// is unknown.
 func (r *Root) VersionText() string {
-	build, ok := r.ModBuild()
-	if !ok {
+	if _, ok := r.EmulatorBuild(); !ok {
 		return ""
 	}
-	if major, b, patch, ok := ParseVersion(r.manifestVersion()); ok && b == build {
-		return fmt.Sprintf("%d.%d.%d", major, b, patch)
+	if major, minor, patch, ok := r.InstalledVersion(); ok {
+		return fmt.Sprintf("%d.%d.%d", major, minor, patch)
 	}
-	return fmt.Sprintf("0.%d.0", build)
+	return ""
 }

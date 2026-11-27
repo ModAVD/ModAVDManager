@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // The test binary doubles as the processes the tests start: TestMain routes these first arguments before any test
@@ -29,6 +30,7 @@ const (
 	modeTree  = "__tree"  // start a __child with StartDetached, print "grandchild=<pid>", sleep 60 s
 	modeExit  = "__exit"  // sleep 300 ms, exit with <code>
 	modeLock  = "__lock"  // TryLock <path>, print "locked=<bool>"
+	modeShm   = "__shm"   // open the named mapping <name>, print "held", sleep 60 s
 )
 
 func TestMain(m *testing.M) {
@@ -62,6 +64,15 @@ func TestMain(m *testing.M) {
 			fmt.Printf("locked=%v err=%v\n", ok, err)
 			l.Unlock()
 			os.Exit(0)
+		case modeShm:
+			p, _ := syscall.UTF16PtrFromString(os.Args[2])
+			if h, _ := call(procOpenFileMappingW, fileMapRead, 0, uintptr(unsafe.Pointer(p))); h == 0 {
+				fmt.Println("missing")
+				os.Exit(1)
+			}
+			fmt.Println("held")
+			time.Sleep(60 * time.Second)
+			os.Exit(0)
 		}
 	}
 	os.Exit(m.Run())
@@ -77,23 +88,18 @@ func testExe(t *testing.T) string {
 }
 
 // workDir is a fresh directory, removed afterwards: under $MODAVD_TEST_TMP\win when that is set (to keep test data on a
-// chosen drive), otherwise t.TempDir().
+// chosen drive), otherwise the default OS temporary directory.
 func workDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
 	base := filepath.Join(env, "win")
 	if err := os.MkdirAll(base, 0o755); err != nil {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
-	d, err := os.MkdirTemp(base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(d) })
-	return d
+	return testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
 }
 
 func waitFor(timeout time.Duration, cond func() bool) bool {
@@ -643,11 +649,17 @@ func TestParseTCPTable(t *testing.T) {
 	buf := make([]byte, 4+3*tcp4RowSize)
 	binary.LittleEndian.PutUint32(buf, 3)
 	row(buf, 4, tcp4State, tcp4Port, tcp4PID, mibTCPStateListen, 20089, 1234)
-	row(buf, 4+tcp4RowSize, tcp4State, tcp4Port, tcp4PID, 5, 20090, 99) // ESTABLISHED: skipped
+	row(buf, 4+tcp4RowSize, tcp4State, tcp4Port, tcp4PID, 5, 20090, 99) // not LISTEN: kept, its state remembered
 	row(buf, 4+2*tcp4RowSize, tcp4State, tcp4Port, tcp4PID, mibTCPStateListen, 5037, 42)
 	if got := parseTCPTable(buf, tcp4RowSize, tcp4State, tcp4Port, tcp4PID); !slices.Equal(got,
-		[]Listener{{20089, 1234}, {5037, 42}}) {
+		[]Listener{{20089, 1234}, {20090, 99}, {5037, 42}}) {
 		t.Errorf("v4 %v", got)
+	}
+	if st, ok := OddListenerState(20090); !ok || st != 5 {
+		t.Errorf("odd state of 20090: %d %v", st, ok)
+	}
+	if _, ok := OddListenerState(20089); ok {
+		t.Error("a LISTEN row remembered as odd")
 	}
 	buf6 := make([]byte, 4+tcp6RowSize)
 	binary.LittleEndian.PutUint32(buf6, 2) // claims 2 rows, holds 1: no overrun
@@ -679,7 +691,68 @@ func TestSharedMemory(t *testing.T) {
 	}
 }
 
-func TestDiskFreeAndMemory(t *testing.T) {
+// ModAVD#210: the program that keeps a screenshot region alive after its emulator exited.
+func TestSharedMemoryHolders(t *testing.T) {
+	name := fmt.Sprintf("SHM_videmulator_modavd_holders_%d", os.Getpid())
+	if got, err := SharedMemoryHolders(name); got != nil || err != nil {
+		t.Fatalf("absent mapping: %v %v", got, err)
+	}
+	p, _ := syscall.UTF16PtrFromString(name)
+	h, err := syscall.CreateFileMapping(syscall.InvalidHandle, nil, syscall.PAGE_READWRITE, 0, 4096, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// only this process: it does not count itself
+	if got, err := SharedMemoryHolders(name); got != nil || err != nil {
+		t.Fatalf("own mapping: %v %v", got, err)
+	}
+	cmd := exec.Command(testExe(t), modeShm, name)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	line := make([]byte, 16)
+	if n, _ := out.Read(line); !strings.HasPrefix(string(line[:n]), "held") {
+		t.Fatalf("helper: %q", line[:n])
+	}
+	// the creator lets go: the helper alone keeps the region alive, as the stale reader did
+	syscall.CloseHandle(h)
+	got, err := SharedMemoryHolders(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].PID != uint32(cmd.Process.Pid) || !strings.EqualFold(got[0].Name, filepath.Base(testExe(t))) {
+		t.Fatalf("holders %+v, want pid %d", got, cmd.Process.Pid)
+	}
+	// an unrelated section of the same process is not a match
+	other := name + "_other"
+	if got, _ := SharedMemoryHolders(other); got != nil {
+		t.Fatalf("absent other: %v", got)
+	}
+}
+
+func TestParseHandleTable(t *testing.T) {
+	buf := make([]byte, handleTableHeader+handleEntrySize)
+	*(*uintptr)(unsafe.Pointer(&buf[0])) = 3 // claims 3 rows, holds 1: no overrun
+	row := buf[handleTableHeader:]
+	*(*uintptr)(unsafe.Pointer(&row[0])) = 0xfeed
+	*(*uintptr)(unsafe.Pointer(&row[handleEntryPID])) = 42
+	*(*uintptr)(unsafe.Pointer(&row[handleEntryHandle])) = 0x1a4
+	*(*uint16)(unsafe.Pointer(&row[handleEntryType])) = 44
+	got := parseHandleTable(buf)
+	if len(got) != 1 || got[0] != (handleEntry{object: 0xfeed, pid: 42, handle: 0x1a4, typ: 44}) {
+		t.Fatalf("%+v", got)
+	}
+	if parseHandleTable(buf[:8]) != nil {
+		t.Error("short buffer")
+	}
+}
+
+func TestDiskFree(t *testing.T) {
 	dir := workDir(t)
 	free, err := DiskFree(dir)
 	if err != nil || free == 0 {
@@ -695,25 +768,33 @@ func TestDiskFreeAndMemory(t *testing.T) {
 		t.Errorf("DiskFree(file) = %d %v", n, err)
 	}
 	t.Logf("free on %s: %.1f GiB", filepath.VolumeName(dir), float64(free)/(1<<30))
-
-	mb, err := AvailableMemoryMB()
-	if err != nil || mb == 0 {
-		t.Fatalf("AvailableMemoryMB = %d %v", mb, err)
-	}
-	t.Logf("available memory: %d MiB", mb)
 }
 
-func TestBigL3CPUs(t *testing.T) {
+func TestGetCompressedFileSize(t *testing.T) {
+	dir := workDir(t)
+	file := filepath.Join(dir, "sz.bin")
+	if err := os.WriteFile(file, make([]byte, 100000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := GetCompressedFileSize(file)
+	// a plain file takes at least its length (rounded up to the cluster); a compressed volume may report less
+	if err != nil || n == 0 || n > 1<<20 {
+		t.Errorf("GetCompressedFileSize = %d, %v", n, err)
+	}
+	if _, err := GetCompressedFileSize(filepath.Join(dir, "missing.bin")); errs.CodeOf(err) != errs.NotFound {
+		t.Errorf("missing file: %v", err)
+	}
+}
+
+func TestL3Groups(t *testing.T) {
 	raw := cacheTopology()
-	groups := parseL3Groups(raw)
-	mask, cpus, ok := BigL3CPUs()
-	t.Logf("cache topology %d bytes, L3 groups %+v; BigL3CPUs = 0x%x %v %v", len(raw), groups, mask, cpus, ok)
+	t.Logf("cache topology %d bytes, L3 groups %+v", len(raw), L3Groups())
 	if len(raw) == 0 {
 		t.Error("no cache topology")
 	}
 }
 
-func TestBigL3Parse(t *testing.T) {
+func TestL3Parse(t *testing.T) {
 	entry := func(level byte, size uint32, mask uint64) []byte {
 		b := make([]byte, 56)
 		binary.LittleEndian.PutUint32(b[0:], relationCache)
@@ -730,25 +811,6 @@ func TestBigL3Parse(t *testing.T) {
 	if len(groups) != 2 || groups[0] != (l3Group{96 << 20, 0xFFFF}) || groups[1] != (l3Group{32 << 20, 0xFFFF0000}) {
 		t.Fatalf("groups %+v", groups)
 	}
-	mask, cpus, ok := bigL3(groups)
-	if !ok || mask != 0xFFFF || !slices.Equal(cpus, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
-		t.Errorf("x3d: 0x%x %v %v", mask, cpus, ok)
-	}
-	// Big CCD second in the list.
-	if mask, _, ok := bigL3(parseL3Groups(cat(entry(3, 32<<20, 0xFF), entry(3, 96<<20, 0xFF00)))); !ok || mask != 0xFF00 {
-		t.Errorf("x3d reversed: 0x%x %v", mask, ok)
-	}
-	// Two equal L3 (7950X), a single L3, no L3: ordinary.
-	for name, raw := range map[string][]byte{
-		"equal":  cat(entry(3, 32<<20, 0xFF), entry(3, 32<<20, 0xFF00)),
-		"single": cat(entry(2, 1<<20, 1), entry(3, 36<<20, 0xFFFFFF)),
-		"none":   cat(entry(1, 32<<10, 1)),
-		"empty":  nil,
-	} {
-		if _, _, ok := bigL3(parseL3Groups(raw)); ok {
-			t.Errorf("%s: reported big L3", name)
-		}
-	}
 	// A zero entry size stops the walk before that entry is read (AUTO-MAS breaks there too).
 	broken := entry(3, 96<<20, 0xFF)
 	binary.LittleEndian.PutUint32(broken[4:], 0)
@@ -761,20 +823,7 @@ func TestBigL3Parse(t *testing.T) {
 	}
 }
 
-var (
-	procGetPriorityClass       = modkernel32.NewProc("GetPriorityClass")
-	procGetProcessAffinityMask = modkernel32.NewProc("GetProcessAffinityMask")
-	procGetModuleHandleW       = modkernel32.NewProc("GetModuleHandleW")
-	procRegisterClassExW       = moduser32.NewProc("RegisterClassExW")
-	procUnregisterClassW       = moduser32.NewProc("UnregisterClassW")
-	procCreateWindowExW        = moduser32.NewProc("CreateWindowExW")
-	procDestroyWindow          = moduser32.NewProc("DestroyWindow")
-	procDefWindowProcW         = moduser32.NewProc("DefWindowProcW")
-	procIsWindowVisible        = moduser32.NewProc("IsWindowVisible")
-	procPeekMessageW           = moduser32.NewProc("PeekMessageW")
-	procTranslateMessage       = moduser32.NewProc("TranslateMessage")
-	procDispatchMessageW       = moduser32.NewProc("DispatchMessageW")
-)
+var procGetPriorityClass = modkernel32.NewProc("GetPriorityClass")
 
 func TestPriorityAndAffinity(t *testing.T) {
 	p := startChild(t, StartOptions{}, "60")
@@ -798,6 +847,9 @@ func TestPriorityAndAffinity(t *testing.T) {
 	} else if got != 1 {
 		t.Errorf("affinity 0x%x, want 1", got)
 	}
+	if got, err := GetAffinity(p); err != nil || got != 1 {
+		t.Errorf("GetAffinity = 0x%x %v, want 1", got, err)
+	}
 	if err := SetAffinity(p, 0); errs.CodeOf(err) != errs.InvalidArgument {
 		t.Errorf("mask 0: %v", err)
 	}
@@ -811,36 +863,20 @@ func TestPriorityAndAffinity(t *testing.T) {
 	if err := SetAffinity(p, 1); err == nil {
 		t.Error("affinity on a killed process succeeded")
 	}
+	if _, err := GetAffinity(p); err == nil {
+		t.Error("GetAffinity on a killed process succeeded")
+	}
 }
 
-type wndClassEx struct {
-	Size       uint32
-	Style      uint32
-	WndProc    uintptr
-	ClsExtra   int32
-	WndExtra   int32
-	Instance   uintptr
-	Icon       uintptr
-	Cursor     uintptr
-	Background uintptr
-	MenuName   *uint16
-	ClassName  *uint16
-	IconSm     uintptr
-}
-
-type winMsg struct {
-	Hwnd    uintptr
-	Message uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	X, Y    int32
-	Private uint32
+// testWindow is one window of testWindows; owned: the first window of the list owns it.
+type testWindow struct {
+	class, title string
+	owned        bool
 }
 
 // testWindows creates visible 1x1 tool windows far off-screen (never activated, no taskbar button) on a thread that
 // pumps messages, so ShowWindowAsync takes effect. Returns their handles in the order of specs.
-func testWindows(t *testing.T, specs [][2]string) []uintptr {
+func testWindows(t *testing.T, specs []testWindow) []uintptr {
 	t.Helper()
 	type result struct {
 		hwnds []uintptr
@@ -864,24 +900,28 @@ func testWindows(t *testing.T, specs [][2]string) []uintptr {
 			}
 		}()
 		for _, s := range specs {
-			cls, ok := classes[s[0]]
+			cls, ok := classes[s.class]
 			if !ok {
-				cls, _ = syscall.UTF16PtrFromString(s[0])
+				cls, _ = syscall.UTF16PtrFromString(s.class)
 				wc := wndClassEx{WndProc: procDefWindowProcW.Addr(), Instance: inst, ClassName: cls}
 				wc.Size = uint32(unsafe.Sizeof(wc))
 				if r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-					ready <- result{err: fmt.Errorf("RegisterClassExW %s: %v", s[0], err)}
+					ready <- result{err: fmt.Errorf("RegisterClassExW %s: %v", s.class, err)}
 					return
 				}
-				classes[s[0]] = cls
+				classes[s.class] = cls
 			}
-			title, _ := syscall.UTF16PtrFromString(s[1])
+			title, _ := syscall.UTF16PtrFromString(s.title)
+			var owner uintptr // a popup window's parent is its owner
+			if s.owned && len(hwnds) > 0 {
+				owner = hwnds[0]
+			}
 			off := -32000
 			const wsExToolWindow, wsExNoActivate, wsPopup, wsVisible = 0x80, 0x08000000, 0x80000000, 0x10000000
 			h, _, err := procCreateWindowExW.Call(wsExToolWindow|wsExNoActivate, uintptr(unsafe.Pointer(cls)),
-				uintptr(unsafe.Pointer(title)), wsPopup|wsVisible, uintptr(off), uintptr(off), 1, 1, 0, 0, inst, 0)
+				uintptr(unsafe.Pointer(title)), wsPopup|wsVisible, uintptr(off), uintptr(off), 1, 1, owner, 0, inst, 0)
 			if h == 0 {
-				ready <- result{err: fmt.Errorf("CreateWindowExW %q: %v", s[1], err)}
+				ready <- result{err: fmt.Errorf("CreateWindowExW %q: %v", s.title, err)}
 				return
 			}
 			hwnds = append(hwnds, h)
@@ -916,21 +956,64 @@ func testWindows(t *testing.T, specs [][2]string) []uintptr {
 	return res.hwnds
 }
 
+// TestEmulatorWindow: the main window is found whatever its title says (upstream's, with the mouse-capture prefix or
+// the safe-shutdown suffix, or the instance name of ModAVD/ModAVD#58); the toolbar by its title; the emulator's other
+// windows and Qt's helper windows never. Class names are the real ones of the emulator (Qt 6.5.3) and of Qt 5.
+func TestEmulatorWindow(t *testing.T) {
+	const main, mainGL, tool, popup = "Qt653QWindowIcon", "Qt653QWindowOwnDCIcon", "Qt653QWindowToolSaveBits",
+		"Qt653QWindowPopupDropShadowSaveBits"
+	for _, c := range []struct {
+		class, title string
+		owned, want  bool
+	}{
+		{main, "Android Emulator - mas_7:29070", false, true},
+		{main, "Android Emulator - mas_7:29070（正在关机…）", false, true},
+		{main, "[Mouse captured, press Ctrl+G to release] Android Emulator - mas_7:29070", false, true},
+		{main, "方舟", false, true},
+		{main, "方舟（正在关机…）", false, true},
+		{mainGL, "方舟", false, true}, // a main window drawn by OpenGL, or frameless (ModAVD/ModAVD#58)
+		{"Qt5QWindowIcon", "Android Emulator - mas_1:20010", false, true},
+		{tool, "Emulator", true, true}, // the side toolbar (full toolbar mode), owned by the main window
+		{main, "", false, false},
+		{main, "APK Installer", true, false}, // a dialog of the main window
+		{main, "Extended Controls - mas_7:29070", false, false},
+		{main, "方舟 - Extended Controls", false, false},
+		{mainGL, "Display 2", false, false},
+		{tool, "方舟", false, false}, // overlays, touchpad, virtual scene controls
+		{popup, "方舟", false, false},
+		{"Qt653QWindowToolTipSaveBits", "方舟", false, false},
+		{"Qt653ScreenChangeObserverWindow", "", false, false},
+		{"Qt653ScreenChangeObserverWindow", "方舟", false, false},
+		{"NVOpenGLPbuffer", "NVOGLDC invisible", false, false},
+		{"IME", "Default IME", true, false},
+		{"ModavdTestWindow", "Emulator", false, false},
+		{"ModavdTestWindow", "Android Emulator - mas_7:29070", false, false},
+		{"OtherAppQWindowIcon", "方舟", false, false},
+	} {
+		if got := emulatorWindow(c.class, c.title, c.owned); got != c.want {
+			t.Errorf("emulatorWindow(%q, %q, owned %v) = %v, want %v", c.class, c.title, c.owned, got, c.want)
+		}
+	}
+}
+
 func TestSetEmulatorWindowsVisible(t *testing.T) {
 	self := uint32(os.Getpid())
-	if n, err := SetEmulatorWindowsVisible(self, "mas_7:20070", false); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(self, false); err != nil || n != 0 {
 		t.Fatalf("before any window: %d %v", n, err)
 	}
-	if n, err := SetEmulatorWindowsVisible(0, "mas_7:20070", true); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(0, true); err != nil || n != 0 {
 		t.Fatalf("pid 0: %d %v", n, err)
 	}
-	qt := fmt.Sprintf("Qt5QWindowModavdTest%d", self)
-	other := fmt.Sprintf("ModavdTestWindow%d", self)
-	w := testWindows(t, [][2]string{
-		{qt, "Android Emulator - mas_7:20070"}, // main window: touched
-		{qt, "Emulator"},                       // toolbar: touched
-		{qt, "Android Emulator - mas_8:20080"}, // another instance's title
-		{other, "Emulator"},                    // not a Qt window
+	suffix := fmt.Sprint("ModavdTest", self)
+	main, tool := "Qt5QWindowIcon"+suffix, "Qt5QWindowToolSaveBits"+suffix
+	w := testWindows(t, []testWindow{
+		{class: main, title: "方舟"},                                     // main window, new title: touched
+		{class: tool, title: "Emulator", owned: true},                  // toolbar: touched
+		{class: main, title: "APK Installer", owned: true},             // owned by the main window
+		{class: main, title: "Extended Controls - mas_7:20070"},        // upstream's other window
+		{class: tool, title: "方舟"},                                     // an overlay
+		{class: "Qt5ScreenChangeObserverWindow" + suffix, title: "方舟"}, // a Qt helper window
+		{class: "ModavdTestWindow" + suffix, title: "Emulator"},        // not a Qt window
 	})
 	visible := func(h uintptr) bool { r, _, _ := procIsWindowVisible.Call(h); return r != 0 }
 	for i, h := range w {
@@ -938,18 +1021,31 @@ func TestSetEmulatorWindowsVisible(t *testing.T) {
 			t.Fatalf("window %d not visible at start", i)
 		}
 	}
-	n, err := SetEmulatorWindowsVisible(self, "mas_7:20070", false)
+	untouched := func() {
+		t.Helper()
+		for i, h := range w[2:] {
+			if !visible(h) {
+				t.Errorf("untargeted window %d hidden", i+2)
+			}
+		}
+	}
+	n, err := SetEmulatorWindowsVisible(self, false)
 	if err != nil || n != 2 {
 		t.Fatalf("hide: %d %v, want 2", n, err)
 	}
 	if !waitFor(3*time.Second, func() bool { return !visible(w[0]) && !visible(w[1]) }) {
 		t.Fatalf("still visible: main %v toolbar %v", visible(w[0]), visible(w[1]))
 	}
-	if !visible(w[2]) || !visible(w[3]) {
-		t.Errorf("untargeted windows hidden: %v %v", visible(w[2]), visible(w[3]))
+	untouched()
+	if n, err := SetEmulatorWindowsVisible(self, true); err != nil || n != 2 {
+		t.Fatalf("show: %d %v, want 2", n, err)
 	}
+	if !waitFor(3*time.Second, func() bool { return visible(w[0]) && visible(w[1]) }) {
+		t.Fatalf("still hidden: main %v toolbar %v", visible(w[0]), visible(w[1]))
+	}
+	untouched()
 	// Other processes' windows are never matched.
-	if n, err := SetEmulatorWindowsVisible(uint32(os.Getppid()), "mas_7:20070", false); err != nil || n != 0 {
+	if n, err := SetEmulatorWindowsVisible(uint32(os.Getppid()), false); err != nil || n != 0 {
 		t.Errorf("parent process: %d %v", n, err)
 	}
 }

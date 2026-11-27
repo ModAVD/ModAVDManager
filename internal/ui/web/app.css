@@ -372,7 +372,16 @@ button { -webkit-tap-highlight-color: transparent; }
 .with-suffix .input { padding-right: 40px; }
 /* the native spinner would sit on top of 「GB」; arrow keys still step the value */
 .with-suffix .input::-webkit-inner-spin-button, .with-suffix .input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+/* frame rate: the number box (name="fps", the value sent) and a slider kept in step */
+.fps-ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fps-ctl .with-suffix { width: 96px; }
+.fps-ctl input[type="range"] { flex: 1; min-width: 120px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .suffix { position: absolute; right: 12px; color: var(--text-3); font-size: 13px; pointer-events: none; }
+/* the boss key: the input that takes a key combination, its clear button and the warning when another program has it */
+.bosskey { display: flex; align-items: center; gap: 6px; }
+.bosskey .input { width: 200px; caret-color: transparent; cursor: pointer; }
+.bk-warn { display: inline-flex; color: var(--warn-dot); cursor: help; }
+.bk-warn .ic { width: 18px; height: 18px; }
 
 .seg {
   display: inline-flex; gap: 2px; padding: 3px; flex-wrap: wrap;
@@ -580,6 +589,17 @@ button { -webkit-tap-highlight-color: transparent; }
 .card-cfg { margin-top: -8px; } /* sits right under the sub line, across the full width (not beside the pill) */
 .card-lmsg, .card-lbar { display: none; }
 .card-head .pill { margin-top: 1px; }
+/* the title and, when 按应用走代理 is on, its mark (a button: it opens the dialog) */
+.card-tline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.card-tline .card-title { min-width: 0; }
+.pmark {
+  display: inline-flex; align-items: center; gap: 3px; flex: none;
+  height: 18px; padding: 0 6px 0 4px; border: 0; border-radius: 5px;
+  background: var(--tb); color: var(--tf); font-size: 12px; line-height: 1; cursor: pointer;
+}
+.pmark .ic { width: 12px; height: 12px; }
+.pmark:hover { box-shadow: inset 0 0 0 1px var(--td); }
+.pmark:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .adb {
   display: flex; align-items: center; gap: 8px;
@@ -627,7 +647,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .is-list .screen, .is-list .adb-label, .is-list .card-actions .spacer { display: none; }
 .is-list .card-body, .is-list .card-head, .is-list .card-titles, .is-list .card-actions { display: contents; }
 .is-list .pill { grid-area: pill; justify-self: start; margin: 0; }
-.is-list .card-title { grid-area: title; align-self: end; }
+.is-list .card-tline { grid-area: title; align-self: end; }
 .is-list .card-sub { grid-area: sub; align-self: start; }
 .is-list .card-cfg { grid-area: cfg; margin: 0; }
 .is-list .adb { grid-area: adb; height: auto; padding: 0; gap: 4px; border: 0; background: none; }
@@ -825,6 +845,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 24px; row-gap: 16px; align-items: start; }
 .f-label { padding-top: 6px; color: var(--text-2); font-size: 14px; font-weight: 400; white-space: nowrap; }
 .f-ctl { min-width: 0; }
+.regional-choice { display: grid; gap: 8px; }
 .f-hint { margin-top: 6px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .f-hint b { color: var(--text); font-weight: 400; font-variant-numeric: tabular-nums; }
 .f-err { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--err); font-size: 12px; line-height: 1.5; }
@@ -865,6 +886,68 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 /* check: anchored at the top, so the panel's top edge stays put when the result replaces the skeleton (a fixed
    height would leave a large blank once the passed items fold away) */
 .dlg-check { --w: 640px; --top: clamp(24px, 6vh, 56px); height: min(760px, calc(100vh - 48px)); margin: var(--top) auto auto; max-height: calc(100vh - var(--top) - 24px); }
+/* the manager's own update */
+.dlg-update { --w: 560px; }
+.game-resource-tree { margin-inline-start: 1rem; overflow-wrap: anywhere; }
+.game-resource-tree summary { cursor: pointer; padding-block: .25rem; }
+.game-resource-folder { display: flex; align-items: baseline; gap: .4rem; }
+.dlg-update .dlg-body { display: grid; gap: 12px; }
+.upd-msg { margin: 0; color: var(--text); }
+.upd-cdk { display: flex; gap: 8px; align-items: center; }
+.upd-cdk .input { flex: 1; min-width: 0; }
+.upd-urls { margin-top: 8px; }
+.upd-dot { min-width: 8px; height: 8px; padding: 0; }
+/* 按应用走代理 */
+.dlg-proxy { --w: 520px; }
+.p-intro { margin: 0 0 16px; color: var(--text-2); font-size: 13px; }
+.p-loading { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 13px; }
+.p-mono { font-family: var(--mono); font-size: 13px; }
+.p-switch { padding-top: 6px; }
+.p-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.p-probe { display: flex; align-items: flex-start; gap: 6px; color: var(--tf); }
+.p-probe.tone-info { color: var(--text-2); }
+.p-probe > .ic { flex: none; width: 14px; height: 14px; margin-top: 2px; }
+.p-note { display: block; color: var(--text-3); }
+.p-apps { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.p-app { align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); }
+.p-app:first-child { border-top: 0; }
+.p-app:hover { background: var(--hover); }
+.p-app input { margin: 0; }
+.p-app-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.p-app-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-app-pkg { color: var(--text-3); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.p-empty { margin: 0; padding: 12px; color: var(--text-3); font-size: 13px; }
+.p-add { display: flex; gap: 8px; margin-top: 12px; }
+.p-add .input { flex: 1; min-width: 0; }
+.p-add .btn { flex: none; height: 34px; }
+.p-count.tone-err { color: var(--err); }
+.p-gms { margin: 16px 0 0; }
+.p-state { margin-bottom: 0; }
+.diag-launch { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.diag-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.diag-head strong { font-size: 14px; font-weight: 600; }
+.diag-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.diag-components { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.diag-components:empty::before { content: attr(data-empty); display: block; padding: 12px; color: var(--text-3); font-size: 13px; }
+.diag-components .comp-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.diag-running { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; color: var(--text-2); font-size: 13px; }
+.diag-running .btn { margin-left: auto; }
+.diag-path { margin: 10px 0 0; color: var(--text-2); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.diag-privacy { white-space: pre-line; }
+.diag-sections { margin: 10px 0 0; padding-left: 20px; font-size: 12px; }
+.diag-license { max-height: min(52vh, 460px); white-space: pre-wrap; }
+.diag-config { max-height: min(58vh, 520px); white-space: pre-wrap; }
+/* 电脑检查 → 组件: 补全组件, the running fetch, the last failure */
+.ci-fetch { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.ci-fetch .diag-running { margin: 0; overflow-wrap: anywhere; }
+.ci-fetch .form-error { margin: 0; }
+.diag-state { margin: 10px 0 0; color: var(--tf, var(--text-2)); font-size: 13px; overflow-wrap: anywhere; }
+/* the license dialog: source first, then where the text came from and the text */
+.diag-license-body { display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+.diag-license-body .fields { row-gap: 12px; }
+.diag-license-body .form-error { margin-top: 0; }
+.diag-license-body .form-error > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diag-license-body .form-error > .btn { flex: none; }
 .check-sum { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 16px; margin-bottom: 8px; border-radius: var(--r-card); background: var(--tb); }
 .check-sum > .sk-row { flex: 1; margin: 0; }
 .check-sum > .ic { width: 22px; height: 22px; color: var(--tf); }
@@ -900,6 +983,39 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
 .comps summary .muted { font-weight: 400; }
 .comp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .comp-row .v { color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* Google Play 商店服务: its own block in 电脑检查, and the option under the license in 补全组件 */
+.store-box {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--r-card); outline: none;
+  transition: box-shadow .3s var(--ease), border-color .3s var(--ease);
+}
+.store-box.flash { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-ring); }
+.store-head { display: flex; align-items: center; gap: 8px; }
+.store-head strong { font-size: 14px; font-weight: 600; }
+.store-note { color: var(--text-2); font-size: 13px; }
+.store-box .diag-running, .store-opt .diag-running { margin: 0; overflow-wrap: anywhere; }
+.store-box .form-error, .store-opt .form-error { margin: 0; }
+.store-opt { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.store-choose .f-hint, .store-own { margin-left: 28px; }
+.store-choose .checkbox input:disabled { opacity: .5; cursor: default; }
+/* 批量删除 (ModAVD#240): the instances to tick */
+.pick-list { display: grid; gap: 10px; margin: 12px 0 16px; }
+.pick-list .checkbox input:disabled { opacity: .5; cursor: default; }
+.pick-list .muted { margin-left: auto; font-size: 13px; }
+.store-own { margin-top: 6px; }
+.store-own .btn { margin-left: -10px; }
+.store-state { margin: 0; color: var(--tf); font-size: 13px; overflow-wrap: anywhere; }
+/* 补全 / 移除 Google Play 商店 on an instance */
+.dlg-store { --w: 480px; }
+.store-q { color: var(--text-2); margin-bottom: 12px; }
+.store-q strong { color: var(--text); font-weight: 400; }
+.dlg-store .note-box { margin-bottom: 0; }
+/* 复制 GSF ID: the ID in both spellings and where to register it */
+.dlg-gsf { --w: 520px; }
+.gsf-steps { margin: 16px 0 0; padding-left: 20px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.gsf-steps .mono { color: var(--text); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.gsf-steps .icon-btn.sm { margin-left: 4px; vertical-align: middle; }
+.gsf-note { margin: 12px 0 0; color: var(--text-3); font-size: 12px; }
 .sk-row { height: 40px; margin: 10px 0; }
 
 /* activity */
@@ -941,7 +1057,7 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
   border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--code-bg);
   font-family: var(--mono); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.loglines:empty::before { content: "暂无消息"; color: var(--text-3); font-family: var(--font); }
+.loglines:empty::before { content: attr(data-empty); color: var(--text-3); font-family: var(--font); }
 /* ordinary lines are quiet; only warnings and errors keep a colour */
 .ll { display: block; color: var(--text-2); }
 .ll-t { color: var(--text-3); margin-right: 8px; }

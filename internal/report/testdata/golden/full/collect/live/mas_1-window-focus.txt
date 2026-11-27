@@ -1,0 +1,2 @@
+mCurrentFocus=Window{2bce772 u0 de.jrpie.android.launcher/de.jrpie.android.launcher.ui.HomeActivity}
+mFocusedApp=ActivityRecord{fb750ba u0 de.jrpie.android.launcher/.ui.HomeActivity t6}

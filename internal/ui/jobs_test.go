@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -39,7 +40,7 @@ func TestStartJobWithEvents(t *testing.T) {
 	waitFor(es, "instances", listHas(3, emu.StatusOffline))
 
 	var j jobView
-	expect(t, h.do("POST", "/api/instances/3/start", `{"window":true}`), http.StatusAccepted, &j)
+	expect(t, h.do("POST", "/api/instances/3/start", `{}`), http.StatusAccepted, &j)
 	if j.ID == "" || j.Kind != kindStart || j.Index != 3 || j.State != stateRunning || j.CreatedAt == "" ||
 		j.FinishedAt != "" || j.Result != nil || j.Error != nil || j.Warnings == nil {
 		t.Fatalf("new job %+v", j)
@@ -120,10 +121,10 @@ func TestBusyAndStopWhileStart(t *testing.T) {
 
 	e := expectError(t, h.do("POST", "/api/instances/3/start", "{}"), http.StatusConflict, errs.Busy)
 	t.Logf("busy message: %s", e.Message)
-	expectError(t, h.do("POST", "/api/instances/3/restart", "{}"), http.StatusConflict, errs.Busy)
 	expectError(t, h.do("POST", "/api/instances/3/install", nil, withHeader("Content-Type", "multipart/form-data; boundary=x")),
 		http.StatusConflict, errs.Busy)
 	expectError(t, h.do("DELETE", "/api/instances/3?confirm=1", nil), http.StatusConflict, errs.Busy)
+	expectError(t, h.do("POST", "/api/instances/3/disk-trim", "{}"), http.StatusConflict, errs.Busy)
 	// another instance is not affected
 	expect(t, h.do("POST", "/api/instances/4/start", nil), http.StatusAccepted, nil)
 
@@ -179,20 +180,60 @@ func TestCancelJob(t *testing.T) {
 		http.StatusForbidden, "forbidden")
 }
 
-func TestRestartAndFailedJob(t *testing.T) {
+func TestStopCancelCreateOption(t *testing.T) {
+	for _, body := range []string{`{}`, `{"force":true}`, `{"cancel_create":true}`} {
+		t.Run(body, func(t *testing.T) {
+			h := newHarness(t, nil)
+			var j jobView
+			expect(t, h.do("POST", "/api/instances/3/stop", body), http.StatusAccepted, &j)
+			h.waitJob(j.ID, stateIs(stateDone))
+			h.f.mu.Lock()
+			opt := h.f.stops[0]
+			h.f.mu.Unlock()
+			if opt.CancelCreate != (body == `{"cancel_create":true}`) || opt.Force != (body == `{"force":true}`) {
+				t.Fatalf("stop options %+v", opt)
+			}
+		})
+	}
+}
+
+func TestCancelCreateJob(t *testing.T) {
+	h := newHarness(t, nil)
+	j, err := h.s.startJob(kindCreate, 3, func(ctx context.Context, _ *job, _ backend) (any, error) {
+		<-ctx.Done()
+		return nil, canceledErr(ctx)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, h.do("POST", "/api/instances/3/stop", `{}`), http.StatusConflict, errs.Busy)
+	expect(t, h.do("POST", "/api/jobs/"+j.ID+"/cancel", nil), http.StatusOK, nil)
+	h.waitJob(j.ID, stateIs(stateCanceled))
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	if len(h.f.stops) != 0 {
+		t.Fatalf("job cancel sent stop: %+v", h.f.stops)
+	}
+}
+
+// TestStartWithWindowAndFailedJob: the manager boots with the window only (no headless option, no restart, no
+// showing or hiding windows); emu's error becomes the job's.
+func TestStartWithWindowAndFailedJob(t *testing.T) {
 	h := newHarness(t, nil)
 	var j jobView
-	expect(t, h.do("POST", "/api/instances/3/restart", `{"window":true,"force":true}`), http.StatusAccepted, &j)
-	got := h.waitJob(j.ID, stateIs(stateDone))
-	if got.Kind != kindRestart {
-		t.Fatalf("restart job %+v", got)
+	expect(t, h.do("POST", "/api/instances/3/start", `{}`), http.StatusAccepted, &j)
+	if got := h.waitJob(j.ID, stateIs(stateDone)); got.Kind != kindStart {
+		t.Fatalf("start job %+v", got)
 	}
 	h.f.mu.Lock()
-	stops, starts := len(h.f.stops), len(h.f.starts)
+	starts := slices.Clone(h.f.starts)
 	h.f.mu.Unlock()
-	if stops != 1 || starts != 1 {
-		t.Fatalf("restart ran %d stops, %d starts", stops, starts)
+	if len(starts) != 1 || !starts[0].Window || starts[0].Headless {
+		t.Fatalf("start options %+v", starts)
 	}
+	expectError(t, h.do("POST", "/api/instances/3/start", `{"window":false}`), http.StatusBadRequest, errs.Usage)
+	expectError(t, h.do("POST", "/api/instances/3/restart", `{}`), http.StatusNotFound, errs.NotFound)
+	expectError(t, h.do("POST", "/api/instances/3/window", `{"visible":true}`), http.StatusNotFound, errs.NotFound)
 
 	// emu's error becomes the job's error
 	expect(t, h.do("POST", "/api/instances/8/start", nil), http.StatusAccepted, &j)

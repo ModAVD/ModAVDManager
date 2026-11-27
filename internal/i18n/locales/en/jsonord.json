@@ -1,0 +1,16 @@
+{
+  "JSON 格式不对：%s（第 %d 行第 %d 列，第 %d 个字符）": "Invalid JSON: %s (line %d, column %d, character %d)",
+  "\\u 转义写法不对": "Invalid \\u escape",
+  "不是 JSON 数字: %q": "Not a JSON number: %q",
+  "不是有效的 UTF-8 文本（第 %d 个字节）": "Not valid UTF-8 text (byte %d)",
+  "不能转成 JSON 的类型 %T": "Type %T cannot be converted to JSON",
+  "值后面还有多余的内容": "Extra content after the value",
+  "字符串没有结束": "Unterminated string",
+  "字符串里有控制字符": "Control character in string",
+  "嵌套太深": "Nested too deeply",
+  "缺少 ','": "Missing ','",
+  "缺少 ':'": "Missing ':'",
+  "缺少值": "Missing value",
+  "缺少用双引号括起来的键名": "Missing key name in double quotes",
+  "转义写法不对": "Invalid escape"
+}

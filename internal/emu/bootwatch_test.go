@@ -152,6 +152,8 @@ func TestWatchStartLock(t *testing.T) {
 	started := time.Now()
 	if _, err := m.watchStartLock(3); errs.CodeOf(err) != errs.Busy {
 		t.Errorf("second start: %v", err)
+	} else {
+		wantErrorDetails(t, err, map[string]string{errs.Reason: "locked", errs.Lock: "start"})
 	}
 	if d := time.Since(started); d > time.Second {
 		t.Errorf("waited %v for the start lock", d)
@@ -164,6 +166,8 @@ func TestWatchStartLock(t *testing.T) {
 	}
 	if _, err := m.watchStartLock(3); errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正在关机") {
 		t.Errorf("while stopping: %v", err)
+	} else {
+		wantErrorDetails(t, err, map[string]string{errs.Reason: "locked", errs.Lock: "stop"})
 	}
 	if m.lockHeld(3, "start") {
 		t.Error("start lock left held after a stop was found")
@@ -198,7 +202,7 @@ func stubGuestBoot(t *testing.T) *guestStub {
 // gone it fails without launching anything.
 func TestBootWatchTick(t *testing.T) {
 	m, logs := opsTestManager(t)
-	created, err := m.Create(context.Background(), CreateRequest{})
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

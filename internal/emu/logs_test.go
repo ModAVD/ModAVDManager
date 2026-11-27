@@ -12,8 +12,12 @@ import (
 	"time"
 
 	"modavd/internal/logx"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
+
+// Keep the fixtures inside diagnostic retention, with stable ordering throughout a test run.
+var logFixtureTime = time.Now().Add(-24 * time.Hour).Truncate(time.Minute)
 
 // mkLog writes a file of size bytes with mtime base + age minutes.
 func mkLog(t *testing.T, dir, name string, size int, minute int) string {
@@ -22,7 +26,7 @@ func mkLog(t *testing.T, dir, name string, size int, minute int) string {
 	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mt := time.Date(2026, 10, 28, 12, 0, 0, 0, time.Local).Add(time.Duration(minute) * time.Minute)
+	mt := logFixtureTime.Add(time.Duration(minute) * time.Minute)
 	if err := os.Chtimes(path, mt, mt); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +48,7 @@ func names(t *testing.T, dir string) []string {
 }
 
 func TestPruneLogDirPerInstance(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for k := 0; k < 12; k++ {
 		mkLog(t, dir, fmt.Sprintf("mas_0-20261028-1200%02d.log", k), 10, k)
 	}
@@ -70,7 +74,36 @@ func TestPruneLogDirPerInstance(t *testing.T) {
 	if removed != 2 || freed != 10+20 {
 		t.Errorf("removed %d freed %d, want 2 / 30", removed, freed)
 	}
-	got := names(t, dir)
+	// Deletion on Windows can leave short-lived .tmp entries. Wait for the
+	// expected counts and then check the removed names below;
+	// persistent extra or missing files must still fail this assertion.
+	want := map[string]int{"mas_0": 11, "logcat": 10, "mas_1": 12, "other": 2}
+	var got []string
+	var count map[string]int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got = names(t, dir)
+		count = map[string]int{}
+		for _, n := range got {
+			switch {
+			case len(n) > 6 && n[:6] == "mas_0-":
+				count["mas_0"]++
+			case len(n) > 13 && n[:13] == "logcat-mas_0-":
+				count["logcat"]++
+			case len(n) > 6 && n[:6] == "mas_1-":
+				count["mas_1"]++
+			default:
+				count["other"]++
+			}
+		}
+		if reflect.DeepEqual(count, want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("left %v, want %v (%q)", count, want, got)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	for _, gone := range []string{"mas_0-20261028-120001.log", "logcat-mas_0-20261028-120000.txt"} {
 		for _, n := range got {
 			if n == gone {
@@ -78,28 +111,10 @@ func TestPruneLogDirPerInstance(t *testing.T) {
 			}
 		}
 	}
-	count := map[string]int{}
-	for _, n := range got {
-		switch {
-		case len(n) > 6 && n[:6] == "mas_0-":
-			count["mas_0"]++
-		case len(n) > 13 && n[:13] == "logcat-mas_0-":
-			count["logcat"]++
-		case len(n) > 6 && n[:6] == "mas_1-":
-			count["mas_1"]++
-		default:
-			count["other"]++
-		}
-	}
-	// 10 kept + the open one
-	want := map[string]int{"mas_0": 11, "logcat": 10, "mas_1": 12, "other": 2}
-	if !reflect.DeepEqual(count, want) {
-		t.Errorf("left %v, want %v (%q)", count, want, got)
-	}
 }
 
 func TestPruneLogDirTotalSize(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	// oldest first: a(100) b(100) c(100) d(100, open) e(100); limit 250
 	mkLog(t, dir, "mas_1-a.log", 100, 1)
 	mkLog(t, dir, "logcat-mas_2-b.txt", 100, 2)
@@ -133,15 +148,101 @@ func TestPruneLogDirTotalSize(t *testing.T) {
 	}
 }
 
+// mkDiag makes a failed boot's directory with two files of 25 bytes, mtime base + minute minutes.
+func mkDiag(t *testing.T, dir, name string, minute int) {
+	t.Helper()
+	d := filepath.Join(dir, name)
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mkLog(t, d, "logcat.txt", 25, minute)
+	mkLog(t, d, "summary.txt", 25, minute)
+	mt := logFixtureTime.Add(time.Duration(minute) * time.Minute)
+	if err := os.Chtimes(d, mt, mt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPruneLogDirBootDiag: per instance the newest 3 failed boots' directories stay (bootDiagKeep), whatever the
+// keep of the logs; their size counts toward the total, and they go oldest first like the logs. Directories that do
+// not look like ours stay.
+func TestPruneLogDirBootDiag(t *testing.T) {
+	dir := testutil.TempDir(t)
+	for k := 0; k < 5; k++ {
+		mkDiag(t, dir, fmt.Sprintf("mas_0-20261028-1200%02d-bootfail", k), k)
+	}
+	mkDiag(t, dir, "mas_1-20261028-115900-bootfail", -1)
+	mkDiag(t, dir, "mas_0-notes-bootfail", -100)             // not ours: no time stamp
+	mkLog(t, dir, "mas_0-20261028-120009-bootfail", 1, -100) // a file, not a directory: not ours
+	mkLog(t, dir, "mas_0-20261028-120010.log", 10, 10)       // a log of the same instance
+	removed, freed, err := pruneLogDir(dir, 0, 10, 1<<30, logx.Nop())
+	if err != nil || removed != 2 || freed != 100 {
+		t.Fatalf("per instance: removed %d freed %d, %v; want 2 / 100", removed, freed, err)
+	}
+	want := []string{"mas_0-20261028-120002-bootfail", "mas_0-20261028-120003-bootfail", "mas_0-20261028-120004-bootfail",
+		"mas_0-20261028-120009-bootfail", "mas_0-20261028-120010.log", "mas_0-notes-bootfail", "mas_1-20261028-115900-bootfail"}
+	if got := names(t, dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("left %q\nwant %q", got, want)
+	}
+
+	// total: 3 × 50 + 50 + the log's 10 = 210 > 100 -> the oldest go: mas_1's (160), mas_0 02 (110), mas_0 03 (60)
+	removed, freed, err = pruneLogDir(dir, 1, 10, 100, logx.Nop())
+	if err != nil || removed != 3 || freed != 150 {
+		t.Fatalf("total: removed %d freed %d, %v; want 3 / 150", removed, freed, err)
+	}
+	want = []string{"mas_0-20261028-120004-bootfail", "mas_0-20261028-120009-bootfail", "mas_0-20261028-120010.log",
+		"mas_0-notes-bootfail"}
+	if got := names(t, dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("left %q\nwant %q", got, want)
+	}
+}
+
 func TestPruneLogDirMissing(t *testing.T) {
-	removed, freed, err := pruneLogDir(filepath.Join(t.TempDir(), "logs"), 0, 10, 1<<30, logx.Nop())
+	removed, freed, err := pruneLogDir(filepath.Join(testutil.TempDir(t), "logs"), 0, 10, 1<<30, logx.Nop())
 	if removed != 0 || freed != 0 || err != nil {
 		t.Errorf("missing dir: %d %d %v", removed, freed, err)
 	}
 }
 
+func TestPruneBridgeLogs(t *testing.T) {
+	dir := testutil.TempDir(t)
+	for k := 0; k < 13; k++ {
+		mkLog(t, dir, fmt.Sprintf("modavd-bridge-0-20261028-1200%02d.log", k), 10, k)
+	}
+	for k := 0; k < 11; k++ {
+		mkLog(t, dir, fmt.Sprintf("modavd-bridge-1-20261028-1200%02d.log", k), 10, k)
+	}
+	for _, name := range []string{"modavd-bridge-0-notes.log", "modavd-bridge-x-20261028-120000.log", "modavd-ui.log"} {
+		mkLog(t, dir, name, 10000, -1)
+	}
+	held, err := os.OpenFile(filepath.Join(dir, "modavd-bridge-0-20261028-120000.log"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	removed, freed, err := pruneLogDir(dir, 0, 10, 1<<30, logx.Nop())
+	if err != nil || removed != 2 || freed != 20 {
+		t.Fatalf("per instance: %d / %d / %v", removed, freed, err)
+	}
+	for _, k := range []int{1, 2} {
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("modavd-bridge-0-20261028-1200%02d.log", k))); !os.IsNotExist(err) {
+			t.Fatalf("old bridge log %d remains: %v", k, err)
+		}
+	}
+	if got := names(t, dir); len(got) != 25 {
+		t.Fatalf("unexpected files after per-instance cleanup: %q", got)
+	}
+	removed, freed, err = pruneLogDir(dir, 0, 10, 30, logx.Nop())
+	if err != nil || removed != 18 || freed != 180 {
+		t.Fatalf("total budget: %d / %d / %v", removed, freed, err)
+	}
+	if got := names(t, dir); len(got) != 7 {
+		t.Fatalf("unexpected files after size cleanup: %q", got)
+	}
+}
+
 func TestPruneLogDirLogsRemoval(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for k := 0; k < 11; k++ {
 		mkLog(t, dir, fmt.Sprintf("mas_6-x%02d.log", k), 1<<20, k)
 	}
@@ -161,7 +262,7 @@ func TestPruneLogDirLogsRemoval(t *testing.T) {
 }
 
 func TestFileInUse(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := mkLog(t, dir, "mas_0-x.log", 5, 0)
 	if busy, gone := fileInUse(path); busy || gone {
 		t.Errorf("closed file: busy %v gone %v", busy, gone)
@@ -201,7 +302,7 @@ func TestManagedLogNames(t *testing.T) {
 }
 
 func TestOpenLogFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	mkLog(t, dir, "logcat-mas_2-a.txt", 1, 1)
 	open := mkLog(t, dir, "logcat-mas_2-b.txt", 1, 2)
 	mkLog(t, dir, "logcat-mas_2-c.txt", 1, 3) // newest, closed
@@ -225,31 +326,6 @@ func TestOpenLogFile(t *testing.T) {
 	}
 	if got := openLogFile(dir, "logcat-mas_3-", ".txt"); got != "" {
 		t.Errorf("other instance: %q", got)
-	}
-}
-
-// TestSplitLogcatClients: a capture client older than the private server now listening talks to a server that is
-// gone, unless it is the client that started this server (the server is its child then).
-func TestSplitLogcatClients(t *testing.T) {
-	server := win.Process{PID: 500, PPID: 77, Name: "adb.exe", Created: 1000}
-	old := win.Process{PID: 10, Name: "adb.exe", Created: 900}
-	starter := win.Process{PID: 77, Name: "adb.exe", Created: 990}
-	newer := win.Process{PID: 11, Name: "adb.exe", Created: 1100}
-	unknown := win.Process{PID: 12, Name: "adb.exe"}
-	live, stale := splitLogcatClients([]win.Process{old, starter, newer, unknown}, server)
-	if !reflect.DeepEqual(live, []win.Process{starter, newer, unknown}) || !reflect.DeepEqual(stale, []win.Process{old}) {
-		t.Errorf("live %+v stale %+v", live, stale)
-	}
-	// no server known (none listening, listener table unreadable, not adb): nothing counts as stale
-	live, stale = splitLogcatClients([]win.Process{old, newer}, win.Process{})
-	if len(live) != 2 || len(stale) != 0 {
-		t.Errorf("no server: live %+v stale %+v", live, stale)
-	}
-	if live, stale = splitLogcatClients(nil, server); live != nil || stale != nil {
-		t.Errorf("no clients: %+v %+v", live, stale)
-	}
-	if got := pidList([]win.Process{old, newer}); got != "10, 11" {
-		t.Errorf("pidList = %q", got)
 	}
 }
 
@@ -281,6 +357,19 @@ func TestLogcatCommandLine(t *testing.T) {
 	} {
 		if logcatCmdlineMatches(c, "20050", "emulator-20030") {
 			t.Errorf("%s matched", name)
+		}
+	}
+}
+
+// endProcesses kills procs and waits up to timeout in all for them to be gone.
+func endProcesses(procs []win.Process, timeout time.Duration) {
+	for _, p := range procs {
+		p.Kill()
+	}
+	deadline := time.Now().Add(timeout)
+	for _, p := range procs {
+		if left := time.Until(deadline); left > 0 {
+			p.Wait(left)
 		}
 	}
 }

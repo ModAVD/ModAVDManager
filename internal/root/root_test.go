@@ -1,3 +1,5 @@
+//go:build windows
+
 package root
 
 import (
@@ -17,13 +19,14 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/testutil"
 )
 
 // ---- helpers -----------------------------------------------------------------------------------------------------
 
 func newRoot(t *testing.T) *Root {
 	t.Helper()
-	r, err := New(t.TempDir())
+	r, err := New(testutil.TempDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +74,7 @@ func python(t *testing.T, script string, input any) []byte {
 	if _, err := os.Stat(py); err != nil {
 		t.Skipf("no Python at %s", py)
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	in, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +91,9 @@ func python(t *testing.T, script string, input any) []byte {
 // ---- ports -------------------------------------------------------------------------------------------------------
 
 func TestPortsAndNames(t *testing.T) {
-	if ConsolePort(3) != 20030 || AdbPort(3) != 20031 || GrpcPort(3) != 20032 || AvdName(3) != "mas_3" ||
-		Serial(3) != "emulator-20030" {
+	def := PortPlan{DefaultPortBase}
+	if def.Console(3) != 20030 || def.Adb(3) != 20031 || def.Grpc(3) != 20032 || AvdName(3) != "mas_3" ||
+		def.Serial(3) != "emulator-20030" {
 		t.Fatal("port plan")
 	}
 	for i, want := range []bool{true, true, true, true, true, false, true, true, true, true, false} {
@@ -100,24 +104,142 @@ func TestPortsAndNames(t *testing.T) {
 	if ValidIndex(-1) {
 		t.Error("ValidIndex(-1)")
 	}
-	if i, ok := IndexOfConsolePort(20090); !ok || i != 9 {
+	if i, ok := def.IndexOfConsole(20090); !ok || i != 9 {
 		t.Error("20090")
 	}
 	for _, p := range []int{19990, 20001, 20100, 5554} {
-		if _, ok := IndexOfConsolePort(p); ok {
-			t.Errorf("IndexOfConsolePort(%d)", p)
+		if _, ok := def.IndexOfConsole(p); ok {
+			t.Errorf("IndexOfConsole(%d)", p)
 		}
 	}
-	ports := InstancePorts()
+	ports := def.InstancePorts()
 	if len(ports) != 27 || !ports[20000] || !ports[20092] || ports[20050] || ports[20051] || ports[20049] {
 		t.Fatalf("InstancePorts: %d", len(ports))
+	}
+}
+
+// TestPortPlan: another base moves every port and the serial, and the index set (0-9 without 5) stays.
+func TestPortPlan(t *testing.T) {
+	def, dev := PortPlan{DefaultPortBase}, PortPlan{21000}
+	if dev.Console(6) != 21060 || dev.Adb(6) != 21061 || dev.Grpc(6) != 21062 || dev.Serial(6) != "emulator-21060" ||
+		dev.Last() != 21092 || def.Last() != 20092 {
+		t.Fatal("plan 21000")
+	}
+	if i, ok := dev.IndexOfConsole(21090); !ok || i != 9 {
+		t.Error("21090")
+	}
+	for _, p := range []int{20000, 20060, 21001, 21100, 20990} {
+		if _, ok := dev.IndexOfConsole(p); ok {
+			t.Errorf("plan 21000: IndexOfConsole(%d)", p)
+		}
+	}
+	ports := dev.InstancePorts()
+	if len(ports) != 27 || !ports[21000] || !ports[21092] || ports[21050] || ports[20000] {
+		t.Fatalf("plan 21000: InstancePorts %d", len(ports))
+	}
+}
+
+// TestPortBase: mas-avd.json portBase, read as the adb server ports are; the instance ports the server ports must
+// avoid are the root's own plan's; CheckPorts refuses an invalid portBase, and a plan of one's own that still shares
+// an adb server port with the default root.
+func TestPortBase(t *testing.T) {
+	r := newRoot(t)
+	if r.Ports().Base != DefaultPortBase || r.CheckPorts() != nil {
+		t.Fatal("no mas-avd.json")
+	}
+	const servers = `, "adbServerPort": 20089, "scriptAdbServerPort": 20088`
+	for _, c := range []struct {
+		value string
+		base  int
+		ok    bool
+	}{
+		{`20000`, 20000, true}, {`21000`, 21000, true}, {`"21000"`, 21000, true}, {`21000.0`, 21000, true},
+		{`1100`, 1100, true}, {`49000`, 49000, true}, {`19900`, 19900, true}, {`20100`, 20100, true},
+		{`5400`, 5400, true}, {`5600`, 5600, true}, {`5500`, 5500, false}, {`"5500"`, 5500, false},
+		{`49100`, 49100, false}, {`65400`, 65400, false}, {`49100.0`, 49100, false},
+		{`21050`, 20000, false}, {`21010`, 20000, false}, {`1000`, 20000, false}, {`65500`, 20000, false},
+		{`-21000`, 20000, false}, {`"abc"`, 20000, false}, {`null`, 20000, false}, {`true`, 20000, false},
+		{`[21000]`, 20000, false}, {`{}`, 20000, false}, {`""`, 20000, false},
+	} {
+		writeFile(t, r.MetadataPath(), []byte(`{"portBase": `+c.value+servers+`}`))
+		if got := r.Ports().Base; got != c.base {
+			t.Errorf("portBase %s: base %d, want %d", c.value, got, c.base)
+		}
+		err := r.CheckPorts()
+		if c.ok != (err == nil) {
+			t.Errorf("portBase %s: CheckPorts %v", c.value, err)
+		}
+		if err != nil && (err.Code != errs.InvalidArgument || !strings.Contains(err.Message, "portBase 不合规（"+c.value+"）")) {
+			t.Errorf("portBase %s: %s %q", c.value, err.Code, err.Message)
+		}
+		legacy := c.base == 5500 || c.base > maxPortBase
+		if adbErr := r.CheckAdbPorts(); (adbErr == nil) != (c.ok || legacy) {
+			t.Errorf("portBase %s: CheckAdbPorts %v", c.value, adbErr)
+		}
+	}
+
+	// the server ports must avoid the root's own instance ports: 21011 is one with portBase 21000, 20011 is not
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 21000, "adbServerPort": 21011, "scriptAdbServerPort": 20011}`))
+	if r.AdbServerPort() != DefaultAdbServerPort || r.ScriptAdbServerPort() != 20011 {
+		t.Fatalf("server ports %d %d", r.AdbServerPort(), r.ScriptAdbServerPort())
+	}
+	writeFile(t, r.MetadataPath(), []byte(`{"adbServerPort": 21011, "scriptAdbServerPort": 20011}`))
+	if r.AdbServerPort() != 21011 || r.ScriptAdbServerPort() != DefaultScriptAdbServerPort {
+		t.Fatalf("default plan: server ports %d %d", r.AdbServerPort(), r.ScriptAdbServerPort())
+	}
+
+	// a plan of one's own with an adb server port of the default root's: refused, naming the key
+	for _, c := range []struct{ meta, key string }{
+		{`{"portBase": 21000}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089}`, "scriptAdbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20049, "scriptAdbServerPort": 20088}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20050}`, "scriptAdbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20011, "scriptAdbServerPort": 20088}`, "adbServerPort"},
+		{`{"portBase": 21000, "adbServerPort": 20089, "scriptAdbServerPort": 20092}`, "scriptAdbServerPort"},
+		{`{"portBase": 5500}`, "adbServerPort"},
+		{`{"portBase": 49100, "adbServerPort": 34050, "scriptAdbServerPort": 20049}`, "scriptAdbServerPort"},
+	} {
+		writeFile(t, r.MetadataPath(), []byte(c.meta))
+		err := r.CheckAdbPorts()
+		if err == nil || err.Code != errs.InvalidArgument || !strings.Contains(err.Message, c.key+" 却是") {
+			t.Errorf("%s: %v", c.meta, err)
+		}
+	}
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 21000`+servers+`}`))
+	if err := r.CheckPorts(); err != nil {
+		t.Fatal(err)
+	}
+	// the default plan keeps the default servers, as every root has them today
+	writeFile(t, r.MetadataPath(), []byte(`{"portBase": 20000}`))
+	if err := r.CheckPorts(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPortBaseAvoidsScannedAndEphemeralPorts(t *testing.T) {
+	for base := minPortBase; base <= legacyMaxPortBase; base += 100 {
+		v, err := jsonord.Parse([]byte(fmt.Sprintf(`{"portBase":%d}`, base)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, problem := PortPlanOf(v.Obj())
+		if p.Base != base {
+			t.Fatalf("previously accepted plan %d became %d", base, p.Base)
+		}
+		unsafe := false
+		for port := range p.InstancePorts() {
+			unsafe = unsafe || port >= 5555 && port <= 5585 || port >= 49152
+		}
+		if (problem != "") != unsafe {
+			t.Errorf("plan %d unsafe=%v, problem=%q", base, unsafe, problem)
+		}
 	}
 }
 
 // ---- resolve -----------------------------------------------------------------------------------------------------
 
 func TestResolve(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	rootDir := filepath.Join(base, "ModAVD")
 	writeFile(t, filepath.Join(rootDir, "tools", "modavd.exe"), nil)
 	if err := os.MkdirAll(filepath.Join(rootDir, "sdk"), 0o755); err != nil {
@@ -148,7 +270,7 @@ func TestResolve(t *testing.T) {
 
 	_, err := resolve(filepath.Join(base, "missing"), "", "")
 	wantCode(t, err, errs.NotFound)
-	if !strings.Contains(err.Error(), "--root 指定的魔改 AVD 根目录不存在") {
+	if !strings.Contains(err.Error(), "--root 指定的 ModAVD 根目录不存在") {
 		t.Fatalf("message: %v", err)
 	}
 	_, err = resolve("", filepath.Join(base, "missing"), "")
@@ -165,6 +287,24 @@ func TestResolve(t *testing.T) {
 	}
 	if _, err := New(filepath.Join(base, "missing")); errs.CodeOf(err) != errs.NotFound {
 		t.Fatalf("New missing: %v", err)
+	}
+}
+
+func TestQemuImgExe(t *testing.T) {
+	r := newRoot(t)
+	exe := r.Dir + `\sdk\emulator\qemu-img.exe`
+	got, err := r.QemuImgExe()
+	if got != exe || errs.CodeOf(err) != errs.NotReady {
+		t.Errorf("missing: (%q, %v)", got, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.QemuImgExe(); got != exe || err != nil {
+		t.Errorf("present: (%q, %v)", got, err)
 	}
 }
 
@@ -192,7 +332,7 @@ func TestPaths(t *testing.T) {
 		}
 	}
 	for meta, want := range map[string]string{
-		`{"sdkRoot": "  C:/emu-src/sdk-mas35/  "}`: `C:\emu-src\sdk-mas35`,
+		`{"sdkRoot": "  C:/sdk-src/sdk-mas35/  "}`: `C:\sdk-src\sdk-mas35`,
 		`{"sdkRoot": "dev-sdk"}`:                   d + `\dev-sdk`,
 		`{"sdkRoot": "   "}`:                       "",
 		`{"sdkRoot": 5}`:                           "",
@@ -204,8 +344,8 @@ func TestPaths(t *testing.T) {
 			t.Errorf("%s: LocalSDKRoot %q want %q", meta, got, want)
 		}
 	}
-	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": "C:\\emu-src\\sdk-mas35"}`))
-	if r.AdbExe() != `C:\emu-src\sdk-mas35\platform-tools\adb.exe` || r.SDK() != d+`\sdk` {
+	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": "C:\\sdk-src\\sdk-mas35"}`))
+	if r.AdbExe() != `C:\sdk-src\sdk-mas35\platform-tools\adb.exe` || r.SDK() != d+`\sdk` {
 		t.Errorf("runtime sdk: %s", r.AdbExe())
 	}
 }
@@ -249,7 +389,7 @@ func TestUpdateMetadataFormatAndAbort(t *testing.T) {
 	writeFile(t, r.MetadataPath(), []byte(sampleMetadata))
 	err := r.UpdateMetadata(func(o *jsonord.Obj) error {
 		o.Set("adbServerPort", jsonord.NewInt(20089))
-		o.Set("名称", jsonord.NewString("魔改 \"AVD\""))
+		o.Set("名称", jsonord.NewString("模拟器 \"AVD\""))
 		return nil
 	})
 	if err != nil {
@@ -257,7 +397,7 @@ func TestUpdateMetadataFormatAndAbort(t *testing.T) {
 	}
 	want := "{\r\n  \"components\": {\r\n    \"emulator\": \"37.2.10\"\r\n  },\r\n  \"zeta\": [\r\n    1000.0,\r\n    0,\r\n" +
 		"    {}\r\n  ],\r\n  \"instances\": {\r\n    \"0\": {\r\n      \"memoryMb\": 6144,\r\n      \"initialized\": true\r\n" +
-		"    }\r\n  },\r\n  \"sdkRoot\": \"\",\r\n  \"adbServerPort\": 20089,\r\n  \"名称\": \"魔改 \\\"AVD\\\"\"\r\n}"
+		"    }\r\n  },\r\n  \"sdkRoot\": \"\",\r\n  \"adbServerPort\": 20089,\r\n  \"名称\": \"模拟器 \\\"AVD\\\"\"\r\n}"
 	if got := string(readFile(t, r.MetadataPath())); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
@@ -374,6 +514,9 @@ func TestMetadataLock(t *testing.T) {
 	defer func() { metadataLockWait = old }()
 	err = r.UpdateMetadata(func(o *jsonord.Obj) error { return nil })
 	wantCode(t, err, errs.Busy)
+	if got := errs.DetailsOf(err); got[errs.Reason] != "locked" || got[errs.Lock] != "metadata" {
+		t.Errorf("details: %v", got)
+	}
 	held.unlock()
 	if err := r.UpdateMetadata(func(o *jsonord.Obj) error { return nil }); err != nil {
 		t.Fatalf("after unlock: %v", err)
@@ -712,6 +855,14 @@ func TestComponentsAndEnsureMetadata(t *testing.T) {
 	if c := r.Components()[1]; c.Installed || c.Build != "0.24.0" {
 		t.Errorf("old build: %+v", c)
 	}
+	fakeSDK(t, r.SDK(), "0.42.0", true)
+	if c := r.Components()[1]; !c.Installed || c.Build != "0.42.0" {
+		t.Errorf("version build: %+v", c)
+	}
+	fakeSDK(t, r.SDK(), "0.24.0", true)
+	if c := r.Components()[1]; c.Installed || c.Build != "0.24.0" {
+		t.Errorf("old version build: %+v", c)
+	}
 	fakeSDK(t, r.SDK(), "mas-35", false)
 	if c := r.Components()[1]; c.Installed || c.Build != "" || c.Version != "37.2.10" {
 		t.Errorf("not self-built: %+v", c)
@@ -726,7 +877,7 @@ func TestComponentsAndEnsureMetadata(t *testing.T) {
 	}
 
 	// sdkRoot moves the SDK components; launcher / ime stay in the root.
-	dev := filepath.Join(t.TempDir(), "sdk-mas36")
+	dev := filepath.Join(testutil.TempDir(t), "sdk-mas36")
 	fakeSDK(t, dev, "mas-36", true)
 	writeFile(t, r.MetadataPath(), []byte(`{"sdkRoot": `+jsonString(dev)+`}`))
 	comps = r.Components()
@@ -757,7 +908,7 @@ func TestMissingError(t *testing.T) {
 	if got := r.MissingError([]string{SystemImageName}).Error(); got != "这个目录里缺少：系统镜像 Android 14 Google APIs x86_64。"+FetchComponentsAdvice {
 		t.Fatalf("image only: %s", got)
 	}
-	if !strings.Contains(FetchComponentsAdvice, "再运行一次 modavd check") || strings.Contains(FetchComponentsAdvice, "点「检查」") {
+	if !strings.Contains(FetchComponentsAdvice, "完成后再检查一次") || strings.Contains(FetchComponentsAdvice, "补全组件.bat") {
 		t.Fatal("advice wording")
 	}
 	if got := r.MissingError(nil).Error(); !strings.HasPrefix(got, "这个目录里缺少：平台工具（adb）、") {
@@ -768,7 +919,7 @@ func TestMissingError(t *testing.T) {
 func TestSelfBuiltMarkAcrossChunks(t *testing.T) {
 	old := selfBuiltChunk
 	defer func() { selfBuiltChunk = old }()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	mark := SelfBuiltMark
 	for chunk := 1; chunk <= 3*len(mark); chunk++ {
 		selfBuiltChunk = chunk
@@ -803,21 +954,19 @@ func TestSelfBuiltMarkAcrossChunks(t *testing.T) {
 	}
 }
 
-func TestModBuildAndVersionText(t *testing.T) {
+func TestEmulatorBuildAndVersionText(t *testing.T) {
 	r := newRoot(t)
-	if _, ok := r.ModBuild(); ok || r.VersionText() != "" || r.EmulatorVersion() != "" {
+	if _, ok := r.EmulatorBuild(); ok || r.VersionText() != "" || r.EmulatorVersion() != "" {
 		t.Fatal("empty root")
 	}
 	props := filepath.Join(r.SDK(), "emulator", "source.properties")
-	for id, want := range map[string]int{"mas-35": 35, "  mas-32  ": 32, "mas-007": 7, "mas-": -1, "mas-35b": -1,
-		"35": -1, "MAS-35": -1, "mas-x": -1, "mas-99999999999999999999": -1} {
+	for id, want := range map[string]string{"mas-35": "mas-35", "  mas-32  ": "mas-32", "mas-007": "mas-7", "mas-": "",
+		"mas-35b": "", "35": "", "MAS-35": "", "mas-x": "", "mas-99999999999999999999": "", "mas-0": "",
+		"0.42.0": "0.42.0", "v0.42.1": "0.42.1", " 1.0.0 ": "1.0.0", "0.42": "", "0.42.0-rc1": "", "0.0.0": ""} {
 		writeFile(t, props, []byte("Pkg.Revision=37.2.10\r\nPkg.BuildId="+id+"\r\n"))
-		got, ok := r.ModBuild()
-		if !ok {
-			got = -1
-		}
-		if got != want {
-			t.Errorf("BuildId %q: %d want %d", id, got, want)
+		got, ok := r.EmulatorBuild()
+		if ok == (want == "") || got.String() != want {
+			t.Errorf("BuildId %q: %q %v want %q", id, got, ok, want)
 		}
 	}
 	if r.EmulatorVersion() != "37.2.10" {
@@ -848,6 +997,66 @@ func TestModBuildAndVersionText(t *testing.T) {
 		if got := r.VersionText(); got != want {
 			t.Errorf("manifest %q: %q want %q", content, got, want)
 		}
+	}
+	// The manifest's "build" (the emulator build) decides, not the version's minor number: from 0.41 they differ.
+	for content, want := range map[string]string{
+		`{"version": "v0.41.0", "build": 35}`:   "0.41.0",
+		`{"version": "v0.35.2", "build": 35}`:   "0.35.2",
+		`{"version": "v0.35.0", "build": 34}`:   "0.35.0", // the manifest is another build's: emulator mas-35 is 0.35.0
+		`{"version": "v0.35.0", "build": "35"}`: "0.35.0", // not an integer: as a manifest without build
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("manifest %q: %q want %q", content, got, want)
+		}
+	}
+	// Past mas-40 there is no 0.<build>.0: only a manifest of that build gives the version.
+	writeFile(t, props, []byte("Pkg.BuildId=mas-41\n"))
+	for content, want := range map[string]string{
+		`{"version": "v0.42.0", "build": 41}`: "0.42.0",
+		`{"version": "v0.41.0"}`:              "0.41.0",
+		`{"version": "v0.42.0", "build": 40}`: "",
+		`{"version": "v0.42.0"}`:              "",
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("mas-41, manifest %q: %q want %q", content, got, want)
+		}
+	}
+	os.Remove(manifest)
+	if got := r.VersionText(); got != "" {
+		t.Errorf("mas-41 without manifest: %q", got)
+	}
+	// From 0.42 the build ID is the version: the manifest's "build" is that string; the forms do not mix.
+	writeFile(t, props, []byte("Pkg.BuildId=0.42.0\n"))
+	for content, want := range map[string]string{
+		`{"version": "v0.42.0", "build": "0.42.0"}`:  "0.42.0",
+		`{"version": "v0.42.3", "build": "0.42.0"}`:  "0.42.3", // a patch release on the same emulator
+		`{"version": "v0.42.3", "build": "v0.42.0"}`: "0.42.3",
+		`{"version": "v0.43.0", "build": "0.43.0"}`:  "0.42.0", // another build's manifest: the build itself
+		`{"version": "v0.42.3", "build": 42}`:        "0.42.0", // legacy N is mas-N, not 0.42.0
+		`{"version": "v0.42.3"}`:                     "0.42.0", // no "build": not known to be this emulator's
+		`{"version": "v0.42.3", "build": "0.42"}`:    "0.42.0",
+	} {
+		writeFile(t, manifest, []byte(content))
+		if got := r.VersionText(); got != want {
+			t.Errorf("0.42.0, manifest %q: %q want %q", content, got, want)
+		}
+	}
+	os.Remove(manifest)
+	if got := r.VersionText(); got != "0.42.0" {
+		t.Errorf("0.42.0 without manifest: %q", got)
+	}
+	// mas-41 against a manifest naming "0.41.0": a different form, so not this emulator's.
+	writeFile(t, props, []byte("Pkg.BuildId=mas-41\n"))
+	writeFile(t, manifest, []byte(`{"version": "v0.41.0", "build": "0.41.0"}`))
+	if got := r.VersionText(); got != "" {
+		t.Errorf("mas-41, manifest build \"0.41.0\": %q", got)
+	}
+	// The components list and the boot gate take the new form too.
+	writeFile(t, props, []byte("Pkg.BuildId=0.42.0\n"))
+	if b, _ := r.EmulatorBuild(); !b.AtLeast(MinEmulatorBuild) {
+		t.Error("0.42.0 below the minimum")
 	}
 	writeFile(t, props, []byte("Pkg.BuildId=12345\n"))
 	writeFile(t, manifest, []byte(`{"version": "v0.35.0"}`))
@@ -888,8 +1097,8 @@ func TestProductionRootReadOnly(t *testing.T) {
 	} else {
 		t.Logf("note: mas-avd.json is not what AUTO-MAS writes for its content (edited by hand?)")
 	}
-	b, ok := r.ModBuild()
-	t.Logf("build %d %v, version %q, emulator %q, adb %d / %d, missing %v", b, ok, r.VersionText(),
+	b, ok := r.EmulatorBuild()
+	t.Logf("build %v %v, version %q, emulator %q, adb %d / %d, missing %v", b, ok, r.VersionText(),
 		r.EmulatorVersion(), r.AdbServerPort(), r.ScriptAdbServerPort(), r.Missing())
 	for _, c := range r.Components() {
 		t.Logf("%+v", c)

@@ -1,0 +1,461 @@
+{
+  "comment": [
+    "Fake computers and roots for the report tests and gen_golden.ps1. Everything here is made up.",
+    "Placeholders, replaced in this text before it is parsed: {{BASE}} (the scenario's directory), {{ROOT}} (the ModAVD",
+    "root under it), {{MAS}} (the fake AUTO-MAS installation, {{BASE}}\\mas), {{ADBPORT}} (the port of the fake adb",
+    "server). Each is JSON-escaped once; the _J forms ({{BASE_J}} ...) twice, for JSON inside a JSON string.",
+    "files: path under {{BASE}} ('root/' is the root); text, or size (that many 'x'), or b64; mtime is local wall-clock",
+    "time (default 2026-01-10 08:00:00); hidden sets the hidden attribute; dir makes a directory.",
+    "<name>Err makes that query fail with the message; limits lower the script's $LogCapBytes, $MasLogTailBytes and",
+    "$DumpMaxBytes.",
+    "env: paths under {{BASE}}; '<dir>\\rest' names dir (directly under {{BASE}}) by its 8.3 short name, the way %TEMP%",
+    "is the 8.3 short form (PROFIL~1 style) of %LOCALAPPDATA%\\Temp (only on a",
+    "volume that makes 8.3 names: gen_golden.ps1 fails elsewhere, the tests skip the scenario)."
+  ],
+  "full": {
+    "now": "2026-01-15 12:00:00",
+    "root": "root",
+    "env": {"LOCALAPPDATA": "local", "TEMP": "local\\Temp"},
+    "limits": {"logCap": 6000, "masTail": 2000, "dumpMax": 3000},
+    "os": {
+      "Caption": "Microsoft Windows 11 专业版",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200",
+      "OSArchitecture": "64 位",
+      "TotalVisibleMemorySize": 33470844,
+      "FreePhysicalMemory": 12058624
+    },
+    "currentVersion": {"DisplayVersion": "25H2", "ReleaseId": "2009", "CurrentBuild": "26200", "UBR": 7019},
+    "cpus": [
+      {"Name": "  Intel(R) Core(TM) i7-12700K   CPU @ 3.60GHz ", "NumberOfCores": 12, "NumberOfLogicalProcessors": 20, "VirtualizationFirmwareEnabled": true},
+      {"Name": "Fake Socket 2", "NumberOfCores": null, "NumberOfLogicalProcessors": null, "VirtualizationFirmwareEnabled": null}
+    ],
+    "cs": {"HypervisorPresent": true},
+    "gpus": [
+      {"Name": "Parsec Virtual Display Adapter", "DriverVersion": "0.45.0.0", "PNPDeviceID": "ROOT\\DISPLAY\\0000", "DriverDate": "2024-01-25"},
+      {"Name": "NVIDIA GeForce RTX 4070", "DriverVersion": "32.0.15.6094", "PNPDeviceID": "PCI\\VEN_10DE&DEV_2786&SUBSYS_00000000", "DriverDate": "2024-08-14"},
+      {"Name": "Intel(R) UHD Graphics 770", "DriverVersion": "31.0.101.5186", "PNPDeviceID": "pci\\VEN_8086&DEV_4680", "DriverDate": null}
+    ],
+    "features": [
+      {"Name": "hypervisorplatform", "InstallState": 2},
+      {"Name": "VirtualMachinePlatform", "InstallState": 1},
+      {"Name": "Microsoft-Hyper-V-All", "InstallState": 3}
+    ],
+    "av": [
+      {"displayName": "Windows Defender", "productState": 397568},
+      {"displayName": "Fake AV", "productState": 266240}
+    ],
+    "disk": {"BusType": "USB", "MediaType": "SSD"},
+    "drive": {"AvailableFreeSpace": 221600000000, "TotalSize": 1024209543168, "DriveFormat": "NTFS"},
+    "uninstall": {
+      "HKLM": [
+        {"DisplayName": "Some Other App", "InstallLocation": "{{MAS}}", "DisplayVersion": "1.0"},
+        {"DisplayName": "AUTO-MAS (old)", "InstallLocation": "{{BASE}}\\no-such-dir", "DisplayVersion": "v4.0"}
+      ],
+      "WOW": [
+        {"DisplayName": "auto-mas", "InstallLocation": "{{MAS}}\\", "DisplayVersion": "v5.8.0-beta.2"}
+      ],
+      "HKCU": []
+    },
+    "processes": [
+      {"ProcessId": 4100, "Name": "qemu-system-x86_64-headless.exe", "CreationDate": "2026-01-15 11:58:00",
+        "CommandLine": "{{ROOT}}\\sdk\\emulator\\qemu\\windows-x86_64\\qemu-system-x86_64-headless.exe -avd mas_1 -no-snapshot -gpu host -ports 20010,20011 -grpc 20012 -no-window",
+        "ExecutablePath": "{{ROOT}}\\sdk\\emulator\\qemu\\windows-x86_64\\qemu-system-x86_64-headless.exe"},
+      {"ProcessId": 4300, "Name": "qemu-system-x86_64.exe", "CreationDate": "2026-01-15 11:50:30", "CommandLine": "", "ExecutablePath": ""},
+      {"ProcessId": 4400, "Name": "QEMU-SYSTEM-aarch64.exe", "CreationDate": "", "CommandLine": "qemu -avd other_avd -port 20090", "ExecutablePath": ""},
+      {"ProcessId": 4242, "Name": "adb.exe", "CreationDate": "2026-01-15 11:57:00", "CommandLine": "adb -L tcp:fake fork-server server", "ExecutablePath": ""},
+      {"ProcessId": 777, "Name": "ADB.EXE", "CreationDate": "2026-01-14 08:00:00", "CommandLine": "", "ExecutablePath": "X:\\fake\\other\\adb.exe"},
+      {"ProcessId": 999, "Name": "notadb.exe", "CreationDate": "2026-01-14 08:00:00", "CommandLine": "", "ExecutablePath": ""},
+      {"ProcessId": 5000, "Name": "AUTO-MAS.exe", "CreationDate": "2026-01-14 08:00:00", "CommandLine": "", "ExecutablePath": "{{MAS}}\\AUTO-MAS.exe"}
+    ],
+    "listeners": [
+      {"LocalAddress": "::1", "LocalPort": "5037", "OwningProcess": 777},
+      {"LocalAddress": "127.0.0.1", "LocalPort": "{{ADBPORT}}", "OwningProcess": 4242},
+      {"LocalAddress": "127.0.0.1", "LocalPort": "20010", "OwningProcess": 999},
+      {"LocalAddress": "127.0.0.1", "LocalPort": "5037", "OwningProcess": 777}
+    ],
+    "events": [
+      {"TimeCreated": "2026-01-14 10:00:00", "Id": 1000, "ProviderName": "Application Error",
+        "Message": "Faulting application name: qemu-system-x86_64.exe, version: 0.0.0.0\r\nFaulting module name: ntdll.dll, version: 10.0.26100.1\r\n\r\n  Exception code: 0xc0000005  \r\nFault offset: 0x0000000000001234\r\nFaulting process id: 0x1004\r\nFaulting application start time: 0x01db0000\r\nFaulting application path: X:\\fake\\qemu-system-x86_64.exe"},
+      {"TimeCreated": "2026-01-13 09:00:00", "Id": 1001, "ProviderName": "Windows Error Reporting",
+        "Message": "Fault bucket 1, type 5\r\nEvent Name: AppHangB1\r\nP1: badbeef.exe"},
+      {"TimeCreated": "2026-01-12 08:30:00", "Id": 1002, "ProviderName": "Application Hang",
+        "Message": "The program adb.exe version 0.0.0.0 stopped interacting with Windows and was closed."},
+      {"TimeCreated": "2026-01-11 07:00:00", "Id": 1000, "ProviderName": "Application Error",
+        "Message": "Faulting application name: AUTO-MAS.exe"},
+      {"TimeCreated": "2026-01-10 06:00:00", "Id": 1001, "ProviderName": "Windows Error Reporting",
+        "Message": "P1: Emulator-Check.exe"},
+      {"TimeCreated": "2026-01-09 05:00:00", "Id": 1000, "ProviderName": "Application Error",
+        "Message": "Faulting application name: notepad.exe"}
+    ],
+    "run": {
+      "emulator.exe": {"stdout": "accel:\r\n0\r\nWHPX(10.0.26200) is installed and usable.\r\naccel\r\n", "stderr": "WARNING | fake warning   \n", "exit": 0},
+      "emulator-check.exe": {"stdout": "accel:\r\n0\r\nWHPX(10.0.26200) is installed and usable.\r\naccel\r\n", "stderr": "", "exit": 0}
+    },
+    "adb": {
+      "devices": "emulator-20010\tdevice\nemulator-20030\tdevice\nemulator-20045\tdevice\nemulator-20080\toffline\nemulator-20090\tdevice\n127.0.0.1:20071\tdevice\n",
+      "serials": {
+        "emulator-20010": {
+          "features": "stat_v2,shell_v2,cmd",
+          "shell": {
+            "getprop sys.boot_completed": {"out": "1\n"},
+            "pm list packages -3": {"out": "package:com.hypergryph.arknights\npackage:de.jrpie.android.launcher\npackage:org.modavd.ime\npackage:com.example.zeta\npackage:org.fossify.home\npackage:COM.MIHOYO.HKRPG\n"},
+            "dumpsys package com.hypergryph.arknights 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=2.6.21\n"},
+            "dumpsys package org.modavd.ime 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=1.0\n"},
+            "dumpsys package com.example.zeta 2>/dev/null | grep -m1 versionName=": {"out": ""},
+            "dumpsys package COM.MIHOYO.HKRPG 2>/dev/null | grep -m1 versionName=": {"out": "    versionName=3.5.0\n", "err": "Broken pipe\n"},
+            "getprop": {"out": "[ro.build.version.sdk]: [34]\n[ro.product.model]: [中文型号]\n[sys.boot_completed]: [1]\n"},
+            "dumpsys window": {"out": "WINDOW MANAGER WINDOWS (dumpsys window windows)\n  Window #0 Window{1a2b u0 StatusBar}:\n  mCurrentFocus=Window{2bce772 u0 de.jrpie.android.launcher/de.jrpie.android.launcher.ui.HomeActivity}\n  mFocusedApp=ActivityRecord{fb750ba u0 de.jrpie.android.launcher/.ui.HomeActivity t6}\n  mInputMethodWindow=null\n"},
+            "export ANDROID_LOG_TAGS=''; exec logcat '-d' '-b' 'crash'": {"out": "", "err": "logcat: Unable to open log device '/dev/log/crash'\n", "exit": 1}
+          },
+          "exec": {"screencap -p": {"b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="}}
+        },
+        "emulator-20030": {
+          "features": "cmd",
+          "shell": {
+            "getprop sys.boot_completed": {"out": "0\n"},
+            "getprop": {"out": "[sys.boot_completed]: [0]\n", "err": "warning: no shell_v2\n"},
+            "dumpsys window": {"out": "WINDOW MANAGER\n"},
+            "export ANDROID_LOG_TAGS=''; exec logcat '-d' '-b' 'crash'": {"out": "--------- beginning of crash\n"}
+          },
+          "exec": {"screencap -p": {"b64": "ZXJyb3I6IG5vIGRpc3BsYXkK"}}
+        },
+        "emulator-20090": {
+          "features": "shell_v2",
+          "shell": {
+            "getprop sys.boot_completed": {"out": "1\n"},
+            "pm list packages -3": {"out": "package:de.jrpie.android.launcher\n"}
+          }
+        }
+      }
+    },
+    "files": [
+      {"path": "root/mas-avd.json", "text": "{\r\n  \"adbServerPort\": {{ADBPORT}},\r\n  \"sdkRoot\": \"  \",\r\n  \"instances\": {\r\n    \"1\": {\"memoryMb\": 6144, \"initialized\": true},\r\n    \"3\": {\"memoryMb\": 4096},\r\n    \"10\": {\"memoryMb\": 3072}\r\n  }\r\n}\r\n"},
+      {"path": "root/sdk/emulator/source.properties", "text": "Pkg.Desc=Android Emulator\r\nPkg.Revision=37.2.10\r\n# Pkg.BuildId=not-this-one\r\nPkg.BuildId=mas-36\r\n"},
+      {"path": "root/sdk/emulator/emulator.exe", "text": "MZ fake emulator"},
+      {"path": "root/sdk/emulator/emulator-check.exe", "text": "MZ fake emulator-check"},
+      {"path": "root/sdk/platform-tools/source.properties", "text": "Pkg.UserSrc=false\nPkg.Revision=37.0.1\n"},
+      {"path": "root/sdk/platform-tools/adb.exe", "text": "MZ fake adb"},
+      {"path": "root/sdk/system-images/android-34/google_apis/x86_64/source.properties", "text": "Pkg.Desc=System Image x86_64 with Google APIs.\nPkg.Revision=14\nAndroidVersion.ApiLevel=34\nSystemImage.Abi=x86_64\nSystemImage.TagId=google_apis\n"},
+      {"path": "root/sdk/system-images/android-34/google_apis/x86_64/system.img", "size": 64},
+      {"path": "root/avd/mas_1.ini", "text": "avd.ini.encoding=UTF-8\r\npath={{ROOT}}\\avd\\mas_1.avd\r\npath.rel=avd\\mas_1.avd\r\ntarget=android-34\r\n"},
+      {"path": "root/avd/mas_1.avd/config.ini", "text": "hw.ramSize = 6144M\r\nhw.cpu.ncore=6\r\nhw.lcd.width=1280\r\nhw.lcd.height=720\r\nHW.LCD.DENSITY=240\r\nimage.sysdir.1=system-images\\android-34\\google_apis\\x86_64\\\r\n#hw.ramSize=1\r\n", "mtime": "2026-01-14 21:30:05"},
+      {"path": "root/avd/mas_1.avd/hardware-qemu.ini", "text": "hw.cpu.arch = x86_64\r\n", "mtime": "2026-01-15 11:58:01"},
+      {"path": "root/avd/mas_1.avd/emulator-user.ini", "text": "window.x = 0\r\nwindow.y = 0\r\n"},
+      {"path": "root/avd/mas_1.avd/userdata-qemu.img", "size": 4096},
+      {"path": "root/avd/mas_1.avd/userdata-qemu.img.qcow2", "size": 1234567},
+      {"path": "root/avd/mas_1.avd/encryptionkey.img", "size": 100},
+      {"path": "root/avd/mas_1.avd/snapshots/default_boot/ram.bin", "size": 10},
+      {"path": "root/avd/mas_1.avd/multiinstance.lock", "text": "", "hidden": true},
+      {"path": "root/avd/mas_1.avd/这是一个非常非常长的中文文件名用来检查四十个字符宽度的列在名字更长的时候不会被截断.txt", "text": "x"},
+      {"path": "root/avd/mas_10.ini", "text": "path.rel=avd\\mas_10.avd\r\n"},
+      {"path": "root/avd/mas_10.avd/config.ini", "text": "hw.ramSize=3072M\n"},
+      {"path": "root/avd/mas_3.ini", "text": "path.rel=avd\\mas_3.avd\r\n"},
+      {"path": "root/avd/mas_4.ini", "text": "path.rel=avd\\mas_4.avd\r\n"},
+      {"path": "root/avd/mas_4.avd/hardware-qemu.ini", "text": "hw.cpu.arch = x86_64\r\n"},
+      {"path": "root/avd/mas_4.avd/cache.img", "size": 2048},
+      {"path": "root/avd/mas_7.ini", "text": "path.rel=avd\\mas_7.avd\r\n"},
+      {"path": "root/avd/mas_7.avd", "dir": true},
+      {"path": "root/avd/hidden_9.ini", "text": "path.rel=avd\\hidden_9.avd\r\n", "hidden": true},
+      {"path": "root/avd/notes.txt", "text": "not an instance"},
+      {"path": "root/logs/mas_1-20260105-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260106-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260107-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260108-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260109-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260110-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260111-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260112-080000.log", "size": 300},
+      {"path": "root/logs/mas_1-20260113-080000.log", "size": 300},
+      {"path": "root/logs/logcat-mas_1-20260111-080000.txt", "size": 2000},
+      {"path": "root/logs/logcat-mas_1-20260112-080000.txt", "size": 2000},
+      {"path": "root/logs/logcat-mas_1-20260113-080000.txt", "size": 2000},
+      {"path": "root/logs/mas_10-20260114-090000.log", "size": 200},
+      {"path": "root/logs/modavd-bridge-1-20260113-080100.log", "size": 100},
+      {"path": "root/logs/modavd-bootwatch.log", "text": "boot watch log\n"},
+      {"path": "root/logs/modavd-ui.log", "text": "manager log\n"},
+      {"path": "root/logs/startup-mas_1-20260110-080000-hang-threads.txt", "text": "threads 0110\n"},
+      {"path": "root/logs/startup-mas_1-20260111-080000-hang-threads.txt", "text": "threads 0111\n"},
+      {"path": "root/logs/startup-mas_1-20260112-080000-hang-threads.txt", "text": "threads 0112\n"},
+      {"path": "root/logs/startup-mas_10-20260109-080000-hang-threads.txt", "text": "threads 10\n"},
+      {"path": "root/logs/startup-odd-hang-threads.txt", "text": "no stamp in the name\n", "mtime": "2026-01-14 10:00:00"},
+      {"path": "root/logs/fetch-components.log", "text": "fetch log\n"},
+      {"path": "local/Temp/adb.log", "text": "--- adb starting (pid 4242) ---\n"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/r1.dmp", "size": 1000, "mtime": "2026-01-14 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/r2.dmp", "size": 5000, "mtime": "2026-01-13 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.11-mas.db/pending/r3.dmp", "size": 800, "mtime": "2026-01-12 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/r4.dmp", "size": 700, "mtime": "2026-01-11 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/old.dmp", "size": 600, "mtime": "2026-01-01 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/attachments/note.txt", "text": "x", "mtime": "2026-01-14 09:30:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-37.2.10.db/reports/google.dmp", "size": 500, "mtime": "2026-01-14 09:00:00"},
+      {"path": "local/Temp/AndroidEmulator/emu-crash-36.1-mas.db/reports/odd.dmp", "size": 500, "mtime": "2026-01-14 09:00:00"},
+      {"path": "mas/AUTO-MAS.exe", "text": "MZ fake AUTO-MAS"},
+      {"path": "mas/debug/app.log", "size": 5000},
+      {"path": "mas/debug/frontend.log", "size": 500},
+      {"path": "mas/debug/app.2026-01-01_10-00-00_000001.log.zip", "size": 300, "mtime": "2026-01-01 10:00:00"},
+      {"path": "mas/debug/app.2026-01-12_10-00-00_000002.log.zip", "size": 400, "mtime": "2026-01-12 10:00:00"},
+      {"path": "mas/config/accounts.json", "text": "{\"secret\": true}"},
+      {"path": "mas/data/accounts.db", "size": 100}
+    ]
+  },
+  "bare": {
+    "now": "2026-01-15 12:00:00",
+    "root": "模拟器 根目录",
+    "env": {"LOCALAPPDATA": "lad", "TEMP": "tmp"},
+    "clipboardErr": "剪贴板被别的程序占着",
+    "os": {
+      "Caption": "Microsoft Windows 10 Home",
+      "Version": "10.0.19045",
+      "BuildNumber": "19045",
+      "OSArchitecture": "64-bit",
+      "TotalVisibleMemorySize": 8282112,
+      "FreePhysicalMemory": 1572864
+    },
+    "currentVersion": {"ReleaseId": "2009", "CurrentBuild": "19045"},
+    "cpus": [
+      {"Name": "AMD Ryzen 5 5600G with Radeon Graphics", "NumberOfCores": 6, "NumberOfLogicalProcessors": 12, "VirtualizationFirmwareEnabled": false}
+    ],
+    "csErr": "拒绝访问。",
+    "gpus": [
+      {"Name": "Microsoft Basic Display Adapter", "DriverVersion": "10.0.19041.1", "PNPDeviceID": "ROOT\\BASICDISPLAY\\0000", "DriverDate": "2006-06-21"}
+    ],
+    "features": [
+      {"Name": "Microsoft-Hyper-V-All", "InstallState": null}
+    ],
+    "avErr": "无效命名空间 ",
+    "diskErr": "No MSFT_Partition objects found with property 'DriveLetter' equal to 'X'.",
+    "driveErr": "设备未就绪。",
+    "uninstall": {"HKLM": [], "WOW": [], "HKCU": []},
+    "processes": [],
+    "listeners": [],
+    "events": [],
+    "run": {},
+    "adb": {"devices": "", "serials": {}},
+    "files": [
+      {"path": "root/mas-avd.json", "text": "{\"adbServerPort\": \"5037\", \"sdkRoot\": \" {{BASE_J}}\\\\nosdk \", \"instances\": {\"2\": {\"memoryMb\": 3072.5}, \"10\": {}, \"1\": {\"memoryMb\": \"4096\"}}}"},
+      {"path": "tmp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/old.dmp", "size": 300, "mtime": "2026-01-08 11:59:59"},
+      {"path": "lad/Temp/AndroidEmulator/emu-crash-37.2.12-mas.db/reports/new.dmp", "size": 200, "mtime": "2026-01-08 12:00:00"}
+    ]
+  },
+  "shortname": {
+    "now": "2026-01-15 12:00:00",
+    "root": "root",
+    "env": {"LOCALAPPDATA": "Local Data Dir", "TEMP": "<Local Data Dir>\\Temp"},
+    "os": {
+      "Caption": "Microsoft Windows 11 Pro",
+      "Version": "10.0.26100",
+      "BuildNumber": "26100",
+      "OSArchitecture": "64-bit",
+      "TotalVisibleMemorySize": 16654336,
+      "FreePhysicalMemory": 8327168
+    },
+    "currentVersion": {"DisplayVersion": "24H2", "ReleaseId": "2009", "CurrentBuild": "26100", "UBR": 4351},
+    "cpus": [
+      {"Name": "Fake CPU 8 Cores", "NumberOfCores": 8, "NumberOfLogicalProcessors": 16, "VirtualizationFirmwareEnabled": true}
+    ],
+    "cs": {"HypervisorPresent": false},
+    "gpus": [
+      {"Name": "Fake GPU", "DriverVersion": "1.2.3.4", "PNPDeviceID": "PCI\\VEN_1234&DEV_5678", "DriverDate": "2025-06-01"}
+    ],
+    "features": [
+      {"Name": "HypervisorPlatform", "InstallState": 1}
+    ],
+    "av": [
+      {"displayName": "Windows Defender", "productState": 397568}
+    ],
+    "disk": {"BusType": "NVMe", "MediaType": "SSD"},
+    "drive": {"AvailableFreeSpace": 107374182400, "TotalSize": 512110190592, "DriveFormat": "NTFS"},
+    "uninstall": {"HKLM": [], "WOW": [], "HKCU": []},
+    "processes": [],
+    "listeners": [],
+    "events": [],
+    "run": {},
+    "adb": {"devices": "", "serials": {}},
+    "files": [
+      {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/a.dmp", "size": 300, "mtime": "2026-01-14 09:00:00"},
+      {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/b.dmp", "size": 200, "mtime": "2026-01-13 09:00:00"},
+      {"path": "Local Data Dir/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/c.dmp", "size": 100, "mtime": "2026-01-12 09:00:00"}
+    ]
+  }
+,
+  "failure-os": {
+    "extends": "full",
+    "collectOnly": true,
+    "osErr": "test os unavailable"
+  },
+  "failure-currentVersion": {
+    "extends": "full",
+    "collectOnly": true,
+    "currentVersionErr": "test currentVersion unavailable"
+  },
+  "failure-cpus": {
+    "extends": "full",
+    "collectOnly": true,
+    "cpusErr": "test cpus unavailable"
+  },
+  "failure-cs": {
+    "extends": "full",
+    "collectOnly": true,
+    "csErr": "test cs unavailable"
+  },
+  "failure-gpus": {
+    "extends": "full",
+    "collectOnly": true,
+    "gpusErr": "test gpus unavailable"
+  },
+  "failure-features": {
+    "extends": "full",
+    "collectOnly": true,
+    "featuresErr": "test features unavailable"
+  },
+  "failure-av": {
+    "extends": "full",
+    "collectOnly": true,
+    "avErr": "test av unavailable"
+  },
+  "failure-disk": {
+    "extends": "full",
+    "collectOnly": true,
+    "diskErr": "test disk unavailable"
+  },
+  "failure-drive": {
+    "extends": "full",
+    "collectOnly": true,
+    "driveErr": "test drive unavailable"
+  },
+  "failure-processes": {
+    "extends": "full",
+    "collectOnly": true,
+    "processesErr": "test processes unavailable"
+  },
+  "failure-listeners": {
+    "extends": "full",
+    "collectOnly": true,
+    "listenersErr": "test listeners unavailable"
+  },
+  "failure-events": {
+    "extends": "full",
+    "collectOnly": true,
+    "eventsErr": "test events unavailable"
+  },
+  "failure-accel": {
+    "extends": "full",
+    "collectOnly": true,
+    "run": {
+      "emulator.exe": {
+        "timeout": true
+      }
+    }
+  },
+  "empty-branches": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "files": [
+      {
+        "path": "root/sdk/emulator/source.properties",
+        "text": "Pkg.Revision=37.2.10\nPkg.BuildId=mas-37\n"
+      },
+      {
+        "path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/old.dmp",
+        "text": "old dump",
+        "mtime": "2026-01-01 00:00:00"
+      },
+      {
+        "path": "tmp/AndroidEmulator/emu-crash-37.2.10.db/reports/foreign.dmp",
+        "text": "foreign"
+      },
+      {
+        "path": "mas/AUTO-MAS.exe",
+        "text": "fake"
+      }
+    ],
+    "processes": [
+      {
+        "ProcessId": 5000,
+        "Name": "AUTO-MAS.exe",
+        "ExecutablePath": "{{MAS}}\\AUTO-MAS.exe"
+      }
+    ]
+  },
+  "logs-and-mas": {
+    "extends": "full",
+    "collectOnly": true,
+    "uninstall": {
+      "HKLM": [],
+      "WOW": [],
+      "HKCU": []
+    },
+    "limits": {
+      "logCap": 1000000,
+      "masTail": 1000000,
+      "dumpMax": 1000000
+    }
+  },
+  "live-no-devices": {
+    "extends": "full",
+    "collectOnly": true,
+    "adb": {
+      "devices": "",
+      "serials": {}
+    }
+  },
+  "live-no-server": {
+    "extends": "full",
+    "collectOnly": true,
+    "listeners": []
+  },
+  "mas-missing-logs": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "uninstall": {
+      "HKLM": [
+        {
+          "DisplayName": "AUTO-MAS",
+          "InstallLocation": "{{MAS}}",
+          "DisplayVersion": "test"
+        }
+      ],
+      "WOW": [],
+      "HKCU": []
+    },
+    "files": [
+      {
+        "path": "mas/debug",
+        "dir": true
+      }
+    ]
+  },
+  "crash-boundary": {
+    "extends": "shortname",
+    "collectOnly": true,
+    "env": {
+      "LOCALAPPDATA": "local",
+      "TEMP": "tmp"
+    },
+    "limits": {
+      "logCap": 6000,
+      "masTail": 2000,
+      "dumpMax": 16
+    },
+    "files": [
+      {
+        "path": "local/Temp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/a.dmp",
+        "b64": "AAECAwQFBgcICQoLDA0ODw==",
+        "mtime": "2026-01-08 12:00:00"
+      },
+      {
+        "path": "tmp/AndroidEmulator/emu-crash-37.2.10-mas.db/reports/b.dmp",
+        "size": 17,
+        "mtime": "2026-01-14 09:00:00"
+      }
+    ]
+  }
+}

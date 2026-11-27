@@ -11,11 +11,14 @@ export const S = {
   checking: false,
   checkError: null,
   checkedAt: 0,
+  update: null, // GET /api/update and the "update" event
+  components: null, // GET /api/components
+  componentsError: null,
   conn: 'connecting', // connecting | open | lost | auth
   lostAt: 0, // when the event stream went down (0 while it is up)
   pending: {}, // index -> kind while the POST is in flight
-  win: {}, // index -> window visible, as last told by the server
   dismissed: new Set(), // failed job ids the user closed on the card
+  proxyMarks: {}, // index -> {index, tone, text}: the 代理 mark of a running instance (the proxy event)
 };
 
 const subs = new Set();
@@ -60,8 +63,10 @@ export function lastJob(i, running) {
   return best;
 }
 
-// The root cannot boot right now (the banner says why); 开机 / 重启 would only fail.
-export const rootBlocked = () => !!S.check && S.check.ready === false;
+// A blocking check failed: no instance can boot from this root (the check is the same for every instance).
+export function rootBlocked() {
+  return !!S.check && S.check.ready === false;
+}
 
 export function runningCount() {
   let n = 0;

@@ -1,15 +1,18 @@
-//go:build windows
-
 package cli
 
 import (
 	"fmt"
 	"io"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"modavd/internal/avd"
+	"modavd/internal/components"
 	"modavd/internal/emu"
+	"modavd/internal/i18n"
 )
 
 // Human-readable summaries (stdout without --json). Wording follows AUTO-MAS where it has a message for the same
@@ -23,10 +26,20 @@ func statusText(s emu.Status) string {
 		return "开机中"
 	case emu.StatusOnline:
 		return "运行中"
+	case emu.StatusCreateFailed:
+		return "新建失败"
 	case "":
 		return "未知"
 	}
 	return string(s)
+}
+
+// statusLabel is statusText, and 新建中 with the percentage of create's setup while it runs ("新建中 35%").
+func statusLabel(s emu.Status, creationProgress int) string {
+	if s == emu.StatusCreating {
+		return fmt.Sprintf("新建中 %d%%", creationProgress)
+	}
+	return statusText(s)
 }
 
 func busyText(b string) string {
@@ -35,6 +48,8 @@ func busyText(b string) string {
 		return "正在开机"
 	case "stopping":
 		return "正在关机"
+	case "creating":
+		return "" // the status says so
 	}
 	return b
 }
@@ -120,6 +135,13 @@ func displayWidth(s string) int {
 
 // writeTable aligns columns by display width (text/tabwriter counts runes, which misaligns Chinese).
 func writeTable(w io.Writer, rows [][]string) {
+	if lang := i18n.LangOf(w); lang != i18n.Chinese {
+		for _, row := range rows {
+			for k, cell := range row {
+				row[k] = i18n.Translate(lang, cell)
+			}
+		}
+	}
 	var widths []int
 	for _, row := range rows {
 		for k, cell := range row {
@@ -171,11 +193,11 @@ func formatList(w io.Writer, r *emu.ListResult) {
 	rows := [][]string{{"编号", "名称", "状态", "adb 地址", "内存", "核数", "帧率", "备注"}}
 	for _, in := range r.Instances {
 		title := in.Title
-		if title == "" {
-			title = in.Name
+		if title == "" || title == in.Name { // no title of its own: emu-N, as the manager shows it (mas_N is the file name)
+			title = fmt.Sprintf("emu-%d", in.Index)
 		}
 		rows = append(rows, []string{
-			strconv.Itoa(in.Index), title, statusText(in.Status), in.AdbAddress,
+			strconv.Itoa(in.Index), title, statusLabel(in.Status, in.CreationProgress), in.AdbAddress,
 			fmtMemory(in.Config.MemoryMB), intOrDash(in.Config.CPU), intOrDash(in.Config.FPS),
 			strings.Join(listNotes(in), "，"),
 		})
@@ -185,10 +207,14 @@ func formatList(w io.Writer, r *emu.ListResult) {
 
 func listNotes(in emu.InstanceInfo) []string {
 	var notes []string
+	if in.Diagnostics {
+		notes = append(notes, "诊断模式")
+	}
 	if b := busyText(in.Busy); b != "" {
 		notes = append(notes, b)
 	}
-	if !in.Initialized {
+	// a new instance is initialized by create's setup, whose state the status shows
+	if !in.Initialized && in.Creation == "" {
 		notes = append(notes, "未初始化")
 	}
 	if in.SoftwareRenderer {
@@ -197,8 +223,8 @@ func listNotes(in emu.InstanceInfo) []string {
 	return notes
 }
 
-func statusDetail(status emu.Status, pid int, startedAt, busy string) string {
-	s := statusText(status)
+func statusDetail(status emu.Status, creationProgress, pid int, startedAt, busy string) string {
+	s := statusLabel(status, creationProgress)
 	var extra []string
 	if pid != 0 {
 		extra = append(extra, "PID "+strconv.Itoa(pid))
@@ -222,7 +248,22 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	if in.Title != "" && in.Title != in.Name {
 		kv("标题", in.Title)
 	}
-	kv("状态", statusDetail(in.Status, in.PID, in.StartedAt, in.Busy))
+	kv("状态", statusDetail(in.Status, in.CreationProgress, in.PID, in.StartedAt, in.Busy))
+	diagnostics := "关"
+	if in.Diagnostics {
+		diagnostics = "开"
+		if in.DiagnosticsSince != "" {
+			since := in.DiagnosticsSince
+			if parsed, err := time.Parse(time.RFC3339Nano, since); err == nil {
+				since = parsed.Local().Format("2006-01-02 15:04:05 MST")
+			}
+			diagnostics += "，自 " + since
+		}
+	}
+	kv("诊断模式", diagnostics)
+	if runtime.GOOS == "windows" {
+		kv("老板键", bossKeyText(in.BossKey))
+	}
 	kv("adb 地址", in.AdbAddress)
 	kv("序列号", in.Serial+"（私有 adb server 上）")
 	kv("端口", fmt.Sprintf("控制台 %d，adb %d，gRPC %d", in.Ports.Console, in.Ports.Adb, in.Ports.Grpc))
@@ -237,13 +278,21 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 	kv("内存", fmtMemory(cfg.MemoryMB))
 	kv("核数", intOrDash(cfg.CPU))
 	kv("帧率", intOrDash(cfg.FPS))
-	kv("数据盘", fmtGB(cfg.DataPartitionGB))
+	kv("声音", onOff(cfg.Sound))
+	kv("应用保活", onOff(cfg.AppKeepalive))
+	kv("数据盘", dataDiskText(cfg)+"，"+dataSpaceSummary(in.DataSpace))
+	if in.DataSpace.Message != "" {
+		kv("数据盘提示", dataSpaceNote(in.DataSpace))
+	}
 	if cfg.Width > 0 && cfg.Height > 0 {
 		kv("显示", fmt.Sprintf("%dx%d，%d dpi", cfg.Width, cfg.Height, cfg.DPI))
 	}
-	if in.Initialized {
+	switch {
+	case in.Initialized:
 		kv("首次初始化", "已完成")
-	} else {
+	case in.Creation != "":
+		kv("首次初始化", "还没做完（新建时做）")
+	default:
 		kv("首次初始化", "还没做（第一次开机时做）")
 	}
 	if in.Launcher != "" {
@@ -256,23 +305,81 @@ func formatInfo(w io.Writer, in *emu.InstanceInfo) {
 		}
 		kv("渲染器", r)
 	}
+	if in.GLES32 {
+		kv("报告 GLES 3.2", "开（实验；实际渲染仍是 3.1）")
+	}
+	if p := in.AppProxy; p != nil {
+		state := "关"
+		if p.Enabled {
+			state = fmt.Sprintf("开，%d 个应用 → %s", p.Apps, p.Server)
+		}
+		kv("按应用走代理", state)
+	}
 	kv("路径", in.Path)
 }
 
+// onOff is a switch for people: "开" / "关".
+func onOff(on bool) string {
+	if on {
+		return "开"
+	}
+	return "关"
+}
+
+// bossKeyText is a boss key for people: "无" when there is none.
+func bossKeyText(key string) string {
+	if key == "" {
+		return "无"
+	}
+	return key
+}
+
 func formatStatus(w io.Writer, s *StatusResult) {
-	fmt.Fprintf(w, "实例 %d：%s\n", s.Index, statusDetail(s.Status, s.PID, "", s.Busy))
+	fmt.Fprintf(w, "实例 %d：%s\n", s.Index, statusDetail(s.Status, s.CreationProgress, s.PID, "", s.Busy))
+	if s.DataSpace.Message != "" {
+		fmt.Fprintf(w, "数据盘：%s\n", dataSpaceNote(s.DataSpace))
+	}
+}
+
+// dataDiskText is the data disk's mode and size: "自动扩盘（256 GB）" / "64 GB（指定大小）".
+func dataDiskText(cfg emu.InstanceConfig) string {
+	if cfg.DataDiskMode == avd.DataDiskManual {
+		return fmtGB(cfg.DataPartitionGB) + "（指定大小）"
+	}
+	return "自动扩盘（" + fmtGB(cfg.DataPartitionGB) + "）"
+}
+
+// dataSpaceSummary is what info shows after the data disk: what it takes on the host and the free space after the
+// last boot ("宿主占用 12.3 GB，上次开机剩余 200.0 GB").
+func dataSpaceSummary(d emu.DataSpace) string {
+	host := "宿主占用读不到"
+	if d.HostBytes >= 0 {
+		host = fmt.Sprintf("宿主占用 %.1f GB", float64(d.HostBytes)/(1<<30))
+	}
+	if d.TotalBytes > 0 {
+		return fmt.Sprintf("%s，上次开机剩余 %.1f GB", host, float64(d.FreeBytes)/(1<<30))
+	}
+	return host
+}
+
+// dataSpaceNote is the message with its advice ("数据盘只剩 …；手动扩容：modavd set …").
+func dataSpaceNote(d emu.DataSpace) string {
+	if d.Advice == "" {
+		return d.Message
+	}
+	return d.Message + "；" + d.Advice
 }
 
 func formatCreate(w io.Writer, in *emu.InstanceInfo) {
 	cfg := in.Config
 	fmt.Fprintf(w, "已创建%s：内存 %s，%s 核，%s 帧，数据盘 %s\n", instLabel(in.Index, in.Name, in.Title),
-		fmtMemory(cfg.MemoryMB), intOrDash(cfg.CPU), intOrDash(cfg.FPS), fmtGB(cfg.DataPartitionGB))
+		fmtMemory(cfg.MemoryMB), intOrDash(cfg.CPU), intOrDash(cfg.FPS), dataDiskText(cfg))
 	fmt.Fprintf(w, "adb 地址：%s\n", in.AdbAddress)
 	fmt.Fprintf(w, "路径：%s\n", in.Path)
 }
 
 // appliedOrder is the order changes are listed in; unknown keys follow alphabetically.
-var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "data_partition_gb"}
+var appliedOrder = []string{"title", "memory_mb", "cpu", "fps", "resolution", "dpi", "orientation", "data_partition_gb"}
 
 func appliedParts(applied map[string]any) []string {
 	keys := make([]string, 0, len(applied))
@@ -310,8 +417,43 @@ func appliedParts(applied map[string]any) []string {
 			parts = append(parts, fmt.Sprintf("核数 %v", v))
 		case "fps":
 			parts = append(parts, fmt.Sprintf("帧率 %v", v))
+		case "resolution":
+			parts = append(parts, fmt.Sprintf("分辨率 %vp", v))
+		case "dpi":
+			if n, ok := asInt(v); ok && n == 0 {
+				parts = append(parts, "DPI 跟随分辨率")
+			} else {
+				parts = append(parts, fmt.Sprintf("DPI %v", v))
+			}
+		case "orientation":
+			if v == avd.OrientationPortrait {
+				parts = append(parts, "方向 竖屏")
+			} else {
+				parts = append(parts, "方向 横屏")
+			}
 		case "data_partition_gb":
-			parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+			if applied["data_disk_mode"] == avd.DataDiskAuto {
+				parts = append(parts, fmt.Sprintf("数据盘 自动扩盘（%v GB，下次开机生效）", v))
+			} else {
+				parts = append(parts, fmt.Sprintf("数据盘 %v GB（下次开机扩大）", v))
+			}
+		case "data_disk_mode":
+			// said with data_partition_gb
+		case "diagnostics":
+			if enabled, _ := v.(bool); enabled {
+				parts = append(parts, "诊断模式 开")
+			} else {
+				parts = append(parts, "诊断模式 关")
+			}
+		case "app_keepalive":
+			on, _ := v.(bool)
+			parts = append(parts, "应用保活 "+onOff(on))
+		case "sound":
+			on, _ := v.(bool)
+			parts = append(parts, "声音 "+onOff(on))
+		case "boss_key":
+			key, _ := v.(string)
+			parts = append(parts, "老板键 "+bossKeyText(key))
 		default:
 			parts = append(parts, fmt.Sprintf("%s %v", k, v))
 		}
@@ -341,10 +483,52 @@ func formatUpdate(w io.Writer, r *emu.UpdateResult) {
 	if r.AppliesNextBoot {
 		fmt.Fprintln(w, "实例正在运行，改动下次开机生效")
 	}
+	if c := r.DiagnosticsCleanup; c != nil && !r.Instance.Diagnostics {
+		fmt.Fprintf(w, "清理日志 %d 份，释放 %d 字节\n", c.Files, c.Bytes)
+	}
+	for _, warning := range r.Warnings {
+		fmt.Fprintln(w, warning)
+	}
 }
 
 func formatDelete(w io.Writer, r *emu.DeleteResult) {
 	fmt.Fprintf(w, "已删除实例 %d（%s），连同数据目录 %s\n", r.Index, r.Name, r.Path)
+}
+
+func formatClone(w io.Writer, r *emu.CloneResult) {
+	in := r.Instance
+	fmt.Fprintf(w, "已把实例 %d 复制成%s，复制了 %.1f GB\n", r.Source, instLabel(in.Index, in.Name, in.Title), float64(r.CopiedBytes)/(1<<30))
+	fmt.Fprintf(w, "adb 地址：%s\n", in.AdbAddress)
+	fmt.Fprintf(w, "路径：%s\n", in.Path)
+}
+
+// formatCreateBatch: each new instance as create prints it, then the ones not made.
+func formatCreateBatch(w io.Writer, r *CreateBatchResult) {
+	fmt.Fprintf(w, "新建了 %d 台，%d 台没建成\n", len(r.Results), len(r.Failed))
+	for k := range r.Results {
+		formatCreate(w, &r.Results[k])
+	}
+	for _, f := range r.Failed {
+		fmt.Fprintf(w, "实例 %d 没建成：%s\n", f.Index, f.Error.Message)
+		formatFailureAdvice(w, f)
+	}
+}
+
+func formatDeleteBatch(w io.Writer, r *DeleteBatchResult) {
+	fmt.Fprintf(w, "删除了 %d 台，%d 台没删\n", len(r.Results), len(r.Failed))
+	for k := range r.Results {
+		formatDelete(w, &r.Results[k])
+	}
+	for _, f := range r.Failed {
+		fmt.Fprintf(w, "实例 %d 没删：%s\n", f.Index, f.Error.Message)
+		formatFailureAdvice(w, f)
+	}
+}
+
+func formatFailureAdvice(w io.Writer, f InstanceFailure) {
+	if f.Error.Advice != "" {
+		fmt.Fprintf(w, "  建议：%s\n", f.Error.Advice)
+	}
 }
 
 func formatStart(w io.Writer, r *emu.StartResult) {
@@ -360,10 +544,10 @@ func formatStart(w io.Writer, r *emu.StartResult) {
 		fmt.Fprintln(w, "已完成首次初始化")
 	}
 	if r.ZygoteRestarted {
-		fmt.Fprintln(w, "挂上了客体 Vulkan 修复，zygote 已重启（应用都重新开始）")
+		fmt.Fprintln(w, "挂上了客体库补丁（Vulkan 驱动、ARM 转译层），zygote 已重启（应用都重新开始）")
 	}
 	if r.SetupPending {
-		fmt.Fprintf(w, "这次开机的一次性设置（首次初始化、客体 Vulkan 修复）还没做完，再运行一次 modavd start %d 补完\n",
+		fmt.Fprintf(w, "这次开机的一次性设置（首次初始化、客体库补丁）还没做完，再运行一次 modavd start %d 补完\n",
 			in.Index)
 	}
 	if r.LogFile != "" {
@@ -412,6 +596,9 @@ func stopLine(r *emu.StopResult) string {
 
 func formatStop(w io.Writer, r *emu.StopResult) {
 	fmt.Fprintln(w, stopLine(r))
+	if r.InterruptedCreate {
+		fmt.Fprintf(w, "  已打断新建初始化，用 modavd create --resume %d 重做\n", r.Index)
+	}
 	writeWarnings(w, r.Warnings)
 }
 
@@ -470,26 +657,81 @@ func formatCheck(w io.Writer, r *emu.CheckResult) {
 	if len(r.Components) > 0 {
 		fmt.Fprintln(w, "组件：")
 		for _, c := range r.Components {
-			ok := c.Installed
-			line := "  " + checkMark(&ok) + " " + c.Name
-			if c.Installed {
-				if c.Version != "" {
-					line += " " + c.Version
-				}
-				if c.Build != "" {
-					line += "（ModAVD " + c.Build + "）"
-				}
-			} else {
-				line += " 未安装"
-			}
-			if c.Optional {
-				line += "（可选）"
-			}
-			if c.LocalSDK {
-				line += "（本地 SDK）"
-			}
-			fmt.Fprintln(w, line)
+			fmt.Fprintln(w, "  "+componentLine(c))
 		}
+	}
+}
+
+// componentLine is one component of check and components status: "✓ 平台工具（adb） 37.0.1".
+func componentLine(c emu.ComponentStatus) string {
+	ok := c.Installed
+	line := checkMark(&ok) + " " + c.Name
+	if c.Installed {
+		if c.Version != "" {
+			line += " " + c.Version
+		}
+		if c.Build != "" {
+			line += "（ModAVD " + c.Build + "）"
+		}
+	} else {
+		line += " 未安装"
+	}
+	if c.Optional {
+		line += "（可选）"
+	}
+	if c.LocalSDK {
+		line += "（本地 SDK）"
+	}
+	return line
+}
+
+func formatComponents(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *ComponentsSourceResult:
+		label := r.Source
+		if label == "custom" {
+			label = "自定义：" + strings.Join(r.MirrorURLs, "、")
+		} else if label == "auto" {
+			label = "自动"
+		}
+		if r.Configured {
+			fmt.Fprintf(w, "组件下载源：%s（已保存）\n", label)
+		} else {
+			fmt.Fprintf(w, "组件下载源：%s（默认）\n", label)
+		}
+	case *ComponentsStatusResult:
+		fmt.Fprintf(w, "根目录：%s\n", r.Root)
+		for _, c := range r.Components {
+			fmt.Fprintln(w, componentLine(c))
+		}
+		fmt.Fprintln(w, playStoreStateLine(r.PlayStore))
+	case *components.PlayStoreImportResult:
+		formatImportPlayStore(w, r)
+	case *components.Result:
+		fetched := false
+		for _, c := range r.Components {
+			version := c.Version
+			if version == "" {
+				version = "未知"
+			}
+			switch {
+			case c.Skipped:
+				fmt.Fprintf(w, "已有：%s（版本 %s），跳过\n", c.Name, version)
+			case c.Downloaded:
+				fetched = true
+				fmt.Fprintf(w, "已装好：%s（版本 %s）\n", c.Name, version)
+			}
+			if c.SetAside != "" {
+				fmt.Fprintf(w, "  原来不完整的目录改名为 %s，确认没用后可以自己删掉\n", c.SetAside)
+			}
+		}
+		if len(r.Downloads) > 0 {
+			fmt.Fprintf(w, "下载的 %s 留在 downloads 里\n", strings.Join(r.Downloads, "、"))
+		}
+		if !fetched {
+			fmt.Fprint(w, "组件都已齐全，不需要下载。")
+		}
+		fmt.Fprintln(w, "完成，可以新建实例了；用 AUTO-MAS 的，也可以在 AUTO-MAS 里添加这个文件夹了。")
 	}
 }
 
@@ -532,6 +774,115 @@ func formatBridge(w io.Writer, r *emu.BridgeResult) {
 	}
 	if r.LogFile != "" {
 		fmt.Fprintln(w, "脚本输出："+r.LogFile)
+	}
+}
+
+func formatPlayStore(w io.Writer, r *emu.PlayStoreResult) {
+	state := map[string]string{"installed": "已装", "absent": "没装", "partial": "只装了一部分"}[r.State]
+	if state == "" {
+		state = "不知道（实例关着）"
+	}
+	fmt.Fprintf(w, "实例 %d Google Play 商店 %s：%s\n", r.Index, r.Action, state)
+	for _, l := range r.Files {
+		fmt.Fprintln(w, "  "+l)
+	}
+	if r.Restarted {
+		fmt.Fprintln(w, "为了让改动生效，关机后又开了一次")
+	}
+	if r.Stopped {
+		fmt.Fprintln(w, "实例原来是关着的，做完已经关掉")
+	}
+	if r.Action == "install" && r.Installed {
+		fmt.Fprintf(w, "在实例里打开 Play 商店登录 Google 账号；提示设备未经 Play 保护机制认证时，用 modavd playstore %d gsfid 取这台实例的 GSF ID，"+
+			"到 %s 登记\n", r.Index, emu.PlayStoreUncertifiedURL)
+	}
+}
+
+func formatPlayStoreGSFID(w io.Writer, r *emu.PlayStoreGSFIDResult) {
+	fmt.Fprintf(w, "实例 %d 的 GSF ID\n", r.Index)
+	fmt.Fprintf(w, "  十进制：%s\n", r.Decimal)
+	fmt.Fprintf(w, "  十六进制：%s\n", r.Hex)
+	fmt.Fprintf(w, "在电脑的浏览器里打开 %s ，用要在实例里登录的 Google 账号登录，填入 GSF ID（登记页要哪种写法就填哪种）提交；"+
+		"等一会儿让登记生效，把实例关机再开机，再去登录\n", emu.PlayStoreUncertifiedURL)
+}
+
+func formatGLES32(w io.Writer, r *emu.GLES32Result) {
+	state := map[string]string{"on": "开", "off": "关", "pending-on": "已写入，要关机再开机才生效", "pending-off": "已去掉，要关机再开机才生效"}[r.State]
+	fmt.Fprintf(w, "实例 %d 报告 GLES 3.2 %s：%s（ro.opengles.version=%s）\n", r.Index, r.Action, state, r.Prop)
+	if r.Restarted {
+		fmt.Fprintln(w, "为了让改动生效，关机后又开了一次")
+	}
+	if r.Stopped {
+		fmt.Fprintln(w, "实例原来是关着的，做完已经关掉")
+	}
+	for _, n := range r.Notes {
+		fmt.Fprintln(w, n)
+	}
+}
+
+func formatDisk(w io.Writer, r *emu.DiskTrimResult) {
+	fmt.Fprintf(w, "实例 %d 已触发磁盘回收（trim）\n", r.Index)
+}
+
+// formatDiskHuman picks the text form of a `disk` result by its type (trim and info return different results).
+func formatDiskHuman(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.DiskTrimResult:
+		if r != nil {
+			formatDisk(w, r)
+		}
+	case *emu.DiskInfoResult:
+		if r != nil {
+			formatDiskInfo(w, r)
+		}
+	case *emu.DiskCompactResult:
+		if r != nil {
+			formatDiskCompact(w, r)
+		}
+	}
+}
+
+func formatDiskCompact(w io.Writer, r *emu.DiskCompactResult) {
+	if r.Skipped {
+		fmt.Fprintf(w, "实例 %d 预计可回收不足 %d 字节，跳过重写：覆盖层占用 %s → %s\n",
+			r.Index, r.ReclaimThresholdBytes, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes))
+		return
+	}
+	if r.AfterOnDiskBytes > r.BeforeOnDiskBytes {
+		fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，增加 %d 字节\n",
+			r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), r.AfterOnDiskBytes-r.BeforeOnDiskBytes)
+		return
+	}
+	fmt.Fprintf(w, "实例 %d 整理磁盘完成：覆盖层占用 %s → %s，省下 %s\n",
+		r.Index, fmtBytesGB(r.BeforeOnDiskBytes), fmtBytesGB(r.AfterOnDiskBytes), fmtBytesGB(r.FreedBytes))
+}
+
+// fmtBytesGB is a byte count in GB with one decimal ("12.3 GB").
+func fmtBytesGB(b int64) string {
+	return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
+}
+
+func formatDiskInfo(w io.Writer, r *emu.DiskInfoResult) {
+	kv := func(k, v string) { fmt.Fprintf(w, "%s：%s\n", k, v) }
+	state := "已关机"
+	if r.Running {
+		state = "运行中"
+	}
+	kv("实例", strconv.Itoa(r.Index)+"（"+state+"）")
+	if r.LogicalBytes > 0 {
+		kv("数据盘逻辑大小", fmtBytesGB(r.LogicalBytes))
+	}
+	if r.OnDiskBytes != nil {
+		kv("覆盖层在宿主上占用", fmtBytesGB(*r.OnDiskBytes))
+	}
+	if r.AllocatedBytes != nil {
+		kv("已分配（客体实际数据）", fmtBytesGB(*r.AllocatedBytes))
+	}
+	if r.ReclaimableBytes != nil {
+		kv("估计可回收", fmtBytesGB(*r.ReclaimableBytes))
+	}
+	for _, s := range r.Warnings {
+		fmt.Fprintln(w, "注意："+s)
 	}
 }
 
@@ -579,7 +930,7 @@ func formatHelp(w io.Writer, r *HelpResult) {
 		}
 		return
 	}
-	fmt.Fprintln(w, "modavd：魔改 AVD 实例管理（新建、删除、修改、列出、开机、关机）和 MCP 服务")
+	fmt.Fprintln(w, "modavd：ModAVD 实例管理（新建、删除、修改、列出、开机、关机）和 MCP 服务")
 	fmt.Fprintf(w, "\n用法：%s\n\n命令：\n", r.Usage)
 	// Usage and summary on separate lines: create's usage alone is ~80 columns.
 	for _, e := range r.Commands {
@@ -592,14 +943,16 @@ const helpTail = `
 全局选项（写在命令前后都行；adb、shell 要写在命令本身前面）：
   --root <目录>  ModAVD 根目录；不给就用环境变量 MODAVD_ROOT，再不行用 modavd.exe 所在目录或它的上一级
   --json         stdout 只输出一行 JSON：{"ok":true,"data":…} 或 {"ok":false,"error":{"code","message","advice"}}；
-                 日志以每行一个 JSON 对象写到 stderr
+                 日志以每行一个 JSON 对象写到 stderr（{"time","level","msg"}，可能多出字段，
+                 比如 update 的进度行带 "progress"）
   --quiet        只输出警告和错误日志
   --verbose      输出调试日志和错误原因
 
 <i> 写成 3 或 mas_3（0–9，5 除外）。内存写成 6144、6144M 或 6G。
 
-退出码：0 成功，1 内部错误，2 用法或参数不对，3 实例不存在，4 根目录没就绪、检查没通过或不支持，
-5 实例忙、已存在或端口被占，6 超时，7 启动失败，8 已取消（Ctrl+C）。
+退出码：0 成功，1 内部错误，2 用法或参数不对、未同意许可协议（license_declined），3 实例不存在，4 根目录没就绪、检查没通过或不支持，
+5 实例忙、已存在或端口被占，6 超时，7 启动失败，8 已取消（Ctrl+C），9 更新或组件下载不可用、校验未通过，或代理不可用，
+10 电脑内存不足、模拟器起不来（insufficient_memory）。
 例外：shell 不带 --json 时是命令自己的退出码；adb 是 adb 的退出码；stop --all 有失败时是第一个失败的退出码。
 
 运行 modavd help <命令> 查看某个命令的说明和选项。

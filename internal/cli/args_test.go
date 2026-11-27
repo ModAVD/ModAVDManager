@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"modavd/internal/avd"
+	"modavd/internal/emu"
 	"modavd/internal/errs"
 )
 
@@ -253,18 +254,25 @@ func TestBuildCreateRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Index != nil || req.MemoryMB != nil || req.CPU != nil || req.DataPartitionGB != nil || req.FPS != nil || req.Title != "" {
+	if req.Index != nil || req.MemoryMB != nil || req.CPU != nil || req.DataPartitionGB != nil || req.FPS != nil || req.Resolution != nil || req.Title != "" {
 		t.Errorf("defaults: %+v, want all nil", req)
 	}
 	req, err = buildCreateRequest(mustParse(t, "create", "--index", "mas_4", "--title", "星铁", "--memory", "6G",
-		"--cpu", "4", "--data-gb", "128", "--fps", "30"))
+		"--cpu", "4", "--data-gb", "128", "--fps", "30", "--resolution", "720"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if req.Index == nil || *req.Index != 4 || req.Title != "星铁" || req.MemoryMB == nil || *req.MemoryMB != 6144 ||
 		req.CPU == nil || *req.CPU != 4 || req.DataPartitionGB == nil || *req.DataPartitionGB != 128 ||
-		req.FPS == nil || *req.FPS != 30 {
+		req.FPS == nil || *req.FPS != 30 || req.Resolution == nil || *req.Resolution != 720 {
 		t.Errorf("all options: %+v", req)
+	}
+	req, err = buildCreateRequest(mustParse(t, "create", "--dpi", "320", "--orientation", "Portrait"))
+	if err != nil || req.DPI == nil || *req.DPI != 320 || req.Orientation == nil || *req.Orientation != "portrait" {
+		t.Errorf("dpi/orientation: %+v %v", req, err)
+	}
+	if _, err := buildCreateRequest(mustParse(t, "create", "--dpi", "high")); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("--dpi high: %v", err)
 	}
 	// Zero is passed on (emu rejects it with the AUTO-MAS wording), not mistaken for "not given".
 	req, _ = buildCreateRequest(mustParse(t, "create", "--cpu", "0"))
@@ -327,6 +335,78 @@ func TestBuildUpdateRequest(t *testing.T) {
 	if err != nil || req.DataPartitionGB == nil || *req.DataPartitionGB != 96 || req.MemoryMB != nil {
 		t.Errorf("data-gb alone: %+v %v", req, err)
 	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--resolution", "1080"))
+	if err != nil || req.Resolution == nil || *req.Resolution != 1080 || req.MemoryMB != nil {
+		t.Fatalf("resolution alone: %+v %v", req, err)
+	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--dpi", "auto"))
+	if err != nil || req.DPI == nil || *req.DPI != 0 || req.Orientation != nil || req.MemoryMB != nil {
+		t.Fatalf("dpi auto alone: %+v %v", req, err)
+	}
+	req, err = buildUpdateRequest(mustParse(t, "set", "3", "--orientation", "landscape"))
+	if err != nil || req.Orientation == nil || *req.Orientation != "landscape" || req.DPI != nil {
+		t.Fatalf("orientation alone: %+v %v", req, err)
+	}
+	for _, v := range []string{"auto", "AUTO", " auto "} {
+		req, err = buildUpdateRequest(mustParse(t, "set", "3", "--data-gb", v))
+		if err != nil || !req.DataDiskAuto || req.DataPartitionGB != nil || req.Diagnostics != nil {
+			t.Errorf("--data-gb %q: %+v %v", v, req, err)
+		}
+	}
+	for _, v := range []string{"yes", "64G", ""} {
+		if _, err := buildUpdateRequest(mustParse(t, "set", "3", "--data-gb", v)); errs.CodeOf(err) != errs.InvalidArgument {
+			t.Errorf("--data-gb %q: %v", v, err)
+		}
+	}
+}
+
+func TestBuildCreateRequestDataDisk(t *testing.T) {
+	withFakeMemory(t)
+	for _, args := range [][]string{{"create"}, {"create", "--data-gb", "auto"}} {
+		req, err := buildCreateRequest(mustParse(t, args...))
+		if err != nil || req.DataPartitionGB != nil {
+			t.Errorf("%v: %+v %v (want 自动扩盘: no size)", args, req, err)
+		}
+	}
+	req, err := buildCreateRequest(mustParse(t, "create", "--data-gb", "48"))
+	if err != nil || req.DataPartitionGB == nil || *req.DataPartitionGB != 48 {
+		t.Errorf("--data-gb 48: %+v %v", req, err)
+	}
+	if _, err := buildCreateRequest(mustParse(t, "create", "--data-gb", "big")); errs.CodeOf(err) != errs.InvalidArgument {
+		t.Errorf("--data-gb big: %v", err)
+	}
+}
+
+func TestFormatDataSpace(t *testing.T) {
+	var b strings.Builder
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline, DataSpace: emu.DataSpace{State: "low",
+		Message: "数据盘只剩 1.8 GB（共 47.0 GB）", Advice: "改成自动扩盘：modavd set 3 --data-gb auto"}})
+	if out := b.String(); !strings.Contains(out, "数据盘：数据盘只剩 1.8 GB") || !strings.Contains(out, "modavd set 3 --data-gb auto") {
+		t.Errorf("status:\n%s", out)
+	}
+	b.Reset()
+	formatStatus(&b, &StatusResult{Index: 3, Status: emu.StatusOffline})
+	if strings.Contains(b.String(), "数据盘") {
+		t.Errorf("status without a note:\n%s", b.String())
+	}
+	if s := dataSpaceSummary(emu.DataSpace{HostBytes: 12 << 30, FreeBytes: 3 << 30, TotalBytes: 60 << 30}); s != "宿主占用 12.0 GB，上次开机剩余 3.0 GB" {
+		t.Errorf("summary %q", s)
+	}
+	if s := dataSpaceSummary(emu.DataSpace{HostBytes: -1}); s != "宿主占用读不到" {
+		t.Errorf("summary never read %q", s)
+	}
+	if s := dataDiskText(emu.InstanceConfig{DataPartitionGB: 256, DataDiskMode: "auto"}); s != "自动扩盘（256 GB）" {
+		t.Errorf("auto %q", s)
+	}
+	if s := dataDiskText(emu.InstanceConfig{DataPartitionGB: 64, DataDiskMode: "manual"}); s != "64 GB（指定大小）" {
+		t.Errorf("manual %q", s)
+	}
+	if got := appliedParts(map[string]any{"data_partition_gb": 256, "data_disk_mode": "auto"}); len(got) != 1 || got[0] != "数据盘 自动扩盘（256 GB，下次开机生效）" {
+		t.Errorf("applied auto %q", got)
+	}
+	if got := appliedParts(map[string]any{"data_partition_gb": 96, "data_disk_mode": "manual"}); len(got) != 1 || got[0] != "数据盘 96 GB（下次开机扩大）" {
+		t.Errorf("applied manual %q", got)
+	}
 }
 
 func TestBuildStartOptions(t *testing.T) {
@@ -364,8 +444,8 @@ func TestCommandTable(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"list", "info", "status", "create", "set", "delete", "start", "stop", "restart",
-		"check", "window", "install", "shell", "adb", "servers", "version", "mcp", "help"} {
+	for _, name := range []string{"list", "info", "status", "create", "set", "delete", "clone", "start", "stop",
+		"check", "report-config", "collect-info", "window", "disk", "install", "shell", "adb", "servers", "version", "mcp", "help"} {
 		if !seen[name] {
 			t.Errorf("command %s missing", name)
 		}

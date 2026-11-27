@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,12 +50,30 @@ func (l Level) label() string {
 // Sink receives every message. It must be safe for concurrent use.
 type Sink func(level Level, msg string)
 
+// Fields are machine-readable extras of one message (LogFields), e.g. {"progress": {...}}. Only a FieldSink sees
+// them (JSONFieldSink writes each as a top-level key after time, level and msg); a plain Sink gets the message alone.
+type Fields map[string]any
+
+// FieldSink is a Sink that also receives the fields of a message (nil for Log). It must be safe for concurrent use.
+type FieldSink func(level Level, msg string, fields Fields)
+
 // Logger is nil-safe: methods on a nil *Logger do nothing.
 type Logger struct {
-	sinks []Sink
+	sinks []FieldSink
 }
 
-func New(sinks ...Sink) *Logger { return &Logger{sinks: sinks} }
+func plain(s Sink) FieldSink { return func(level Level, msg string, _ Fields) { s(level, msg) } }
+
+func New(sinks ...Sink) *Logger {
+	l := &Logger{}
+	for _, s := range sinks {
+		l.sinks = append(l.sinks, plain(s))
+	}
+	return l
+}
+
+// NewFields is New for sinks that take fields.
+func NewFields(sinks ...FieldSink) *Logger { return &Logger{sinks: append([]FieldSink(nil), sinks...)} }
 
 // Nop discards everything.
 func Nop() *Logger { return &Logger{} }
@@ -64,16 +83,19 @@ func (l *Logger) Tee(sink Sink) *Logger {
 	if l == nil {
 		return New(sink)
 	}
-	sinks := append(append([]Sink(nil), l.sinks...), sink)
+	sinks := append(append([]FieldSink(nil), l.sinks...), plain(sink))
 	return &Logger{sinks: sinks}
 }
 
-func (l *Logger) Log(level Level, msg string) {
+func (l *Logger) Log(level Level, msg string) { l.LogFields(level, msg, nil) }
+
+// LogFields logs msg with fields for the sinks that take them (the others get msg alone).
+func (l *Logger) LogFields(level Level, msg string, fields Fields) {
 	if l == nil {
 		return
 	}
 	for _, s := range l.sinks {
-		s(level, msg)
+		s(level, msg, fields)
 	}
 }
 
@@ -99,8 +121,15 @@ func TextSink(w io.Writer, min Level) Sink {
 
 // JSONSink writes one JSON object per line: {"time":"2026-10-28T15:04:05.123+01:00","level":"info","msg":"..."}.
 func JSONSink(w io.Writer, min Level) Sink {
+	s := JSONFieldSink(w, min)
+	return func(level Level, msg string) { s(level, msg, nil) }
+}
+
+// JSONFieldSink is JSONSink that also writes the fields, sorted by key after time, level and msg (which fields cannot
+// replace): {"time":…,"level":"info","msg":"…","progress":{…}}. A field that does not marshal is left out.
+func JSONFieldSink(w io.Writer, min Level) FieldSink {
 	var mu sync.Mutex
-	return func(level Level, msg string) {
+	return func(level Level, msg string, fields Fields) {
 		if level < min {
 			return
 		}
@@ -109,6 +138,25 @@ func JSONSink(w io.Writer, min Level) Sink {
 			Level string `json:"level"`
 			Msg   string `json:"msg"`
 		}{time.Now().Format("2006-01-02T15:04:05.000Z07:00"), level.String(), msg})
+		if len(fields) > 0 {
+			keys := make([]string, 0, len(fields))
+			for k := range fields {
+				if k != "time" && k != "level" && k != "msg" {
+					keys = append(keys, k)
+				}
+			}
+			sort.Strings(keys)
+			line = line[:len(line)-1] // the closing }
+			for _, k := range keys {
+				v, err := json.Marshal(fields[k])
+				if err != nil {
+					continue
+				}
+				name, _ := json.Marshal(k)
+				line = append(append(append(append(line, ','), name...), ':'), v...)
+			}
+			line = append(line, '}')
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		w.Write(append(line, '\n'))

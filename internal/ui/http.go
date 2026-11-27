@@ -1,5 +1,3 @@
-//go:build windows
-
 package ui
 
 import (
@@ -26,25 +24,61 @@ func (s *server) routes() {
 	m.HandleFunc("/", s.handleStatic)
 	m.HandleFunc("/api/", s.handleNoAPI)
 	m.HandleFunc("GET /api/info", s.handleInfo)
+	m.HandleFunc("GET /api/locale", s.handleLocale)
+	m.HandleFunc("PUT /api/locale", s.handleSetLocale)
 	m.HandleFunc("GET /api/instances", s.handleList)
 	m.HandleFunc("POST /api/instances", s.handleCreate)
 	m.HandleFunc("GET /api/instances/{i}", s.handleGet)
+	m.HandleFunc("GET /api/instances/{i}/regional", s.handleRegional)
 	m.HandleFunc("PATCH /api/instances/{i}", s.handleUpdate)
+	m.HandleFunc("GET /api/instances/{i}/diagnostics/preview", s.handleDiagnosticsPreview)
 	m.HandleFunc("DELETE /api/instances/{i}", s.handleDelete)
 	m.HandleFunc("POST /api/instances/{i}/start", s.handleStart)
 	m.HandleFunc("POST /api/instances/{i}/stop", s.handleStop)
-	m.HandleFunc("POST /api/instances/{i}/restart", s.handleRestart)
+	m.HandleFunc("GET /api/game-sources", s.handleGameList)
+	m.HandleFunc("POST /api/game-sources/browse", s.handleGameBrowse)
+	m.HandleFunc("POST /api/instances/{i}/import-game", s.handleGameImport)
 	m.HandleFunc("POST /api/instances/{i}/install", s.handleInstall)
-	m.HandleFunc("POST /api/instances/{i}/window", s.handleWindow)
+	m.HandleFunc("POST /api/instances/{i}/disk-info", s.handleDiskInfo)
+	m.HandleFunc("POST /api/instances/{i}/disk-trim", s.handleDiskTrim)
+	m.HandleFunc("POST /api/instances/{i}/disk-compact", s.handleDiskCompact)
+	m.HandleFunc("POST /api/instances/{i}/resume", s.handleResumeCreate)
+	m.HandleFunc("POST /api/instances/{i}/clone", s.handleClone)
+	m.HandleFunc("POST /api/instances/{i}/playstore-install", s.handlePlayStore("install"))
+	m.HandleFunc("POST /api/instances/{i}/playstore-uninstall", s.handlePlayStore("uninstall"))
+	m.HandleFunc("GET /api/instances/{i}/playstore-gsfid", s.handlePlayStoreGSFID)
+	m.HandleFunc("POST /api/instances/{i}/gles32-on", s.handleGLES32("on"))
+	m.HandleFunc("POST /api/instances/{i}/gles32-off", s.handleGLES32("off"))
 	m.HandleFunc("POST /api/instances/{i}/input", s.handleInput)
 	m.HandleFunc("GET /api/instances/{i}/screenshot", s.handleScreenshot)
 	m.HandleFunc("GET /api/instances/{i}/log", s.handleLog)
+	m.HandleFunc("GET /api/instances/{i}/proxy", s.handleProxyGet)
+	m.HandleFunc("PUT /api/instances/{i}/proxy", s.handleProxyPut)
+	m.HandleFunc("GET /api/instances/{i}/packages", s.handleProxyPackages)
+	m.HandleFunc("GET /api/proxy/suggest", s.handleProxySuggest)
+	m.HandleFunc("POST /api/proxy/probe", s.handleProxyProbe)
 	m.HandleFunc("POST /api/open", s.handleOpen)
+	m.HandleFunc("GET /api/components", s.handleComponents)
+	m.HandleFunc("GET /api/components/license", s.handleComponentLicense)
+	m.HandleFunc("GET /api/components/source", s.handleComponentSource)
+	m.HandleFunc("PUT /api/components/source", s.handleComponentSource)
+	m.HandleFunc("POST /api/components/fetch", s.handleComponentsFetch)
+	m.HandleFunc("POST /api/components/import-playstore", s.handleImportPlayStore)
+	m.HandleFunc("POST /api/diag/collect", s.handleDiagCollect)
+	m.HandleFunc("GET /api/diag/report-config", s.handleReportConfig)
+	m.HandleFunc("GET /api/boss-keys", s.handleBossKeys)
+	m.HandleFunc("POST /api/boss-keys/check", s.handleBossKeyCheck)
 	m.HandleFunc("GET /api/check", s.handleCheck)
 	m.HandleFunc("GET /api/jobs", s.handleJobs)
 	m.HandleFunc("GET /api/jobs/{id}", s.handleJob)
 	m.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancel)
 	m.HandleFunc("GET /api/events", s.handleEvents)
+	m.HandleFunc("GET /api/update", s.handleUpdateGet)
+	m.HandleFunc("POST /api/update/check", s.handleUpdateCheck)
+	m.HandleFunc("POST /api/update/settings", s.handleUpdateSettings)
+	m.HandleFunc("POST /api/update/apply", s.handleUpdateApply)
+	m.HandleFunc("POST /api/update/handoff/take", s.handleUpdateHandoffTake)
+	m.HandleFunc("POST /api/update/handoff/receive", s.handleUpdateHandoffReceive)
 	s.mux = m
 }
 
@@ -93,9 +127,10 @@ func (s *server) handleNoAPI(w http.ResponseWriter, r *http.Request) {
 // ---- responses ---------------------------------------------------------------------------------------------------
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf
 }
 
 func newErrorBody(err error) *errorBody {
@@ -103,7 +138,7 @@ func newErrorBody(err error) *errorBody {
 		return nil
 	}
 	e := errs.As(err)
-	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice}
+	return &errorBody{Code: e.Code, Message: e.Message, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // httpStatus is the status table of API.md.
@@ -119,7 +154,7 @@ func httpStatus(code string) int {
 		return http.StatusUnprocessableEntity
 	case errs.Canceled:
 		return 499 // nginx's "client closed request": there is no standard status for it
-	case errs.LaunchFailed:
+	case errs.LaunchFailed, errs.InsufficientMemory, errs.UpdateUnavailable, errs.UpdateRejected, errs.ProxyUnavailable:
 		return http.StatusBadGateway
 	case errs.Timeout:
 		return http.StatusGatewayTimeout
@@ -138,18 +173,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	w.Write(buf.Bytes())
+	w.Write(localizeJSON(buf.Bytes()))
 }
 
 func writeError(w http.ResponseWriter, err error) {
 	e := newErrorBody(err)
-	writeErrorStatus(w, httpStatus(e.Code), e.Code, e.Message, e.Advice)
+	writeErrorBody(w, httpStatus(e.Code), *e)
 }
 
 func writeErrorStatus(w http.ResponseWriter, status int, code, message, advice string) {
+	writeErrorBody(w, status, errorBody{Code: code, Message: message, Advice: advice})
+}
+
+func writeErrorBody(w http.ResponseWriter, status int, e errorBody) {
+	e = localizeError(e)
 	body, _ := json.Marshal(struct {
 		Error errorBody `json:"error"`
-	}{errorBody{Code: code, Message: message, Advice: advice}})
+	}{e})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	w.Write(append(body, '\n'))

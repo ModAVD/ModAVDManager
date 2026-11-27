@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 // Create / update / delete. Port of AUTO-MAS manager.py create_instance / _free_index / write_instance_settings /
@@ -12,15 +10,42 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"modavd/internal/avd"
+	"modavd/internal/bosskey"
+	"modavd/internal/diagnostics"
 	"modavd/internal/errs"
+	"modavd/internal/host"
+	"modavd/internal/jsonord"
+	"modavd/internal/logx"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
 
-// Create makes a new instance (validated options, free index and ports) and returns it.
-func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
+// Create makes a new instance (validated options, free index and ports), sets it up with one headless boot
+// (createinit.go) and returns it, stopped. req.Resume runs that setup again on an instance whose setup failed.
+func (m *Manager) Create(ctx context.Context, req CreateRequest) (_ *InstanceInfo, retErr error) {
+	index := -1
+	if req.Index != nil {
+		index = *req.Index
+	}
+	defer func() {
+		if retErr != nil && errs.DetailsOf(retErr)[errs.InstanceExists] == "" {
+			retErr = m.withCreateErrorState(index, retErr, false)
+		}
+	}()
+	if err := requireLifecycle(); err != nil {
+		return nil, err
+	}
+	if req.Resume {
+		return m.resumeCreate(ctx, req)
+	}
+	regionalSettings, err := m.newRegional(req.Language, req.TimeZone)
+	if err != nil {
+		return nil, err
+	}
+	// no size given: 自动扩盘 (autogrow.go)
+	manualDisk := req.DataPartitionGB != nil
 	memory, cpu, dataGB, err := avd.ValidateOptions(req.MemoryMB, req.CPU, req.DataPartitionGB)
 	if err != nil {
 		return nil, err
@@ -29,8 +54,30 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 	if err != nil {
 		return nil, err
 	}
+	resolution, err := avd.ValidateResolution(req.Resolution)
+	if err != nil {
+		return nil, err
+	}
+	dpi := 0
+	if req.DPI != nil {
+		dpi = *req.DPI
+	}
+	if err := avd.ValidateDPI(dpi); err != nil {
+		return nil, err
+	}
+	orientation := ""
+	if req.Orientation != nil {
+		orientation = *req.Orientation
+	}
+	if orientation, err = avd.ValidateOrientation(orientation); err != nil {
+		return nil, err
+	}
 	// A root used by modavd alone has no mas-avd.json yet (AUTO-MAS writes it when the root is added).
 	if _, err := m.Root.EnsureMetadata(); err != nil {
+		return nil, err
+	}
+	// before any file is written: the setup boot would refuse these ports anyway (prepareLaunch)
+	if err := m.Root.CheckPorts(); err != nil {
 		return nil, err
 	}
 	insts, err := avd.List(m.Root)
@@ -49,6 +96,9 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 			return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
 		}
 		if existing[i] {
+			if err := m.notCreated(i, "不能再新建"); err != nil {
+				return nil, err
+			}
 			return nil, errs.Newf(errs.AlreadyExists, "实例 %s 已存在", root.AvdName(i))
 		}
 		// Leftovers of a delete or create that stopped half-way: not listed, but avd.Create refuses the index. Say
@@ -58,79 +108,258 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (*InstanceInfo,
 				root.AvdName(i), strings.Join(left, "、")).
 				WithAdvice(fmt.Sprintf("先用 modavd delete %d --yes 清掉这些残留再新建，或换一个编号", i))
 		}
-	} else {
-		// Leftovers of a half-deleted instance (an .ini or a directory without the other) do not count as
-		// instances, but avd.Create refuses their index: skip them here instead of failing with "already exists"
-		// (Delete clears them).
-		for k := 0; k <= root.MaxIndex; k++ {
-			if len(instanceFilesOnDisk(m.Root, k)) > 0 {
-				existing[k] = true
-			}
-		}
-		var busyErr error
-		i, err = avd.FreeIndex(existing, func(ports []int) []int {
-			busy, err := win.BusyPorts(ports)
-			if err != nil {
-				busyErr = err
-				return ports
-			}
-			return busy
-		})
-		if err != nil {
-			if busyErr != nil {
-				return nil, errs.Wrap(errs.Internal, busyErr, "读不了端口占用情况: "+busyErr.Error())
-			}
-			return nil, err
-		}
+	} else if i, err = m.freeIndex(existing); err != nil {
+		return nil, err
 	}
+	index = i
 
-	in, err := avd.Create(m.Root, i, avd.CreateOptions{
-		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, FPS: fps,
-	})
+	// Held from before the files exist until the setup is done: nobody else starts, changes or deletes the instance
+	// meanwhile, and status tells "creating" from a create that was killed (createinit.go).
+	lock, err := m.lockCreation(ctx, i)
 	if err != nil {
 		return nil, err
 	}
-	m.Log.Infof("已新建魔改 AVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %d GB / 帧率 %d）", i, memory, cpu, dataGB, fps)
+	in, err := avd.Create(m.Root, i, avd.CreateOptions{
+		Title: req.Title, MemoryMB: memory, CPU: cpu, DataPartitionGB: dataGB, DataDiskManual: manualDisk, FPS: fps, Resolution: resolution,
+		DPI: dpi, Orientation: orientation,
+		Creating: !req.filesOnly,
+		Regional: regionalSettings,
+	})
+	if err != nil {
+		lock.Unlock()
+		return nil, err
+	}
+	disk := "自动扩盘"
+	if manualDisk {
+		disk = fmt.Sprintf("%d GB", dataGB)
+	}
+	m.Log.Infof("已新建 ModAVD 实例 %d（内存 %d MB / %d 核 / 数据盘 %s / 帧率 %d）", i, memory, cpu, disk, fps)
 	if req.NoBridge {
 		// recorded, so no start installs it (bridge.go)
 		if err := m.setBridgeWanted(i, false); err != nil {
 			m.Log.Warnf("实例 %d 没记下「不装执行桥」，开机时还是会装: %v", i, err)
 		}
-	} else if err := writeBridgeMarker(m.Root, i); err != nil {
-		// first boot writable; any start (modavd / the manager) installs the bridge (bridge.go)
-		m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
-	} else {
-		m.Log.Infof("实例 %d 第一次开机时会装 arm64 执行桥", i)
+	} else if m.bridgeWanted(i, in.Config) {
+		if err := writeBridgeMarker(m.Root, i); err != nil {
+			// first boot writable; the setup below (or, for filesOnly, any start) installs the bridge (bridge.go)
+			m.Log.Warnf("实例 %d 没放上执行桥的开机标记: %v", i, err)
+		}
 	}
-	info := m.instanceInfo(ctx, in, nil, nil)
-	return &info, nil
+	if req.filesOnly {
+		lock.Unlock()
+		info := m.instanceInfo(ctx, in, nil, nil)
+		return &info, nil
+	}
+	return m.setupNew(ctx, i, in.Config, req, lock)
 }
 
-// Update changes title / memory / cpu / fps / data partition size (next boot).
-func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
-	if _, err := m.instance(i); err != nil {
-		return nil, err
+// FreeIndex is the index Create picks when none is given (the manager names its create job after it).
+func (m *Manager) FreeIndex() (int, error) {
+	insts, err := avd.List(m.Root)
+	if err != nil {
+		return 0, err
 	}
-	applied, err := avd.Update(m.Root, i, avd.UpdateOptions{
-		Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, DataPartitionGB: req.DataPartitionGB,
-	})
+	existing := map[int]bool{}
+	for _, in := range insts {
+		existing[in.Index] = true
+	}
+	return m.freeIndex(existing)
+}
+
+// FreeIndexes are the n indexes a batch create takes, in order (ModAVD/ModAVD#240): the smallest free ones, each as
+// FreeIndex picks it. errs.Busy when fewer than n are free, saying how many are.
+func (m *Manager) FreeIndexes(n int) ([]int, error) {
+	insts, err := avd.List(m.Root)
 	if err != nil {
 		return nil, err
 	}
-	if applied == nil {
-		applied = map[string]any{}
+	existing := map[int]bool{}
+	for _, in := range insts {
+		existing[in.Index] = true
 	}
-	m.Log.Infof("已写入魔改 AVD 实例 %d 的设置: %s", i, formatApplied(applied))
+	out := make([]int, 0, n)
+	for len(out) < n {
+		i, err := m.freeIndex(existing)
+		if err != nil {
+			if len(out) > 0 && errs.CodeOf(err) == errs.Busy {
+				return nil, errs.Newf(errs.Busy, "只有 %d 个空闲编号（端口也要空着），建不了 %d 台", len(out), n).
+					WithAdvice("少建几台，或者先删掉不用的实例")
+			}
+			return nil, err
+		}
+		existing[i] = true
+		out = append(out, i)
+	}
+	return out, nil
+}
+
+// CreateSpaceError is nil when the disk holding the instances has the space a boot needs (check's 磁盘 item), else
+// errs.PrecheckFailed with that item's reason and advice. A batch create asks before each instance, so a run of new
+// instances stops before the disk fills up; a free space that cannot be read does not stop it.
+func (m *Manager) CreateSpaceError() error {
+	target := diskExistingAncestor(m.Root.AvdHome())
+	free, err := hostDiskFree(target)
+	it := diskItem(diskDrive(target), free, err)
+	if it.OK == nil || *it.OK {
+		return nil
+	}
+	return errs.New(errs.PrecheckFailed, it.Reason).WithAdvice(it.Advice)
+}
+
+// freeIndex is the smallest index that is not in existing, has no leftovers and whose ports (in the root's plan) are
+// free; an errs.InvalidArgument error when mas-avd.json's ports are not ones to start with (root.CheckPorts).
+func (m *Manager) freeIndex(existing map[int]bool) (int, error) {
+	if err := m.Root.CheckPorts(); err != nil {
+		return 0, err
+	}
+	// Leftovers of a half-deleted instance (an .ini or a directory without the other) do not count as instances, but
+	// avd.Create refuses their index: skip them here instead of failing with "already exists" (Delete clears them).
+	for k := 0; k <= root.MaxIndex; k++ {
+		if len(instanceFilesOnDisk(m.Root, k)) > 0 {
+			existing[k] = true
+		}
+	}
+	var busyErr error
+	i, err := avd.FreeIndex(m.Root.Ports(), existing, func(ports []int) []int {
+		busy, err := host.BusyPorts(ports)
+		if err != nil {
+			busyErr = err
+			return ports
+		}
+		return busy
+	})
+	if err != nil {
+		if busyErr != nil {
+			return 0, errs.Wrap(errs.Internal, busyErr, "读不了端口占用情况: "+busyErr.Error())
+		}
+		return 0, err
+	}
+	return i, nil
+}
+
+// resumeCreate runs the setup again on an instance whose setup failed (or was killed), shutting down normally the
+// emulator that setup left running first; its bridge setting is the one recorded at create.
+func (m *Manager) resumeCreate(ctx context.Context, req CreateRequest) (*InstanceInfo, error) {
+	if req.Index == nil {
+		return nil, errs.New(errs.Usage, "--resume 要给实例编号")
+	}
+	i := *req.Index
 	in, err := m.instance(i)
 	if err != nil {
 		return nil, err
 	}
-	var p *win.Process
-	if q, ok := m.qemuOf(i); ok {
-		p = &q
-		m.Log.Infof("魔改 AVD 实例 %d 正在运行，改动下次开机生效", i)
+	lock, err := m.lockCreation(ctx, i)
+	if err != nil {
+		return nil, err
 	}
-	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil}, nil
+	// a killed setup left its progress behind; from here status reads "creating" (our lock), so drop it before the
+	// leftover shutdown below, or that shows the old percentage until the setup starts over
+	m.removeCreateProgress(i)
+	// with the lock in hand, a recorded "creating" is one that was killed (creation() would see our own lock)
+	if state := m.creationRecorded(i); state != creationFailed && state != creationCreating {
+		lock.Unlock()
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 不是新建失败的实例，没有要重做的初始化", i).
+			WithAdvice(fmt.Sprintf("直接 modavd start %d", i))
+	}
+	return m.setupNew(ctx, i, in.Config, req, lock)
+}
+
+// Update changes title / memory / cpu / fps / data partition size / sound (next boot), the data partition's automatic
+// growth and diagnostics (at once).
+func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*UpdateResult, error) {
+	if err := requireLifecycle(); err != nil {
+		return nil, err
+	}
+	if _, err := m.instance(i); err != nil {
+		return nil, err
+	}
+	if err := m.notCreated(i, "不能修改"); err != nil {
+		return nil, err
+	}
+	language, zone, localeRequest, err := m.regionalChoices(req.Language, req.TimeZone)
+	if err != nil {
+		return nil, err
+	}
+	// Diagnostics is an immediate logging policy, not an AVD hardware edit. Do not validate or rewrite unrelated
+	// legacy disk sizes or AUTO-MAS's automatic memory when the request only changes this switch.
+	applied := map[string]any{}
+	// checked before anything is written, so a bad key leaves the other settings of the same request unwritten too
+	var bossKey string
+	if req.BossKey != nil {
+		if err := requireWindows(); err != nil {
+			return nil, errs.Wrap(errs.Unsupported, err, "老板键只在 Windows 上有")
+		}
+		if bossKey, err = bosskey.Normalize(*req.BossKey); err != nil {
+			return nil, err
+		}
+	}
+	if req.Title != nil || req.MemoryMB != nil || req.CPU != nil || req.FPS != nil || req.Resolution != nil || req.DPI != nil ||
+		req.Orientation != nil || req.DataPartitionGB != nil || req.DataDiskAuto || req.Sound != nil {
+		applied, err = avd.Update(m.Root, i, avd.UpdateOptions{
+			Title: req.Title, MemoryMB: req.MemoryMB, CPU: req.CPU, FPS: req.FPS, Resolution: req.Resolution,
+			DPI: req.DPI, Orientation: req.Orientation, DataPartitionGB: req.DataPartitionGB,
+			DataDiskAuto: req.DataDiskAuto, Sound: req.Sound,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if applied == nil {
+		applied = map[string]any{}
+	}
+	if language != nil || zone != nil {
+		if err := m.saveRegional(i, language, zone, localeRequest); err != nil {
+			return nil, err
+		}
+		if language != nil {
+			applied["language"] = *language
+		}
+		if zone != nil {
+			applied["time_zone"] = *zone
+		}
+	}
+	if req.AppKeepalive != nil {
+		if err := m.Root.UpdateInstanceMeta(i, map[string]*jsonord.Value{appKeepaliveKey: jsonord.NewBool(*req.AppKeepalive)}); err != nil {
+			return nil, err
+		}
+		applied["app_keepalive"] = *req.AppKeepalive
+	}
+	nextBoot := len(applied) > 0
+	var cleanup *DiagnosticsCleanup
+	var warnings []string
+	if req.Diagnostics != nil {
+		col := &logx.Collector{}
+		cleanup, err = m.withLog(col.Sink()).SetDiagnostics(ctx, i, *req.Diagnostics)
+		if err != nil {
+			return nil, err
+		}
+		warnings = col.Messages()
+		applied["diagnostics"] = *req.Diagnostics
+	}
+	if req.BossKey != nil {
+		if err := m.setBossKey(i, bossKey); err != nil {
+			return nil, err
+		}
+		applied["boss_key"] = bossKey
+	}
+	m.Log.Infof("已写入 ModAVD 实例 %d 的设置: %s", i, formatApplied(applied))
+	in, err := m.instance(i)
+	if err != nil {
+		return nil, err
+	}
+	var p *host.Process
+	q, ok, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		p = &q
+		if nextBoot {
+			m.Log.Infof("ModAVD 实例 %d 正在运行，设置改动下次开机生效", i)
+		}
+	}
+	return &UpdateResult{Instance: m.instanceInfo(ctx, in, p, nil), Applied: applied, AppliesNextBoot: p != nil && nextBoot,
+		DiagnosticsCleanup: cleanup, Warnings: warnings}, nil
 }
 
 // Delete removes a stopped instance with all its data. errs.Busy while it runs or is being started / stopped.
@@ -145,6 +374,9 @@ func (m *Manager) Update(ctx context.Context, i int, req UpdateRequest) (*Update
 // without this the retry the error advises would end in "不存在". errs.NotFound only when none of mas_<i>.ini,
 // mas_<i>.avd and instances.<i> is there.
 func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
+	if err := requireLifecycle(); err != nil {
+		return nil, err
+	}
 	in, err := m.instance(i)
 	var leftovers []string
 	if errs.CodeOf(err) == errs.NotFound {
@@ -164,17 +396,40 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 		startLock.Unlock()
 		return nil, err
 	}
+	bridgeLock, err := m.tryInstanceLock(i, "bridge", "正在装卸执行桥")
+	if err != nil {
+		startLock.Unlock()
+		stopLock.Unlock()
+		return nil, err
+	}
+	// a create still setting the instance up (between its boots no other lock is held); a failed one may go
+	createLock, err := m.tryInstanceLock(i, "create", "正在新建")
+	if err != nil {
+		bridgeLock.Unlock()
+		startLock.Unlock()
+		stopLock.Unlock()
+		return nil, err
+	}
 	unlock := func() {
+		createLock.Unlock()
+		bridgeLock.Unlock()
 		stopLock.Unlock()
 		startLock.Unlock()
 	}
-	if _, running := m.qemuOf(i); running {
+	if _, running, err := m.qemuOf(i); err != nil {
 		unlock()
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d 未关闭，无法删除", i)
+		return nil, err
+	} else if running {
+		unlock()
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d 未关闭，无法删除", i), map[string]string{errs.Reason: "running"})
 	}
 	if len(leftovers) > 0 {
-		m.Log.Warnf("魔改 AVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
+		m.Log.Warnf("ModAVD 实例 %d 不完整（只剩：%s），可能是上次删除或新建到一半，把这些残留删掉", i,
 			strings.Join(leftovers, "、"))
+	}
+	if err := m.prepareDiagnosticDelete(ctx, i); err != nil {
+		unlock()
+		return nil, err
 	}
 	if err := avd.Delete(m.Root, i); err != nil {
 		unlock()
@@ -183,29 +438,78 @@ func (m *Manager) Delete(ctx context.Context, i int) (*DeleteResult, error) {
 	// Confirm it is gone: a later create must not find a half-deleted instance under this index.
 	if left := instanceFilesOnDisk(m.Root, i); len(left) > 0 {
 		unlock()
-		return nil, errs.Newf(errs.Internal, "魔改 AVD 实例 %d 没有删干净，还剩：%s", i, strings.Join(left, "、")).
+		return nil, errs.Newf(errs.Internal, "ModAVD 实例 %d 没有删干净，还剩：%s", i, strings.Join(left, "、")).
 			WithAdvice(fmt.Sprintf("关掉占用这些文件的程序后再运行一次 modavd delete %d --yes，会接着删", i))
 	}
 	// The lock files can only go once nobody holds them (an open file cannot be deleted).
 	unlock()
 	m.removeLockFiles(i)
 	if len(leftovers) > 0 {
-		m.Log.Infof("已清掉魔改 AVD 实例 %d 的残留", i)
+		m.Log.Infof("已清掉 ModAVD 实例 %d 的残留", i)
 	} else {
-		m.Log.Infof("已删除魔改 AVD 实例 %d", i)
+		m.Log.Infof("已删除 ModAVD 实例 %d", i)
 	}
 	return &DeleteResult{Index: i, Name: in.Name, Path: in.Dir}, nil
 }
 
-// tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("魔改 AVD 实例 0 正在启动，无法删除").
-func (m *Manager) tryInstanceLock(i int, kind, what string) (*win.FileLock, error) {
-	path := m.lockPath(i, kind)
-	l, ok, err := win.TryLock(path)
+// Retire diagnostic history before removing its metadata. Otherwise up to 4 GiB immediately joins the ordinary
+// 1 GiB pool. An explicit off value also retries a previous partial cleanup before a repeated delete.
+func (m *Manager) prepareDiagnosticDelete(ctx context.Context, i int) error {
+	l, err := m.Root.LockInstanceConfig(i)
 	if err != nil {
-		return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
+		if errs.CodeOf(err) == errs.NotFound {
+			return nil // avd home itself is absent; only metadata can remain
+		}
+		return err
+	}
+	meta, err := m.Root.ReadMetadata()
+	if err != nil {
+		l.Unlock()
+		return err
+	}
+	states, err := diagnostics.Parse(meta.Obj())
+	needed := meta.Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj().Has("diagnostics")
+	if err != nil || !needed {
+		l.Unlock()
+		return err
+	}
+	retention, err := m.retentionLock()
+	if err != nil {
+		l.Unlock()
+		return err
+	}
+	if states[i].Enabled {
+		err = diagnostics.Set(m.Root, i, false, time.Now())
+	}
+	// Do not expose the diagnostic history to another instance's ordinary-pool prune between off and its first
+	// cleanup. Only the short selection/deletion phase holds this lock, never a background dump copy.
+	if err == nil {
+		var plan cleanupPlan
+		plan, err = m.diagnosticCleanup(i, false)
+		if err == nil {
+			_, _, err = applyCleanup(plan, m.Log)
+		}
+	}
+	retention.Unlock()
+	l.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := m.waitCrashArchiveStopped(ctx, i); err != nil {
+		return err
+	}
+	_, _, err = m.cleanupDiagnostics(ctx, i)
+	return err
+}
+
+// tryInstanceLock takes lock kind of instance i now or fails with errs.Busy ("ModAVD 实例 0 正在启动，无法删除").
+func (m *Manager) tryInstanceLock(i int, kind, what string) (*host.FileLock, error) {
+	l, ok, err := m.tryOperationLock(i, kind)
+	if err != nil {
+		return nil, err
 	}
 	if !ok {
-		return nil, errs.Newf(errs.Busy, "魔改 AVD 实例 %d %s，无法删除", i, what)
+		return nil, errs.WithDetails(errs.Newf(errs.Busy, "ModAVD 实例 %d %s，无法删除", i, what), map[string]string{errs.Reason: "locked", errs.Lock: kind})
 	}
 	return l, nil
 }

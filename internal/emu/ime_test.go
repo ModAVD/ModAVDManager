@@ -17,6 +17,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 )
 
 const (
@@ -35,7 +36,7 @@ func TestHostImeScripts(t *testing.T) {
 		"wait":         {hostImeWaitScript, `i=0; while [ $i -lt 20 ]; do ime list -a -s | grep -qx org.modavd.ime/.HostImeService && { echo ok; exit 0; }; sleep 0.25; i=$((i+1)); done; echo timeout`},
 		"marker":       {hostImeMarker, "/data/local/tmp/modavd-ime.autoselected"},
 		"id":           {hostImeID, "org.modavd.ime/.HostImeService"},
-		"allow":        {allowInstallSourcesScript, `set -o pipefail; list=$(dumpsys package packages 2>/dev/null | awk '/^  Package \[/ { n++; p = substr($2, 2, length($2) - 2) } /android.permission.REQUEST_INSTALL_PACKAGES/ { if (p != "" && p != "android") print p } END { if (n == 0) exit 3 }' | sort -u) || { echo "dumpsys package failed"; exit 2; }; fail=0; for p in $list; do m=$(appops get "$p" REQUEST_INSTALL_PACKAGES 2>&1) || { echo "failed: $p"; fail=1; continue; }; case "$m" in *"REQUEST_INSTALL_PACKAGES: default"*) ;; *"REQUEST_INSTALL_PACKAGES: "*) continue ;; esac; if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p"; else echo "failed: $p"; fail=1; fi; done; exit $fail`},
+		"allow":        {allowInstallSourcesScript, `set -o pipefail; list=$(dumpsys package packages 2>/dev/null | awk '/^  Package \[/ { n++; p = substr($2, 2, length($2) - 2) } /android.permission.REQUEST_INSTALL_PACKAGES/ { if (p != "" && p != "android") print p } END { if (n == 0) exit 3 }' | sort -u) || { echo "dumpsys package failed"; exit 2; }; fail=0; changed=0; for p in $list; do m=$(appops get "$p" REQUEST_INSTALL_PACKAGES 2>&1) || { echo "failed: $p"; fail=1; continue; }; case "$m" in *"REQUEST_INSTALL_PACKAGES: default"*) ;; *"REQUEST_INSTALL_PACKAGES: "*) continue ;; esac; if appops set "$p" REQUEST_INSTALL_PACKAGES allow; then echo "$p"; changed=1; else echo "failed: $p"; fail=1; fi; done; if [ $changed = 1 ] && ! appops write-settings >/dev/null 2>&1; then echo "write-settings failed"; fail=1; fi; exit $fail`},
 	}
 	for name, c := range checks {
 		if c[0] != c[1] {
@@ -129,7 +130,7 @@ func TestHostImeInstallAction(t *testing.T) {
 }
 
 func TestFileSHA256(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "x.apk")
+	f := filepath.Join(testutil.TempDir(t), "x.apk")
 	if err := os.WriteFile(f, []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -528,49 +529,9 @@ func TestRunHostImeProbeFails(t *testing.T) {
 	}
 }
 
-func TestRecheckHostIme(t *testing.T) {
-	cases := []struct {
-		name  string
-		def   string // before
-		fails bool   // ime set does not take
-		after string
-		level logx.Level
-		msg   string
-	}{
-		{"still ours", hostImeID, false, hostImeID, -1, ""},
-		{"lost: set back", gboard, false, hostImeID, logx.Info,
-			"实例 4 宿主输入法: 重启 zygote 后默认变成了 " + gboard + "，已设回"},
-		{"lost: cannot set back", "", true, "", logx.Warn,
-			"实例 4 宿主输入法: 重启 zygote 后默认变成了 没设，没能设回（现在 没设）"},
-	}
-	for _, c := range cases {
-		g := fakeImeGuest{imeState: imeState{installed: 3, build: releaseSigner, enabled: true, def: c.def, marker: true},
-			imeFaults: imeFaults{setFails: c.fails}}
-		m, lines := recordingManager()
-		m.recheckHostIme(4, g.io())
-		if g.def != c.after || len(g.unknown) > 0 {
-			t.Errorf("%s: default %q (unknown %q), want %q", c.name, g.def, g.unknown, c.after)
-		}
-		switch {
-		case c.msg == "" && len(*lines) != 0:
-			t.Errorf("%s: logged %v", c.name, *lines)
-		case c.msg != "" && (len(*lines) != 1 || (*lines)[0].level != c.level || (*lines)[0].msg != c.msg):
-			t.Errorf("%s: log %v, want %v %q", c.name, *lines, c.level, c.msg)
-		}
-	}
-	// settings unreadable: no ime set, a warning
-	m, lines := recordingManager()
-	m.recheckHostIme(4, guestIO{shell: func(string, time.Duration) adb.Result {
-		return adb.Result{Code: -1, Out: "adb shell 超时（30 秒）"}
-	}})
-	if len(*lines) != 1 || (*lines)[0].msg != "实例 4 宿主输入法: 重启 zygote 后读不出默认输入法" {
-		t.Errorf("unreadable: %v", *lines)
-	}
-}
-
 // TestSetupHostImeSkips: the quiet and the warned skips before the guest is touched (no adb here at all).
 func TestSetupHostImeSkips(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -604,7 +565,7 @@ func TestSetupHostImeSkips(t *testing.T) {
 	writeBuild("mas-34")
 	lines = nil
 	if m.setupHostIme(t.Context(), 0, false, "", nil) || len(lines) != 1 || lines[0].level != logx.Debug ||
-		lines[0].msg != "实例 0 宿主输入法跳过: 内测包 mas-34 低于 mas-35" {
+		lines[0].msg != "实例 0 宿主输入法跳过: 内测包 0.34.0 低于 0.35.0" {
 		t.Errorf("old emulator: %v", lines)
 	}
 	// channel known (build): an unreadable APK is a warning
@@ -617,7 +578,7 @@ func TestSetupHostImeSkips(t *testing.T) {
 }
 
 func TestHostImeChannel(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -641,6 +602,9 @@ func TestHostImeChannel(t *testing.T) {
 		{"mas-34", false, logWith, false}, // adopted: the log is not ours to judge
 		{"mas-34", true, logWith, true},   // a dev SDK whose build id lags behind
 		{"mas-34", true, logWithout, false},
+		{"0.42.0", false, "", true}, // the version form, from 0.42 on
+		{"0.35.0", false, "", true},
+		{"0.34.9", false, "", false},
 		{"", true, logWith, true},
 		{"", false, "", false},
 	}

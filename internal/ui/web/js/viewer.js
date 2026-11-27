@@ -1,32 +1,34 @@
 // 画面 viewer (about 2 frames a second, click = tap) and the log viewer.
 
+import { t } from './i18n.js';
 import { h, icon, btn, setText, attr } from './dom.js';
 import { api } from './api.js';
 import { S, subscribe, instance, rootBlocked } from './store.js';
 import { openDialog } from './ui.js';
 import { label } from './format.js';
 import * as A from './actions.js';
+import { displayTap } from './display.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function openViewer(i) {
   const inst = instance(i);
   if (!inst) return;
-  const img = h('img', { class: 'vshot', alt: `${label(inst)} 的当前画面`, draggable: 'false' });
+  const img = h('img', { class: 'vshot', alt: t('{name} 的当前画面', { name: label(inst) }), draggable: 'false' });
   // not live: the card's placeholder (number tile on the dot pattern), what is going on, and 开机 when it is off
   const phMsg = h('span');
   const phLead = h('span', { class: 'vph-lead' });
   const phSub = h('p', { class: 'vph-sub' });
-  const startBtn = btn('btn btn-tonal', [icon('power'), '开机'], () => { if (startBtn.getAttribute('aria-disabled') !== 'true') A.start(i); });
+  const startBtn = btn('btn btn-tonal', [icon('power'), t('开机')], () => { if (startBtn.getAttribute('aria-disabled') !== 'true') A.start(i); });
   const ph = h('div', { class: 'ph vph' }, h('span', { class: 'ph-tile' }, h('span', { class: 'ph-num', text: String(i) })),
     h('p', { class: 'vph-text' }, phLead, phMsg), phSub, startBtn);
-  const frame = h('div', { class: 'viewer-frame off', role: 'group', 'aria-label': `「${label(inst)}」的画面` }, img, ph);
+  const frame = h('div', { class: 'viewer-frame off', role: 'group', 'aria-label': t('「{name}」的画面', { name: label(inst) }) }, img, ph);
   const dot = h('span', { class: 'live-dot off' });
   const status = h('span');
-  const keys = [['back', '返回'], ['home', '主页'], ['recents', '最近任务']].map(([k, t]) =>
-    btn('btn btn-secondary btn-sm', [icon(k), t], () => { if (!frame.classList.contains('off')) A.input(i, { type: 'key', key: k }); }));
+  const keys = [['back', t('返回')], ['home', t('主页')], ['recents', t('最近任务')]].map(([k, name]) =>
+    btn('btn btn-secondary btn-sm', [icon(k), name], () => { if (!frame.classList.contains('off')) A.input(i, { type: 'key', key: k }); }));
   const ctl = openDialog({
-    title: `「${label(inst)}」的画面`, sub: '点按画面即在模拟器上点按 · Esc 关闭', cls: 'dlg-viewer', light: true,
+    title: t('「{name}」的画面', { name: label(inst) }), sub: t('点按画面即在模拟器上点按 · Esc 关闭'), cls: 'dlg-viewer', light: true,
     tools: h('div', { class: 'viewer-tools' }, h('span', { class: 'viewer-status' }, dot, status), h('div', { class: 'navkeys' }, keys)),
     body: h('div', { class: 'dlg-body' }, frame),
   });
@@ -45,17 +47,17 @@ export function openViewer(i) {
     ph.hidden = live;
     img.hidden = !live;
     dot.classList.toggle('off', !live);
-    setText(status, live ? '实时 · 约 2 帧/秒' : s === 'wait' ? '正在取画面…' : '没有画面');
+    setText(status, live ? t('实时 · 约 2 帧/秒') : s === 'wait' ? t('正在取画面…') : t('没有画面'));
     for (const b of keys) attr(b, 'aria-disabled', !live || null);
     phLead.replaceChildren(s === 'wait' || s === 'boot' ? h('span', { class: 'spin' }) : s === 'error' ? icon('alert') : '');
     setText(phMsg, text);
-    setText(phSub, blocked ? '这个目录现在还不能开机，先按主页上方的提示处理' : sub);
+    setText(phSub, blocked ? t('这个目录现在还不能开机，先按主页上方的提示处理') : sub);
     phSub.hidden = !phSub.textContent;
     startBtn.hidden = s !== 'off' || text !== OFF;
     attr(startBtn, 'aria-disabled', blocked || null);
   };
-  const OFF = '实例没有开机';
-  setState('wait', '正在取画面…');
+  const OFF = t('实例没有开机');
+  setState('wait', t('正在取画面…'));
 
   (async () => {
     let fail = 0;
@@ -63,9 +65,9 @@ export function openViewer(i) {
       const t0 = performance.now();
       let wait = 500;
       const cur = instance(i);
-      if (!cur) { setState('off', '这台实例已经不在了'); break; }
-      if (cur.status === 'starting' || S.pending[i] === 'start') setState('boot', '正在开机，开好后这里会显示画面');
-      else if (cur.status !== 'online') setState('off', OFF, '开机后这里会显示实时画面');
+      if (!cur) { setState('off', t('这台实例已经不在了')); break; }
+      if (cur.status === 'starting' || S.pending[i] === 'start') setState('boot', t('正在开机，开好后这里会显示画面'));
+      else if (cur.status !== 'online') setState('off', OFF, t('开机后这里会显示实时画面'));
       else if (document.visibilityState === 'visible') {
         let u = null;
         try {
@@ -83,11 +85,11 @@ export function openViewer(i) {
             setState('live');
           }
         } catch (e) {
-          if (e.status === 409) setState('off', OFF, '开机后这里会显示实时画面');
+          if (e.status === 409) setState('off', OFF, t('开机后这里会显示实时画面'));
           else {
             fail++;
-            if (e.name === 'TimeoutError') setState('error', '取画面超时', '模拟器可能卡住了，过一会儿会再试');
-            else setState('error', e.message || '取不到画面', e.advice);
+            if (e.name === 'TimeoutError') setState('error', t('取画面超时'), t('模拟器可能卡住了，过一会儿会再试'));
+            else setState('error', e.message || t('取不到画面'), e.advice);
           }
         }
         if (u) URL.revokeObjectURL(u);
@@ -102,24 +104,22 @@ export function openViewer(i) {
   frame.addEventListener('click', (e) => {
     if (frame.classList.contains('off')) return;
     const r = frame.getBoundingClientRect();
-    const cfg = (instance(i) || inst).config || {};
-    const fx = (e.clientX - r.left) / r.width;
-    const fy = (e.clientY - r.top) / r.height;
-    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+    // The screenshot is the running display; config may already describe the next boot.
+    const tap = displayTap(r, img.naturalWidth, img.naturalHeight, e.clientX, e.clientY);
+    if (!tap) return;
     const rip = h('span', { class: 'ripple' });
-    rip.style.left = fx * 100 + '%';
-    rip.style.top = fy * 100 + '%';
+    rip.style.left = (e.clientX - r.left) + 'px';
+    rip.style.top = (e.clientY - r.top) + 'px';
     frame.append(rip);
     setTimeout(() => rip.remove(), 600);
-    // the API takes pixels of the 1280×720 display
-    A.input(i, { type: 'tap', x: Math.round(fx * ((cfg.width || 1280) - 1)), y: Math.round(fy * ((cfg.height || 720) - 1)) });
+    A.input(i, tap);
   });
   const un = subscribe(() => {
     const cur = instance(i);
     if (!cur) return;
-    setText(ctl.titleEl, `「${label(cur)}」的画面`);
-    attr(frame, 'aria-label', `「${label(cur)}」的画面`);
-    attr(img, 'alt', `${label(cur)} 的当前画面`);
+    setText(ctl.titleEl, t('「{name}」的画面', { name: label(cur) }));
+    attr(frame, 'aria-label', t('「{name}」的画面', { name: label(cur) }));
+    attr(img, 'alt', t('{name} 的当前画面', { name: label(cur) }));
   });
   ctl.onClose.push(() => { alive = false; un(); if (url) URL.revokeObjectURL(url); });
 }
@@ -144,16 +144,16 @@ export function openLogs(i, kind0) {
   let text = null;
   let seq = 0;
 
-  const tabs = [['emulator', '模拟器'], ['logcat', 'logcat']].map(([k, t]) =>
-    btn('tab', t, () => setKind(k), { role: 'tab', id: `lt-${k}`, 'aria-controls': 'logview' }));
-  const tablist = h('div', { class: 'tabs', role: 'tablist', 'aria-label': '日志种类' }, tabs);
+  const tabs = [['emulator', t('模拟器')], ['logcat', 'logcat']].map(([k, name]) =>
+    btn('tab', name, () => setKind(k), { role: 'tab', id: `lt-${k}`, 'aria-controls': 'logview' }));
+  const tablist = h('div', { class: 'tabs', role: 'tablist', 'aria-label': t('日志种类') }, tabs);
   tablist.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
     setKind(kind === 'emulator' ? 'logcat' : 'emulator');
     tabs[kind === 'emulator' ? 0 : 1].focus();
   });
-  const sel = h('select', { class: 'select', 'aria-label': '显示的行数' }, [300, 1000, 3000].map((n) => h('option', { value: String(n), text: `最近 ${n} 行` })));
+  const sel = h('select', { class: 'select', 'aria-label': t('显示的行数') }, [300, 1000, 3000].map((n) => h('option', { value: String(n), text: t('最近 {n} 行', { n }) })));
   sel.addEventListener('change', () => { lines = Number(sel.value); load(true); });
   const chk = h('input', { type: 'checkbox', checked: true });
   chk.addEventListener('change', () => { follow = chk.checked; if (follow) load(true); });
@@ -167,20 +167,20 @@ export function openLogs(i, kind0) {
   // a selection inside the log survives: no refresh while there is one
   const selecting = () => { const s = getSelection(); return !!s && !s.isCollapsed && view.contains(s.anchorNode); };
   const ctl = openDialog({
-    title: `「${label(inst)}」的日志`, sub: `${inst.name} · ${inst.serial}`, cls: 'dlg-logs', light: true,
+    title: t('「{name}」的日志', { name: label(inst) }), sub: `${inst.name} · ${inst.serial}`, cls: 'dlg-logs', light: true,
     body: h('div', { class: 'dlg-body' },
       h('div', { class: 'logs-bar' }, tablist, h('span', { class: 'spacer' }), sel,
-        h('label', { class: 'checkbox' }, chk, h('span', { text: '实时跟随' })), btn('btn btn-secondary', [icon('refresh'), '刷新'], () => load(true))),
+        h('label', { class: 'checkbox' }, chk, h('span', { text: t('实时跟随') })), btn('btn btn-secondary', [icon('refresh'), t('刷新')], () => load(true))),
       view),
-    foot: h('footer', { class: 'dlg-foot' }, h('span', { class: 'foot-note', text: '最新那份日志的末尾。完整日志在日志目录里。' }),
-      btn('btn btn-ghost', [icon('folder'), '打开日志目录'], () => A.openFolder('logs'))),
+    foot: h('footer', { class: 'dlg-foot' }, h('span', { class: 'foot-note', text: t('最新那份日志的末尾。完整日志在日志目录里。') }),
+      btn('btn btn-ghost', [icon('folder'), t('打开日志目录')], () => A.openFolder('logs'))),
   });
 
   function setKind(k) {
     kind = k;
-    for (const t of tabs) {
-      attr(t, 'aria-selected', t.id === `lt-${k}`);
-      t.tabIndex = t.id === `lt-${k}` ? 0 : -1;
+    for (const tab of tabs) {
+      attr(tab, 'aria-selected', tab.id === `lt-${k}`);
+      tab.tabIndex = tab.id === `lt-${k}` ? 0 : -1;
     }
     attr(view, 'aria-labelledby', `lt-${k}`);
     text = null;
@@ -197,18 +197,18 @@ export function openLogs(i, kind0) {
     // Keep a selected log line intact.  The next interval (or a manual refresh after
     // the selection is cleared) will fetch the newest tail without replacing it mid-read.
     if (text != null && selecting()) return;
-    if (manual && text == null) showState('spin', '正在读取日志…');
+    if (manual && text == null) showState('spin', t('正在读取日志…'));
     try {
-      const t = await api.get(`/api/instances/${i}/log?kind=${kind}&lines=${lines}`);
-      if (my !== seq || t === text) return;
+      const body = await api.get(`/api/instances/${i}/log?kind=${kind}&lines=${lines}`);
+      if (my !== seq || body === text) return;
       const atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 32;
-      if (!t.trim()) { showState('file', '日志是空的'); return; }
-      text = t;
-      view.replaceChildren(...t.replace(/\n$/, '').split('\n').map((l) => h('span', { class: 'll ' + lineClass(kind, l), text: l })));
+      if (!body.trim()) { showState('file', t('日志是空的')); return; }
+      text = body;
+      view.replaceChildren(...body.replace(/\n$/, '').split('\n').map((l) => h('span', { class: 'll ' + lineClass(kind, l), text: l })));
       if (follow || atEnd || manual) view.scrollTop = view.scrollHeight;
     } catch (e) {
       if (my !== seq) return;
-      if (e.status === 404) showState('file', kind === 'logcat' ? '还没有 logcat 日志' : '还没有模拟器日志', '实例开过一次机才会有日志。');
+      if (e.status === 404) showState('file', kind === 'logcat' ? t('还没有 logcat 日志') : t('还没有模拟器日志'), t('实例开过一次机才会有日志。'));
       else showState('alert', e.message, e.advice);
     }
   }

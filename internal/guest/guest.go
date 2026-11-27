@@ -1,11 +1,12 @@
 // Package guest holds the scripts modavd pushes into the guest after boot. They are copies of AUTO-MAS
-// res/avd/guest/*.sh (the product versions; mas-idlepoll.sh differs from aemu-lab tools/launcher/ only in a comment,
-// mas-wifi-fastpath.sh equals tools/guest/). Until AUTO-MAS calls modavd for booting, changes go into both places.
+// res/avd/guest/*.sh (the product versions). Until AUTO-MAS calls modavd for booting, changes go into both places.
+// It also carries the guest daemon of the per-app proxy (ProxyDaemon), which build.ps1 builds and puts in proxyd/.
 package guest
 
 import (
 	"bytes"
 	"crypto/sha256"
+	"debug/elf"
 	"embed"
 	"encoding/hex"
 	"errors"
@@ -14,16 +15,90 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 //go:embed scripts/*.sh
 var scripts embed.FS
 
+//go:embed proxyd
+var proxyd embed.FS
+
+// ProxyDaemonName is the daemon's file name, on the host and in the guest.
+const ProxyDaemonName = "modavd-proxyd"
+
+// ErrNoProxyDaemon: this modavd was built without build.ps1, so it carries no guest daemon.
+var ErrNoProxyDaemon = errors.New("这个 modavd 编的时候没带按应用走代理的客体程序（要用 build.ps1 编）")
+
+// ProxyDaemon is cmd/modavd-proxyd for linux/amd64, as build.ps1 embedded it. It is embedded as is, not compressed:
+// a large compressed blob inside an exe is what antivirus models take for a dropper's payload.
+func ProxyDaemon() ([]byte, error) { return ProxyDaemonForABI("x86_64") }
+
+// ProxyDaemonForABI selects a packaged Linux guest executable. The historical
+// filename stays reserved for x86_64; ARM64 never falls back to that executable.
+func ProxyDaemonForABI(abi string) ([]byte, error) {
+	name := ProxyDaemonName
+	machine := elf.EM_X86_64
+	switch abi {
+	case "x86_64":
+	case "arm64-v8a", "arm64", "aarch64":
+		name += "-arm64"
+		machine = elf.EM_AARCH64
+	default:
+		return nil, fmt.Errorf("不支持的客体代理 ABI：%s", abi)
+	}
+	b, err := proxyd.ReadFile("proxyd/" + name)
+	if err != nil {
+		if abi == "x86_64" {
+			return nil, ErrNoProxyDaemon
+		}
+		return nil, fmt.Errorf("此构建未附带 ARM64 客体代理程序 %s", name)
+	}
+	if len(b) > 64<<20 {
+		return nil, errors.New("客体代理程序过大")
+	}
+	exe, err := elf.NewFile(bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("客体代理不是 ELF：%w", err)
+	}
+	defer exe.Close()
+	if exe.Class != elf.ELFCLASS64 || exe.Data != elf.ELFDATA2LSB || exe.Machine != machine ||
+		(exe.Type != elf.ET_EXEC && exe.Type != elf.ET_DYN) {
+		return nil, fmt.Errorf("客体代理的 ELF 架构与 %s 不匹配", abi)
+	}
+	return b, nil
+}
+
+// LocalProxyDaemon is LocalFile for the daemon.
+func LocalProxyDaemon(dir string) (string, error) { return LocalProxyDaemonForABI(dir, "x86_64") }
+
+func LocalProxyDaemonForABI(dir, abi string) (string, error) {
+	b, err := ProxyDaemonForABI(abi)
+	if err != nil {
+		return "", err
+	}
+	return localCopy(dir, ProxyDaemonName, b)
+}
+
 const (
 	CPUInfoBind  = "cpuinfo-bind.sh"
 	IdlePoll     = "mas-idlepoll.sh"
 	WifiFastpath = "mas-wifi-fastpath.sh"
-	VulkanFix    = "vulkanfix.sh"
+	// LibFix mounts the patched guest libraries, the Vulkan driver and the ARM translation layer (modavd only;
+	// AUTO-MAS keeps its own vulkanfix.sh for the Vulkan driver alone, with the same guest cache and upload names).
+	LibFix = "libfix.sh"
+	// GLES32 switches the OpenGL ES version the guest reports to 3.2 (modavd only, experimental, ModAVD/ModAVD#131).
+	GLES32 = "gles32.sh"
+	// PlayStore installs, checks and removes the Google Play Store (modavd only, not in AUTO-MAS).
+	PlayStore = "playstore.sh"
+	// DownloadDisk keeps the download folder of games that fsync after every few KB on a disk of its own, where
+	// fsync does not wait and the folder is committed as a whole every 3 s (modavd only, ModAVD/ModAVD#35).
+	DownloadDisk = "modavd-dldisk.sh"
+	// VulkanMode writes the Vulkan display mode for listed games that have not chosen one, before their first start
+	// (modavd only, ModAVD/ModAVD#222).
+	VulkanMode   = "modavd-vkmode.sh"
+	AppKeepalive = "modavd-app-keepalive.sh"
 )
 
 // RemoteDir is where the scripts go in the guest.
@@ -55,10 +130,15 @@ func LocalFile(dir, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return localCopy(dir, name, b)
+}
+
+// localCopy is LocalFile for any bytes.
+func localCopy(dir, name string, b []byte) (string, error) {
 	sum := sha256.Sum256(b)
 	sub := filepath.Join(dir, hex.EncodeToString(sum[:])[:12])
 	path := filepath.Join(sub, name)
-	switch old, err := os.ReadFile(path); {
+	switch old, err := readStable(path); {
 	case err == nil && bytes.Equal(old, b):
 		return path, nil
 	case err == nil:
@@ -77,16 +157,34 @@ func LocalFile(dir, name string) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
-	err = moveNoReplace(tmp, path)
-	if err != nil {
+	if err := moveNoReplace(tmp, path); err != nil {
 		os.Remove(tmp)
 		// another writer got there first: its file is just as good when it holds these bytes
-		if old, rerr := os.ReadFile(path); rerr == nil && bytes.Equal(old, b) {
+		if old, rerr := readStable(path); rerr == nil && bytes.Equal(old, b) {
 			return path, nil
 		}
 		return "", err
 	}
 	return path, nil
+}
+
+// readStable tolerates the short window in which another writer has renamed a complete file but still has its
+// handle open. Windows reports that as ERROR_SHARING_VIOLATION (or ERROR_LOCK_VIOLATION); retrying here makes the
+// content-addressed first write safe across processes without weakening the no-replace invariant.
+func readStable(path string) ([]byte, error) {
+	const attempts = 40
+	for n := 0; ; n++ {
+		b, err := os.ReadFile(path)
+		if err == nil || n >= attempts || !sharingViolation(err) {
+			return b, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func sharingViolation(err error) bool {
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == syscall.Errno(32) || errno == syscall.Errno(33))
 }
 
 // Remote is the guest path of a script.

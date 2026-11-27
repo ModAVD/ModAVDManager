@@ -13,9 +13,12 @@ import (
 	"time"
 	"unsafe"
 
+	"modavd/internal/host"
 	"modavd/internal/root"
-	"modavd/internal/win"
 )
+
+// OwnershipSupported reports whether QemuBelongsTo can verify native process ownership.
+const OwnershipSupported = true
 
 // QemuBelongsTo reports whether qemu process p, already matched to instance i by its "-avd mas_<i>" and "-ports
 // <console>,..." arguments, is instance i of root r. Every root names its instances mas_0, mas_1 ... and uses the same
@@ -39,7 +42,7 @@ import (
 //     leftover, p's start time unknown, unreadable) the qemu is not ours: taking another root's emulator for ours
 //     is the harm to avoid, and ours is found a moment later, once its lock (taken early in qemu's main) or its
 //     runtime file is there.
-func QemuBelongsTo(r *root.Root, p win.Process, i int) bool {
+func QemuBelongsTo(r *root.Root, p host.Process, i int) bool {
 	if r == nil || p.PID == 0 {
 		return false
 	}
@@ -102,7 +105,7 @@ const (
 // retries fail if its handle stays open across them (the probing thread preempted between CreateFile and CloseHandle
 // on a busy host is enough), and qemu then panics with "Running multiple emulators with the same AVD" (main.cpp).
 // That is one reason the probe reads with every share mode now and never stands in the emulator's way.
-func runLockHeldBy(avdDir string, p win.Process) bool {
+func runLockHeldBy(avdDir string, p host.Process) bool {
 	started := p.StartedAt()
 	if p.PID == 0 || started.IsZero() {
 		return false
@@ -206,7 +209,7 @@ func isDir(path string) bool {
 
 // runningAvdDir is the avd.dir= value of qemu p's runtime file pid_<pid>.ini in dir; "" when there is no current one
 // (missing, unreadable, without that line, or written before p started).
-func runningAvdDir(dir string, p win.Process) string {
+func runningAvdDir(dir string, p host.Process) string {
 	path := filepath.Join(dir, "pid_"+strconv.FormatUint(uint64(p.PID), 10)+".ini")
 	st, err := os.Stat(path)
 	if err != nil || !st.Mode().IsRegular() {
@@ -262,7 +265,7 @@ func hasDirPrefix(path, dir string) bool {
 
 // resolvedPath is path with its links resolved, cleaned; the cleaned path itself when it cannot be resolved (it does
 // not exist, access denied). filepath.EvalSymlinks alone is not enough: since Go 1.23 it leaves mount points unresolved
-// on Windows, and a directory junction (C:\emu-src) is one.
+// on Windows, and a directory junction (C:\sdk-src) is one.
 func resolvedPath(path string) string {
 	if s, ok := finalPath(path); ok {
 		return filepath.Clean(s)

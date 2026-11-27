@@ -1,5 +1,9 @@
 # modavd 管理器的 HTTP 接口（`internal/ui` ↔ `internal/ui/web`）
 
+**简体中文** | [English](API.en.md)
+
+<!-- API.md 和 API.en.md 逐节对应：改了其中一份，请在同一个 PR 里把另一份也改了。 -->
+
 内部契约，前端（`web/`）和服务端（`*.go`）按这份写；改了两边一起改。字段名、结构和 CLI `--json` 的 `data` 相同（`internal/emu/types.go`）。
 
 ## 连接与安全
@@ -8,12 +12,12 @@
 - 启动器打开 `/?t=<令牌>`：服务回 `Set-Cookie: modavd_ui_<端口>=<令牌>; HttpOnly; SameSite=Strict; Path=/` 和 302 跳到 `/`。令牌每次启动随机生成（32 字节）。cookie 名带端口：cookie 只按主机分、不按端口分，所有管理器窗口又共用一个 Edge 配置，同名的话后开的管理器会把先开的那个顶掉。
 - 所有 `/api/*` 都要带这个 cookie，没有或不对回 401。
 - `Host` 不是 `127.0.0.1:<端口>` 或 `localhost:<端口>` 的请求一律 403（防 DNS 重绑定）。
-- 非 GET 请求：`Origin` 必须是本服务自己的地址（浏览器会带），否则 403；请求体是 JSON（`Content-Type: application/json`），上传 APK 例外。
+- 非 GET 请求：`Origin` 必须是本服务自己的地址（浏览器会带），否则 403；请求体是 JSON（`Content-Type: application/json`），上传 APK 和导入 Google Play 商店的文件例外。
 - 静态文件 `/`、`/app.css`、`/js/*`、`/assets/*` 不要 cookie（页面要先加载才能带 cookie），但同样校验 Host。
 
 ## 错误
 
-HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}`，`code` 是 `internal/errs` 的错误码。状态码：
+HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…","details":{…}}}`，`code` 是 `internal/errs` 的错误码；`details` 只在有额外的机读信息时出现（现在只有开机失败时客体现场的目录 `boot_diag_dir`，见 README）。任务（jobs）的 `error` 也一样。状态码：
 
 | code | HTTP |
 | --- | --- |
@@ -24,7 +28,7 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | `busy`、`already_exists`、`port_conflict` | 409 |
 | `not_ready`、`precheck_failed`、`unsupported` | 422 |
 | `canceled` | 499 |
-| `launch_failed` | 502 |
+| `launch_failed`、`insufficient_memory`、`update_unavailable`、`update_rejected`、`proxy_unavailable` | 502 |
 | `timeout` | 504 |
 | 其余 | 500 |
 
@@ -33,30 +37,69 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
 | GET | `/api/info` | | `{"version","protocol","root":RootInfo}` |
+| GET | `/api/locale` | | `{"language","preference","system","languages":[{code,name}],"messages"}`：管理器现在用的语言（`zh-CN` / `en`）、设置里选的（`auto` 是跟随系统）、跟随系统时会选哪种、可选的语言，以及页面自己那部分字符串的译文（键是中文原文，中文时是 `{}`）。后端发给页面的文字（错误、进度、日志、检查项）已经按 `language` 翻好；命令行 `--json`、MCP、日志和问题包不翻，照旧是中文 |
+| PUT | `/api/locale` | `{preference: "auto"\|"zh-CN"\|"en"}` | 同上；记进这个 Windows 用户的 `%LOCALAPPDATA%\ModAVD\language.json`（命令行也按它选），管理器马上换语言，页面随后重新加载 |
 | GET | `/api/instances` | | `ListResult` |
 | GET | `/api/instances/{i}` | | `InstanceInfo` |
-| POST | `/api/instances` | `{title?, index?, memory_mb?, cpu?, data_partition_gb?, fps?}` | 201 `InstanceInfo` |
-| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?}` | `UpdateResult` |
+| GET | `/api/instances/{i}/regional` | | `RegionalResult` |
+| POST | `/api/instances` | `{title?, index?, count?, memory_mb?, cpu?, data_partition_gb?, fps?, resolution?, dpi?, orientation?: string, language?: string, time_zone?: string}` | 202 `Job`（`kind` 是 `create`：不给 `data_partition_gb` 是自动扩盘（256 GB），给了是指定大小；后台开机做完初始化再关机，要几分钟；没给 `index` 时服务端先选好编号，`Job.index` 就是新实例的；结果是 `InstanceInfo`）。新建的实例不带 Google Play 商店（没有 `play_store` 字段，给了回 400），要的话建好后用下面的 `playstore-install`。`count` 是一次建几台（1–9，不给是 1，不能和 `index` 一起给）：大于 1 时服务端先取好这么多个空闲编号（不够就 409 `busy`，一台不建），每台当场开一个 `create` 任务，回 202 `{jobs: [Job…]}`；任务按编号一台做完再做下一台（排着的 `progress.step` 是 `queued`，可以单独取消），每台开建前查实例所在盘的剩余空间，不够那一台失败（`precheck_failed`）；`title` 后面加序号（`T 1`、`T 2`…）；一台失败或取消不影响别的 |
+| PATCH | `/api/instances/{i}` | `{title?, memory_mb?, cpu?, fps?, resolution?, dpi?, orientation?: string, data_partition_gb?, data_disk_auto?: bool, diagnostics?: bool, sound?: bool, app_keepalive?: bool, boss_key?: string, language?: string, time_zone?: string}` | `UpdateResult`；诊断和老板键立即生效，普通配置（包括 `sound` 和 `app_keepalive`）下次开机生效。`data_partition_gb` 把数据盘改成指定大小（只能改大），`data_disk_auto: true` 改成自动扩盘，两个不能同时给。给了 `boss_key` 时多一个 `boss_key_taken`（bool）：新键当场试注册过，被别的程序占着是 `true`（见下「老板键和托盘」） |
+| GET | `/api/instances/{i}/diagnostics/preview` | | `{"index","files","bytes"}`：关闭诊断时预计清理的份数、字节，不改配置、不删文件 |
 | DELETE | `/api/instances/{i}?confirm=1` | 不带 `confirm=1` 回 400 `usage` | `DeleteResult` |
-| POST | `/api/instances/{i}/start` | `{window?: bool}` | 202 `Job` |
-| POST | `/api/instances/{i}/stop` | `{force?: bool}` | 202 `Job` |
-| POST | `/api/instances/{i}/restart` | `{window?: bool, force?: bool}` | 202 `Job` |
+| POST | `/api/instances/{i}/start` | `{}` | 202 `Job`：一律带窗口开机（管理器不开无头的，无头开机只走命令行）；实例要先装执行桥时，装桥这几次准备用的开机都无头，装好后正常关机，最后一次带窗口开机（同 `modavd start <i> --window`）；实例已经以无头方式在运行时，任务失败，code 是 `busy`（运行中不切换） |
+| POST | `/api/instances/{i}/stop` | `{force?: bool, cancel_create?: bool}` | 202 `Job`；新建中默认 busy，显式 `cancel_create: true` 才取消；`force` 只管是否跳过 Android 正常关机。被取消的新建在结果里标记 `interrupted_create: true` |
+| GET | `/api/game-sources` | | 本机 MuMu 和雷电实例的类型 `kind`、编号、名称和运行状态 |
+| POST | `/api/game-sources/browse` | `player`（`mumu` 或 `ldplayer`）、源编号 `source`，可选 `package`、`path` | 按需启动源实例。返回第三方包名，指定包名时返回公开数据目录下一级的 `name`、`directory`。 |
+| POST | `/api/instances/{i}/import-game` | `player`、`source`、`games`（每项含 `package` 和可选的相对资源路径数组 `data`） | 202 `Job`，目标为开机的实例。结果按游戏列出 `package`、`apk_bytes`、`resource_bytes`。 |
 | POST | `/api/instances/{i}/install` | `multipart/form-data`，文件字段 `apk` | 202 `Job`（服务端存到临时文件，任务结束删掉） |
-| POST | `/api/instances/{i}/window` | `{visible: bool}` | `WindowResult` |
-| POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是 1280×720 显示的像素）或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
+| POST | `/api/instances/{i}/disk-info` | `{}` | 202 `Job`（`kind` 是 `disk-info`）：数据盘的占用，随时可以查（开机时 `allocated_bytes`、`reclaimable_bytes` 不返回，`needs_shutdown` 为 `true`）；结果是 emu 的 `DiskInfoResult`。整理中或锁不可用时返回可读取的文件信息及 `warnings`，不运行 qemu-img；读不到宿主占用时省略 `on_disk_bytes` |
+| POST | `/api/instances/{i}/disk-trim` | `{}` | 202 `Job`（`kind` 是 `disk-trim`）：请求开着的安卓回收空间；`done` 和 100% 仅表示触发请求已返回，不等待或确认客体 FITRIM 完成，任务耗时也是请求耗时；实例没开机完成、或模拟器版本不支持时任务失败，code 是 `unsupported`；结果是 `DiskTrimResult` |
+| POST | `/api/instances/{i}/disk-compact` | `{}` | 202 `Job`（`kind` 是 `disk-compact`）：整理已关机实例的数据盘文件；预估收益不足时跳过重写；实例没关机时任务失败，code 是 `busy`；结果是 `DiskCompactResult` |
+| POST | `/api/instances/{i}/clone` | `{title?: string}` | 202 `Job`（`kind` 是 `clone`，任务挂在源实例上）：把已关机的实例整份复制成一台新实例（同 `modavd clone <i>`）；源实例没关机时任务失败，code 是 `busy`；可用空间不够是 `precheck_failed`；取消任务会删掉复制到一半的实例；结果是 `CloneResult`（`source`、`instance`、`copied_bytes`） |
+| POST | `/api/instances/{i}/resume` | `{}` | 202 `Job`（`kind` 是 `create`）：重做新建失败的那台的初始化 |
+| POST | `/api/instances/{i}/playstore-install` | `{}` | 202 `Job`（`kind` 是 `playstore-install`）：把根目录里的五个文件装进这台实例（同 `modavd playstore <i> install`：放进执行桥的可写覆盖层、藏起占位应用、冷启动一次；关着的做完再关上，开着的照原来的方式开回来，要几分钟）；结果是 `PlayStoreResult`。开始前先检查，不行立即回错误、不开任务：根目录还没有五个文件（或文件不全、损坏）是 422 `not_ready`，`details.reason` 为 `playstore_files_missing`（页面引导去「补全组件」勾选或导入）；实例没有执行桥是 422 `not_ready`，`details.reason` 为 `no_bridge`；arm64 客体是 422 `unsupported`（`unsupported_guest`）；新建中 409 `busy`；不存在 404。任务里客体脚本发现系统不可写也是 `not_ready` / `no_bridge`。任务中途失败时客体脚本撤回这次放进去的文件；撤不干净（或脚本没说完就断了）的，实例的 `play_store_partial` 变成 `true`，页面同时给「补全」和「移除」。实例原来关着的，失败后也关上 |
+| POST | `/api/instances/{i}/playstore-uninstall` | `{}` | 202 `Job`（`kind` 是 `playstore-uninstall`）：从实例里移除商店（去掉 Google Play 装的更新、删掉五个文件、冷启动后恢复占位应用；同 `playstore <i> uninstall`）；结果是 `PlayStoreResult`。不要五个文件，也不检查执行桥；只装了一部分的实例也用它移除 |
+| POST | `/api/instances/{i}/gles32-on` | `{}` | 202 `Job`（`kind` 是 `gles32-on`）：实验功能，让实例把 `ro.opengles.version` 报成 196610（GLES 3.2），Google Play 就不会把清单里要求 GLES 3.2 的游戏判成不兼容（同 `modavd gles32 <i> on`）。只改报的版本，实际渲染仍是 3.1。在执行桥带来的可写系统镜像覆盖层里改 `/vendor/build.prop`，冷启动一次生效；关着的做完再关上，开着的照原来的方式开回来，要几分钟；冷启动后核对客体报的版本，对不上任务失败。结果是 `GLES32Result`。开始前先检查，不行立即回错误、不开任务：实例没有执行桥是 422 `not_ready`，`details.reason` 为 `gles32_no_bridge`；arm64 客体是 422 `unsupported`；新建中 409 `busy`；不存在 404。任务里客体脚本发现系统不可写也是 `not_ready` / `gles32_no_bridge`。开着时 `bridge <i> uninstall` 拒绝 |
+| POST | `/api/instances/{i}/gles32-off` | `{}` | 202 `Job`（`kind` 是 `gles32-off`）：去掉上面写进去的行，冷启动后实例改回报 3.1（同 `gles32 <i> off`）；结果是 `GLES32Result`。检查同 `gles32-on` |
+| GET | `/api/instances/{i}/playstore-gsfid` | | `{"index","decimal","hex"}`：开着的实例的 GSF ID（同 `modavd playstore <i> gsfid --json`；十进制是 GSF 记的，十六进制是同一个数，负数按补码），几秒钟。用来到 https://www.google.com/android/uncertified/ 登记。没开机（按最近的列表）或实例上有任务在跑是 409 `busy`；还没有 ID 是 422 `not_ready`，`details.reason` 为 `no_gsf_id`（开着网等一两分钟再试） |
+| POST | `/api/instances/{i}/input` | `{type:"tap", x, y}`（坐标是这台实例显示的像素（1280×720 或 1920×1080，竖屏时宽高对调））或 `{type:"key", key:"back"\|"home"\|"recents"}` | `{}` |
 | GET | `/api/instances/{i}/screenshot` | | `image/png`（`adb exec-out screencap -p`），`Cache-Control: no-store`；没开机回 409 |
 | GET | `/api/instances/{i}/log?kind=emulator\|logcat&lines=300` | | `text/plain; charset=utf-8`，最新那份日志的末尾；没有回 404 |
-| POST | `/api/open` | `{what: "root"\|"logs"\|"instance", index?}` | `{}`，在资源管理器里打开 |
-| GET | `/api/check?refresh=1` | | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
+| GET | `/api/instances/{i}/proxy` | | `ProxyView`，见下 |
+| PUT | `/api/instances/{i}/proxy` | `{enabled?: bool, server?: string, apps?: [string]}` | `ProxyView`：给出的项换成新值，没给的不变；一项都没给回 400 `usage`。`server` 可以不写协议（探测出来）或写 `auto`（取这台电脑的代理设置）；第一次打开没给地址也按 `auto`。地址探测不到回 502 `proxy_unavailable`。实例开着就马上生效，几秒内回 |
+| GET | `/api/instances/{i}/packages` | | `{"packages":[{"package","name","uid","system"}]}`：实例里装的第三方应用，加上装了的话「Google Play 服务」（`system: true`）；`name` 是认得的游戏的中文名和「Google Play 服务」，其余是 `""`。认得的游戏在前，然后按包名排。没开机回 409 `busy` |
+| GET | `/api/proxy/suggest` | | `{"server","notes"}`：这台电脑的代理设置（同 `modavd proxy --server auto`），换成实例里看到的地址，设置没说是 SOCKS5 时探测协议；`notes` 说取自哪里。没设代理回 502 `proxy_unavailable` |
+| POST | `/api/proxy/probe` | `{server}` | `{"server","host_addr","kind","udp","udp_error","notes"}`：在这台电脑上探测这个地址：是 SOCKS5 还是 HTTP 代理，SOCKS5 再经它发一个 DNS 查询试 UDP。`server` 换成实例里看到的地址（`127.0.0.1`、`localhost` 记成 `10.0.2.2`），协议换成探测到的，`notes` 说改了什么。连不上回 502 `proxy_unavailable` |
+| POST | `/api/open` | `{what: "root"\|"logs"\|"instance"\|"collect-info", index?, job?}` | `{}`，在资源管理器里打开；`collect-info` 打开那个做完了的收集问题信息任务（`job` 是任务 id）生成的问题包所在的文件夹，不接受页面给的路径 |
+| GET | `/api/components` | | `{"root","components":[…],"play_store":PlayStoreStatus}`：组件状态；`components` 最后一项是可选的 Google Play 商店的概要（`id` 为 `play-store`，`optional: true`，五个文件都在就是 `installed`），`play_store` 是它的细节，见下 |
+| GET | `/api/components/license` | `?source=auto\|googledownloads_cn\|tencent\|google\|custom&mirror_urls=…`（可重复；不带时用保存的下载源） | `{"license":"全文","license_source":"镜像来源","license_sha256":"全文的 SHA-256"}`：从这个下载源取的许可协议，和补全时取的是同一份；不下载组件 |
+| GET | `/api/components/source` | | 当前组件下载源：`source` 为 `auto`、内置镜像 ID 或 `custom`，以及 `mirror_urls`、`configured` |
+| PUT | `/api/components/source` | `{"source":"auto"\|"googledownloads_cn"\|"tencent"\|"google"\|"custom", "mirror_urls":[...]}` | 保存当前用户的组件下载源；自定义地址只接受 HTTP(S) 目录 |
+| POST | `/api/components/fetch` | `{"accept_license":true, "license_sha256":"…", "source"?:..., "mirror_urls"?:[...]}`（`accept_license` 必须明确为 `true`；`license_sha256` 是看过的那份许可协议的，取自上面的接口，同一个下载源） | 202 `Job`（`kind` 是 `components`，根任务，`index` 为 `-1`）。不带 `source` / `mirror_urls` 时用保存的下载源。后台取到的许可协议和 `license_sha256` 对不上时，任务以 `components_rejected` 失败，什么也不下。`"play_store": true` 再补全可选的 Google Play 商店：根目录还没有五个文件时下 Google Play 版系统镜像（约 1.5 GB），取出五个文件后压缩包和解出的 `system.img` 都删掉，只留这五个；已经有了（下载的或导入的）就跳过 |
+| POST | `/api/components/import-playstore` | `multipart/form-data`，文件字段 `file`，每个文件一个（1–8 个）：Google 官方的 Google Play 版镜像压缩包 `x86_64-34_r14.zip`，或者那五个文件本身（文件名都不限） | 202 `Job`（`kind` 是 `playstore-import`，根任务，`index` 为 `-1`）：「使用我自己的文件」。不下载、不问许可协议。服务端把上传存到临时文件夹，任务结束删掉；任务按大小认出每个文件，压缩包核对 Google 仓库清单的大小和 SHA-1，五个文件各自核对写死的大小和 SHA-256；结果是 `PlayStoreImportResult`。上传本身不对时立即回 400：不是 multipart 是 `usage`，没有 `file` 字段是 `usage`，空文件、超过 8 个、单个比压缩包还大是 `invalid_argument`。文件被拒收时任务以 `components_rejected` 失败，什么也不改，`details.reason`：`unknown_file`（大小既不是压缩包也不是五个文件之一）、`mismatch`（大小对上了、哈希对不上）、`incomplete`（只给了一部分，根目录里又没有其余的）；另一个补全或导入在跑是 409 `busy`；空间不够 422 `precheck_failed` |
+| POST | `/api/diag/collect` | `{out_dir?, stage_dir?, keep_stage?}` | 202 `Job`（`kind` 是 `collect-info`，根任务，`index` 为 `-1`） |
+| GET | `/api/diag/report-config` | | `{"text":"…"}` |
+| GET | `/api/boss-keys` | | `{"supported","taken"}`：`supported` 是这个管理器有老板键（Windows，托盘图标放成了）；`taken` 是已知被别的程序占着的键（注册或试注册没成），没有是 `[]` |
+| POST | `/api/boss-keys/check` | `{key}` | `{"key","taken"}`：`key` 是存下来的写法（`"Ctrl+Alt+Shift+1"`；`""`、`"none"` 是不要，回 `""`），`taken` 是现在试注册（注册上马上注销）没成；这个管理器自己为别的实例注册着的不算。键写得不对 400 `invalid_argument`，没有老板键 422 `unsupported` |
+| GET | `/api/check?refresh=1` | `refresh` 可省略 | `CheckResult`（要几秒：硬件加速检查和 Vulkan 探测） |
 | GET | `/api/jobs` | | `{"jobs":[Job]}`，新的在前，最多 50 个 |
 | GET | `/api/jobs/{id}` | | `Job` |
 | POST | `/api/jobs/{id}/cancel` | | `Job` |
 | GET | `/api/events` | | `text/event-stream`，见下 |
+| GET | `/api/update` | | `UpdateView`，见下（不联网） |
+| POST | `/api/update/check` | `{}` | `UpdateView`：按设置的更新源查最新版本（不带 CDK）；检查进行中回 409 `busy` |
+| POST | `/api/update/settings` | `{source?: "github"\|"mirrorchyan", cdk?: string}` | `UpdateView`；`cdk` 为 `""` 时清除，CDK 加密保存，从不返回 |
+| POST | `/api/update/handoff/take` | `{id}` | 200 本次交接的 `HandoffResult`，全管理器只领取一次；已领走或 ID 不匹配是 `null` |
+| POST | `/api/update/handoff/receive` | `{id}` | 200 `{received}`，供重开启动把本次交接结果转交给已运行的管理器 |
+| POST | `/api/update/apply` | `{confirmed?}` | 202 `Job`（`kind` 是 `update`，根任务，`index` 为 `-1`）：更新这个根目录，见下「更新」；结果是 `{handoff, version, stopped, message}` |
 
 `{i}` 是实例编号（0–9，5 除外）。
 
 - JSON 请求体：不认识的字段回 400 `usage`（拼错的字段名页面能直接看到）；空请求体等于全用默认值；PATCH 一个字段都没给回 400 `usage`。
-- 截图、输入遇到实例没开机：409，code 是 `busy`。
+- 截图、输入、列应用、取 GSF ID 遇到实例没开机：409，code 是 `busy`。
+- `InstanceInfo` 带 `diagnostics: bool`，开启时带 `diagnostics_since`。PATCH 修改诊断时，`UpdateResult` 带 `diagnostics_cleanup: {files, bytes}`，只报实际删除量。关闭预览包含重新加入普通全根目录 1 GiB 池后需淘汰的其它普通实例旧日志；活跃文件不在预览和删除范围内。预览和提交之间现场可能变化，页面以提交结果为准。关闭部分失败时开关已保存为关，再次提交 `diagnostics: false` 会继续清理和客体恢复。
+- 诊断设置成功但宿主 logcat 由外部程序采集时，`UpdateResult.warnings` 说明未接管；不结束外部进程，也不等待它切换后才返回。前端显示该提示。
+- 电脑检查查的是这台电脑和这个根目录，所有实例共用一份结果，不查内存（模拟器分不到内存时开机报 `insufficient_memory`）。结果会缓存，`refresh=1` 重新执行硬件加速和图形检查。`ready` 为 `false` 时所有实例都开不了机；macOS 无法确认的阻断项也视为未通过。
 
 ### Job
 
@@ -67,13 +110,16 @@ HTTP 4xx / 5xx，体为 `{"error":{"code":"…","message":"…","advice":"…"}}
  "result":null,"error":null,"warnings":[]}
 ```
 
-- `kind`：`start` / `stop` / `restart` / `install`。
+- `kind`：`start` / `stop` / `install` / `create` / `components` / `collect-info` / `disk-info` / `disk-trim` / `disk-compact` / `clone` / `playstore-install` / `playstore-uninstall` / `playstore-import` / `gles32-on` / `gles32-off` / `update`（0.3.0 起没有重启，也没有显示 / 隐藏窗口）。
 - `state`：`running` / `done` / `failed` / `canceled`。
-- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含重启的关机阶段、等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`。`total` 一律 1000。
+- `progress.step`：开机用 emu 的 `launch` / `boot` / `tune` / `ime` / `first_boot` / `vulkan_fix` / `done`；关机（含等被取消的开机停下）是 `stop`，安装是 `install`，这两种做完是 `done`；磁盘任务进行中是 `disk_info` / `disk_trim` / `disk_compact`、做完是 `done`；复制实例是 `copy`（`done` / `total` 按复制的字节折成千分比）（进行中没有百分比，`total` 为 0，页面显示不定长进度条；做完 `done` = `total` = 1000）；装执行桥的每一轮是 `bridge`；商店的装、卸进行中是 `playstore-install` / `playstore-uninstall`（没有百分比）、做完是 `done`；导入时核对文件是 `verifying`、解压镜像是 `extracting`（`done` / `total` 是字节）；新建是 `create`、其中几次开机的上述各步（开机做完是 `setup`）、`create_stop`、`done`，几次开机合成一条不回退的进度。`total` 一律 1000。
 - 安装任务的 `result.apk` 是用户上传的文件名，不是服务端的临时路径（临时文件任务结束就删了）。
-- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult`，没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
+- `progress` 在没有进度时为 `null`；`result` 是 `StartResult` / `StopResult` / `InstallResult` / `DiskInfoResult` / `DiskTrimResult` / `DiskCompactResult` / `InstanceInfo`（新建）/ `PlayStoreResult` / `PlayStoreImportResult` / `GLES32Result`，没完成时为 `null`；`error` 失败时是错误对象，否则 `null`。
+
+`DiskCompactResult` 保留非负的 `freed_bytes`。`before_on_disk_bytes` 和 `after_on_disk_bytes` 是整理前后宿主实际占用，新增的 `on_disk_delta_bytes` 等于后者减前者，正值表示占用增大。`skipped=true` 表示检查通过、预计收益不足，未重写原盘；此时前后占用相等、变化和释放量均为零。结果还包含 `reclaim_threshold_bytes` 和可省略的 `estimated_reclaimable_bytes`，详见 [整理预算与结果契约](../emu/COMPACT.md)。
 - 同一实例同时只能有一个任务在跑；第二个回 409 `busy`。**例外**：开机任务进行中可以发关机（和 emu 一致：开机中照样能关）。
 - 取消开机：只停止等待，模拟器继续开机，不会被强制结束。
+- `components`、`playstore-import` 和 `collect-info` 是根目录任务，`index` 为 `-1`，同时只跑一个；取消会传给诊断后端上下文。`components`、`playstore-import` 在跑时，开机、新建、商店的装卸回 409 `busy`，反过来也一样（它们会改 `sdk\`）。
 
 ### 事件流 `/api/events`
 
@@ -87,17 +133,119 @@ data: <Job>                 任务有任何变化时
 event: log
 data: {"time":"…","level":"info|warn|error","msg":"…","job_id":"j12"}   不属于任务的消息 job_id 是 ""
 
+event: update
+data: <UpdateView>          检查、设置有变化时，以及更新任务下载完以后
+
+event: proxy
+data: {"marks":[ProxyMark]} 按应用走代理的卡片标记，全量；连上时发一次（有过的话），之后有变化时
+
 event: ping
 data: {}                    每 15 秒
 ```
 
-没有任何事件流连着时服务不轮询实例状态（`list` 要对每台在跑的实例发一次 adb）。
+### 按应用走代理 `ProxyView`、`ProxyMark`
+
+`ProxyView` 是 `AppProxyResult` 的全部字段（和 `modavd proxy <i> --json` 的 `data` 相同：`index`、`enabled`、`server`、`apps`、`dns`、`applied`、`notes`、`guest`、`guest_error`、`error`；`guest_error` 是实例开着但问不到客体时的原因），加上 `mark`：实例开着、开完了机、没在开机或关机、设置开着且名单不空时是一个 `ProxyMark`，否则是 `null`。
+
+- `applied`：GET 是 `""`；PUT 是 `now`（客体里已生效）、`failed`（客体没接受，`error` 说为什么）、`booting`（正在开机，开完马上生效）、`next_boot`（没开机）、`off`（关了，客体里不留它的程序和规则）。
+- `ProxyMark` 是 `{"index","tone","text"}`：
+  - `ok`：客体里的程序在跑、规则就位，代理通着。
+  - `warn`：规则缺了几条、正在补；或者客体最近一次经代理的连接没成功，但这台电脑上能连到代理（可能是目标本身没回应）；或者这次没问到客体（adb、su 没回应）。
+  - `err`：名单里的应用现在断网或直连：客体里没有它在跑、规则挂不上，或者代理连不上（客体最近一次连接失败，这台电脑上也连不上）。
+  - `text` 是给人看的一句话。
+- 卡片的标记：页面连着时，服务每 30 秒问一次每个开着这个设置、已开机的实例（一条 root 命令），实例的状态或设置一变就马上问；正在开机、关机或做开机后设置的不问。GET、PUT 的结果也会更新标记。
+- 没开机的实例没有 `ProxyMark`：页面按 `InstanceInfo.app_proxy`（只读配置的概要）显示「下次开机生效」。
+
+### Google Play 商店 `PlayStoreStatus`、`PlayStoreImportResult`、`PlayStoreResult`
+
+Apple Silicon macOS 的组件下载/导入使用 API35 Google Play ARM64 r9，归档 `arm64-v8a-35_r09.zip`；实例内装卸仍返回 `unsupported`。Windows 保持 API34 x86_64 r14。`PlayStoreStatus` 增加 `archive`（可导入的官方归档名）、`download_bytes`（归档大小）和 `install_supported`（当前宿主是否已支持实例装卸）；界面按这些字段展示大小、导入提示和能力边界。macOS 的 `ready` 同时检查 `source.properties` 的 ABI、API 和镜像类型，仍不替代导入/下载时的摘要校验。
+
+商店是可选的：根目录里留五个文件（`sdk\playstore\`，补全组件时勾选下载，或者导入自己的文件），每台实例要的时候再装进去；新建实例不带。
+
+- `PlayStoreStatus`（`GET /api/components` 的 `play_store`，和 `modavd components status --json` 的 `data.play_store` 相同）：`{"dir","ready","source","version","archive","download_bytes","install_supported","files":[{"name","guest","size","present"}]}`。
+  - `ready`：五个文件都在、`source.properties` 的版本对（只看大小，SHA-256 在放进来和装进实例时核对）。实例的「补全 Google Play 商店」按钮按它决定是直接装，还是先引导去补全组件。
+  - `source`：`download`（补全组件时下载的）、`import`（用自己的文件导入的），没有或来历不明是 `""`。
+  - `files` 固定五项，顺序同文档站：`Phonesky.apk`、`PrebuiltGmsCore.apk`、`GoogleServicesFramework.apk`、`PartnerSetupPrebuilt.apk`、`play_store_fsi_cert.der`；`guest` 是装进实例后的路径，`present` 是这个文件在、大小对。
+- `PlayStoreImportResult`（`playstore-import` 任务的结果，同 `modavd components import-playstore --json`）：`{"root","from","used","kept","skipped","set_aside","status":PlayStoreStatus}`。
+  - `from`：`zip`（给了压缩包）或 `files`（给了文件本身）；`used`：核对通过、用上了的文件（按上传时的文件名）；`kept`：这次没给、根目录里原有且核对无误留下的。
+  - `skipped`：根目录里五个文件本来就齐全，给的文件也核对过了，什么都没改。
+  - `set_aside`：原来不完整的 `sdk\playstore` 改名后的位置（`sdk\playstore.incomplete-<时间>`），没有是 `""`。
+- `PlayStoreResult`（`playstore-install` / `playstore-uninstall` 任务的结果，同 `modavd playstore <i> … --json`）：`{"index","action","state","installed","files","restarted","stopped","warnings"}`；`state` 是做完后客体里的情况：`installed`、`absent` 或 `partial`（还有没放到位的 `.new` 也算 `partial`）。
+- `InstanceInfo.play_store`（bool）：这台实例装着商店（按 `mas-avd.json` 的记录，装成功后为 `true`，移除后 `false`；不问客体）。按钮据此显示「补全 Google Play 商店」或「移除 Google Play 商店」，装着时再加一项「复制 GSF ID」（开机后可用）；`bridge` 为 `off` 的实例装不了（会回 `no_bridge`）。
+- `InstanceInfo.play_store_partial`（bool）：上次补全中途失败、没能全部撤回（`mas-avd.json` 记的是 `"partial"`）。这时 `play_store` 为 `false`，页面「补全」和「移除」都给；`bridge <i> uninstall` 照样拒绝。
+
+### 报告 GLES 3.2（实验）
+
+有的游戏在清单里要求 GLES 3.2，Play 商店按 `ro.opengles.version` 把 ModAVD（报 3.1）判成不兼容。这个开关只把实例报的版本改成 3.2，实际渲染仍是 3.1：走 Vulkan 的游戏能用，真要 GLES 3.2 渲染的应用会装得上、打不开。默认关，按实例开；要执行桥（改的是它带来的可写系统镜像覆盖层）。
+
+- `GLES32Result`（`gles32-on` / `gles32-off` 任务的结果，同 `modavd gles32 <i> … --json`）：`{"index","action","state","enabled","prop","restarted","stopped","notes","warnings"}`；`state` 是做完后客体里的情况：`on`（行在，客体报 196610）、`off`（行不在，客体不报 196610），还有没冷启动完的 `pending-on` / `pending-off`；`prop` 是客体的 `ro.opengles.version`；`notes` 在实例装着 Play 商店时有一条：商店会记着旧的设备信息，要到 设置 → 应用 → Google Play 商店 → 存储 清除数据（账号不会退出）。
+- `InstanceInfo.gles32`（bool）：开关的记录（`mas-avd.json` 的 `gles32`；不问客体）。界面据此在「更多操作」里显示「开启 / 关闭报告 GLES 3.2（实验）」；`bridge` 为 `off` 的实例开不了（会回 `gles32_no_bridge`），已经开着的仍可关。
+- 页面选文件和装 APK 一样：`<input type="file">`（可多选），每个文件追加一个 `file` 字段，用 `FormData` 发 `multipart/form-data`。
+
+### 数据盘 `InstanceConfig.data_disk_mode`、`InstanceInfo.data_space`
+
+- `config.data_disk_mode`：`auto`（自动扩盘：数据盘一开始就是 256 GB，按实际写入占电脑硬盘；`mas-avd.json` 没写模式的旧实例也是，下次开机前扩到 256 GB）或 `manual`（指定大小，`data_partition_gb` 就是用户给的）。新建和设置里二选一，选指定大小才有大小输入框。
+- `data_space`：`{"free_bytes","total_bytes","checked_at","low","host_bytes","host_free_bytes","state","message","advice"}`，和 `modavd info` / `status --json` 的 `data_space` 相同，不问客体。
+  - 每次开机后读一次客体 `/data` 的剩余（`free_bytes` / `total_bytes`，`checked_at` 是那时）；剩余不到 5 GB 或不到 10%、并且读数就是现在这个大小的，是 `low`。
+  - `host_bytes`：数据盘文件在电脑上实际占的字节（稀疏文件，只算写进去的）；`host_free_bytes`：它所在的盘的剩余。读不到是 `-1`。
+  - `state`：`""`（没什么要说的）、`low`（数据盘快满）、`host_low`（自动扩盘、电脑硬盘剩余不到 20 GB）。
+  - `message`、`advice` 是给人看的一句话和带命令的建议，`state` 为 `""` 时是空的。卡片按它们显示一条警告。
+
+### 语言和时区（Windows）`RegionalResult`
+
+`RootInfo.regional_supported` 在支持这组设置时为 `true`，否则可省略。Windows 的 `InstanceInfo.regional` 是只读配置概要：`{language, time_zone, pending_language?, last_language?, error?}`。缺少 `instances.<i>.regional` 的旧实例返回两个 `preserve`，普通开机不会替它补默认值。
+
+新建、修改接口接受 `language` 和 `time_zone`。语言是 `host`、`preserve` 或 `zh-CN`、`en-US` 等语言标识；时区是 `host`、`preserve` 或 IANA 名称，`UTC` 归一为 `Etc/UTC`。Windows 新建默认两项 `host`。语言每次显式选择只生成一次请求；之后不覆盖安卓里的更改。`preserve` 取消待应用语言。时区 `host` 每次冷启动解析，`preserve` 沿用原来的模拟器检测。运行中修改等下次冷启动生效，接管运行中的实例不会应用刚保存的语言。
+
+`RegionalResult` 是 `{index, supported, config, host_language?, host_time_zone?, host_errors?, guest, guest_error?}`。`config` 是上述概要，`last_language` 只表示上次请求设置的语言。`guest` 是从安卓系统属性读取的 `{language, time_zone}`：`language` 取语言列表的第一项，时区属性没设过时 `time_zone` 是 `""`；关机、忙碌或不可访问时为 `null`。页面按需读一次，不加入实例状态的轮询。宿主时区无法映射时，启动日志警告并回退原检测；读取宿主语言失败则在写入新建/修改前返回 `not_ready`。
+
+开机结果的可选 `language_pending: true` 表示本次语言请求失败、后续 `start` 可重试；原有 `setup_pending` 仍只表示待处理的客体库补丁。两个状态都保留本次开机的设置标记。
+
+### 更新 `UpdateView`
+
+`update.Status` 的全部字段（和 `modavd update --json` 的 `data` 相同：`root`、`updatable`、`not_updatable_reason`、`current_version`、`current_build`、`source`、`cdk_set`、`checked`、`check_error`、`latest_version`、`latest_source`、`update_available`、`required_automas`、`release_url`、`phase`、`prepared_version`、`last_result`、`recovered`、`updated`、`message`、`notices`），加上 `checking`、`checked_at`（RFC 3339，本次启动后没查过是 `""`）、`error`（上次检查的错误对象，没有是 `null`）、`can_install`（可以试 `POST /api/update/apply`：管理器知道怎么重新打开自己）、`install_by_cli`（`can_install` 的反面：只能用命令行装）、`handoff`（上次点「更新」交给命令行以后命令行留下的结果 `{id, at, ok, updated, version, message, error: {code, message, advice} | null}`；没有收到本次交接 ID、结果已被任一窗口领取、或者结果超过 30 分钟，是 `null`）。
+
+- 只有点「检查更新」或「更新」才联网；没有自动检查。
+- 更新源和 CDK 是当前系统用户的设置，管理器和命令行更新时都按它来；AUTO-MAS 自己的更新器用 AUTO-MAS 的设置。Windows 使用 `%LOCALAPPDATA%\ModAVD\update-settings.json` 和 DPAPI；macOS 使用 `~/Library/Application Support/ModAVD/update-settings.json`，CDK 的随机 AES-GCM 包装密钥保存在当前用户的 Keychain。钥匙串锁定或未授权时保存失败，不弹授权框，不保存明文密钥。
+- 「更新」（`POST /api/update/apply`）：管理器不能在自己运行时换掉自己，所以分三步。
+  1. 任务（`kind` 是 `update`，根任务）先下载、按清单核对、暂存好新版。这个阶段可以开机、关机、新建和操作实例，但与其他根任务互斥。已经是最新就到此为止，结果 `handoff` 为 `false`。Prepare 回 `update_unavailable` 时，只有暂存指纹和版本记录仍相符、且暂存版本比已安装的已知版本新，才离线继续；取消、损坏暂存和其他错误仍终止任务。
+  2. 准备完成后，在任务锁内切换到独占，同时检查已接收的实例任务和同步修改。还有操作没做完时，更新失败并保留暂存，一台实例都不关，也不取消已有操作；做完后可重试。独占期间不再接收新的实例操作。然后检查其他根程序占用和正在新建的实例，全部通过才正常关掉所有在运行的实例（同 `stop --all`，不取消新建）。请求带了 `confirmed`（用户确认过要关的实例编号，页面总是带，没有实例在跑时是空数组）时，在跑的实例里有不在这份名单上的（下载期间新开的），更新失败并保留暂存，一台实例都不关，页面再点「更新」重新确认；不带时在跑的都关。已经在路上的一次输入不拦这一步。暂存不比已安装版本新时，算已经是最新。
+  3. 用 `host.StartOrphan` 启动根目录的 `tools\modavd.exe --root <根> --json update install --after-pid <管理器 pid> --reopen <管理器程序> --handoff-id <ID> --reopen-arg …`（输出追加到 `logs\modavd-update.log`）。命令行先持有 `.update\manager-handoff.lock`，发布带本次 ID、PID、进程创建时间和根目录身份的交接记录。管理器等它存活半秒且确认持锁（最多等 30 秒）后，任务才成功，结果 `{handoff: true, version, stopped, message}`，约 1.5 秒后管理器退出。确认交接前可以取消，命令行撤销等待并释放锁；确认后不能再取消。取消标记按本次 ID 写在结果文件旁，命令行在等管理器退出的前后都会查，管理器先取消并退出、命令行才启动时也不会换包；留下没人读的标记，超过 10 分钟的在下次正常启动时清掉。命令行等旧管理器退出，重新核对暂存指纹和版本；已有较新暂存时直接换上，不重复查远端。启动锁覆盖等待、换包和恢复，重复打开的管理器提示「正在更新」后退出（提示用 `WTSSendMessage` 交给会话里的系统进程显示，15 秒自动关，管理器不起子进程）；换包时程序映像锁还会阻止新的映射。进程异常退出后系统释放锁，遗留交接记录不阻挡下次启动。
+
+     命令行把结果和本次随机 ID 写进 `.update\manager-results\<ID>.json`，释放启动锁，再按原来的参数（`--root`，以及 `--port`、`--no-window`、`--dev`）重新打开管理器，通过 `--update-handoff <ID>` 传递本次 ID。新管理器只读对应结果，放进 `handoff`。如果已有管理器在运行，这次启动通过 `POST /api/update/handoff/receive` 转交本次 ID。页面先用 `POST /api/update/handoff/take` 领取结果，只有领到的窗口提示，随后从服务端清掉。普通启动不读取无 ID 的旧版结果。换不上也照样重新打开，仍有效的暂存留着，下次不用重下。失败和取消会释放任务独占，允许再次操作实例。
+- 管理器装的时候不带 AUTO-MAS 的版本检查（和人用命令行装一样），页面在 `required_automas` 不为空时提示用 AUTO-MAS 的先更新 AUTO-MAS。
+- 开始前就拒绝、不开任务（422）：不是 Windows，或者管理器不知道怎么重新打开自己（`unsupported`）；根目录没有 `tools\modavd.exe`，或者它的版本和管理器不一样（`not_ready`，旧版命令行不认这些选项）。与其他根任务冲突时回 409 `busy`；更新进入独占后，实例操作也回 409。
+- macOS 原生更新由 CLI 的 `update prepare/install --package ZIP --sha256 HEX` 选择本地签名包；暂存后可离线 `install/recover`。没有兼容的 `macos-arm64` 远端资产时，检查结果为 `update_unavailable`。界面不提供安装入口；包协议见 `internal/update/MACOS.md`。
+
 
 ## 生命周期
 
-- `ModAVD.exe`（GUI 子系统）启动服务，再用 Edge 的应用模式打开窗口：`msedge --app=<地址> --user-data-dir=%LOCALAPPDATA%\ModAVD\ui-edge`。找不到 Edge 时用默认浏览器打开。
+- `ModAVD.exe`（GUI 子系统）启动服务，再用 Edge 的应用模式打开窗口：`msedge --app=<地址> --user-data-dir=%LOCALAPPDATA%\ModAVD\ui-edge2 --disable-features=msImplicitSignin,msEdgeStartupBoost --disable-sync --disable-extensions`。找不到 Edge 时用默认浏览器打开。
+  - 管理器自己的配置不登录、不同步、不加载扩展：不然 Edge 会在新配置上自动用 Windows 账户登录，同步装上用户的扩展，扩展的欢迎页再弹出一个完整的浏览器窗口。
+  - 关掉窗口时不起「启动增强」：不然 Edge 会另起一个 `msedge --no-startup-window`，它不带 `--user-data-dir`，用的是用户自己的配置。
+  - 页面声明了不用翻译（`translate="no"`），Edge 的界面语言不是中文时也不会弹「翻译此页」。
+  - 0.3.0 及以前用的是 `ui-edge`，没带这些开关，可能已经登着用户的账户、同步进了收藏夹、历史、密码，所以换了新目录。
+  - 新版打开窗口以后删掉旧的 `ui-edge`；还有 Edge 在用它（开着旧版管理器）时跳过，下次打开再删。删不掉只记日志，不影响打开。
 - 同一个根目录只开一个服务：再次双击时，把已有的窗口重新打开。
+- Apple Silicon macOS 默认用系统浏览器打开；`--chrome-window` 可改为 Chrome 应用窗口，使用 `~/Library/Application Support/ModAVD/ui-chrome` 独立配置，关闭同步和扩展。Chrome 不可用时回到默认浏览器。单实例锁和状态也在该用户的 `ModAVD` 目录，目录打开操作交给 Finder；根目录可以自动从外层的 `ModAVD.app` 定位。
+- Windows 上管理器在托盘里放一个图标（见下「老板键和托盘」），关掉窗口不退出，留在托盘里，直到在托盘图标的右键菜单里点「退出」：那时等正在跑的任务做完再退出（有页面开着也退）。托盘图标放不成时照下面的规则。
 - 窗口关掉（Edge 进程退出，或者 60 秒内没有任何事件流连着）以后，等正在跑的任务做完，服务再退出。
   - Edge 进程在启动后 10 秒内就退出：当作把窗口交给了同一配置下已在运行的 Edge，不算关窗，之后按事件流规则判断。
   - 真正关窗后，5 秒内没有事件流连着就退出（有任务先等任务做完）。
   - `--dev` 不会因为空闲退出。
+
+## 老板键和托盘
+
+ModAVD/ModAVD#101，只有 Windows。
+
+- 每台实例一个老板键：`InstanceInfo.boss_key`（`"Ctrl+Alt+Shift+1"`，`""` 是不要），存在 `mas-avd.json` 的 `instances.<i>.bossKey`；没写过时编号 0–9 是 Ctrl+Alt+Shift+编号（主键盘那排数字），超过 9 没有。至少带 Ctrl、Alt、Shift 中的一个，不收 Win；按键可以是数字、字母、F1–F24、Num0–Num9、Space、Insert、Delete、Home、End、PageUp、PageDown、方向键。
+- 由管理器统一 `RegisterHotKey`：同一个键只注册一次，只在用它的实例里有带窗口运行着的时候注册，都关了或都是无头的就注销。每 3 秒按进程和实例文件对一遍（不走 adb），改了设置马上对一遍。注册不上的键进 `taken`，之后每轮再试，别的程序放了就注册上。
+- 按下时，这个键管的实例里带窗口运行着的：有一台的窗口显示着就全部藏起来，全都藏着就全部显示（同 `modavd window <i> show|hide`，按窗口现在显不显示，不管是谁藏的）。藏着照旧渲染、照旧能截图，任务栏上没有按钮，位置大小不变。
+- 托盘图标：左键单击等系统双击间隔过去后恢复藏着的实例窗口。双击切换管理器窗口的隐藏和显示，保留页面状态；双击不会恢复实例窗口。同一独立 Edge 配置的所有管理器窗口一起切换，没有窗口时打开一个。右键「打开管理器」优先显示已有窗口，默认浏览器回退时双击只打开管理器。任何正常退出路径（托盘「退出」、取消运行、交给命令行更新）都先恢复藏着的管理器和实例窗口，再注销老板键、去掉图标。
+- 设置页的老板键一项：点一下输入框再按组合；改了先 `POST /api/boss-keys/check` 当场试一次，保存时 `PATCH` 再试一次；打开设置时按 `GET /api/boss-keys` 的 `taken` 在被占的键旁边标警告图标。`supported` 为 `false` 时不显示这一项。
+
+`resolution` 只接受 1080 和 720。新建默认 1080，分别联动 1920×1080 / DPI 280 与 1280×720 / DPI 240；修改保留方向，下次开机生效。`InstanceInfo.config.resolution` 是按当前配置宽高识别的档位，运行中修改后表示下次开机的设置。
+
+`dpi` 是 0（跟随分辨率，默认）或 160、240、280、320、400、480 之一，记在 `mas-avd.json` 的 `instances.<i>.dpi`，每次开机前写进 config.ini 的 `hw.lcd.density`，换分辨率时保留；`config.dpi` 是下次开机用的 DPI，`config.dpi_setting` 是设的值（0 = 跟随分辨率）。`orientation` 是 `landscape`（横屏，默认）或 `portrait`（竖屏），写进 config.ini 的 `hw.initialOrientation`，画布仍是横的 1280×720 / 1920×1080，开机后安卓的 `user_rotation` 横屏是 0、竖屏是 3（模拟器 0.43.0 起也按这个值设）；`config.orientation` 是当前设置。两项都下次开机生效。MAA 等自动化任务要横屏，竖屏只适合自己玩。
+
+画面点击按当前截图的尺寸换算并校验。运行中改档时，`config` 表示下次开机设置，当前画面和点击坐标在重启前保持原尺寸。

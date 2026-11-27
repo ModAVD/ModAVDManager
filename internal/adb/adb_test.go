@@ -15,26 +15,23 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
+	"modavd/internal/win"
 )
 
 // tempDir is a fresh directory for one test, removed afterwards: under $MODAVD_TEST_TMP\adb when that is set (to keep
-// test data on a chosen drive), otherwise t.TempDir().
+// test data on a chosen drive), otherwise the default OS temporary directory.
 func tempDir(t *testing.T) string {
 	t.Helper()
 	env := os.Getenv("MODAVD_TEST_TMP")
 	if env == "" {
-		return t.TempDir()
+		return testutil.TempDir(t)
 	}
 	base := filepath.Join(env, "adb")
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp(base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return testutil.MkdirTemp(t, base, strings.ReplaceAll(t.Name(), "/", "_")+"-")
 }
 
 func TestEnvKey(t *testing.T) {
@@ -140,15 +137,23 @@ func TestDeviceMissing(t *testing.T) {
 }
 
 func TestConsolePortOf(t *testing.T) {
+	def, dev := root.PortPlan{Base: root.DefaultPortBase}, root.PortPlan{Base: 21000}
 	ok := map[string]int{"emulator-20000": 20000, "emulator-20040": 20040, "emulator-20090": 20090}
 	for serial, want := range ok {
-		if got, found := consolePortOf(serial); !found || got != want {
+		if got, found := consolePortOf(def, serial); !found || got != want {
 			t.Errorf("consolePortOf(%q) = %d, %v; want %d", serial, got, found, want)
 		}
+		// another root's plan: the production root's serials are not this root's
+		if got, found := consolePortOf(dev, serial); found {
+			t.Errorf("plan 21000: consolePortOf(%q) = %d, want not ours", serial, got)
+		}
+	}
+	if got, found := consolePortOf(dev, "emulator-21060"); !found || got != 21060 {
+		t.Errorf("plan 21000: consolePortOf(emulator-21060) = %d, %v", got, found)
 	}
 	for _, serial := range []string{"emulator-", "emulator-5554", "emulator-20001", "emulator-20100", "emulator-2000x",
 		"emulator-+20000", "127.0.0.1:20001", "EMULATOR-20000", "emulator-0000000020000"} {
-		if got, found := consolePortOf(serial); found {
+		if got, found := consolePortOf(def, serial); found {
 			t.Errorf("consolePortOf(%q) = %d, want not ours", serial, got)
 		}
 	}
@@ -192,9 +197,58 @@ func TestQemuOnAdbPortNotOurs(t *testing.T) {
 		if !root.ValidIndex(i) {
 			continue
 		}
-		if p, ok := QemuOnAdbPort(r, root.ConsolePort(i)); ok {
-			t.Errorf("QemuOnAdbPort(%d) on a fresh root = pid %d", root.ConsolePort(i), p.PID)
+		if p, ok := QemuOnAdbPort(r, r.Ports().Console(i)); ok {
+			t.Errorf("QemuOnAdbPort(%d) on a fresh root = pid %d", r.Ports().Console(i), p.PID)
 		}
+	}
+}
+
+// TestEnsureServerPortPlan: a root with a port plan of its own whose adb servers are still the production ones is
+// refused before any listener is looked at or any server started (ModAVD/ModAVD#75); so is every adb run through it.
+func TestEnsureServerPortPlan(t *testing.T) {
+	dir := tempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(`{"portBase": 21000}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &root.Root{Dir: dir}
+	c := New(r, nil)
+	ctx := context.Background()
+	for name, ensure := range map[string]func(context.Context, time.Duration) (bool, error){
+		"EnsureServer": c.EnsureServer, "EnsureScriptServer": c.EnsureScriptServer,
+	} {
+		if up, err := ensure(ctx, time.Second); up || errs.CodeOf(err) != errs.InvalidArgument {
+			t.Errorf("%s = %v, %v; want invalid_argument", name, up, err)
+		}
+	}
+	if res := c.Run(ctx, RunOptions{Serial: "emulator-21060", Timeout: time.Second}, "get-state"); res.Code == 0 ||
+		!strings.Contains(res.Out, "portBase") {
+		t.Errorf("Run = %+v", res)
+	}
+}
+
+// TestReregisterPortPlan: on a root with portBase 21000, emulator-21060 is its instance 6 (the qemu check is asked
+// about console 21060) and emulator-20060, the production root's, is not looked at.
+func TestReregisterPortPlan(t *testing.T) {
+	dir := tempDir(t)
+	meta := `{"portBase": 21000, "adbServerPort": 21099, "scriptAdbServerPort": 21098}`
+	if err := os.WriteFile(filepath.Join(dir, root.MetadataFile), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var asked []int
+	saved := qemuOnAdbPort
+	qemuOnAdbPort = func(_ *root.Root, console int) (win.Process, bool) {
+		asked = append(asked, console)
+		return win.Process{}, false
+	}
+	t.Cleanup(func() { qemuOnAdbPort = saved })
+	c := New(&root.Root{Dir: dir}, nil)
+	for _, serial := range []string{"emulator-21060", "emulator-20060"} {
+		if c.Reregister(context.Background(), serial) {
+			t.Errorf("Reregister(%s) = true without a qemu", serial)
+		}
+	}
+	if len(asked) != 1 || asked[0] != 21060 {
+		t.Errorf("qemu looked up for consoles %v, want [21060]", asked)
 	}
 }
 
@@ -297,14 +351,14 @@ func TestPortConflictMessage(t *testing.T) {
 	dir := tempDir(t)
 	c := New(&root.Root{Dir: dir}, nil)
 	e := c.portConflict(privateServer, 20050, 1234, "foo.exe")
-	want := "魔改 AVD 的私有 adb 端口 20050 被 foo.exe（PID 1234）占用，它不是 adb。请在 " + c.Root.MetadataPath() +
+	want := "ModAVD 的私有 adb 端口 20050 被 foo.exe（PID 1234）占用，它不是 adb。请在 " + c.Root.MetadataPath() +
 		" 里把 adbServerPort 改成一个没被占用的端口（不能用 5037 和各实例的控制台 / adb / gRPC 端口，也不能和 " +
 		"scriptAdbServerPort 相同），或者先关掉占用它的程序"
 	if e.Code != errs.PortConflict || e.Error() != want {
 		t.Errorf("private conflict:\n got %s %q\nwant %q", e.Code, e.Error(), want)
 	}
 	e = c.portConflict(scriptServer, 20049, 1, "x.exe")
-	if !strings.HasPrefix(e.Message, "魔改 AVD 的脚本专用 adb 端口 20049 被 x.exe（PID 1）占用") ||
+	if !strings.HasPrefix(e.Message, "ModAVD 的脚本专用 adb 端口 20049 被 x.exe（PID 1）占用") ||
 		!strings.Contains(e.Message, "里把 scriptAdbServerPort 改成") || !strings.Contains(e.Message, "也不能和 adbServerPort 相同") {
 		t.Errorf("script conflict: %q", e.Message)
 	}

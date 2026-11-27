@@ -1,0 +1,42 @@
+# Code owners list only the high-risk paths: places where a mistake loses users' data, runs with privilege, or
+# weakens the checks themselves. GitHub asks the owner to review a pull request that touches one of them. Everything
+# else is merged once CI is green. How pull requests are reviewed and merged:
+# https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.en.md
+# 只列高风险路径：动了这些路径的 PR，GitHub 会自动请负责人审查；其余的 CI 绿了就能合。
+# 流程见 https://github.com/ModAVD/ModAVD/blob/main/CONTRIBUTING.md
+
+# Workflows and their permissions, Dependabot, this file
+/.github/                        @qiyinxi
+
+# The CI gate, the privacy scan and its allowlist, release checksums
+/scripts/repo_checks.py          @qiyinxi
+/scripts/privacy.py              @qiyinxi
+/scripts/privacy-allowlist.json  @qiyinxi
+/release/                        @qiyinxi
+
+# Component download
+/internal/components/            @qiyinxi
+/internal/download/              @qiyinxi
+
+# Full-package update
+/internal/update/                @qiyinxi
+
+# The daemon that runs as root in the guest, and programs pushed into the guest
+/cmd/modavd-proxyd/              @qiyinxi
+/internal/appproxy/              @qiyinxi
+/internal/emu/appproxy*          @qiyinxi
+/internal/guest/                 @qiyinxi
+
+# Guest system libraries patched on the user's machine and mounted in every instance, Play Store install
+/internal/guestpatch/            @qiyinxi
+/internal/ndkfix/                @qiyinxi
+/internal/vkfix/                 @qiyinxi
+/internal/emu/guestfix*          @qiyinxi
+/internal/playstore/             @qiyinxi
+/internal/emu/playstore*         @qiyinxi
+
+# Data disks and qcow2
+/internal/emu/disk*              @qiyinxi
+/internal/emu/compact*           @qiyinxi
+/internal/emu/datagrow*          @qiyinxi
+/internal/emu/bridge_backing*    @qiyinxi

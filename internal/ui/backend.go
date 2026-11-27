@@ -1,5 +1,3 @@
-//go:build windows
-
 package ui
 
 import (
@@ -7,27 +5,70 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/appproxy"
 	"modavd/internal/emu"
+	"modavd/internal/gamesource"
+	"modavd/internal/root"
 )
 
 // backend is the part of emu.Manager the server uses; tests inject a fake. One backend is built per job (its
 // logger carries the job's messages), plus one for plain requests and one for the instance poller.
 type backend interface {
+	SourcePackages(context.Context, gamesource.Source) ([]string, error)
+	SourceFiles(context.Context, gamesource.Source, string, string) ([]emu.ResourceEntry, error)
+	ImportGames(context.Context, int, gamesource.Source, []emu.ImportGame, func(emu.Progress)) ([]emu.GameImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
+	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
 	Create(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	// FreeIndex is the index Create picks when none is given.
+	FreeIndex() (int, error)
+	// FreeIndexes are the indexes a batch create takes; CreateSpaceError its disk check before each instance.
+	FreeIndexes(n int) ([]int, error)
+	CreateSpaceError() error
 	Update(ctx context.Context, i int, req emu.UpdateRequest) (*emu.UpdateResult, error)
+	PreviewDiagnostics(ctx context.Context, i int) (*emu.DiagnosticsPreview, error)
 	Delete(ctx context.Context, i int) (*emu.DeleteResult, error)
+	// Clone copies a stopped instance into a new one (modavd clone): minutes for a large data disk, so a job.
+	Clone(ctx context.Context, i int, req emu.CloneRequest) (*emu.CloneResult, error)
 	Start(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
 	Stop(ctx context.Context, i int, opt emu.StopOptions) (*emu.StopResult, error)
+	// StopTargets is what `stop --all` stops: the running or actively creating instances (设置 → 更新 stops them).
+	StopTargets(ctx context.Context) ([]int, error)
 	Check(ctx context.Context, opt emu.CheckOptions) (*emu.CheckResult, error)
-	SetWindowVisible(ctx context.Context, i int, visible bool) (*emu.WindowResult, error)
 	Shell(ctx context.Context, i int, command string, timeout time.Duration) (*emu.ShellResult, error)
 	InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error)
+	// DiskTrim / DiskInfo / DiskCompact are the data-disk reclaim (modavd disk): trim needs the instance booted,
+	// info works either way, compact needs it shut down.
+	DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error)
+	DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error)
+	DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error)
+	// PlayStore is `modavd playstore <i> <action>`; PlayStoreCheck what it refuses before touching the instance (no
+	// bridge, the root has not got the files ...), quick enough for a request.
+	PlayStore(ctx context.Context, i int, action string) (*emu.PlayStoreResult, error)
+	PlayStoreCheck(i int, action string) error
+	// PlayStoreGSFID is `modavd playstore <i> gsfid`: a few seconds on a running instance.
+	PlayStoreGSFID(ctx context.Context, i int) (*emu.PlayStoreGSFIDResult, error)
+	// GLES32 is `modavd gles32 <i> on|off|status`; GLES32Check what it refuses before touching the instance (no bridge ...).
+	GLES32(ctx context.Context, i int, action string) (*emu.GLES32Result, error)
+	GLES32Check(i int, action string) error
 	// AdbRun is Manager.ADB.Run (the screenshot: exec-out screencap -p with Raw).
 	AdbRun(ctx context.Context, opt adb.RunOptions, args ...string) adb.Result
+	// Serial is instance i's adb serial in the root's port plan.
+	Serial(i int) string
 	// RootInfo describes the root without asking any instance (GET /api/info).
 	RootInfo() emu.RootInfo
+	// The per-app proxy (emu/appproxy.go). SuggestAppProxy and ProbeAppProxy are emu's functions of those names: they
+	// ask the host, not an instance.
+	AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error)
+	SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error)
+	SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error)
+	ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error)
+	// The boss keys (emu/bosskey.go, bosskey.go here): which keys the instances use and which run with a window (no
+	// adb), a press of one key, and showing every hidden window (tray icon, exit).
+	BossKeyTargets(ctx context.Context) ([]emu.BossKeyTarget, error)
+	ToggleBossKey(ctx context.Context, key string) (*emu.BossKeyToggle, error)
+	ShowHiddenWindows(ctx context.Context) ([]int, error)
 }
 
 // managerBackend adapts *emu.Manager.
@@ -39,21 +80,32 @@ func (b managerBackend) AdbRun(ctx context.Context, opt adb.RunOptions, args ...
 	return b.ADB.Run(ctx, opt, args...)
 }
 
+func (b managerBackend) Serial(i int) string { return b.Root.Ports().Serial(i) }
+
+func (managerBackend) SuggestAppProxy(ctx context.Context) (*emu.AppProxySuggestion, error) {
+	return emu.SuggestAppProxy(ctx)
+}
+
+func (managerBackend) ProbeAppProxy(ctx context.Context, server string, withUDP bool) (*emu.AppProxyProbe, error) {
+	return emu.ProbeAppProxy(ctx, server, withUDP)
+}
+
 // RootInfo is what emu fills into ListResult / CheckResult (emu's own helper is unexported); List would cost an adb
 // call per running instance.
 func (b managerBackend) RootInfo() emu.RootInfo {
 	r := b.Root
 	info := emu.RootInfo{
+		RegionalSupported:   root.CurrentPlatform().Windows(),
 		Root:                r.Dir,
 		SDK:                 r.RuntimeSDK(),
 		LocalSDK:            r.LocalSDKRoot() != "",
 		AdbExe:              r.AdbExe(),
 		AdbServerPort:       r.AdbServerPort(),
 		ScriptAdbServerPort: r.ScriptAdbServerPort(),
+		PortBase:            r.Ports().Base,
 		Version:             r.VersionText(),
 	}
-	if n, ok := r.ModBuild(); ok {
-		info.Build = n
-	}
+	build, _ := r.EmulatorBuild()
+	info.SetBuild(build)
 	return info
 }

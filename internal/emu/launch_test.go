@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,34 +16,90 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
-// Reference lists printed by AUTO-MAS build_launch_args("mas_3", 20030, memory_mb=4096, headless=...).
+// Reference lists printed by AUTO-MAS build_launch_args("mas_3", 20030, memory_mb=4096, headless=...), plus the three
+// netsim switches before -qemu (ModAVDManager #32).
 var (
 	masArgsHeadless = []string{"-avd", "mas_3", "-no-snapshot", "-gpu", "host", "-ports", "20030,20031", "-grpc", "20032",
 		"-grpc-use-token", "-audio", "none", "-memory", "4096", "-no-window", "-no-boot-anim",
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
-		"-device", "virtio-balloon-pci,free-page-reporting=on"}
+		"-device", "virtio-balloon-pci,free-page-reporting=on", "-append", "tsc=nowatchdog"}
 	masArgsWindow = []string{"-avd", "mas_3", "-no-snapshot", "-gpu", "host", "-ports", "20030,20031", "-grpc", "20032",
 		"-grpc-use-token", "-audio", "none", "-memory", "4096",
 		"-feature", "-QuickbootFileBacked", "-feature", "-VirtioSndCard", "-feature", "VulkanBatchedDescriptorSetUpdate",
+		"-feature", "-WiFiPacketStream", "-feature", "-BluetoothEmulation", "-feature", "-Uwb",
 		"-qemu", "-global", "virtio-blk-device.write-cache=off", "-global", "virtio-blk-device.config-wce=off",
-		"-device", "virtio-balloon-pci,free-page-reporting=on"}
+		"-device", "virtio-balloon-pci,free-page-reporting=on", "-append", "tsc=nowatchdog"}
 )
 
 func TestBuildLaunchArgs(t *testing.T) {
-	if got := buildLaunchArgs("mas_3", 20030, 4096, true); !reflect.DeepEqual(got, masArgsHeadless) {
+	if got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true}); !reflect.DeepEqual(got, masArgsHeadless) {
 		t.Errorf("headless:\n got %q\nwant %q", got, masArgsHeadless)
 	}
-	if got := buildLaunchArgs("mas_3", 20030, 4096, false); !reflect.DeepEqual(got, masArgsWindow) {
+	if got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{}); !reflect.DeepEqual(got, masArgsWindow) {
 		t.Errorf("window:\n got %q\nwant %q", got, masArgsWindow)
 	}
 	// another instance: only the name, ports and memory move
-	got := buildLaunchArgs("mas_0", 20000, 6144, true)
+	got := buildLaunchArgs("mas_0", 20000, 6144, launchOptions{headless: true})
 	if got[1] != "mas_0" || got[6] != "20000,20001" || got[8] != "20002" || got[13] != "6144" {
 		t.Errorf("mas_0: %q", got)
+	}
+}
+
+// without drops every item of the pairs from args, each pair once.
+func without(args []string, pairs ...[2]string) []string {
+	out := append([]string(nil), args...)
+	for _, p := range pairs {
+		for k := 0; k+1 < len(out); k++ {
+			if out[k] == p[0] && out[k+1] == p[1] {
+				out = append(out[:k], out[k+2:]...)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// TestBuildLaunchArgsSound: the sound switch (ModAVD/ModAVD#226) takes out exactly -audio none and
+// -feature -VirtioSndCard, windowed and headless; everything else stays as it is.
+func TestBuildLaunchArgsSound(t *testing.T) {
+	soundless := [][2]string{{"-audio", "none"}, {"-feature", "-VirtioSndCard"}}
+	for _, c := range []struct {
+		name string
+		o    launchOptions
+		base []string
+	}{
+		{"headless", launchOptions{headless: true, sound: true}, masArgsHeadless},
+		{"window", launchOptions{sound: true}, masArgsWindow},
+	} {
+		got := buildLaunchArgs("mas_3", 20030, 4096, c.o)
+		if want := without(c.base, soundless...); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s with sound:\n got %q\nwant %q", c.name, got, want)
+		}
+		for _, a := range got {
+			if a == "none" || a == "-VirtioSndCard" {
+				t.Errorf("%s with sound still has %q: %q", c.name, a, got)
+			}
+		}
+	}
+}
+
+// TestBuildLaunchArgsSavePath: -save-path <dir> right after -memory (ModAVD/ModAVD#231); nothing when "".
+func TestBuildLaunchArgsSavePath(t *testing.T) {
+	dir := `X:\Pictures\ModAVD`
+	got := buildLaunchArgs("mas_3", 20030, 4096, launchOptions{headless: true, savePath: dir})
+	want := append(append(append([]string(nil), masArgsHeadless[:14]...), "-save-path", dir), masArgsHeadless[14:]...)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("save path:\n got %q\nwant %q", got, want)
+	}
+	got = buildLaunchArgs("mas_3", 20030, 4096, launchOptions{sound: true, savePath: dir})
+	if k := slices.Index(got, "-save-path"); k < 0 || got[k+1] != dir {
+		t.Errorf("save path with sound: %q", got)
 	}
 }
 
@@ -59,7 +116,7 @@ func lastEnv(env []string, key string) (string, bool) {
 }
 
 func TestEmulatorEnv(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +143,7 @@ func TestEmulatorEnv(t *testing.T) {
 }
 
 func TestLogTail(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "mas_0-20261028-150405.log")
 	var b strings.Builder
 	for k := 1; k <= 12; k++ {
@@ -137,7 +194,7 @@ func TestOutputLines(t *testing.T) {
 }
 
 func TestFileContains(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mas_1-x.log")
+	path := filepath.Join(testutil.TempDir(t), "mas_1-x.log")
 	text := "INFO    | something\nINFO    | modavd_ime: host input method pipe service registered\n"
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
@@ -150,9 +207,44 @@ func TestFileContains(t *testing.T) {
 	}
 }
 
+// TestEmulatorExitedError: an emulator that quit for lack of memory (each message it writes then) is
+// insufficient_memory with the advice and exit code 10; any other exit stays launch_failed.
+func TestEmulatorExitedError(t *testing.T) {
+	dir := testutil.TempDir(t)
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for k, line := range []string{
+		"ERROR: Insufficient RAM free for launching emulator.\nPlease free up memory (close other programs and files),\n",
+		"qemu-system-x86_64.exe: cannot set up guest memory 'android.ram': Cannot allocate memory\n",
+		"Failed to allocate memory: 1455\n",
+		"PANIC: not enough memory\n",
+	} {
+		path := write("oom"+strconv.Itoa(k)+".log", "INFO    | Android emulator version 36.1.9.0\n"+line)
+		err := emulatorExitedError(3, "1", path)
+		e := errs.As(err)
+		if e.Code != errs.InsufficientMemory || errs.ExitCode(err) != 10 || !strings.Contains(e.Message, "电脑内存不足") ||
+			!strings.Contains(e.Message, "emulator.exe 退出码 1") || !strings.Contains(e.Advice, "页面文件") {
+			t.Errorf("%q -> %s %q %q", line, e.Code, e.Message, e.Advice)
+		}
+	}
+	other := write("other.log", "INFO    | Android emulator version 36.1.9.0\nERROR   | Unknown AVD name [mas_3]\n")
+	if e := errs.As(emulatorExitedError(3, "未知", other)); e.Code != errs.LaunchFailed || e.Advice != "" ||
+		e.Message != "ModAVD 实例 3 启动失败（emulator.exe 退出码 未知）：INFO    | Android emulator version 36.1.9.0 | ERROR   | Unknown AVD name [mas_3]" {
+		t.Errorf("other exit -> %s %q %q", e.Code, e.Message, e.Advice)
+	}
+	if e := errs.As(emulatorExitedError(3, "1", filepath.Join(dir, "missing.log"))); e.Code != errs.LaunchFailed {
+		t.Errorf("no log -> %s", e.Code)
+	}
+}
+
 // TestOtherRootQemu: only a qemu that is instance i by name and ports and that the root check gives to another root.
 func TestOtherRootQemu(t *testing.T) {
-	c := root.ConsolePort(3)
+	c := root.PortPlan{Base: root.DefaultPortBase}.Console(3)
 	ports := strconv.Itoa(c) + "," + strconv.Itoa(c+1)
 	qemu := win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe", Created: 1}
 	exe := `D:\ModAVD\sdk\emulator\qemu\windows-x86_64\qemu-system-x86_64-headless.exe`
@@ -175,15 +267,22 @@ func TestOtherRootQemu(t *testing.T) {
 		{"no arguments", qemu, nil, notOurs, false},
 	}
 	for _, k := range cases {
-		if got := otherRootQemu(k.q, k.cmdline, 3, k.ours); got != k.want {
+		if got := otherRootQemu(k.q, k.cmdline, 3, c, k.ours); got != k.want {
 			t.Errorf("%s: otherRootQemu = %v, want %v", k.name, got, k.want)
 		}
+	}
+	// a root with a plan of its own: the default root's mas_3 is not on its ports
+	if otherRootQemu(qemu, args, 3, root.PortPlan{Base: 21000}.Console(3), notOurs) {
+		t.Error("plan 21000: the default root's mas_3 counted as on our ports")
 	}
 }
 
 func TestOtherRootBusy(t *testing.T) {
 	err := otherRootBusy(3, win.Process{PID: 4242}, `D:\ModAVD\avd\mas_3.avd`)
-	if err.Code != errs.Busy || err.Message != `魔改 AVD 实例 3 的端口被另一个根目录的同编号实例占用（pid 4242，D:\ModAVD\avd\mas_3.avd）` ||
+	if errs.DetailsOf(err)[errs.Reason] != "port_other_root" {
+		t.Errorf("details: %v", errs.DetailsOf(err))
+	}
+	if err.Code != errs.Busy || err.Message != `ModAVD 实例 3 的端口被另一个根目录的同编号实例占用（pid 4242，D:\ModAVD\avd\mas_3.avd）` ||
 		err.Advice == "" {
 		t.Errorf("otherRootBusy = %+v", err)
 	}
@@ -206,7 +305,7 @@ func TestRuntimeAvdDir(t *testing.T) {
 	if !ok || self.Created == 0 {
 		t.Fatal("cannot read our own process")
 	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "pid_"+strconv.Itoa(os.Getpid())+".ini")
 	if got := runtimeAvdDir(dir, self); got != "" {
 		t.Errorf("no file: %q", got)
@@ -242,10 +341,10 @@ func TestRuntimeAvdDir(t *testing.T) {
 // TestRuntimeAvdDirDiscoveryDir: otherRootInstance reads the directory adb.QemuBelongsTo reads
 // (adb.EmulatorDiscoveryDir: under LOCALAPPDATA, TEMP never matters), so both see the same runtime file.
 func TestRuntimeAvdDirDiscoveryDir(t *testing.T) {
-	local := t.TempDir()
+	local := testutil.TempDir(t)
 	t.Setenv("LOCALAPPDATA", local)
-	t.Setenv("TEMP", t.TempDir())
-	t.Setenv("TMP", t.TempDir())
+	t.Setenv("TEMP", testutil.TempDir(t))
+	t.Setenv("TMP", testutil.TempDir(t))
 	want := filepath.Join(local, "Temp", "avd", "running")
 	if got := adb.EmulatorDiscoveryDir(); got != want {
 		t.Fatalf("EmulatorDiscoveryDir = %q, want %q", got, want)
@@ -275,13 +374,14 @@ func TestOtherRootInstanceFreshRoot(t *testing.T) {
 		t.Skip("set MODAVD_TEST_LIVE=1 to run tests that look at live emulators or start a real adb server")
 	}
 	m := markerTestManager(t)
+	plan := m.Root.Ports()
 	for _, i := range []int{0, 1, 2, 3, 4, 6, 7, 8, 9} {
-		p, where, found := m.otherRootInstance(i)
+		p, where, found := m.otherRootInstance(plan, i)
 		if !found {
 			continue
 		}
 		cmdline, err := p.CommandLine()
-		if !isQemuName(p.Name) || where == "" || (err == nil && !cmdlineMatches(cmdline, root.AvdName(i), root.ConsolePort(i))) {
+		if !isQemuName(p.Name) || where == "" || (err == nil && !cmdlineMatches(cmdline, root.AvdName(i), plan.Console(i))) {
 			t.Errorf("instance %d: reported %+v (%s)", i, p, where)
 		}
 		t.Logf("instance %d: another root's qemu pid %d at %s", i, p.PID, where)

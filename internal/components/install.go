@@ -1,0 +1,475 @@
+package components
+
+import (
+	"archive/zip"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"modavd/internal/errs"
+	"modavd/internal/playstore"
+	"modavd/internal/root"
+)
+
+func (f *fetcher) stagingRoot() string { return filepath.Join(f.sdk, ".staging") }
+
+// removeStaging deletes one staging directory, only ever under sdk\.staging, and sdk\.staging when that is left
+// empty (the script's Remove-Staging).
+func (f *fetcher) removeStaging(dir string) {
+	stagingRoot := f.stagingRoot()
+	if !within(dir, stagingRoot) {
+		return
+	}
+	os.RemoveAll(dir)
+	if entries, err := os.ReadDir(stagingRoot); err == nil && len(entries) == 0 {
+		os.Remove(stagingRoot)
+	}
+}
+
+// clearStaging removes what a run that was killed left in sdk\.staging: the whole directory belongs to fetch, and only
+// the holder of the lock gets here (the script's Clear-StagingRoot).
+func (f *fetcher) clearStaging() {
+	stagingRoot := f.stagingRoot()
+	if _, err := os.Lstat(stagingRoot); err != nil {
+		return
+	}
+	os.RemoveAll(stagingRoot)
+	f.note(`  清理了上次遗留的 sdk\.staging`)
+}
+
+// within: path is strictly inside dir (case-insensitive, like the script's OrdinalIgnoreCase).
+func within(path, dir string) bool {
+	p, err1 := filepath.Abs(path)
+	d, err2 := filepath.Abs(dir)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if runtime.GOOS != "windows" {
+		rel, err := filepath.Rel(d, p)
+		return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	}
+	d = strings.TrimRight(d, `\/`) + string(filepath.Separator)
+	return len(p) > len(d) && strings.EqualFold(p[:len(d)], d)
+}
+
+func rejected(format string, args ...any) error {
+	return errs.Newf(errs.ComponentsRejected, format, args...)
+}
+
+// install unpacks zipPath into sdk\.staging\<id>, checks it and moves it into place (the script's Install-Component).
+// An existing target directory (incomplete, or install would not run) is renamed to <target>.incomplete-<time> and
+// kept for the user, never deleted; it is moved back when the new one cannot be moved in. Returns where it went.
+func (f *fetcher) install(ctx context.Context, c root.SDKComponent, zipPath string) (setAside string, err error) {
+	if f.darwin() {
+		if err := f.platformPaths(); err != nil {
+			return "", err
+		}
+	}
+	staging := filepath.Join(f.stagingRoot(), c.ID)
+	f.where = "解压 " + filepath.Base(zipPath) + " 到 " + staging
+	f.removeStaging(staging)
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		return "", errs.Wrap(errs.Internal, err, "建不了 "+staging+"："+err.Error())
+	}
+	defer f.removeStaging(staging)
+	if err := f.extract(ctx, c, zipPath, staging); err != nil {
+		return "", err
+	}
+	if err := f.checkStaged(c, staging); err != nil {
+		return "", err
+	}
+	extracted := filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot))
+	if ctx.Err() != nil {
+		return "", canceled(ctx)
+	}
+	if f.darwin() {
+		if err := f.platformPaths(); err != nil {
+			return "", err
+		}
+		if err := f.platformIdle(); err != nil {
+			return "", err
+		}
+	}
+	return f.place(c, extracted)
+}
+
+// installPlayStore is install for the Google Play Store (root.PlayStoreComponent): the five files are taken out of
+// the Play image's zip into sdk\.staging\<id> (playStoreFromZip) and go into place like a component's directory; the
+// unpacked 3 GB image is gone by then, and fetch deletes the zip afterwards (unless KeepDownloads), so only the five
+// files stay.
+func (f *fetcher) installPlayStore(ctx context.Context, c root.SDKComponent, zipPath string) (setAside string, err error) {
+	staging, out, err := f.playStoreStaging(c)
+	if err != nil {
+		return "", err
+	}
+	defer f.removeStaging(staging)
+	if err := f.playStoreFromZip(ctx, c, zipPath, staging, out); err != nil {
+		return "", err
+	}
+	return f.finishPlayStore(ctx, c, out, PlayStoreFromDownload)
+}
+
+// playStoreStaging is a fresh sdk\.staging\<id> and the directory in it the five files are gathered in.
+func (f *fetcher) playStoreStaging(c root.SDKComponent) (staging, out string, err error) {
+	if f.darwin() {
+		if err := f.platformPaths(); err != nil {
+			return "", "", err
+		}
+	}
+	staging = filepath.Join(f.stagingRoot(), c.ID)
+	f.removeStaging(staging)
+	out = filepath.Join(staging, root.PlayStoreDir)
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return "", "", errs.Wrap(errs.Internal, err, "建不了 "+out+"："+err.Error())
+	}
+	return staging, out, nil
+}
+
+// playStoreFromZip takes the five files out of the Play image's zip into out: only the system image is unpacked, to
+// staging\system.img, read without mounting anything (playStoreExtract checks each file's size and SHA-256) and
+// deleted again, whether that worked or not.
+func (f *fetcher) playStoreFromZip(ctx context.Context, c root.SDKComponent, zipPath, staging, out string) error {
+	member := playstore.CurrentProfile().ImageMember
+	f.where = "从 " + filepath.Base(zipPath) + " 解出 " + member
+	img := filepath.Join(staging, "system.img")
+	err := f.extractMember(ctx, c, zipPath, member, img)
+	if err == nil {
+		f.where = "从 system.img 取出 Google Play 商店的文件"
+		f.say("  从系统镜像里取出商店、Play 服务、GSF、合作伙伴设置…")
+		if xerr := playStoreExtract(img, playStoreFiles, out); xerr != nil {
+			err = rejected("从 Google Play 版系统镜像里取商店的文件失败：%v", xerr)
+		}
+	}
+	if rerr := os.Remove(img); err == nil && rerr != nil {
+		return errs.Wrap(errs.Internal, rerr, "删不掉临时解出的 "+img+"："+rerr.Error())
+	}
+	return err
+}
+
+// finishPlayStore writes out's source.properties (with where the files came from), checks out as a whole (Complete:
+// every pin and the revision) and moves it into sdk\playstore.
+func (f *fetcher) finishPlayStore(ctx context.Context, c root.SDKComponent, out, source string) (setAside string, err error) {
+	if f.darwin() {
+		if err := f.platformPaths(); err != nil {
+			return "", err
+		}
+	}
+	props := c.Properties + playStoreSourceKey + "=" + source + "\n"
+	if err := os.WriteFile(filepath.Join(out, "source.properties"), []byte(props), 0o644); err != nil {
+		return "", errs.Wrap(errs.Internal, err, "写不了 source.properties："+err.Error())
+	}
+	if !c.Complete(out) {
+		return "", rejected("%s 的文件校验失败", c.FetchName)
+	}
+	if ctx.Err() != nil {
+		return "", canceled(ctx)
+	}
+	if f.darwin() {
+		if err := f.platformPaths(); err != nil {
+			return "", err
+		}
+		if err := f.platformIdle(); err != nil {
+			return "", err
+		}
+	}
+	return f.place(c, out)
+}
+
+// extractMember unpacks the one entry name of zipPath to dest (refused like extract's entries: encrypted, another
+// method, a size that does not match).
+func (f *fetcher) extractMember(ctx context.Context, c root.SDKComponent, zipPath, name, dest string) error {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return rejected("压缩包打不开：%v", err)
+	}
+	defer zr.Close()
+	if f.darwin() && len(zr.File) > 20000 {
+		return rejected("压缩包条目过多")
+	}
+	var member *zip.File
+	for _, e := range zr.File {
+		if strings.ReplaceAll(e.Name, `\`, "/") != name {
+			continue
+		}
+		if member != nil {
+			return rejected("压缩包里的 %s 出现了两次", name)
+		}
+		member = e
+		if !f.darwin() {
+			break
+		}
+	}
+	if member == nil {
+		return rejected("压缩包里没有 %s", name)
+	}
+	if f.darwin() {
+		if member.Name != name || !member.Mode().IsRegular() ||
+			member.UncompressedSize64 != uint64(playstore.CurrentProfile().ImageMemberSize) {
+			return rejected("压缩包里的 %s 类型、路径或大小与组件清单不符", name)
+		}
+	}
+	if member.Flags&1 != 0 {
+		return rejected("压缩包里的 %s 是加密的", name)
+	}
+	if member.Method != zip.Store && member.Method != zip.Deflate {
+		return rejected("压缩包里 %s 用了不支持的压缩方式 %d", name, member.Method)
+	}
+	m := newMeter(f.o.Progress, "extracting", c.FetchName, max(int64(member.UncompressedSize64), 1), 0)
+	n, err := f.extractFile(ctx, member, dest, make([]byte, 1<<20), 0, m)
+	if err != nil {
+		return err
+	}
+	if n != int64(member.UncompressedSize64) {
+		return rejected("解压出的 %s 大小不对", name)
+	}
+	m.finish(n)
+	return nil
+}
+
+// place moves an unpacked, checked component directory (extracted) into sdk\<target> (the end of the script's
+// Install-Component), see install.
+func (f *fetcher) place(c root.SDKComponent, extracted string) (setAside string, err error) {
+	f.where = `把解压好的 ` + c.FetchName + ` 挪到 sdk\` + c.Target
+	target := c.Dir(f.sdk)
+	if _, err := os.Lstat(target); err == nil {
+		setAside, err = asideName(target, time.Now())
+		if err != nil {
+			return "", errs.Wrap(errs.Internal, err, "选不了旧目录迁移位置："+err.Error())
+		}
+		if err := moveComponent(target, setAside); err != nil {
+			return "", errs.Wrap(errs.Internal, err, `挪不开原有的 sdk\`+c.Target+"："+err.Error())
+		}
+		f.warn(fmt.Sprintf(`  原有的 sdk\%s 不完整，已改名为 %s，确认没用后可以自己删掉`, c.Target, filepath.Base(setAside)))
+	}
+	moveErr := os.MkdirAll(filepath.Dir(target), 0o755)
+	if moveErr == nil {
+		moveErr = installComponent(extracted, target)
+	}
+	if moveErr != nil {
+		if setAside != "" && moveComponent(setAside, target) == nil {
+			f.warn(fmt.Sprintf(`  新的挪不进去，已把 %s 改回 sdk\%s`, filepath.Base(setAside), c.Target))
+			setAside = ""
+		}
+		return setAside, errs.Wrap(errs.Internal, moveErr, `挪不进 sdk\`+c.Target+"："+moveErr.Error())
+	}
+	if !c.Complete(target) {
+		return setAside, rejected(`装完后 sdk\%s 仍缺关键文件`, c.Target)
+	}
+	return setAside, nil
+}
+
+// asideName is <target>.incomplete-<yyyyMMdd-HHmmss>, with -2, -3 ... when that is taken.
+func asideName(target string, now time.Time) (string, error) {
+	base := target + ".incomplete-" + now.Format("20060102-150405")
+	name := base
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			return name, nil
+		} else if err != nil {
+			return "", err
+		}
+		name = fmt.Sprintf("%s-%d", base, n)
+	}
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// checkStaged checks the unpacked component before it goes anywhere: the archive root is there with every key file, a
+// missing source.properties is written from the table, and the whole must be Complete.
+func (f *fetcher) checkStaged(c root.SDKComponent, staging string) error {
+	prefix := strings.TrimRight(c.ArchiveRoot, "/") + "/"
+	extracted := filepath.Join(staging, filepath.FromSlash(c.ArchiveRoot))
+	if !isDir(extracted) {
+		return rejected("压缩包结构不对：没有 %s 目录", prefix)
+	}
+	for _, k := range c.KeyFiles {
+		if fi, err := os.Stat(filepath.Join(extracted, k)); err != nil || !fi.Mode().IsRegular() {
+			return rejected("压缩包里缺少 %s", k)
+		}
+	}
+	props := filepath.Join(extracted, "source.properties")
+	if _, err := os.Lstat(props); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(props, []byte(c.Properties), 0o644); err != nil {
+			return errs.Wrap(errs.Internal, err, "写不了 "+props+"："+err.Error())
+		}
+		f.say("  压缩包里没有 source.properties，已补写")
+	}
+	if !c.Complete(extracted) {
+		return rejected("解压后的关键文件或版本校验失败：%s", c.FetchName)
+	}
+	return nil
+}
+
+// extract unpacks every entry of zipPath into staging, with progress and a stop at Ctrl+C between two reads. Every
+// entry must sit under the archive root and land inside staging; encrypted entries and methods other than store and
+// deflate are refused, an entry is never written twice, and the files get the zip's times (DOS fields, local time,
+// as the script sets them).
+func (f *fetcher) extract(ctx context.Context, c root.SDKComponent, zipPath, staging string) error {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return rejected("压缩包打不开：%v", err)
+	}
+	defer zr.Close()
+	prefix := strings.TrimRight(c.ArchiveRoot, "/") + "/"
+	total := int64(0)
+	if f.darwin() && len(zr.File) > 20000 {
+		return rejected("压缩包条目过多")
+	}
+	seen := map[string]bool{}
+	spellings := map[string]string{}
+	for _, e := range zr.File {
+		if f.darwin() {
+			name := strings.TrimSuffix(e.Name, "/")
+			mode := e.Mode()
+			if name == "" || strings.Contains(e.Name, `\`) || path.Clean(name) != name ||
+				strings.HasPrefix(name, "/") || strings.Contains(name, "\x00") ||
+				(mode.Type() != 0 && !mode.IsDir()) || mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+				return rejected("压缩包里有非法路径或文件类型：%s", e.Name)
+			}
+			key := strings.ToLower(name)
+			if seen[key] {
+				return rejected("压缩包里有重复或大小写冲突的路径：%s", e.Name)
+			}
+			seen[key] = true
+			parts := strings.Split(name, "/")
+			for n := range parts {
+				prefix := strings.Join(parts[:n+1], "/")
+				folded := strings.ToLower(prefix)
+				if previous, ok := spellings[folded]; ok && previous != prefix {
+					return rejected("压缩包目录有大小写冲突：%s", e.Name)
+				}
+				spellings[folded] = prefix
+			}
+			if e.UncompressedSize64 > uint64(c.ExtractedBytes) || total > c.ExtractedBytes-int64(e.UncompressedSize64) {
+				return rejected("压缩包展开后超过组件大小预算")
+			}
+		}
+		total += int64(e.UncompressedSize64)
+	}
+	if total <= 0 {
+		total = 1
+	}
+	m := newMeter(f.o.Progress, "extracting", c.FetchName, total, 0)
+	buf := make([]byte, 1<<20)
+	done := int64(0)
+	for _, e := range zr.File {
+		if ctx.Err() != nil {
+			return canceled(ctx)
+		}
+		name := strings.ReplaceAll(e.Name, `\`, "/")
+		if !strings.HasPrefix(name, prefix) {
+			return rejected("压缩包结构不对：有不在 %s 下的条目 %s", prefix, e.Name)
+		}
+		dest := filepath.Join(staging, filepath.FromSlash(name))
+		if !within(dest, staging) {
+			return rejected("压缩包里有非法路径：%s", e.Name)
+		}
+		if strings.HasSuffix(name, "/") {
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return errs.Wrap(errs.Internal, err, "建不了 "+dest+"："+err.Error())
+			}
+			continue
+		}
+		if e.Flags&1 != 0 {
+			return rejected("压缩包里的 %s 是加密的", e.Name)
+		}
+		if e.Method != zip.Store && e.Method != zip.Deflate {
+			return rejected("压缩包里 %s 用了不支持的压缩方式 %d", e.Name, e.Method)
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return errs.Wrap(errs.Internal, err, "建不了 "+filepath.Dir(dest)+"："+err.Error())
+		}
+		n, err := f.extractFile(ctx, e, dest, buf, done, m)
+		done += n
+		if err != nil {
+			return err
+		}
+		if n != int64(e.UncompressedSize64) {
+			return rejected("解压出的 %s 大小不对", e.Name)
+		}
+		if when, ok := dosTime(e.ModifiedDate, e.ModifiedTime); ok {
+			os.Chtimes(dest, time.Time{}, when)
+		}
+	}
+	m.finish(done)
+	return nil
+}
+
+// extractFile writes one entry (read to its end, so archive/zip checks the CRC) and returns the bytes written.
+func (f *fetcher) extractFile(ctx context.Context, e *zip.File, dest string, buf []byte, before int64, m *meter) (int64, error) {
+	in, err := e.Open()
+	if err != nil {
+		return 0, rejected("压缩包里的 %s 解不开：%v", e.Name, err)
+	}
+	defer in.Close()
+	// CreateNew, like the script: a second entry of the same name fails instead of replacing the first.
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return 0, rejected("压缩包里的 %s 出现了两次", e.Name)
+		}
+		return 0, errs.Wrap(errs.Internal, err, "写不了 "+dest+"："+err.Error())
+	}
+	written := int64(0)
+	for {
+		if ctx.Err() != nil {
+			out.Close()
+			return written, canceled(ctx)
+		}
+		n, rerr := in.Read(buf)
+		if n > 0 {
+			if f.darwin() && written+int64(n) > int64(e.UncompressedSize64) {
+				out.Close()
+				return written, rejected("解压出的 %s 超过声明大小", e.Name)
+			}
+			if _, err := out.Write(buf[:n]); err != nil {
+				out.Close()
+				return written, errs.Wrap(errs.Internal, err, "写不了 "+dest+"："+err.Error())
+			}
+			written += int64(n)
+			m.add(before + written)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			out.Close()
+			return written, rejected("压缩包里的 %s 解不开：%v", e.Name, rerr)
+		}
+	}
+	if err := out.Close(); err != nil {
+		return written, errs.Wrap(errs.Internal, err, "写不了 "+dest+"："+err.Error())
+	}
+	if f.darwin() {
+		mode := os.FileMode(0o644)
+		if e.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		if err := os.Chmod(dest, mode); err != nil {
+			return written, errs.Wrap(errs.Internal, err, "恢复文件权限失败："+dest)
+		}
+	}
+	return written, nil
+}
+
+// dosTime is an entry's MS-DOS date and time as local time (the script's New-Object DateTime); ok=false when the
+// fields are not a valid date, where the script falls back to now.
+func dosTime(date, clock uint16) (time.Time, bool) {
+	y, mo, d := int(date>>9)+1980, time.Month(date>>5&15), int(date&31)
+	h, mi, s := int(clock>>11), int(clock>>5&63), int(clock&31)*2
+	t := time.Date(y, mo, d, h, mi, s, 0, time.Local)
+	if t.Year() != y || t.Month() != mo || t.Day() != d || t.Hour() != h || t.Minute() != mi || t.Second() != s {
+		return time.Time{}, false
+	}
+	return t, true
+}

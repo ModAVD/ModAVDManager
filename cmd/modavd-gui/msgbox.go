@@ -1,43 +1,32 @@
-//go:build windows
-
 package main
 
 import (
-	"syscall"
-	"unsafe"
+	"modavd/internal/host"
+	"modavd/internal/i18n"
 )
 
-// user32 is a KnownDLL: Windows always maps it from System32.
-var procMessageBoxW = syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW")
-
-const (
-	mbOK            = 0x0
-	mbIconError     = 0x10
-	mbSetForeground = 0x10000
-	mbTopmost       = 0x40000
+// fatal shows an error, notice an information such as the usage. A GUI-subsystem process has no console of its own:
+// the text goes to the redirected stream (stderr for fatal, stdout for notice) or the parent's console when there is
+// one (writeText, ModAVD/ModAVD#258), else into a box. Variables, so that the tests see what would have been shown
+// instead of a dialog popping up.
+var (
+	fatal  = func(msg string) { show(msg, true) }
+	notice = func(msg string) { show(msg, false) }
 )
 
-// reportFatal writes to a redirected stream or the parent's console when possible. It falls back to the dialog
-// used by the desktop launch path.
-func reportFatal(msg string, stderr bool) {
-	if writeFatal(msg, stderr) {
-		return
+// showBox is the fallback of show: an error or information box. A variable for the tests of show.
+var showBox = func(msg string, isErr bool) {
+	if isErr {
+		_ = host.MessageBox(msg)
+	} else {
+		_ = host.InfoBox(msg)
 	}
-	showFatalDialog(msg)
 }
 
-func fatal(msg string) { reportFatal(msg, true) }
-
-// showFatalDialog shows a startup error when there is no stream and no parent console.
-func showFatalDialog(msg string) {
-	text, err := syscall.UTF16PtrFromString(msg)
-	if err != nil {
+func show(msg string, isErr bool) {
+	// the boxes translate the text themselves (internal/win); the stream gets the same translation
+	if writeText(i18n.T(msg), isErr) {
 		return
 	}
-	caption, _ := syscall.UTF16PtrFromString("ModAVD 管理器")
-	if procMessageBoxW.Find() != nil {
-		return
-	}
-	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(text)), uintptr(unsafe.Pointer(caption)),
-		mbOK|mbIconError|mbSetForeground|mbTopmost)
+	showBox(msg, isErr)
 }

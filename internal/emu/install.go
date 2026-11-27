@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 import (
@@ -13,8 +11,7 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/apk"
 	"modavd/internal/errs"
-	"modavd/internal/root"
-	"modavd/internal/win"
+	"modavd/internal/host"
 )
 
 // apkInstallTimeout: game packages are 1-3 GB; push + install on a slow disk takes minutes (AUTO-MAS
@@ -54,16 +51,19 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 	}
 	// Released right after adb install below; the deferred Unlock covers the early returns (it is idempotent).
 	defer guestLock.Unlock()
-	_, running := m.qemuOf(i)
+	_, running, err := m.qemuOf(i)
+	if err != nil {
+		return nil, err
+	}
 	if !running || !m.bootCompleted(ctx, i, statusAdbTimeout, true) {
 		if err := ctxErr(ctx); err != nil {
 			return nil, err
 		}
-		return nil, errs.Newf(errs.Unsupported, "魔改 AVD 实例 %d 没有开机，请先开机再安装 APK", i)
+		return nil, errs.Newf(errs.Unsupported, "ModAVD 实例 %d 没有开机，请先开机再安装 APK", i)
 	}
 
-	m.Log.Infof("魔改 AVD 实例 %d 安装 APK: %s", i, path)
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: apkInstallTimeout, Reregister: true},
+	m.Log.Infof("ModAVD 实例 %d 安装 APK: %s", i, path)
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: apkInstallTimeout, Reregister: true},
 		"install", "-r", path)
 	// The guest is done with the install: a waiting start may restart zygote now (reading the manifest below is local).
 	guestLock.Unlock()
@@ -72,14 +72,14 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 	}
 	last := installResultLine(res.Out)
 	if res.Code != 0 || !strings.HasPrefix(last, "Success") {
-		m.Log.Warnf("魔改 AVD 实例 %d 安装 %s 失败: %s", i, name, res.Out)
+		m.Log.Warnf("ModAVD 实例 %d 安装 %s 失败: %s", i, name, res.Out)
 		why := last
 		if why == "" {
 			why = "adb 返回 " + strconv.Itoa(res.Code)
 		}
 		return nil, errs.Newf(errs.Internal, "安装 %s 失败：%s", name, why)
 	}
-	m.Log.Infof("魔改 AVD 实例 %d 已安装 %s", i, name)
+	m.Log.Infof("ModAVD 实例 %d 已安装 %s", i, name)
 
 	out := &InstallResult{Index: i, APK: path, Output: last}
 	if man, err := apk.ReadManifest(path); err == nil && man != nil {
@@ -91,12 +91,12 @@ func (m *Manager) InstallAPK(ctx context.Context, i int, apkPath string) (*Insta
 // lockGuestForInstall takes the guest lock of instance i (TryLock on guestLockPath), waiting up to
 // installGuestLockWait while a start holds it to mount the guest Vulkan fix. errs.Busy after that, errs.Canceled on a
 // cancel, errs.Internal when the lock file cannot be opened.
-func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*win.FileLock, error) {
+func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*host.FileLock, error) {
 	path := m.guestLockPath(i)
 	deadline := time.Now().Add(installGuestLockWait)
 	logged := false
 	for {
-		l, ok, err := win.TryLock(path)
+		l, ok, err := host.TryLock(path)
 		if err != nil {
 			return nil, errs.Wrap(errs.Internal, err, "实例锁文件打不开: "+path)
 		}
@@ -105,8 +105,8 @@ func (m *Manager) lockGuestForInstall(ctx context.Context, i int) (*win.FileLock
 		}
 		left := time.Until(deadline)
 		if left <= 0 {
-			return nil, errs.Newf(errs.Busy, "实例 %d 正在挂驱动补丁，稍后再装", i).
-				WithAdvice("挂补丁会重启安卓框架，装到一半会失败；等它挂完（start 返回）再装")
+			return nil, errs.WithDetails(errs.Newf(errs.Busy, "实例 %d 正在挂驱动补丁，稍后再装", i).
+				WithAdvice("挂补丁会重启安卓框架，装到一半会失败；等它挂完（start 返回）再装"), map[string]string{errs.Reason: "locked", errs.Lock: "guest"})
 		}
 		if !logged {
 			m.Log.Infof("实例 %d 正在挂驱动补丁（会重启安卓框架），等它挂完再装（最多 %.0f 秒）", i,

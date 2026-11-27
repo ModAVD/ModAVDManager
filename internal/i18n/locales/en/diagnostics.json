@@ -1,0 +1,4 @@
+{
+  "实例 %d diagnostics 不是布尔值，已跳过日志删除": "diagnostics of instance %d is not a boolean; log deletion skipped",
+  "实例 %d diagnosticsSince 无效，已跳过日志删除": "diagnosticsSince of instance %d is invalid; log deletion skipped"
+}

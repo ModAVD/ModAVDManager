@@ -1,11 +1,10 @@
-//go:build windows
-
 package ui
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"math"
 	"net/http"
 	"strconv"
@@ -13,9 +12,9 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/avd"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
-	"modavd/internal/root"
 )
 
 const (
@@ -26,8 +25,6 @@ const (
 	// statusMaxAge: how old a polled instance list may be to decide "not booted" without asking adb.
 	statusMaxAge = 10 * time.Second
 	inputTimeout = 10 * time.Second
-	// The display the page's coordinates refer to when the instance config does not say (API.md: 1280x720).
-	defaultWidth, defaultHeight = 1280, 720
 )
 
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
@@ -40,15 +37,27 @@ type shotCache struct {
 
 type shotEntry struct {
 	data   []byte
+	src    string // shotSourceShm or shotSourceAdb: where data came from
 	at     time.Time
 	flight *shotCall
+	// shmSkip: no shared-memory attempt before this time (the last one failed: library absent, sharing off, old emulator)
+	shmSkip time.Time
 }
 
 type shotCall struct {
 	done chan struct{}
 	data []byte
+	src  string
 	err  error
 }
+
+const (
+	// X-Shot-Source values: the page refreshes thumbnails of an unfocused window only when they come from shared memory.
+	shotSourceShm = "shm"
+	shotSourceAdb = "adb"
+	// shmRetry: how long after a failed shared-memory capture the instance goes straight to adb.
+	shmRetry = 20 * time.Second
+)
 
 func (c *shotCache) entry(i int) *shotEntry {
 	if c.by == nil {
@@ -73,13 +82,14 @@ func (s *server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, err := s.screenshot(r.Context(), i)
+	data, src, err := s.screenshot(r.Context(), i)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	h := w.Header()
 	h.Set("Content-Type", "image/png")
+	h.Set("X-Shot-Source", src)
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
@@ -88,13 +98,13 @@ func (s *server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 
 // screenshot joins the capture in flight, reuses one younger than shotReuse, or starts one. The capture runs on the
 // server's context, so a viewer that goes away does not fail the others waiting for it.
-func (s *server) screenshot(ctx context.Context, i int) ([]byte, error) {
+func (s *server) screenshot(ctx context.Context, i int) ([]byte, string, error) {
 	s.shots.mu.Lock()
 	e := s.shots.entry(i)
 	if e.data != nil && time.Since(e.at) < shotReuse {
-		data := e.data
+		data, src := e.data, e.src
 		s.shots.mu.Unlock()
-		return data, nil
+		return data, src, nil
 	}
 	call := e.flight
 	if call == nil {
@@ -105,23 +115,29 @@ func (s *server) screenshot(ctx context.Context, i int) ([]byte, error) {
 	s.shots.mu.Unlock()
 	select {
 	case <-call.done:
-		return call.data, call.err
+		return call.data, call.src, call.err
 	case <-ctx.Done():
-		return nil, errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
+		return nil, "", errs.Wrap(errs.Canceled, ctx.Err(), "已取消")
 	}
 }
 
 func (s *server) capture(i int, e *shotEntry, call *shotCall) {
 	ctx, cancel := context.WithTimeout(s.ctx, shotTimeout)
 	defer cancel()
-	data, err := s.captureOnce(ctx, i)
+	s.shots.mu.Lock()
+	skip := time.Now().Before(e.shmSkip)
+	s.shots.mu.Unlock()
+	data, src, shmFailed, err := s.captureOnce(ctx, i, skip)
 	s.shots.mu.Lock()
 	e.flight = nil
+	if shmFailed {
+		e.shmSkip = time.Now().Add(shmRetry)
+	}
 	if err == nil {
-		e.data, e.at = data, time.Now()
+		e.data, e.src, e.at = data, src, time.Now()
 	}
 	s.shots.mu.Unlock()
-	call.data, call.err = data, err
+	call.data, call.src, call.err = data, src, err
 	close(call.done)
 }
 
@@ -130,12 +146,34 @@ func notBooted(i int) error {
 	return errs.Newf(errs.Busy, "实例 %d 没有开机", i).WithAdvice("开机后再看画面")
 }
 
-func (s *server) captureOnce(ctx context.Context, i int) ([]byte, error) {
+// captureOnce takes the frame from the emulator's shared memory when it can (unless skipShm), else from adb screencap.
+// shmFailed: the shared-memory attempt was made and failed, so the caller holds the next ones back for a while.
+func (s *server) captureOnce(ctx context.Context, i int, skipShm bool) (data []byte, src string, shmFailed bool, err error) {
 	// A recent list that says offline saves an adb call (which would also start the private adb server).
 	if in, ok := s.hub.cachedInstance(i, statusMaxAge); ok && !in.Running {
-		return nil, notBooted(i)
+		return nil, "", false, notBooted(i)
 	}
-	res := s.mgr.AdbRun(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: shotTimeout, Raw: true},
+	if !skipShm && s.frame != nil {
+		if png, ferr := s.frame(s.root.Dir, s.mgr.Serial(i)); ferr == nil && bytes.HasPrefix(png, pngSignature) {
+			// a portrait instance's shared frame is the wide canvas, not turned (adb screencap is)
+			if in, gerr := avd.Get(s.root, i); gerr == nil && in.Orientation() == avd.OrientationPortrait {
+				png, ferr = turnPortrait(png)
+			}
+			if ferr == nil {
+				return png, shotSourceShm, false, nil
+			}
+		}
+		shmFailed = true
+	}
+	data, err = s.captureAdb(ctx, i)
+	if err == nil {
+		src = shotSourceAdb
+	}
+	return data, src, shmFailed, err
+}
+
+func (s *server) captureAdb(ctx context.Context, i int) ([]byte, error) {
+	res := s.mgr.AdbRun(ctx, adb.RunOptions{Serial: s.mgr.Serial(i), Timeout: shotTimeout, Raw: true},
 		"exec-out", "screencap", "-p")
 	if res.Code == 0 && bytes.HasPrefix(res.Stdout, pngSignature) {
 		return res.Stdout, nil
@@ -225,26 +263,41 @@ func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release, err := s.beginInstanceAction(kindInput, i)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer release()
 	in, err := s.instanceNow(r.Context(), i)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	if !in.Booted {
+		writeError(w, notBooted(i))
+		return
+	}
 	if body.Type == "tap" {
-		wd, ht := in.Config.Width, in.Config.Height
-		if wd <= 0 || ht <= 0 {
-			wd, ht = defaultWidth, defaultHeight
+		// Config describes the next boot. A running guest may still use the previous
+		// preset, so validate against its screenshot, shared with the viewer cache.
+		data, _, err := s.screenshot(r.Context(), i)
+		if err != nil {
+			writeError(w, err)
+			return
 		}
+		display, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			writeError(w, errs.New(errs.Internal, "截图的显示尺寸读不出"))
+			return
+		}
+		wd, ht := display.Width, display.Height
 		x, y := *body.X, *body.Y
 		if math.IsNaN(x) || math.IsNaN(y) || x < 0 || y < 0 || x >= float64(wd) || y >= float64(ht) {
 			writeError(w, errs.Newf(errs.InvalidArgument, "点击位置 (%g, %g) 不在 %d×%d 的画面里", x, y, wd, ht))
 			return
 		}
 		command = fmt.Sprintf("input tap %d %d", int(x), int(y))
-	}
-	if !in.Booted {
-		writeError(w, notBooted(i))
-		return
 	}
 	res, err := s.mgr.Shell(detached(r), i, command, inputTimeout)
 	if err != nil {

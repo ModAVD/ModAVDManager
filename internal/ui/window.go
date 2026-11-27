@@ -3,7 +3,9 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"modavd/internal/logx"
 )
 
 // Window is the manager window that LaunchWindow opened.
@@ -25,12 +29,11 @@ type Window struct {
 }
 
 // LaunchWindow opens url (the login address "http://127.0.0.1:<port>/?t=<token>") in an Edge app window on the
-// manager's own profile (%LOCALAPPDATA%\ModAVD\ui-edge), or in the default browser when Edge is missing or does not
+// manager's own profile (%LOCALAPPDATA%\ModAVD\ui-edge2), or in the default browser when Edge is missing or does not
 // start.
 func LaunchWindow(url string) (*Window, error) {
 	if exe := FindEdge(); exe != "" {
-		cmd := exec.Command(exe, "--app="+url, "--user-data-dir="+EdgeProfileDir(), "--no-first-run",
-			"--no-default-browser-check", "--window-size=1180,760")
+		cmd := exec.Command(exe, edgeArgs(url, EdgeProfileDir())...)
 		if err := cmd.Start(); err == nil {
 			done := make(chan struct{})
 			go func() {
@@ -58,9 +61,88 @@ func AppDataDir() string {
 	return filepath.Join(base, "ModAVD")
 }
 
+// edgeArgs is the msedge.exe command line of the manager window on profile. A profile of its own is not enough: on a
+// new profile Edge signs in with the Windows account by itself (the msImplicitSignin feature), sync then installs the
+// user's extensions there, and their welcome pages open in a full browser window next to the manager. So the window
+// also runs without sign-in, sync and extensions; the last two hold even if a later Edge renames the feature.
+//
+// And when the window closes, startup boost (msEdgeStartupBoost) starts "msedge --no-startup-window", which knows
+// nothing of --user-data-dir: an Edge on the user's own profile, with their extensions, even if they had not opened
+// Edge. Edge reads only the last --disable-features, so both features go in one.
+func edgeArgs(url, profile string) []string {
+	return []string{"--app=" + url, "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check",
+		"--disable-features=" + edgeDisabledFeatures, "--disable-sync", "--disable-extensions", "--window-size=1180,760"}
+}
+
+const edgeDisabledFeatures = "msImplicitSignin,msEdgeStartupBoost"
+
 // EdgeProfileDir is the manager's own Edge profile: the window does not mix with the user's browsing, and the
-// cookie lives there only.
-func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge") }
+// cookie lives there only. Not ui-edge: managers up to 0.3.0 used that one without the switches of edgeArgs, so it
+// may already be signed in with the user's account (switches do not sign a profile out); removeOldEdgeProfile
+// deletes it.
+func EdgeProfileDir() string { return filepath.Join(AppDataDir(), "ui-edge2") }
+
+// oldEdgeProfile is the Edge profile of managers up to 0.3.0 under AppDataDir, and oldEdgeProfile+".deleting" the
+// same folder while it is being deleted.
+const oldEdgeProfile = "ui-edge"
+
+// removeOldEdgeProfile deletes appData\ui-edge, which may hold copies of the user's favourites, history and passwords
+// that sync brought in, and nothing else. It leaves the folder alone while an Edge runs on it (the window of an older
+// manager still open): Edge then holds the profile's lockfile, and Windows does not rename a folder with a file open
+// in it. The folder is renamed to ui-edge.deleting first, so an Edge that an older manager starts meanwhile gets a
+// new profile rather than a half-deleted one, and a deletion cut short is finished on the next start. Failures are
+// only logged; the next start tries again.
+func removeOldEdgeProfile(appData string, log *logx.Logger) {
+	dir := filepath.Join(appData, oldEdgeProfile)
+	trash := dir + ".deleting"
+	if !removePlainDir(trash, log) {
+		return
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "lockfile")); err == nil {
+		log.Infof("旧版管理器的 Edge 配置 %s 还在用（还开着旧版管理器？），下次打开时再删", dir)
+		return
+	}
+	if st, err := os.Lstat(dir); err != nil || !plainDir(st) {
+		if err == nil {
+			log.Warnf("%s 不是普通文件夹，不删", dir)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			log.Warnf("看不了旧版管理器的 Edge 配置 %s: %v", dir, err)
+		}
+		return
+	}
+	if err := os.Rename(dir, trash); err != nil {
+		log.Infof("旧版管理器的 Edge 配置 %s 还在用，下次打开时再删: %v", dir, err)
+		return
+	}
+	if removePlainDir(trash, log) {
+		log.Infof("删掉了旧版管理器的 Edge 配置 %s（里面是以前同步进去的收藏夹、历史、密码的副本）", dir)
+	}
+}
+
+// removePlainDir removes dir if it is a plain folder (not a link or junction); true when it is gone or was never
+// there.
+func removePlainDir(dir string, log *logx.Logger) bool {
+	st, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true
+	case err != nil:
+		log.Warnf("看不了 %s: %v", dir, err)
+		return false
+	case !plainDir(st):
+		log.Warnf("%s 不是普通文件夹，不删", dir)
+		return false
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Warnf("没删完 %s，下次打开时再删: %v", dir, err)
+		return false
+	}
+	return true
+}
+
+func plainDir(st fs.FileInfo) bool {
+	return st.IsDir() && st.Mode()&(fs.ModeSymlink|fs.ModeIrregular) == 0
+}
 
 // FindEdge is msedge.exe from the App Paths registration (per user, then per machine, both registry views), else
 // the usual install folders; "" when there is none.

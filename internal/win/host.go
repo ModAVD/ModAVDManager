@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -50,7 +49,36 @@ func SetAffinity(p Process, mask uint64) error {
 	return nil
 }
 
-// l3Group is one L3 cache: its size in bytes and the processors sharing it.
+// GetAffinity is the process affinity mask (processor group 0).
+func GetAffinity(p Process) (uint64, error) {
+	h, err := p.openRunning(processQueryLimitedInformation, "读取绑核")
+	if err != nil {
+		return 0, err
+	}
+	defer syscall.CloseHandle(h)
+	var proc, sys uintptr
+	if r, err := call(procGetProcessAffinityMask, uintptr(h), uintptr(unsafe.Pointer(&proc)), uintptr(unsafe.Pointer(&sys))); r == 0 {
+		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("读取%s的绑核失败: %v", p.label(), err))
+	}
+	return uint64(proc), nil
+}
+
+// L3Group is one L3 cache: its size in bytes and the logical processors sharing it (processor group 0).
+type L3Group struct {
+	Size uint32
+	Mask uint64
+}
+
+// L3Groups lists the L3 caches of the host, nil when the topology is unreadable.
+func L3Groups() []L3Group {
+	var out []L3Group
+	for _, g := range parseL3Groups(cacheTopology()) {
+		out = append(out, L3Group{Size: g.size, Mask: g.mask})
+	}
+	return out
+}
+
+// l3Group is the parsed form of L3Group.
 type l3Group struct {
 	size uint32
 	mask uint64
@@ -94,42 +122,6 @@ func parseL3Groups(raw []byte) []l3Group {
 		off += size
 	}
 	return groups
-}
-
-// bigL3 picks the largest L3 group when the L3 groups differ in size (AUTO-MAS host.big_l3_cpus: sort by (size,
-// mask) descending, compare the first with the last).
-func bigL3(groups []l3Group) (uint64, []int, bool) {
-	if len(groups) < 2 {
-		return 0, nil, false
-	}
-	sorted := append([]l3Group(nil), groups...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].size != sorted[j].size {
-			return sorted[i].size > sorted[j].size
-		}
-		return sorted[i].mask > sorted[j].mask
-	})
-	if sorted[0].size <= sorted[len(sorted)-1].size {
-		return 0, nil, false
-	}
-	mask := sorted[0].mask
-	var cpus []int
-	for cpu := 0; cpu < 64; cpu++ {
-		if mask>>cpu&1 == 1 {
-			cpus = append(cpus, cpu)
-		}
-	}
-	if len(cpus) == 0 { // AUTO-MAS tune_host_scheduling binds only `if cpus`
-		return 0, nil, false
-	}
-	return mask, cpus, true
-}
-
-// BigL3CPUs is the processor mask and list of the largest L3 cache group on parts whose L3 groups differ in size
-// (AMD X3D); ok=false on ordinary CPUs (all L3 the same, or a single L3). GetLogicalProcessorInformationEx(
-// RelationCache), CACHE_RELATIONSHIP Level at +8, CacheSize at +12, GroupMask.Mask at +40, entry size at +4.
-func BigL3CPUs() (mask uint64, cpus []int, ok bool) {
-	return bigL3(parseL3Groups(cacheTopology()))
 }
 
 // SharedMemoryExists: OpenFileMappingW(FILE_MAP_READ, FALSE, name) succeeds (e.g. "SHM_videmulator20000").
@@ -186,24 +178,117 @@ func DiskFree(path string) (uint64, error) {
 	return free, nil
 }
 
-type memoryStatusEx struct {
-	Length               uint32
-	MemoryLoad           uint32
-	TotalPhys            uint64
-	AvailPhys            uint64
-	TotalPageFile        uint64
-	AvailPageFile        uint64
-	TotalVirtual         uint64
-	AvailVirtual         uint64
-	AvailExtendedVirtual uint64
+// VolumeFileSystem is the file-system name of the volume that holds path ("NTFS", "ReFS", "exFAT", "FAT32", ...),
+// via GetVolumePathNameW (path -> the volume's mount point) then GetVolumeInformationW. Compact uses it to run only
+// on journaled file systems, where a write-through replace is a single transaction and the swap is atomic.
+func VolumeFileSystem(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	p, err := syscall.UTF16PtrFromString(abs)
+	if err != nil {
+		return "", errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
+	}
+	mount := make([]uint16, syscall.MAX_PATH+1)
+	if r, e := call(procGetVolumePathNameW, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&mount[0])),
+		uintptr(len(mount))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("找不到 %s 所在的卷: %v", path, e))
+	}
+	fsName := make([]uint16, 64)
+	if r, e := call(procGetVolumeInformationW, uintptr(unsafe.Pointer(&mount[0])), 0, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&fsName[0])), uintptr(len(fsName))); r == 0 {
+		return "", errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 所在卷的文件系统: %v", path, e))
+	}
+	name := syscall.UTF16ToString(fsName)
+	if name == "" {
+		// seen once on a CI runner (ModAVD/ModAVD#142): success without a name would read "数据盘所在卷是 ，"
+		return "", errs.Newf(errs.Internal, "读不到 %s 所在卷的文件系统：系统没给出名字", path)
+	}
+	return name, nil
 }
 
-// AvailableMemoryMB is GlobalMemoryStatusEx ullAvailPhys in MiB (psutil virtual_memory().available).
-func AvailableMemoryMB() (uint64, error) {
-	var m memoryStatusEx
-	m.Length = uint32(unsafe.Sizeof(m))
-	if r, err := call(procGlobalMemoryStatusEx, uintptr(unsafe.Pointer(&m))); r == 0 {
-		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("读不到可用内存: %v", err))
+// GetCompressedFileSize is the bytes the file at path really occupies on the volume (GetCompressedFileSizeW): for a
+// sparse or NTFS-compressed file that is less than its length. For a plain file it is the length rounded up to the
+// cluster.
+func GetCompressedFileSize(path string) (uint64, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, errs.Wrap(errs.Internal, err, fmt.Sprintf("路径 %s 不可用: %v", path, err))
 	}
-	return m.AvailPhys / (1024 * 1024), nil
+	if err := procGetCompressedFileSizeW.Find(); err != nil {
+		return 0, errs.Wrap(errs.Internal, err, "读不到文件占用的磁盘空间: "+err.Error())
+	}
+	const invalidFileSize = 0xFFFFFFFF
+	var high uint32
+	low, _, e := procGetCompressedFileSizeW.Call(uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&high)))
+	// INVALID_FILE_SIZE is also a legal low word of a file larger than 4 GiB: only the last error tells them apart.
+	if uint32(low) == invalidFileSize {
+		if en, ok := e.(syscall.Errno); ok && en != 0 {
+			if en == syscall.ERROR_FILE_NOT_FOUND || en == syscall.ERROR_PATH_NOT_FOUND {
+				return 0, errs.Wrap(errs.NotFound, e, "找不到文件: "+path)
+			}
+			return 0, errs.Wrap(errs.Internal, e, fmt.Sprintf("读不到 %s 占用的磁盘空间: %v", path, e))
+		}
+	}
+	return uint64(high)<<32 | uint64(uint32(low)), nil
+}
+
+// MoveFileReplaceThrough renames src over dst (MoveFileExW, REPLACE_EXISTING |
+// WRITE_THROUGH): dst is replaced and both the rename and the pending writes are
+// flushed to disk before it returns, so a crash leaves either the old file or the
+// new one, never a torn mix. Used to swap in a freshly compacted disk image.
+func MoveFileReplaceThrough(src, dst string) error {
+	s, err := syscall.UTF16PtrFromString(src)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "源路径不可用: "+src)
+	}
+	d, err := syscall.UTF16PtrFromString(dst)
+	if err != nil {
+		return errs.Wrap(errs.Internal, err, "目标路径不可用: "+dst)
+	}
+	const moveReplaceExisting = 0x1
+	const moveWriteThrough = 0x8
+	r, e := call(procMoveFileExW, uintptr(unsafe.Pointer(s)), uintptr(unsafe.Pointer(d)),
+		moveReplaceExisting|moveWriteThrough)
+	if r == 0 {
+		return errs.Wrap(errs.Internal, e, fmt.Sprintf("换文件失败（%s → %s）: %v", src, dst, e))
+	}
+	return nil
+}
+
+// OpenStableRead keeps the file from being written, renamed or deleted while
+// a raw backing is being verified or an offline overlay is being copied.
+func OpenStableRead(path string) (*os.File, error) {
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	h, err := syscall.CreateFile(p, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil,
+		syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
+var getFileInformationByHandleEx = modkernel32.NewProc("GetFileInformationByHandleEx")
+
+// FileChangeStamp identifies an unchanged file at its current path. An empty
+// result disables caching on filesystems without a file ID or change time.
+func FileChangeStamp(f *os.File) string {
+	h := syscall.Handle(f.Fd())
+	var id syscall.ByHandleFileInformation
+	if syscall.GetFileInformationByHandle(h, &id) != nil || id.FileIndexHigh == 0 && id.FileIndexLow == 0 {
+		return ""
+	}
+	var basic struct {
+		Creation, Access, Write, Change int64
+		Attributes, Padding             uint32
+	}
+	ok, _ := call(getFileInformationByHandleEx, uintptr(h), 0 /* FileBasicInfo */, uintptr(unsafe.Pointer(&basic)), unsafe.Sizeof(basic))
+	if ok == 0 || basic.Change == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x-%x", id.VolumeSerialNumber, id.FileIndexHigh, id.FileIndexLow, basic.Creation, basic.Write, basic.Change)
 }

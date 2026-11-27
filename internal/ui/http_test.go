@@ -12,6 +12,7 @@ import (
 
 	"modavd/internal/emu"
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 func TestLoginCookieFlow(t *testing.T) {
@@ -41,7 +42,7 @@ func TestLoginCookieFlow(t *testing.T) {
 	}
 	expect(t, h.do("GET", "/api/info", nil, noCookie, withHeader("Cookie", cookies[0].Name+"="+cookies[0].Value)),
 		http.StatusOK, &info)
-	if info.Version == "" || info.Protocol == 0 || info.Root.Root != fakeRoot.Root || info.Root.Build != 35 {
+	if info.Version == "" || info.Protocol == 0 || info.Root.Root != fakeRoot.Root || info.Root.Build != 35 || info.Root.BuildID != "mas-35" {
 		t.Fatalf("info %+v", info)
 	}
 
@@ -75,7 +76,7 @@ func TestRejections(t *testing.T) {
 	expectError(t, h.do("POST", "/api/instances", "{}", withHeader("Origin", "http://127.0.0.1:1")),
 		http.StatusForbidden, "forbidden")
 	expect(t, h.do("POST", "/api/instances", "{}", withHeader("Origin", "http://localhost:"+port)),
-		http.StatusCreated, nil)
+		http.StatusAccepted, nil)
 
 	// unknown API paths answer in JSON too
 	expectError(t, h.do("GET", "/api/nothing", nil), http.StatusNotFound, errs.NotFound)
@@ -86,7 +87,7 @@ func TestErrorStatusMapping(t *testing.T) {
 	cases := map[string]int{
 		errs.Usage: 400, errs.InvalidArgument: 400, errs.NotFound: 404, errs.Busy: 409, errs.AlreadyExists: 409,
 		errs.PortConflict: 409, errs.NotReady: 422, errs.PrecheckFailed: 422, errs.Unsupported: 422,
-		errs.Canceled: 499, errs.LaunchFailed: 502, errs.Timeout: 504, errs.Internal: 500,
+		errs.Canceled: 499, errs.LaunchFailed: 502, errs.InsufficientMemory: 502, errs.ProxyUnavailable: 502, errs.Timeout: 504, errs.Internal: 500,
 		errs.MetadataUnreadable: 500, errs.NotImplemented: 500,
 	}
 	for code, status := range cases {
@@ -94,9 +95,18 @@ func TestErrorStatusMapping(t *testing.T) {
 		h.f.infoErr[3] = errs.New(code, "测试错误 "+code).WithAdvice("建议 " + code)
 		h.f.mu.Unlock()
 		e := expectError(t, h.do("GET", "/api/instances/3", nil), status, code)
-		if e.Message != "测试错误 "+code || e.Advice != "建议 "+code {
+		if e.Message != "测试错误 "+code || e.Advice != "建议 "+code || e.Details != nil {
 			t.Errorf("%s: body %+v", code, e)
 		}
+	}
+	// details (a failed boot's guest state, ModAVD/ModAVD#79), also of an error wrapped around the one that has them
+	h.f.mu.Lock()
+	h.f.infoErr[3] = errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_3-20261104-100000-bootfail`), "外层")
+	h.f.mu.Unlock()
+	if e := expectError(t, h.do("GET", "/api/instances/3", nil), 504, errs.Timeout); e.Details[errs.BootDiagDir] !=
+		`D:\r\logs\mas_3-20261104-100000-bootfail` {
+		t.Errorf("details: %+v", e)
 	}
 	// a plain Go error is internal
 	h.f.mu.Lock()
@@ -113,26 +123,44 @@ func TestErrorStatusMapping(t *testing.T) {
 func TestCreateUpdateDelete(t *testing.T) {
 	h := newHarness(t, nil)
 
-	var info emu.InstanceInfo
-	expect(t, h.do("POST", "/api/instances", map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4,
-		"data_partition_gb": 32, "fps": 30}), http.StatusCreated, &info)
-	if info.Index != 2 || info.Title != "测试机" {
-		t.Fatalf("created %+v", info)
+	// create is a job (its setup boots the instance for minutes); one without an index gets it picked at once, so the
+	// job (and its card) belongs to that instance from the start
+	create := func(body any) jobView {
+		t.Helper()
+		var v jobView
+		expect(t, h.do("POST", "/api/instances", body), http.StatusAccepted, &v)
+		if v.Kind != kindCreate {
+			t.Fatalf("create job %+v", v)
+		}
+		return h.waitJob(v.ID, stateIs(stateDone))
 	}
-	expect(t, h.do("POST", "/api/instances", "{}"), http.StatusCreated, nil)
-	expect(t, h.do("POST", "/api/instances", nil), http.StatusCreated, nil)
+	j := create(map[string]any{"title": "测试机", "index": 2, "memory_mb": 4096, "cpu": 4, "data_partition_gb": 32, "fps": 30, "resolution": 720, "dpi": 320, "orientation": "portrait"})
+	if res, _ := j.Result.(map[string]any); j.Index != 2 || res["title"] != "测试机" {
+		t.Fatalf("created %+v", j)
+	}
+	auto1, auto2 := create("{}"), create(nil)
+	if auto1.Index < 0 || auto2.Index < 0 || auto1.Index == auto2.Index {
+		t.Fatalf("jobs of creates without index: %+v / %+v", auto1, auto2)
+	}
+	var rj jobView
+	expect(t, h.do("POST", "/api/instances/3/resume", "{}"), http.StatusAccepted, &rj)
+	h.waitJob(rj.ID, stateIs(stateDone))
 	h.f.mu.Lock()
 	c := h.f.created
 	h.f.mu.Unlock()
-	if len(c) != 3 {
+	if len(c) != 4 {
 		t.Fatalf("creates %d", len(c))
 	}
 	r := c[0]
-	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 {
+	if r.Title != "测试机" || *r.Index != 2 || *r.MemoryMB != 4096 || *r.CPU != 4 || *r.DataPartitionGB != 32 || *r.FPS != 30 || r.Resolution == nil || *r.Resolution != 720 ||
+		r.DPI == nil || *r.DPI != 320 || r.Orientation == nil || *r.Orientation != "portrait" || r.Progress == nil || r.Resume {
 		t.Fatalf("create request %+v", r)
 	}
-	if r := c[1]; r.Title != "" || r.Index != nil || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil {
+	if r := c[1]; r.Title != "" || r.Index == nil || *r.Index != auto1.Index || r.MemoryMB != nil || r.CPU != nil || r.DataPartitionGB != nil || r.FPS != nil || r.Resolution != nil {
 		t.Fatalf("empty create request %+v", r)
+	}
+	if r := c[3]; !r.Resume || r.Index == nil || *r.Index != 3 {
+		t.Fatalf("resume request %+v", r)
 	}
 
 	if e := expectError(t, h.do("POST", "/api/instances", `{"memory":4096}`), 400, errs.Usage); !strings.Contains(e.Message, "memory") {
@@ -150,18 +178,18 @@ func TestCreateUpdateDelete(t *testing.T) {
 	// update
 	expectError(t, h.do("PATCH", "/api/instances/2", "{}"), 400, errs.Usage)
 	var up emu.UpdateResult
-	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30}`), http.StatusOK, &up)
+	expect(t, h.do("PATCH", "/api/instances/2", `{"fps":30,"resolution":1080,"dpi":0,"orientation":"landscape"}`), http.StatusOK, &up)
 	if up.Applied["fps"] != float64(30) {
 		t.Fatalf("update result %+v", up)
 	}
 	expect(t, h.do("PATCH", "/api/instances/2", `{"title":"新名字","memory_mb":8192,"cpu":8}`), http.StatusOK, nil)
 	expect(t, h.do("PATCH", "/api/instances/2", `{"data_partition_gb":96}`), http.StatusOK, nil)
-	expectError(t, h.do("PATCH", "/api/instances/7", `{"fps":30}`), 404, errs.NotFound)
+	expectError(t, h.do("PATCH", "/api/instances/9", `{"fps":30}`), 404, errs.NotFound)
 	h.f.mu.Lock()
 	u := h.f.updated
 	h.f.mu.Unlock()
-	if len(u) != 4 || *u[0].FPS != 30 || u[0].Title != nil || u[0].MemoryMB != nil || u[0].CPU != nil ||
-		u[0].DataPartitionGB != nil {
+	if len(u) != 4 || u[0].Resolution == nil || *u[0].Resolution != 1080 || *u[0].FPS != 30 || u[0].Title != nil || u[0].MemoryMB != nil || u[0].CPU != nil ||
+		u[0].DataPartitionGB != nil || u[0].DPI == nil || *u[0].DPI != 0 || u[0].Orientation == nil || *u[0].Orientation != "landscape" {
 		t.Fatalf("update requests %+v", u)
 	}
 	if *u[1].Title != "新名字" || *u[1].MemoryMB != 8192 || *u[1].CPU != 8 || u[1].FPS != nil {
@@ -180,14 +208,6 @@ func TestCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("delete result %+v", del)
 	}
 	expectError(t, h.do("DELETE", "/api/instances/2?confirm=1", nil), 404, errs.NotFound)
-
-	// window
-	var win emu.WindowResult
-	expect(t, h.do("POST", "/api/instances/3/window", `{"visible":true}`), http.StatusOK, &win)
-	if !win.Visible || win.Index != 3 {
-		t.Fatalf("window %+v", win)
-	}
-	expectError(t, h.do("POST", "/api/instances/3/window", `{}`), 400, errs.Usage)
 }
 
 var testWeb = fstest.MapFS{
@@ -288,4 +308,41 @@ func TestEmbeddedPage(t *testing.T) {
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatalf("GET /: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
+}
+
+// TestUpdateSettings: the settings' update part — read without going online, source and CDK saved (the CDK never
+// comes back), installing left to the command line.
+func TestUpdateSettings(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", testutil.TempDir(t))
+	h := newHarness(t, nil)
+	var v map[string]any
+	expect(t, h.do("GET", "/api/update", nil), http.StatusOK, &v)
+	if v["source"] != "github" || v["cdk_set"] != false || v["install_by_cli"] != true || v["can_install"] != false ||
+		v["checking"] != false || v["handoff"] != nil {
+		t.Fatalf("GET /api/update: %v", v)
+	}
+	resp := h.do("POST", "/api/update/settings", `{"source":"mirrorchyan","cdk":"cdk-xyz-1"}`)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || strings.Contains(body, "cdk-xyz-1") ||
+		!strings.Contains(body, `"source":"mirrorchyan"`) || !strings.Contains(body, `"cdk_set":true`) {
+		t.Fatalf("POST settings: %d %s", resp.StatusCode, body)
+	}
+	expect(t, h.do("POST", "/api/update/settings", `{"cdk":""}`), http.StatusOK, &v)
+	if v["cdk_set"] != false || v["source"] != "mirrorchyan" {
+		t.Fatalf("clear CDK: %v", v)
+	}
+	expectError(t, h.do("POST", "/api/update/settings", `{}`), 400, errs.Usage)
+	expectError(t, h.do("POST", "/api/update/settings", `{"source":"ftp"}`), 400, errs.InvalidArgument)
+	// a manager that cannot start itself again (no Options.Reopen) does not install
+	expectError(t, h.do("POST", "/api/update/apply", `{}`), 422, errs.Unsupported)
+}
+
+func readBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

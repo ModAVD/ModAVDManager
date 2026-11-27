@@ -1,5 +1,6 @@
 // Toasts, dialogs (native <dialog> with a focus trap), menus, clipboard.
 
+import { t, cap } from './i18n.js';
 import { h, icon, btn, ibtn } from './dom.js';
 
 let host;
@@ -29,11 +30,11 @@ export function toast({ tone = 'ok', title, text, advice, action, timeout }) {
   const el = h('div', { class: `toast tone-${tone}`, role: tone === 'err' ? 'alert' : 'status' },
     h('span', { class: 'toast-ic' }, icon({ ok: 'ok', err: 'bad', warn: 'alert' }[tone] || 'info')),
     h('div', { class: 'toast-body' },
-      h('div', { class: 'toast-title', text: title }),
+      h('div', { class: 'toast-title', text: cap(title) }),
       text && h('div', { class: 'toast-text', text }),
       advice && h('div', { class: 'advice' }, icon('bulb'), h('span', { text: advice })),
       action && btn('link-btn', action.label, () => { gone(); action.run(); })),
-    ibtn('x', '关闭提示', () => gone()),
+    ibtn('x', t('关闭提示'), () => gone()),
   );
   el.addEventListener('pointerenter', () => clearTimeout(timer));
   el.addEventListener('focusin', () => clearTimeout(timer));
@@ -45,7 +46,7 @@ export function toast({ tone = 'ok', title, text, advice, action, timeout }) {
 
 export function toastError(e) {
   if (!e || e.name === 'AbortError') return;
-  if (e.name === 'TimeoutError') toast({ tone: 'err', title: '后台太久没有回应', advice: '稍后再试一次' });
+  if (e.name === 'TimeoutError') toast({ tone: 'err', title: t('后台太久没有回应'), advice: t('稍后再试一次') });
   else toast({ tone: 'err', title: e.message || String(e), advice: e.advice });
 }
 
@@ -66,8 +67,9 @@ export function openDialog(o) {
   const el = h('dialog', {
     class: 'dlg ' + (o.cls || ''), role: o.alert ? 'alertdialog' : 'dialog', 'aria-modal': 'true',
     'aria-labelledby': id + 't', 'aria-describedby': o.desc || (o.sub && id + 's'),
-  }, h('header', { class: 'dlg-head' }, o.lead, h('div', { class: 'dlg-titles' }, titleEl, subEl), o.tools, ibtn('x', '关闭', () => close(), 'icon-btn dlg-x')));
-  const parts = [o.body, o.actions ? h('footer', { class: 'dlg-foot' }, o.actions.left, btn('btn btn-ghost', '取消', () => close()), o.actions.ok) : o.foot];
+  }, h('header', { class: 'dlg-head' }, o.lead, h('div', { class: 'dlg-titles' }, titleEl, subEl), o.tools, ibtn('x', t('关闭'), () => close(), 'icon-btn dlg-x')));
+  const parts = [o.body, o.actions ? h('footer', { class: 'dlg-foot' }, o.actions.left,
+    o.actions.cancel === false ? null : btn('btn btn-ghost', t('取消'), () => close()), o.actions.ok) : o.foot];
   let form = null;
   if (o.form) {
     el.append((form = h('form', { class: 'dlg-form', novalidate: true }, parts)));

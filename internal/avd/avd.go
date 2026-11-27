@@ -2,7 +2,7 @@
 // mas-avd.json. File operations only; nothing here looks at processes or ports (callers pass a busy-port check).
 //
 // Port of AUTO-MAS app/utils/common/emulator2/avd/instances.py (+ the choices in constants.py). Files must come out
-// byte-identical to what AUTO-MAS writes, so the two can manage the same root during the move to modavd.
+// compatible with AUTO-MAS, except for the two display presets added in ModAVD#100.
 package avd
 
 import (
@@ -19,33 +19,67 @@ import (
 
 	"modavd/internal/errs"
 	"modavd/internal/jsonord"
+	"modavd/internal/regional"
 	"modavd/internal/root"
 )
 
 // Instance options (user decisions: memory and cores only in these steps, no silent rounding).
 var (
-	MemoryChoicesMB = []int{3072, 4096, 5120, 6144}
-	CPUChoices      = []int{2, 4, 6}
-	FPSChoices      = []int{30, 60}
+	MemoryChoicesMB   = []int{3072, 4096, 5120, 6144, 8192}
+	CPUChoices        = []int{2, 4, 6}
+	ResolutionChoices = []int{1080, 720}
+	// DPIChoices are the densities an instance can be given instead of its resolution's (DPIKey; ModAVD/ModAVD#247).
+	DPIChoices = []int{160, 240, 280, 320, 400, 480}
+	// OrientationChoices: landscape (the default; what AUTO-MAS and MAA expect) or portrait (the same wide canvas, turned).
+	OrientationChoices = []string{OrientationLandscape, OrientationPortrait}
 )
 
 const (
-	DefaultMemoryMB        = 6144
-	DefaultCPU             = 6
-	DefaultFPS             = 60
-	DefaultDataPartitionGB = 64
+	OrientationLandscape = "landscape"
+	OrientationPortrait  = "portrait"
+	// DPIKey is instances.<i>.dpi in mas-avd.json: one of DPIChoices, written as hw.lcd.density before every boot;
+	// absent (or anything else) = the resolution's own density (720p 240, 1080p 280), as before it existed.
+	DPIKey = "dpi"
+)
+
+const (
+	DefaultMemoryMB = 6144
+	DefaultCPU      = 6
+	DefaultFPS      = 60
+	// Any whole frame rate in MinFPS..MaxFPS (ModAVD#180); written as hw.lcd.vsync.
+	MinFPS = 1
+	MaxFPS = 60
+	// AutoDataPartitionGB is the data partition of an instance whose data disk grows by itself (自动扩盘, the default,
+	// ModAVD#153): the disk image is sparse, so the host only pays for what the guest writes (64 -> 256 GB took about
+	// 1 GB more host disk on 11-11, the new block groups' inode tables), and the guest always has room.
+	AutoDataPartitionGB = 256
+	// DefaultDataPartitionGB is the size a new instance gets: automatic.
+	DefaultDataPartitionGB = AutoDataPartitionGB
 	MinDataPartitionGB     = 16
 	MaxDataPartitionGB     = 512
-	// Display is fixed at 720p (user 10-04), written into config.ini before every boot, never `wm size`.
-	ScreenWidth, ScreenHeight, ScreenDensity = 1280, 720, 240
-	TargetAPI                                = "android-34"
-	// image.sysdir.1, relative to the SDK root, with the trailing backslash AUTO-MAS writes.
+	// DataDiskModeKey is instances.<i>.dataDiskMode in mas-avd.json: DataDiskManual for a size the user set, anything
+	// else (DataDiskAuto, or absent: instances made before it) automatic. The size itself stays in config.ini
+	// (disk.dataPartition.size, read by AUTO-MAS too).
+	DataDiskModeKey = "dataDiskMode"
+	DataDiskAuto    = "auto"
+	DataDiskManual  = "manual"
+	// SoundKey is instances.<i>.sound in mas-avd.json: true gives the instance a sound card from its next boot
+	// (ModAVD/ModAVD#226); anything else (absent: every instance before it) keeps it without one, the default. The
+	// boot reads only this key; config.ini's hw.audioInput / hw.audioOutput are written along with it (SoundConfig).
+	SoundKey = "sound"
+	// New instances default to 1080p. Existing instances are identified by their dimensions.
+	DefaultResolution = 1080
+	TargetAPI         = "android-34"
+	// SystemImageSysdir is the Windows/AUTO-MAS value of image.sysdir.1.
+	// Create uses the host platform's system-image directory and path separator.
 	SystemImageSysdir = `system-images\android-34\google_apis\x86_64\`
 )
 
 // ConfigTemplate is config.ini of a new instance before the per-instance keys (AUTO-MAS _CONFIG_TEMPLATE, same
-// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, no sound card keys (the real switch is
-// -feature -VirtioSndCard), hw.mainKeys=yes (no on-screen navigation bar; ModAVD #1).
+// order). Taken from the tuned mas_p0: landscape, host GPU, no device frame, sound keys hw.audioInput / hw.audioOutput
+// set to no (the real switch is -feature -VirtioSndCard; the instance's sound switch, SoundKey, writes them yes),
+// hw.mainKeys=yes (no on-screen
+// navigation bar; ModAVD #1).
 var ConfigTemplate = [][2]string{
 	{"PlayStore.enabled", "no"},
 	{"abi.type", "x86_64"},
@@ -308,13 +342,65 @@ func (in *Instance) DataPartitionGB() (int, bool) {
 	return 0, false
 }
 
-// Display returns the size and density the instance will boot with (after DisplayChanges).
-func (in *Instance) Display() (width, height, dpi int) {
-	ch := DisplayChanges(in.Config)
+// DataDiskAutoMeta: the data disk of the instance with metadata meta grows by itself (DataDiskModeKey is not
+// DataDiskManual; nil metadata too).
+func DataDiskAutoMeta(meta *jsonord.Obj) bool {
+	s, _ := meta.Get(DataDiskModeKey).Str()
+	return s != DataDiskManual
+}
+
+// SoundMeta: the instance with metadata meta boots with a sound card (SoundKey is true; nil metadata, a missing key or
+// any other value is off).
+func SoundMeta(meta *jsonord.Obj) bool {
+	on, ok := meta.Get(SoundKey).BoolVal()
+	return ok && on
+}
+
+// SoundConfig is config.ini's sound keys for the switch: hw.audioInput and hw.audioOutput, both yes or both no.
+func SoundConfig(on bool) [][2]string {
+	v := "no"
+	if on {
+		v = "yes"
+	}
+	return [][2]string{{"hw.audioInput", v}, {"hw.audioOutput", v}}
+}
+
+// DPIMeta is the density set for the instance with metadata meta (DPIKey), 0 when none is: the resolution's own.
+func DPIMeta(meta *jsonord.Obj) int {
+	if n, ok := meta.Get(DPIKey).Int(); ok && slices.Contains(DPIChoices, int(n)) {
+		return int(n)
+	}
+	return 0
+}
+
+// Display returns the size and density the instance will boot with (after DisplayChanges) when its metadata sets
+// density dpi (DPIMeta; 0 = the resolution's).
+func (in *Instance) Display(dpi int) (width, height, density int) {
+	ch := DisplayChanges(in.Config, dpi)
 	width, _ = strconv.Atoi(ch[0][1])
 	height, _ = strconv.Atoi(ch[1][1])
-	dpi, _ = strconv.Atoi(ch[2][1])
-	return width, height, dpi
+	density, _ = strconv.Atoi(ch[2][1])
+	return width, height, density
+}
+
+// Orientation is the instance's display orientation, config.ini's hw.initialOrientation (as the emulator reads it:
+// portrait or landscape, case-insensitive). Without either (no key, "natural") the emulator takes the size's natural
+// orientation: portrait when the height is larger.
+func (in *Instance) Orientation() string { return orientationFor(in.Config) }
+
+func orientationFor(cfg *Ini) string {
+	v, _ := cfg.Get("hw.initialOrientation")
+	for _, o := range OrientationChoices {
+		if strings.EqualFold(strings.TrimSpace(v), o) {
+			return o
+		}
+	}
+	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
+	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+	if h > w {
+		return OrientationPortrait
+	}
+	return OrientationLandscape
 }
 
 func IniPath(r *root.Root, i int) string    { return filepath.Join(r.AvdHome(), root.AvdName(i)+".ini") } // <root>\avd\mas_<i>.ini
@@ -424,7 +510,7 @@ func Get(r *root.Root, i int) (*Instance, error) {
 	return nil, notFound(i)
 }
 
-func notFound(i int) error { return errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i) }
+func notFound(i int) error { return errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i) }
 
 // lockInstance takes root.LockInstanceConfig of i. noDir: the avd directory does not exist (no lock taken, nothing on
 // disk to guard); err is nil then.
@@ -507,10 +593,10 @@ func ValidateOptions(memoryMB, cpu, dataGB *int) (int, int, int, error) {
 		data = *dataGB
 	}
 	if !slices.Contains(MemoryChoicesMB, memory) {
-		return 0, 0, 0, errs.New(errs.InvalidArgument, "魔改 AVD 的内存只能选 "+joinInts(MemoryChoicesMB, "%d GB", 1024))
+		return 0, 0, 0, errs.New(errs.InvalidArgument, "ModAVD 的内存只能选 "+joinInts(MemoryChoicesMB, "%d GB", 1024))
 	}
 	if !slices.Contains(CPUChoices, cores) {
-		return 0, 0, 0, errs.New(errs.InvalidArgument, "魔改 AVD 的 CPU 核数只能选 "+joinInts(CPUChoices, "%d", 1))
+		return 0, 0, 0, errs.New(errs.InvalidArgument, "ModAVD 的 CPU 核数只能选 "+joinInts(CPUChoices, "%d", 1))
 	}
 	if data < MinDataPartitionGB || data > MaxDataPartitionGB {
 		return 0, 0, 0, errs.Newf(errs.InvalidArgument, "数据盘上限只能在 %d–%d GB 之间", MinDataPartitionGB,
@@ -519,16 +605,47 @@ func ValidateOptions(memoryMB, cpu, dataGB *int) (int, int, int, error) {
 	return memory, cores, data, nil
 }
 
-// ValidateFPS: nil means DefaultFPS; anything not in FPSChoices is errs.InvalidArgument.
+// ValidateFPS: nil means DefaultFPS; anything outside MinFPS..MaxFPS is errs.InvalidArgument.
 func ValidateFPS(fps *int) (int, error) {
 	value := DefaultFPS
 	if fps != nil {
 		value = *fps
 	}
-	if !slices.Contains(FPSChoices, value) {
-		return 0, errs.New(errs.InvalidArgument, "魔改 AVD 的帧率只能选 "+joinInts(FPSChoices, "%d", 1))
+	if value < MinFPS || value > MaxFPS {
+		return 0, errs.Newf(errs.InvalidArgument, "帧率只能在 %d–%d 之间", MinFPS, MaxFPS)
 	}
 	return value, nil
+}
+
+// ValidateResolution defaults new instances to 1080p; DPI is part of the preset.
+func ValidateResolution(resolution *int) (int, error) {
+	value := DefaultResolution
+	if resolution != nil {
+		value = *resolution
+	}
+	if !slices.Contains(ResolutionChoices, value) {
+		return 0, errs.New(errs.InvalidArgument, "分辨率只能选 1080 或 720")
+	}
+	return value, nil
+}
+
+// ValidateDPI takes 0 (the resolution's own density) or one of DPIChoices.
+func ValidateDPI(dpi int) error {
+	if dpi != 0 && !slices.Contains(DPIChoices, dpi) {
+		return errs.Newf(errs.InvalidArgument, "DPI 只能选 %s，或 0（跟随分辨率）", joinInts(DPIChoices, "%d", 1))
+	}
+	return nil
+}
+
+// ValidateOrientation takes "landscape" or "portrait" ("" = landscape).
+func ValidateOrientation(orientation string) (string, error) {
+	if orientation == "" {
+		return OrientationLandscape, nil
+	}
+	if !slices.Contains(OrientationChoices, orientation) {
+		return "", errs.New(errs.InvalidArgument, "方向只能选 landscape（横屏）或 portrait（竖屏）")
+	}
+	return orientation, nil
 }
 
 // isLineBreak is every character str.splitlines() splits at: a title holding one would break config.ini apart.
@@ -551,11 +668,21 @@ func validateTitle(title string) error {
 // ---- create / update / delete ------------------------------------------------------------------------------------
 
 type CreateOptions struct {
-	Title           string // "" = the AVD name
+	Regional        *regional.Settings // already resolved by emu; stored before the instance becomes visible
+	Title           string             // "" = the AVD name
 	MemoryMB        int
 	CPU             int
 	DataPartitionGB int
 	FPS             int
+	Resolution      int    // 0 = DefaultResolution
+	DPI             int    // 0 = the resolution's density; else one of DPIChoices (DPIKey)
+	Orientation     string // "" = landscape; OrientationChoices
+	// DataDiskManual: DataPartitionGB is a size the user chose (dataDiskMode manual); otherwise the data disk grows by
+	// itself (dataDiskMode auto; the caller passes AutoDataPartitionGB).
+	DataDiskManual bool
+	// Creating also sets instances.<i>.creationState = "creating" (emu's create setup), in the same write as the other
+	// keys: the instance is never listed without it.
+	Creating bool
 }
 
 // Create writes mas_<i>.ini and mas_<i>.avd\config.ini exactly like AUTO-MAS create_instance_files (template +
@@ -567,8 +694,9 @@ type CreateOptions struct {
 //
 // "Appended" is a dict update: hw.lcd.vsync is already in the template, so it keeps its place there. The options are
 // checked again anyway (same rules as ValidateOptions / ValidateFPS; zero values fail). Before writing anything
-// mas-avd.json must be readable, and when it cannot be updated at the end the new files are removed again, so a
-// failed Create leaves nothing behind (AUTO-MAS would keep the files, or overwrite an unreadable mas-avd.json).
+// mas-avd.json must be readable, and when it cannot be updated (or the .ini written after it fails) the new files
+// are removed again, so a failed Create leaves nothing behind (AUTO-MAS would keep the files, or overwrite an
+// unreadable mas-avd.json).
 func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	if !root.ValidIndex(i) {
 		return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
@@ -581,6 +709,22 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	var resolutionArg *int
+	if opt.Resolution != 0 {
+		resolutionArg = &opt.Resolution
+	}
+	resolution, err := ValidateResolution(resolutionArg)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateDPI(opt.DPI); err != nil {
+		return nil, err
+	}
+	orientation, err := ValidateOrientation(opt.Orientation)
+	if err != nil {
+		return nil, err
+	}
+	display := displayChanges(nil, resolution, orientation, opt.DPI)
 	if err := validateTitle(opt.Title); err != nil {
 		return nil, err
 	}
@@ -601,6 +745,12 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 	for _, kv := range ConfigTemplate {
 		cfg.Set(kv[0], kv[1])
 	}
+	p := root.CurrentPlatform()
+	cfg.Set("abi.type", p.GuestABI)
+	cfg.Set("hw.cpu.arch", p.GuestArch)
+	cfg.Set("target", p.TargetAPI)
+	// in the template's place (landscape there): the emulator turns its window when this and the size disagree
+	cfg.Set(display[4][0], display[4][1])
 	for _, kv := range [][2]string{
 		{"avd.id", name},
 		{"avd.name", name},
@@ -608,19 +758,19 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		{"disk.dataPartition.size", strconv.Itoa(dataGB) + "G"},
 		{"hw.cpu.ncore", strconv.Itoa(cpu)},
 		{"hw.ramSize", strconv.Itoa(memory) + "M"},
-		{"hw.lcd.width", strconv.Itoa(ScreenWidth)},
-		{"hw.lcd.height", strconv.Itoa(ScreenHeight)},
-		{"hw.lcd.density", strconv.Itoa(ScreenDensity)},
+		{"hw.lcd.width", display[0][1]},
+		{"hw.lcd.height", display[1][1]},
+		{"hw.lcd.density", display[2][1]},
 		{"hw.lcd.vsync", strconv.Itoa(fps)},
-		{"image.sysdir.1", SystemImageSysdir},
+		{"image.sysdir.1", p.SystemImageDir + string(filepath.Separator)},
 	} {
 		cfg.Set(kv[0], kv[1])
 	}
 	ini := NewIni()
 	ini.Set("avd.ini.encoding", "UTF-8")
 	ini.Set("path", dir)
-	ini.Set("path.rel", root.AvdDir+`\`+name+".avd")
-	ini.Set("target", TargetAPI)
+	ini.Set("path.rel", filepath.Join(root.AvdDir, name+".avd"))
+	ini.Set("target", p.TargetAPI)
 
 	if err := os.MkdirAll(r.AvdHome(), 0o755); err != nil {
 		return nil, errs.Wrap(errs.Internal, err, fmt.Sprintf("建不了目录 %s：%v", r.AvdHome(), err))
@@ -649,19 +799,110 @@ func Create(r *root.Root, i int, opt CreateOptions) (*Instance, error) {
 		rollback()
 		return nil, err
 	}
-	if err := WriteIni(iniPath, ini); err != nil {
-		rollback()
-		return nil, err
-	}
+	// instances.<i> before mas_<i>.ini, which makes the instance listed: a list in between must not find it without
+	// its metadata (a create's "creating" in particular).
 	createdAt := nowISO()
 	err = r.EditInstanceMeta(i, func(meta *jsonord.Obj) error {
 		meta.Set("memoryMb", jsonord.NewInt(int64(memory)))
 		meta.Set("initialized", jsonord.NewBool(false))
 		meta.Set("createdAt", jsonord.NewString(createdAt))
+		if opt.Regional != nil {
+			opt.Regional.Set(meta)
+		}
+		mode := DataDiskAuto
+		if opt.DataDiskManual {
+			mode = DataDiskManual
+		}
+		meta.Set(DataDiskModeKey, jsonord.NewString(mode))
+		if opt.DPI != 0 {
+			meta.Set(DPIKey, jsonord.NewInt(int64(opt.DPI)))
+		}
+		if opt.Creating {
+			meta.Set("creationState", jsonord.NewString("creating"))
+		}
 		return nil
 	})
 	if err != nil {
 		rollback()
+		return nil, err
+	}
+	if err := WriteIni(iniPath, ini); err != nil {
+		rollback()
+		r.RemoveInstanceMeta(i)
+		return nil, err
+	}
+	if in, err := Get(r, i); err == nil {
+		return in, nil
+	}
+	return &Instance{Index: i, Name: name, Title: title, Dir: dir, Config: cfg}, nil
+}
+
+// ValidateTitle refuses a title Create and Update would refuse (line breaks).
+func ValidateTitle(title string) error { return validateTitle(title) }
+
+// RegisterCopy makes instance i out of a directory the caller already copied to Dir(r, i) (emu's Clone,
+// ModAVD/ModAVD#239): config.ini becomes src's keys with avd.id / avd.name of i and avd.ini.displayname title ("" =
+// the AVD name), instances.<i> becomes meta (replacing whatever was there), and mas_<i>.ini is written last, which
+// makes the instance listed. Like Create, a failure takes back the metadata and the .ini; the directory is the
+// caller's to remove. errs.AlreadyExists when mas_<i>.ini exists, errs.NotFound when the directory does not.
+func RegisterCopy(r *root.Root, i int, src *Ini, title string, meta *jsonord.Obj) (*Instance, error) {
+	if !root.ValidIndex(i) {
+		return nil, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
+	}
+	if err := validateTitle(title); err != nil {
+		return nil, err
+	}
+	name := root.AvdName(i)
+	dir, iniPath := Dir(r, i), IniPath(r, i)
+	if title == "" {
+		title = name
+	}
+	cfg := NewIni()
+	for _, k := range src.Keys() {
+		cfg.Set(k, src.Value(k))
+	}
+	cfg.Set("avd.id", name)
+	cfg.Set("avd.name", name)
+	cfg.Set("avd.ini.displayname", title)
+	target := cfg.Value("target")
+	if target == "" {
+		target = root.CurrentPlatform().TargetAPI
+	}
+	ini := NewIni()
+	ini.Set("avd.ini.encoding", "UTF-8")
+	ini.Set("path", dir)
+	ini.Set("path.rel", filepath.Join(root.AvdDir, name+".avd"))
+	ini.Set("target", target)
+
+	l, err := r.LockInstanceConfig(i)
+	if err != nil {
+		return nil, err
+	}
+	defer l.Unlock()
+	if pathExists(iniPath) {
+		return nil, errs.Newf(errs.AlreadyExists, "实例 %s 已存在", name)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return nil, errs.Newf(errs.NotFound, "实例目录 %s 不存在", dir)
+	}
+	if err := WriteIni(filepath.Join(dir, "config.ini"), cfg); err != nil {
+		return nil, err
+	}
+	err = r.EditInstanceMeta(i, func(o *jsonord.Obj) error {
+		for _, k := range o.Keys() {
+			o.Delete(k)
+		}
+		for _, k := range meta.Keys() {
+			o.Set(k, meta.Get(k).Clone())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := WriteIni(iniPath, ini); err != nil {
+		os.Remove(iniPath)
+		r.RemoveInstanceMeta(i)
 		return nil, err
 	}
 	if in, err := Get(r, i); err == nil {
@@ -675,40 +916,58 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-// FreeIndex is the smallest valid index that has no instance and whose three ports busy() reports free.
-// errs.Busy "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）" when there is none. A nil busy skips the port check.
-func FreeIndex(existing map[int]bool, busy func(ports []int) []int) (int, error) {
+// FreeIndex is the smallest valid index that has no instance and whose three ports in plan busy() reports free.
+// errs.Busy "ModAVD 实例已满（端口段 20000–20100 最多 9 台）" (the root's plan) when there is none. A nil busy skips
+// the port check.
+func FreeIndex(plan root.PortPlan, existing map[int]bool, busy func(ports []int) []int) (int, error) {
 	for i := 0; i <= root.MaxIndex; i++ {
 		if !root.ValidIndex(i) || existing[i] {
 			continue
 		}
-		c := root.ConsolePort(i)
+		c := plan.Console(i)
 		if busy != nil && len(busy([]int{c, c + 1, c + 2})) > 0 {
 			continue
 		}
 		return i, nil
 	}
-	return 0, errs.New(errs.Busy, "魔改 AVD 实例已满（端口段 20000–20100 最多 9 台）")
+	return 0, errs.Newf(errs.Busy, "ModAVD 实例已满（端口段 %d–%d 最多 9 台）", plan.Base, plan.Base+100)
 }
 
 type UpdateOptions struct {
-	Title    *string
-	MemoryMB *int
-	CPU      *int
-	FPS      *int
+	Title      *string
+	MemoryMB   *int
+	CPU        *int
+	FPS        *int
+	Resolution *int
+	// DPI sets the density (DPIKey; 0 = the resolution's own again); Orientation turns the display ("landscape" /
+	// "portrait": hw.initialOrientation on the wide canvas, see displayChanges). Both are written into config.ini with
+	// the resolution's size, and again before every boot (ApplyDisplay).
+	DPI         *int
+	Orientation *string
 	// DataPartitionGB raises disk.dataPartition.size (modavd only; AUTO-MAS cannot change it): within
 	// MinDataPartitionGB..MaxDataPartitionGB and never below the current value. The emulator (sdk-mas36 on) grows the
 	// disk image at the next boot without touching the data, and the boot's after-boot step grows the file system.
+	// It makes the data disk manual (dataDiskMode manual).
 	DataPartitionGB *int
+	// DataDiskAuto makes the data disk automatic (dataDiskMode auto) and raises it to AutoDataPartitionGB unless it is
+	// larger already. Not together with DataPartitionGB.
+	DataDiskAuto bool
+	// Sound turns the instance's sound card on or off from its next boot: instances.<i>.sound (SoundKey) and
+	// config.ini's hw.audioInput / hw.audioOutput (SoundConfig).
+	Sound *bool
 }
 
 // Update writes the changed keys like AUTO-MAS write_instance_settings: hw.ramSize=<n>M and hw.cpu.ncore always
 // (current values when not changed), hw.lcd.vsync only when FPS is given, avd.ini.displayname when Title is given,
-// disk.dataPartition.size when DataPartitionGB is given, and instances.<i>.memoryMb always. Validates first
-// (memory / cpu / fps steps). Returns the applied changes by option name ("title", "memory_mb", "cpu", "fps",
-// "data_partition_gb"). Takes effect at the next boot.
+// disk.dataPartition.size when DataPartitionGB is given, hw.audioInput / hw.audioOutput and instances.<i>.sound when
+// Sound is given, the display keys (displayChanges) and instances.<i>.dpi when Resolution, DPI or Orientation is
+// given, and instances.<i>.memoryMb always. Validates first (memory / cpu / fps steps). Returns the applied
+// changes by option name ("title", "memory_mb", "cpu", "fps", "data_partition_gb", "sound"). Takes effect at the next
+// boot.
 //
-// As in AUTO-MAS the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
+// Sound on its own only writes the sound keys and instances.<i>.sound: nothing is validated or rewritten then.
+//
+// Otherwise, as in AUTO-MAS, the unchanged values are validated too: memory is MemoryFor (old instances get 6144 written), cores
 // hw.cpu.ncore (DefaultCPU when unreadable), and the instance's data partition must still be within range unless a
 // new DataPartitionGB is given (an old 8 GB instance can be raised that way). A given empty Title means the AVD name,
 // like Create.
@@ -728,6 +987,21 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Sound alone is not an AUTO-MAS hardware edit: like the diagnostics switch it neither validates nor rewrites the
+	// unrelated values (an old out-of-range data disk, AUTO-MAS's automatic memory), only the sound keys.
+	if opt.Sound != nil && opt.Title == nil && opt.MemoryMB == nil && opt.CPU == nil && opt.FPS == nil &&
+		opt.Resolution == nil && opt.DPI == nil && opt.Orientation == nil && opt.DataPartitionGB == nil && !opt.DataDiskAuto {
+		if _, err := r.ReadMetadata(); err != nil {
+			return nil, err
+		}
+		if err := writeInstanceConfig(r, i, SoundConfig(*opt.Sound)); err != nil {
+			return nil, err
+		}
+		if err := r.UpdateInstanceMeta(i, map[string]*jsonord.Value{SoundKey: jsonord.NewBool(*opt.Sound)}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sound": *opt.Sound}, nil
+	}
 	if opt.Title != nil {
 		if err := validateTitle(*opt.Title); err != nil {
 			return nil, err
@@ -736,6 +1010,23 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	var fps int
 	if opt.FPS != nil {
 		if fps, err = ValidateFPS(opt.FPS); err != nil {
+			return nil, err
+		}
+	}
+	var resolution int
+	if opt.Resolution != nil {
+		if resolution, err = ValidateResolution(opt.Resolution); err != nil {
+			return nil, err
+		}
+	}
+	if opt.DPI != nil {
+		if err := ValidateDPI(*opt.DPI); err != nil {
+			return nil, err
+		}
+	}
+	var orientation string
+	if opt.Orientation != nil {
+		if orientation, err = ValidateOrientation(*opt.Orientation); err != nil {
 			return nil, err
 		}
 	}
@@ -750,6 +1041,9 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 			cpuArg = &n
 		}
 	}
+	if opt.DataDiskAuto && opt.DataPartitionGB != nil {
+		return nil, errs.New(errs.InvalidArgument, "数据盘只能二选一：自动扩盘，或者指定大小")
+	}
 	var dataArg *int
 	currentData, currentOK := in.DataPartitionGB()
 	if currentOK {
@@ -757,6 +1051,13 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	}
 	if opt.DataPartitionGB != nil {
 		dataArg = opt.DataPartitionGB
+	}
+	if opt.DataDiskAuto {
+		auto := AutoDataPartitionGB
+		if currentOK && currentData > auto && currentData <= MaxDataPartitionGB {
+			auto = currentData // larger already: kept
+		}
+		dataArg = &auto
 	}
 	memory, cpu, data, err := ValidateOptions(memoryArg, cpuArg, dataArg)
 	if err != nil {
@@ -775,8 +1076,22 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.FPS != nil {
 		changes = append(changes, [2]string{"hw.lcd.vsync", strconv.Itoa(fps)})
 	}
-	if opt.DataPartitionGB != nil {
+	if opt.Resolution != nil || opt.DPI != nil || opt.Orientation != nil {
+		res := resolution
+		if opt.Resolution == nil {
+			res = resolutionFor(in.Config)
+		}
+		dpi := DPIMeta(r.InstanceMeta(i))
+		if opt.DPI != nil {
+			dpi = *opt.DPI
+		}
+		changes = append(changes, displayChanges(in.Config, res, orientation, dpi)...)
+	}
+	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		changes = append(changes, [2]string{"disk.dataPartition.size", strconv.Itoa(data) + "G"})
+	}
+	if opt.Sound != nil {
+		changes = append(changes, SoundConfig(*opt.Sound)...)
 	}
 	title := ""
 	if opt.Title != nil {
@@ -790,8 +1105,26 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 		return nil, err
 	}
 	// memory goes into the metadata every time: boots pass it as -memory, so old "auto" instances get a fixed value
-	if err := r.UpdateInstanceMeta(i, map[string]*jsonord.Value{"memoryMb": jsonord.NewInt(int64(memory))}); err != nil {
+	metaChanges := map[string]*jsonord.Value{"memoryMb": jsonord.NewInt(int64(memory))}
+	switch {
+	case opt.DataDiskAuto:
+		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskAuto)
+	case opt.DataPartitionGB != nil:
+		metaChanges[DataDiskModeKey] = jsonord.NewString(DataDiskManual)
+	}
+	if opt.Sound != nil {
+		metaChanges[SoundKey] = jsonord.NewBool(*opt.Sound)
+	}
+	if opt.DPI != nil && *opt.DPI != 0 {
+		metaChanges[DPIKey] = jsonord.NewInt(int64(*opt.DPI))
+	}
+	if err := r.UpdateInstanceMeta(i, metaChanges); err != nil {
 		return nil, err
+	}
+	if opt.DPI != nil && *opt.DPI == 0 {
+		if err := r.EditInstanceMeta(i, func(meta *jsonord.Obj) error { meta.Delete(DPIKey); return nil }); err != nil {
+			return nil, err
+		}
 	}
 	applied := map[string]any{}
 	if opt.Title != nil {
@@ -806,8 +1139,24 @@ func Update(r *root.Root, i int, opt UpdateOptions) (map[string]any, error) {
 	if opt.FPS != nil {
 		applied["fps"] = fps
 	}
-	if opt.DataPartitionGB != nil {
+	if opt.Resolution != nil {
+		applied["resolution"] = resolution
+	}
+	if opt.DPI != nil {
+		applied["dpi"] = *opt.DPI
+	}
+	if opt.Orientation != nil {
+		applied["orientation"] = orientation
+	}
+	if opt.DataPartitionGB != nil || opt.DataDiskAuto {
 		applied["data_partition_gb"] = data
+		applied["data_disk_mode"] = DataDiskManual
+		if opt.DataDiskAuto {
+			applied["data_disk_mode"] = DataDiskAuto
+		}
+	}
+	if opt.Sound != nil {
+		applied["sound"] = *opt.Sound
 	}
 	return applied, nil
 }
@@ -889,25 +1238,58 @@ func deleteInstanceFiles(r *root.Root, i int) error {
 
 // ---- display -----------------------------------------------------------------------------------------------------
 
-// DisplayChanges is the fixed 720p for cfg keeping its orientation (portrait when height > width), plus
-// hw.mainKeys=yes: hw.lcd.width, hw.lcd.height, hw.lcd.density, hw.mainKeys in that order.
-func DisplayChanges(cfg *Ini) [][2]string {
+// Resolution identifies 1080p in either orientation. All other old configurations stay 720p.
+func (in *Instance) Resolution() int { return resolutionFor(in.Config) }
+
+func resolutionFor(cfg *Ini) int {
 	w, _ := intOrNone(cfg.Value("hw.lcd.width"))
 	h, _ := intOrNone(cfg.Value("hw.lcd.height"))
-	width, height := ScreenWidth, ScreenHeight
-	if h > w {
-		width, height = ScreenHeight, ScreenWidth
+	if (w == 1920 && h == 1080) || (w == 1080 && h == 1920) {
+		return 1080
 	}
-	return [][2]string{
-		{"hw.lcd.width", strconv.Itoa(width)},
-		{"hw.lcd.height", strconv.Itoa(height)},
-		{"hw.lcd.density", strconv.Itoa(ScreenDensity)},
-		{"hw.mainKeys", "yes"},
-	}
+	return 720
 }
 
-// ApplyDisplay writes DisplayChanges into config.ini when any differs; returns whether it wrote. Only while stopped.
-// Under the instance's root.LockInstanceConfig, like Update.
+// DisplayChanges normalizes the current preset's dimensions, preserving orientation, with density dpi (DPIMeta; 0 =
+// the preset's).
+func DisplayChanges(cfg *Ini, dpi int) [][2]string {
+	return displayChanges(cfg, resolutionFor(cfg), "", dpi)
+}
+
+// displayChanges: dpi 0 is the resolution's own density. orientation "" leaves the orientation alone: the size keeps
+// cfg's (an old instance whose height is larger stays that way) and hw.initialOrientation is not written. A given
+// orientation writes the landscape canvas of the resolution and hw.initialOrientation: portrait is the same wide
+// canvas turned (ModAVD/ModAVD#247), the emulator (from 0.43.0, ModAVD/ModAVD#225) sets the guest's user_rotation
+// from hw.initialOrientation (landscape 0, portrait 3) and the boot sets the same (emu setupOrientation).
+func displayChanges(cfg *Ini, resolution int, orientation string, dpi int) [][2]string {
+	width, height, density := 1280, 720, 240
+	if resolution == 1080 {
+		width, height, density = 1920, 1080, 280
+	}
+	if dpi != 0 {
+		density = dpi
+	}
+	if orientation == "" {
+		w, _ := intOrNone(cfg.Value("hw.lcd.width"))
+		h, _ := intOrNone(cfg.Value("hw.lcd.height"))
+		if h > w {
+			width, height = height, width
+		}
+	}
+	changes := [][2]string{
+		{"hw.lcd.width", strconv.Itoa(width)},
+		{"hw.lcd.height", strconv.Itoa(height)},
+		{"hw.lcd.density", strconv.Itoa(density)},
+		{"hw.mainKeys", "yes"},
+	}
+	if orientation != "" {
+		changes = append(changes, [2]string{"hw.initialOrientation", orientation})
+	}
+	return changes
+}
+
+// ApplyDisplay writes DisplayChanges (with the density instances.<i>.dpi sets) into config.ini when any differs;
+// returns whether it wrote. Only while stopped. Under the instance's root.LockInstanceConfig, like Update.
 func ApplyDisplay(r *root.Root, i int) (bool, error) {
 	l, noDir, err := lockInstance(r, i)
 	if err != nil {
@@ -922,7 +1304,7 @@ func ApplyDisplay(r *root.Root, i int) (bool, error) {
 	if err != nil || cfg.Len() == 0 {
 		return false, configUnreadable(i, err)
 	}
-	changes := DisplayChanges(cfg)
+	changes := DisplayChanges(cfg, DPIMeta(r.InstanceMeta(i)))
 	same := true
 	for _, kv := range changes {
 		if v, ok := cfg.Get(kv[0]); !ok || v != kv[1] {

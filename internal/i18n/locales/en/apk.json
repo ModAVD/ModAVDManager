@@ -1,0 +1,20 @@
+{
+  "%s 里的 AndroidManifest.xml 太大": "AndroidManifest.xml in %s is too large",
+  "%s 里的 AndroidManifest.xml 太大（%d 字节）": "AndroidManifest.xml in %s is too large (%d bytes)",
+  "%v 不是 APK（不是 zip 文件）": "%v is not an APK (not a zip file)",
+  "%v 不是 APK（里面没有 AndroidManifest.xml）": "%v is not an APK (no AndroidManifest.xml inside)",
+  "APK 文件不存在: %v": "APK file does not exist: %v",
+  "versionCode %q 不是整数": "versionCode %q is not an integer",
+  "不是二进制 XML": "Not binary XML",
+  "偏移 %d 越界": "Offset %d is out of range",
+  "偏移 %d 长度 %d 越界": "Offset %d with length %d is out of range",
+  "字符串 %d 不是合法的 UTF-16": "String %d is not valid UTF-16",
+  "字符串下标 %d 越界（共 %d 个）": "String index %d is out of range (%d in total)",
+  "打不开 APK 文件: %v": "Cannot open APK file: %v",
+  "数据块（偏移 %d）大小 %d 不对": "Chunk (offset %d) has a wrong size %d",
+  "没有找到开始标签": "No start tag found",
+  "第一个开始标签是 <%s>，不是 <manifest>": "The first start tag is <%s>, not <manifest>",
+  "读不出 %s 的包名和版本号: %v": "Cannot read the package name and version of %s: %v",
+  "读不出 %v 里的 AndroidManifest.xml": "Cannot read AndroidManifest.xml in %v",
+  "资源 ID 表头大小 %d 不对": "Resource ID table header has a wrong size %d"
+}

@@ -1,5 +1,3 @@
-//go:build windows
-
 package emu
 
 import (
@@ -19,7 +17,7 @@ import (
 // developer-signed, MIT. It shows in the display's natural orientation (ours is landscape). Pinned to 0.2.12: another
 // version needs the keys, files and version below checked against its source again.
 const (
-	lightLauncherPackage = "de.jrpie.android.launcher"
+	lightLauncherPackage = root.LauncherPackage
 	lightLauncherHome    = "de.jrpie.android.launcher/.ui.HomeActivity"
 	// its PreferenceManager.getDefaultSharedPreferences file
 	lightLauncherPrefsFile = "/data/data/de.jrpie.android.launcher/shared_prefs/de.jrpie.android.launcher_preferences.xml"
@@ -81,7 +79,7 @@ var debloatPackages = []string{
 // Bluetooth off, no immersive-mode hint, phone apps disabled, the light launcher, the renderer. A failed item leaves
 // initialized=false and the next boot tries again.
 func (m *Manager) firstBootInit(ctx context.Context, i int) {
-	m.Log.Infof("魔改 AVD 实例 %d 首次开机，正在初始化", i)
+	m.Log.Infof("ModAVD 实例 %d 首次开机，正在初始化", i)
 	var failures []string
 
 	// Wi-Fi is not turned off here: every boot turns it on with the fastpath (setupNetwork)
@@ -107,7 +105,7 @@ func (m *Manager) firstBootInit(ctx context.Context, i int) {
 	}
 	software := strings.Contains(strings.ToLower(renderer), "swiftshader")
 	if software {
-		m.Log.Warnf("魔改 AVD 实例 %d 正在用软件渲染（%s）：没有可用的显卡驱动，游戏会占满 CPU，请更新显卡驱动", i, renderer)
+		m.Log.Warnf("ModAVD 实例 %d 正在用软件渲染（%s）：没有可用的显卡驱动，游戏会占满 CPU，请更新显卡驱动", i, renderer)
 	}
 	if ctx.Err() != nil {
 		// the commands above were cut short: do not record a half run, the next boot does it again
@@ -115,12 +113,12 @@ func (m *Manager) firstBootInit(ctx context.Context, i int) {
 	}
 
 	if err := m.writeInitMeta(i, len(failures) == 0, launcher, renderer, software, failures); err != nil {
-		m.Log.Warnf("魔改 AVD 实例 %d 初始化结果没写进 mas-avd.json，下次开机重做: %v", i, err)
+		m.Log.Warnf("ModAVD 实例 %d 初始化结果没写进 mas-avd.json，下次开机重做: %v", i, err)
 	}
 	if len(failures) > 0 {
-		m.Log.Warnf("魔改 AVD 实例 %d 初始化有失败项，下次开机重试: %s", i, pyList(failures))
+		m.Log.Warnf("ModAVD 实例 %d 初始化有失败项，下次开机重试: %s", i, pyList(failures))
 	} else {
-		m.Log.Infof("魔改 AVD 实例 %d 初始化完成（桌面: %s）", i, launcher)
+		m.Log.Infof("ModAVD 实例 %d 初始化完成（桌面: %s）", i, launcher)
 	}
 }
 
@@ -161,7 +159,7 @@ func (m *Manager) installLauncher(ctx context.Context, i int) string {
 	if !regularFile(apkPath) {
 		return "pixel"
 	}
-	res := m.ADB.Run(ctx, adb.RunOptions{Serial: root.Serial(i), Timeout: installLauncherTimeout, Reregister: true},
+	res := m.ADB.Run(ctx, adb.RunOptions{Serial: m.Root.Ports().Serial(i), Timeout: installLauncherTimeout, Reregister: true},
 		"install", "-r", apkPath)
 	if res.Code != 0 || !strings.Contains(res.Out, "Success") {
 		m.Log.Warnf("实例 %d 安装轻量桌面失败: %s", i, res.Out)
@@ -171,15 +169,19 @@ func (m *Manager) installLauncher(ctx context.Context, i int) string {
 	// The stock launcher is uninstalled for user 0 (the system partition keeps it; `cmd package install-existing`
 	// restores it), not disabled: disabling sends PACKAGE_CHANGED, SystemUI's OverviewProxyService then looks for
 	// the stock launcher's recents service and crashes on null, which breaks the home switch transition and leaves
-	// only the wallpaper on the first boot. Uninstalling sends PACKAGE_REMOVED, which it ignores (10-08).
-	cmds := []string{
-		"cmd package set-home-activity " + lightLauncherHome,
-		"pm uninstall --user 0 " + pixelLauncherPackage,
-		"input keyevent KEYCODE_HOME",
-	}
-	if res := m.shell(ctx, i, strings.Join(cmds, " ; "), 0); res.Code != 0 {
+	// only the wallpaper on the first boot. Uninstalling sends PACKAGE_REMOVED, which it ignores (10-08). The removal
+	// is waited for until it is on disk (pixelLauncherRemoveScript); one that fails is retried at the next boot
+	// (ensurePixelLauncherRemoved), the light launcher is home all the same.
+	if res := m.shell(ctx, i, "cmd package set-home-activity "+lightLauncherHome, 0); res.Code != 0 {
 		m.Log.Warnf("实例 %d 设置轻量桌面失败: %s", i, res.Out)
 		return "pixel"
+	}
+	ok, saved, out := m.removePixelLauncher(ctx, i)
+	if r := pixelLauncherRemoveReport(i, "卸载原生 Pixel 桌面", ok, saved, out); r.warn {
+		m.logReport(r)
+	}
+	if res := m.shell(ctx, i, "input keyevent KEYCODE_HOME", 0); res.Code != 0 {
+		m.Log.Warnf("实例 %d 回到轻量桌面失败: %s", i, res.Out)
 	}
 	return lightLauncherPackage
 }

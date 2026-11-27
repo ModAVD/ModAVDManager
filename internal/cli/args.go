@@ -1,5 +1,3 @@
-//go:build windows
-
 package cli
 
 import (
@@ -22,7 +20,15 @@ const (
 	kindBool flagKind = iota
 	kindInt
 	kindString
+	kindStrings // a string that may be given more than once: every value, in order
 )
+
+// stringList is the value of a kindStrings flag.
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+func (s *stringList) Get() any           { return []string(*s) }
 
 type flagSpec struct {
 	name string
@@ -46,6 +52,17 @@ type invocation struct {
 	pos  []string      // positional arguments
 	rest []string      // passthrough commands: everything after <i>, verbatim
 	fs   *flag.FlagSet // the command's flags (nil without a command)
+	// secret: a secret flag (secretFlags) is somewhere on the line, so no message quotes a positional argument (a
+	// misplaced value would be the secret: `update install --cdk-dpapi= <B64>`).
+	secret bool
+}
+
+// shownPos is a positional argument for an error message: "…" when the line has a secret flag.
+func (inv *invocation) shownPos(s string) string {
+	if inv.secret {
+		return "…"
+	}
+	return s
 }
 
 func isFlag(a string) bool { return len(a) > 1 && a[0] == '-' && a != "--" }
@@ -55,6 +72,17 @@ func splitFlag(a string) (name, value string, hasValue bool) {
 	a = strings.TrimPrefix(a, "-")
 	a = strings.TrimPrefix(a, "-")
 	return strings.Cut(a, "=")
+}
+
+// secretFlags are the flags whose value no message may quote (update --cdk-dpapi).
+var secretFlags = map[string]bool{"cdk-dpapi": true}
+
+// shownFlag is a for an error message: "--cdk-dpapi=…" without its value.
+func shownFlag(a string) string {
+	if name, _, has := splitFlag(a); has && secretFlags[name] {
+		return "--" + name + "=…"
+	}
+	return a
 }
 
 func isGlobalName(name string) bool {
@@ -96,6 +124,11 @@ func parseArgs(args []string) (*invocation, error) {
 
 func parseStrict(args []string) (*invocation, error) {
 	inv := &invocation{}
+	for _, a := range args {
+		if name, _, _ := splitFlag(a); isFlag(a) && secretFlags[name] {
+			inv.secret = true
+		}
+	}
 	k := 0
 	for k < len(args) && isFlag(args[k]) {
 		ok, err := inv.global(args, &k)
@@ -103,7 +136,7 @@ func parseStrict(args []string) (*invocation, error) {
 			return inv, err
 		}
 		if !ok {
-			return inv, errs.Newf(errs.Usage, "未知选项 %s（命令名前面只能放 --root / --json / --quiet / --verbose）", args[k]).
+			return inv, errs.Newf(errs.Usage, "未知选项 %s（命令名前面只能放 --root / --json / --quiet / --verbose）", shownFlag(args[k])).
 				WithAdvice(helpAdvice)
 		}
 	}
@@ -114,6 +147,9 @@ func parseStrict(args []string) (*invocation, error) {
 	k++
 	inv.cmd = findCommand(name)
 	if inv.cmd == nil {
+		if err := removedError(name); err != nil {
+			return inv, err
+		}
 		return inv, errs.Newf(errs.Usage, "未知命令 %s", name).WithAdvice(helpAdvice)
 	}
 	inv.fs = inv.cmd.newFlagSet()
@@ -206,7 +242,7 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 	name, value, has := splitFlag(args[*k])
 	spec := inv.cmd.spec(name)
 	if spec == nil {
-		return errs.Newf(errs.Usage, "命令 %s 没有选项 %s", inv.cmd.name, args[*k]).WithAdvice(inv.cmd.usageAdvice())
+		return errs.Newf(errs.Usage, "命令 %s 没有选项 %s", inv.cmd.name, shownFlag(args[*k])).WithAdvice(inv.cmd.usageAdvice())
 	}
 	switch spec.kind {
 	case kindBool:
@@ -219,7 +255,11 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 		}
 	default:
 		if !has {
-			if *k+1 >= len(args) {
+			// The next argument is this command's own option (`--source --cdk-dpapi B64`): the value is missing,
+			// rather than that option being taken as the value and its own value left as a positional argument.
+			// Repeatable flags (--reopen-arg forwards any argument verbatim) and global names (--reopen-arg --root)
+			// still take it.
+			if *k+1 >= len(args) || spec.kind != kindStrings && inv.cmd.isOwnFlag(args[*k+1]) {
 				return errs.Newf(errs.Usage, "选项 --%s 后面缺少值", name).WithAdvice(inv.cmd.usageAdvice())
 			}
 			*k++
@@ -235,6 +275,9 @@ func (inv *invocation) commandFlag(args []string, k *int) error {
 		}
 	}
 	if err := inv.fs.Set(name, value); err != nil {
+		if secretFlags[name] {
+			value = "…"
+		}
 		return errs.Newf(errs.Usage, "选项 --%s 的值不对：「%s」", name, value).WithAdvice(inv.cmd.usageAdvice())
 	}
 	*k++
@@ -250,11 +293,22 @@ func (c *command) newFlagSet() *flag.FlagSet {
 			fs.Bool(f.name, false, f.help)
 		case kindInt:
 			fs.Int(f.name, 0, f.help)
+		case kindStrings:
+			fs.Var(new(stringList), f.name, f.help)
 		default:
 			fs.String(f.name, "", f.help)
 		}
 	}
 	return fs
+}
+
+// isOwnFlag: a is one of c's options ("--name" or "--name=value").
+func (c *command) isOwnFlag(a string) bool {
+	if !isFlag(a) {
+		return false
+	}
+	name, _, _ := splitFlag(a)
+	return c.spec(name) != nil
 }
 
 func (c *command) spec(name string) *flagSpec {
@@ -305,6 +359,12 @@ func (inv *invocation) strOpt(name string) string {
 	return s
 }
 
+// strsOpt is every value of a kindStrings flag.
+func (inv *invocation) strsOpt(name string) []string {
+	s, _ := inv.get(name).([]string)
+	return s
+}
+
 // checkArgs checks the number of positional arguments and the passthrough tail.
 func (inv *invocation) checkArgs() error {
 	c := inv.cmd
@@ -317,6 +377,9 @@ func (inv *invocation) checkArgs() error {
 		return errs.New(errs.Usage, missing(what)).WithAdvice(c.usageAdvice())
 	}
 	if c.maxPos >= 0 && n > c.maxPos {
+		if inv.secret {
+			return errs.Newf(errs.Usage, "多余的参数（%d 个）", n-c.maxPos).WithAdvice(c.usageAdvice())
+		}
 		return errs.Newf(errs.Usage, "多余的参数：%s", strings.Join(inv.pos[c.maxPos:], " ")).WithAdvice(c.usageAdvice())
 	}
 	if c.restName != "" && len(inv.rest) == 0 {

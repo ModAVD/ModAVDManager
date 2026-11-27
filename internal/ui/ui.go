@@ -1,14 +1,15 @@
-//go:build windows
-
 // Package ui is the server side of the ModAVD desktop manager (ModAVD.exe): a local HTTP server that serves the
 // embedded page (web/) and the API described in API.md over emu.Manager, and decides when the manager exits.
 //
 // One server manages one root. Every request must carry our own Host (127.0.0.1 or localhost with our port), so a
 // DNS-rebound name never reaches the API; /api/* also needs the login cookie and, unless GET, our own Origin. Long
-// operations (start, stop, restart, install) run as jobs and report through the event stream (/api/events).
+// operations (create, start, stop, install, disk-info / disk-trim / disk-compact) run as jobs and report through the event stream (/api/events). The manager
+// boots instances with their window only and has no restart: headless boots, and switching between the two, are not
+// its to do (the CLI boots headless; a running instance is never switched).
 //
-// Lifetime: the server exits once its window is gone (the Edge process it started exited, or no event stream has
-// been connected for IdleExit) and the running jobs are done.
+// Lifetime: the server exits once its window is gone (the browser app process it started exited, or no event stream has
+// been connected for IdleExit) and the running jobs are done. With the tray icon (Options.Tray, bosskey.go) it stays
+// in the tray instead, until 退出 in the icon's menu.
 package ui
 
 import (
@@ -21,9 +22,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,6 +34,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/update"
 )
 
 // Options of Run.
@@ -40,9 +44,11 @@ type Options struct {
 	Log *logx.Logger
 	// Addr to listen on, "127.0.0.1:<port>"; "" = "127.0.0.1:0" (a free port).
 	Addr string
-	// OpenWindow opens the page in an Edge app window (the default browser when Edge is missing) once the server
-	// listens.
+	// OpenWindow opens the page after listening: Edge app mode on Windows, the
+	// default browser on macOS, or Chrome app mode when ChromeWindow is set.
 	OpenWindow bool
+	// ChromeWindow uses Chrome's app mode on macOS instead of its default browser.
+	ChromeWindow bool
 	// Dev also serves web/dev/ (the page's mock backend).
 	Dev bool
 	// Ready, when set, is called once the server listens with its address ("http://127.0.0.1:<port>/") and the login
@@ -50,13 +56,31 @@ type Options struct {
 	Ready func(baseURL, token string)
 	// IdleExit: exit after this long without any event stream connected; 0 = 60 s, negative = never.
 	IdleExit time.Duration
+	// Reopen is how the CLI starts this manager again after 设置 → 更新 swapped the new version in (update_apply.go);
+	// nil: the manager cannot update itself (更新 is refused, checking still works).
+	Reopen *Reopen
+	// HandoffID is set only by the CLI's restart after one update.
+	HandoffID update.HandoffID
+	// Tray puts the manager's icon in the notification area and registers the instances' boss keys (bosskey.go;
+	// Windows only, ignored elsewhere). The manager then stays after its window closed, in the tray, until 退出 in the
+	// icon's menu (or the process is told to end).
+	Tray bool
 
 	// Test hooks.
-	newBackend func(log *logx.Logger) backend
-	token      string
-	web        fs.FS
-	openPath   func(path string) error
-	launch     func(url string) (*Window, error)
+	newTray        newTrayFunc // the tray of Tray; nil = the real one
+	prepareUpdate  func(ctx context.Context, lg *logx.Logger, progress func(update.Progress)) (*update.Status, error)
+	cliVersion     func(exe string) (string, error)
+	programsInUse  func() ([]string, error)
+	spawn          func(exe string, args []string, logPath string) (alive func() bool, err error)
+	handoffReady   func(id update.HandoffID) bool
+	newBackend     func(log *logx.Logger) backend
+	newDiagBackend func(log *logx.Logger) diagBackend
+	token          string
+	web            fs.FS
+	openPath       func(path string) error
+	launch         func(url string) (*Window, error)
+	removeOld      func(log *logx.Logger) // removeOldEdgeProfile on AppDataDir
+	proxyEvery     time.Duration
 }
 
 const (
@@ -83,14 +107,18 @@ type server struct {
 	mgr        backend      // requests outside jobs; its messages also go to the event stream
 	poll       backend      // the instance poller: file log only, it runs every few seconds
 	newBackend func(log *logx.Logger) backend
+	diag       diagBackend                        // requests outside jobs (component status, license, config text)
+	newDiag    func(log *logx.Logger) diagBackend // one per diagnostic job, with the job's logger
 	token      string
 	dev        bool
 	files      map[string]*staticFile
 	openPath   func(path string) error
+	frame      func(rootDir, serial string) ([]byte, error) // a PNG of the instance's screen from shared memory; nil = adb only
 	launch     func(url string) (*Window, error)
+	removeOld  func(log *logx.Logger)
 	mux        *http.ServeMux
 
-	pollEvery, pingEvery, exitEvery, idleExit, closeGrace, stopWait time.Duration
+	pollEvery, pingEvery, exitEvery, idleExit, closeGrace, stopWait, proxyEvery time.Duration
 
 	// ctx ends with the server (event streams, screenshot captures); jobCtx only when Run's own context ends, since
 	// a closed window waits for running jobs.
@@ -105,11 +133,37 @@ type server struct {
 	jobs  jobTable
 	shots shotCache
 	check checkCache
+	upd   *updatePanel // update.go
+	marks *proxyMarks  // proxy.go
+
+	// 设置 → 更新 (update_apply.go): how we come back, the steps, and the exit the hand-off asks for
+	reopen        *Reopen
+	prepareUpdate func(ctx context.Context, lg *logx.Logger, progress func(update.Progress)) (*update.Status, error)
+	cliVersion    func(exe string) (string, error)
+	programsInUse func() ([]string, error)
+	spawn         func(exe string, args []string, logPath string) (alive func() bool, err error)
+	handoffReady  func(id update.HandoffID) bool
+	exitReq       chan struct{}
+	exitOnce      sync.Once
+	// handingOff: the CLI has taken the swap; no job may start any more (startJob), the manager is about to exit
+	handingOff atomic.Bool
+
+	// the tray icon and boss keys (bosskey.go); tray and boss are nil without them. Set before serving.
+	tray         trayHost
+	boss         *bossKeys
+	bossKick     chan struct{}
+	trayExit     chan struct{} // closed by 退出 in the icon's menu
+	trayExitOnce sync.Once
+	toggleMu     sync.Mutex // one tray action or exit cleanup at a time
+	base         string     // "http://127.0.0.1:<port>/", set once before serving
+
+	trayStopped    bool                                      // protected by toggleMu
+	managerWindows func(toggle bool) (found bool, err error) // queries the Edge profile, never a launch PID
 }
 
 func newServer(opt Options) (*server, error) {
 	if opt.Root == nil {
-		return nil, errs.New(errs.Usage, "没有指定魔改 AVD 根目录")
+		return nil, errs.New(errs.Usage, "没有指定 ModAVD 根目录")
 	}
 	lg := opt.Log
 	if lg == nil {
@@ -119,6 +173,11 @@ func newServer(opt Options) (*server, error) {
 	if newBackend == nil {
 		r := opt.Root
 		newBackend = func(l *logx.Logger) backend { return managerBackend{emu.New(r, l)} }
+	}
+	newDiagBackend := opt.newDiagBackend
+	if newDiagBackend == nil {
+		r := opt.Root
+		newDiagBackend = func(l *logx.Logger) diagBackend { return newRealDiagBackend(r, l) }
 	}
 	token := opt.token
 	if token == "" {
@@ -149,25 +208,70 @@ func newServer(opt Options) (*server, error) {
 		log:        lg,
 		poll:       newBackend(lg),
 		newBackend: newBackend,
+		diag:       newDiagBackend(lg),
+		newDiag:    newDiagBackend,
 		token:      token,
 		dev:        opt.Dev,
 		files:      files,
 		openPath:   opt.openPath,
 		launch:     opt.launch,
+		removeOld:  opt.removeOld,
 		pollEvery:  pollInterval,
 		pingEvery:  pingInterval,
 		exitEvery:  exitTick,
 		idleExit:   idle,
 		closeGrace: windowCloseGrace,
 		stopWait:   startStopWait,
+		proxyEvery: proxyEvery,
 		hub:        newHub(),
+		marks:      newProxyMarks(),
+		frame:      shmFrame,
+
+		managerWindows: changeManagerWindows,
 	}
 	if s.openPath == nil {
 		s.openPath = shellOpen
 	}
 	if s.launch == nil {
 		s.launch = LaunchWindow
+		if opt.ChromeWindow {
+			s.launch = LaunchChromeWindow
+		}
 	}
+	if s.removeOld == nil {
+		s.removeOld = func(l *logx.Logger) { removeOldEdgeProfile(AppDataDir(), l) }
+	}
+	if opt.proxyEvery > 0 {
+		s.proxyEvery = opt.proxyEvery
+	}
+	s.upd = &updatePanel{handoff: update.TakeHandoff(opt.Root, opt.HandoffID, time.Now())}
+	if h := s.upd.handoff; h != nil {
+		lg.Infof("上次在设置里点的更新：%s", h.Message)
+	}
+	s.reopen, s.prepareUpdate, s.cliVersion, s.programsInUse, s.spawn =
+		opt.Reopen, opt.prepareUpdate, opt.cliVersion, opt.programsInUse, opt.spawn
+	if s.programsInUse == nil {
+		r := opt.Root
+		s.programsInUse = func() ([]string, error) { return update.New(r, nil, update.Options{}).ProgramsInUse() }
+	}
+	if s.prepareUpdate == nil {
+		r := opt.Root
+		s.prepareUpdate = func(ctx context.Context, l *logx.Logger, progress func(update.Progress)) (*update.Status, error) {
+			return update.New(r, l, update.Options{Progress: progress}).PrepareHandoff(ctx)
+		}
+	}
+	if s.cliVersion == nil {
+		s.cliVersion = realCLIVersion
+	}
+	if s.spawn == nil {
+		s.spawn = realSpawn
+	}
+	s.handoffReady = opt.handoffReady
+	if s.handoffReady == nil {
+		s.handoffReady = func(id update.HandoffID) bool { return update.HandoffReady(opt.Root, id) }
+	}
+	s.exitReq = make(chan struct{})
+	s.bossKick = make(chan struct{}, 1)
 	s.mgr = newBackend(lg.Tee(s.eventLogSink("")))
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.jobCtx, s.jobCancel = context.WithCancel(context.Background())
@@ -198,6 +302,14 @@ func Run(ctx context.Context, opt Options) error {
 		return listenError(addr, err)
 	}
 	s.port = ln.Addr().(*net.TCPAddr).Port
+	s.base = fmt.Sprintf("http://127.0.0.1:%d/", s.port)
+	if opt.Tray {
+		newTray := opt.newTray
+		if newTray == nil {
+			newTray = realNewTray
+		}
+		s.startTray(newTray)
+	}
 
 	srv := &http.Server{
 		Handler:           s,
@@ -213,9 +325,10 @@ func Run(ctx context.Context, opt Options) error {
 		}
 	}()
 	go s.pollLoop()
+	go s.proxyLoop()
 	cleanUploads(s.log)
 
-	base := fmt.Sprintf("http://127.0.0.1:%d/", s.port)
+	base := s.base
 	s.log.Infof("管理器已启动: %s（根目录 %s）", base, s.root.Dir)
 	if opt.Ready != nil {
 		opt.Ready(base, s.token)
@@ -225,13 +338,20 @@ func Run(ctx context.Context, opt Options) error {
 		if w, err = s.launch(base + "?t=" + s.token); err != nil {
 			s.log.Errorf("打不开管理器窗口: %v", err)
 		} else if w.Edge {
-			s.log.Infof("已用 Edge 应用窗口打开管理器")
+			s.log.Infof("已用 %s 应用窗口打开管理器", appBrowserName())
 		} else {
-			s.log.Infof("没找到 Edge，已用默认浏览器打开管理器")
+			if runtime.GOOS == "darwin" {
+				s.log.Infof("已用默认浏览器打开管理器")
+			} else {
+				s.log.Infof("没找到 Edge，已用默认浏览器打开管理器")
+			}
 		}
+		// after the window is up, and never in its way: a failure is only logged
+		go s.removeOld(s.log)
 	}
 
 	s.waitForExit(ctx, w)
+	s.stopTray()
 
 	s.log.Infof("管理器退出")
 	s.cancel() // ends the event streams, which Shutdown would otherwise wait for
@@ -249,12 +369,17 @@ func Run(ctx context.Context, opt Options) error {
 // gone and no job runs. A window counts as gone when the Edge process we started exited (unless it was a hand-off to
 // a running Edge) and no event stream is connected for closeGrace, or when no event stream has been connected for
 // idleExit. A page that connects again while jobs finish keeps the manager running.
+//
+// With the tray icon (bosskey.go) a gone window does not end the manager: it stays in the tray until 退出 in the
+// icon's menu, which then ends it once no job runs, whether or not a page is still open.
 func (s *server) waitForExit(ctx context.Context, w *Window) {
 	var edgeDone <-chan struct{}
 	if w != nil {
 		edgeDone = w.Done
 	}
-	windowClosed := false
+	resident := s.tray != nil
+	trayExit := s.trayExit // nil without the tray: never ready
+	windowClosed, exitAsked := false, false
 	waitingLogged := false
 	tick := time.NewTicker(s.exitEvery)
 	defer tick.Stop()
@@ -267,28 +392,57 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 				s.jobs.waitIdle(jobDrainOnCancel)
 			}
 			return
+		case <-s.exitReq:
+			// 设置 → 更新 handed the swap to the CLI, which waits for us to exit. No job may start since (handingOff);
+			// one that slipped in before is cancelled and waited for, as when we are told to exit.
+			if n := s.jobs.running(); n > 0 {
+				s.log.Warnf("交给命令行更新后还有 %d 个任务在跑，取消", n)
+				s.jobCancel()
+				s.jobs.waitIdle(jobDrainOnCancel)
+			}
+			return
 		case <-edgeDone:
 			edgeDone = nil
 			if time.Since(w.Started) < edgeHandoffWindow {
-				s.log.Infof("Edge 把窗口交给了已在运行的 Edge；之后按页面连接判断窗口是否关闭")
+				if runtime.GOOS == "darwin" {
+					s.log.Infof("Chrome 把窗口交给了已在运行的 Chrome；之后按页面连接判断窗口是否关闭")
+				} else {
+					s.log.Infof("Edge 把窗口交给了已在运行的 Edge；之后按页面连接判断窗口是否关闭")
+				}
 			} else {
-				s.log.Infof("管理器窗口已关闭")
+				if resident {
+					s.log.Infof("管理器窗口已关闭，管理器留在托盘")
+				} else {
+					s.log.Infof("管理器窗口已关闭")
+				}
 				windowClosed = true
 			}
+		case <-trayExit:
+			trayExit = nil // closed: once is enough
+			exitAsked = true
 		case <-tick.C:
 		}
-		clients, idle := s.hub.idle()
-		if clients > 0 {
-			waitingLogged = false
-			continue
-		}
-		gone := (windowClosed && idle >= s.closeGrace) || (s.idleExit > 0 && idle >= s.idleExit)
-		if !gone {
-			continue
+		if !exitAsked {
+			if resident {
+				continue
+			}
+			clients, idle := s.hub.idle()
+			if clients > 0 {
+				waitingLogged = false
+				continue
+			}
+			gone := (windowClosed && idle >= s.closeGrace) || (s.idleExit > 0 && idle >= s.idleExit)
+			if !gone {
+				continue
+			}
 		}
 		if n := s.jobs.running(); n > 0 {
 			if !waitingLogged {
-				s.log.Infof("窗口已关闭，等 %d 个正在跑的任务做完再退出", n)
+				if exitAsked {
+					s.log.Infof("等 %d 个正在跑的任务做完再退出", n)
+				} else {
+					s.log.Infof("窗口已关闭，等 %d 个正在跑的任务做完再退出", n)
+				}
 				waitingLogged = true
 			}
 			continue
@@ -301,11 +455,18 @@ func (s *server) waitForExit(ctx context.Context, w *Window) {
 func listenError(addr string, err error) error {
 	const wsaeacces, wsaeaddrinuse = syscall.Errno(10013), syscall.Errno(10048)
 	_, port, _ := net.SplitHostPort(addr)
-	if errors.Is(err, wsaeaddrinuse) || errors.Is(err, wsaeacces) {
+	if errors.Is(err, wsaeaddrinuse) || errors.Is(err, wsaeacces) || errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, syscall.EACCES) {
 		return errs.Wrap(errs.PortConflict, err, "管理器用不了端口 "+port+"（被别的程序占用，或被系统保留）").
 			WithAdvice("换一个端口（--port），或者不带 --port 让系统挑一个空闲端口")
 	}
 	return errs.Wrap(errs.Internal, err, "管理器监听 "+addr+" 失败: "+err.Error())
+}
+
+func appBrowserName() string {
+	if runtime.GOOS == "darwin" {
+		return "Chrome"
+	}
+	return "Edge"
 }
 
 // hostOK: the Host header names us (127.0.0.1 or localhost with our port).
@@ -335,10 +496,13 @@ func (w logWriter) Write(p []byte) (int, error) {
 // on every visit of its check view. sem serializes runs; a request waits for a run in progress instead of starting
 // another one.
 type checkCache struct {
-	once sync.Once
-	sem  chan struct{}
-	res  *emu.CheckResult
-	at   time.Time
+	once       sync.Once
+	sem        chan struct{}
+	mu         sync.Mutex
+	generation uint64
+	res        *emu.CheckResult
+	refreshed  bool
+	at         time.Time
 }
 
 func (c *checkCache) lock(ctx context.Context) error {

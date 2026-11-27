@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // deleteAccess is the DELETE access right: a handle with it is what a pending rename or delete holds.
@@ -33,7 +34,7 @@ func openForDelete(t *testing.T, path string) {
 // through with OpenShared and fails with os.Open. A replace over the open file fails either way (only logged: that is
 // Windows' rename, nothing modavd can change).
 func TestOpenSharedAllowsDelete(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	inst := filepath.Join(dir, "avd", "mas_3.avd")
 	target := filepath.Join(inst, "config.ini")
 	writeFile(t, target, []byte("old"))
@@ -43,6 +44,7 @@ func TestOpenSharedAllowsDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = plain.Close() })
 	if err := os.RemoveAll(inst); err == nil {
 		t.Fatal("rmtree went through a file held by os.Open: the test no longer shows anything")
 	}
@@ -53,6 +55,7 @@ func TestOpenSharedAllowsDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = f.Close() })
 	writeFile(t, target+".tmp", []byte("new"))
 	if err := os.Rename(target+".tmp", target); err != nil {
 		t.Logf("replace over a file open with delete sharing still fails (expected): %v", err)
@@ -76,7 +79,7 @@ func TestSharedReadsDoNotBlockDelete(t *testing.T) {
 	props := filepath.Join(r.SDK(), "emulator", "source.properties")
 	writeFile(t, props, []byte("Pkg.Revision=37.2.10\r\nPkg.BuildId=mas-35\r\n"))
 	writeFile(t, r.ManifestPath(), []byte(`{"version": "v0.35.2"}`))
-	exe := filepath.Join(t.TempDir(), "qemu-system-x86_64-headless.exe")
+	exe := filepath.Join(testutil.TempDir(t), "qemu-system-x86_64-headless.exe")
 	writeFile(t, exe, []byte("xx"+SelfBuiltMark+"yy"))
 	for _, p := range []string{r.MetadataPath(), props, r.ManifestPath(), exe} {
 		openForDelete(t, p)
@@ -87,8 +90,8 @@ func TestSharedReadsDoNotBlockDelete(t *testing.T) {
 	if v, err := r.ReadMetadata(); err != nil || r.AdbServerPort() != 20391 {
 		t.Fatalf("ReadMetadata: %v %v", v, err)
 	}
-	if b, ok := r.ModBuild(); !ok || b != 35 || r.EmulatorVersion() != "37.2.10" {
-		t.Fatalf("source.properties: %d %v %q", b, ok, r.EmulatorVersion())
+	if b, ok := r.EmulatorBuild(); !ok || b != LegacyEmuBuild(35) || r.EmulatorVersion() != "37.2.10" {
+		t.Fatalf("source.properties: %v %v %q", b, ok, r.EmulatorVersion())
 	}
 	if got := r.VersionText(); got != "0.35.2" {
 		t.Fatalf("manifest: %q", got)
@@ -124,6 +127,9 @@ func TestLockInstanceConfig(t *testing.T) {
 	started := time.Now()
 	_, err = r.LockInstanceConfig(3)
 	wantCode(t, err, errs.Busy)
+	if got := errs.DetailsOf(err); got[errs.Reason] != "locked" || got[errs.Lock] != "config" {
+		t.Errorf("details: %v", got)
+	}
 	if time.Since(started) < 150*time.Millisecond {
 		t.Fatalf("did not wait (%v)", time.Since(started))
 	}

@@ -9,11 +9,13 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
 
 	"modavd/internal/errs"
+	"modavd/internal/testutil"
 )
 
 // ---- a small binary XML writer -------------------------------------------------------------------------------------
@@ -335,7 +337,7 @@ type entry struct {
 
 func writeZip(t *testing.T, entries ...entry) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.apk")
+	path := filepath.Join(testutil.TempDir(t), "test.apk")
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +388,7 @@ func TestReadManifestZip(t *testing.T) {
 }
 
 func TestReadManifestRejects(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	text := filepath.Join(dir, "not.apk")
 	if err := os.WriteFile(text, []byte("this is not a zip file"), 0o644); err != nil {
 		t.Fatal(err)
@@ -416,7 +418,7 @@ func TestReadManifestRejects(t *testing.T) {
 	wantMsg := map[string]string{
 		"missing":       "APK 文件不存在",
 		"text":          "不是 APK（不是 zip 文件）",
-		"directory":     "不是 APK",
+		"directory":     map[bool]string{true: "不是 APK", false: "打不开 APK 文件"}[runtime.GOOS == "windows"],
 		"no manifest":   "不是 APK（里面没有 AndroidManifest.xml）",
 		"nested name":   "不是 APK（里面没有 AndroidManifest.xml）",
 		"text manifest": "的包名和版本号: 不是二进制 XML",
@@ -441,7 +443,7 @@ func TestReadManifestRejects(t *testing.T) {
 
 // ---- real APKs ---------------------------------------------------------------------------------------------------
 
-// Expected values come from Get-ApkManifestInfo in tools/launcher/avd-p0.ps1, run with pwsh on the same files.
+// Expected values come from Get-ApkManifestInfo in the launcher embedded helper, run with pwsh on the same files.
 // The IME's APKs are looked for in $MODAVD_TEST_IME_APK_DIR (the IME build's output directory); without it those
 // cases are skipped.
 func TestReadManifestRealAPKs(t *testing.T) {

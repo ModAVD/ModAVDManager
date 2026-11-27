@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/appproxy"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
@@ -23,19 +24,23 @@ import (
 // ---- fake backend ------------------------------------------------------------------------------------------------
 
 type fake struct {
-	mu      sync.Mutex
-	calls   []string
-	creates []emu.CreateRequest
-	updates []emu.UpdateRequest
-	starts  []emu.StartOptions
-	stops   []emu.StopOptions
-	shells  []string
-	timeout time.Duration
+	diagnostics bool
+	mu          sync.Mutex
+	calls       []string
+	creates     []emu.CreateRequest
+	updates     []emu.UpdateRequest
+	starts      []emu.StartOptions
+	stops       []emu.StopOptions
+	// proxySets are the changes set_app_proxy passed
+	proxySets []appproxy.Change
+	shells    []string
+	timeout   time.Duration
 
-	start func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
-	del   func(ctx context.Context, i int) (*emu.DeleteResult, error)
-	wait  func(timeout time.Duration)
-	waits []time.Duration
+	start  func(ctx context.Context, i int, opt emu.StartOptions) (*emu.StartResult, error)
+	create func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error)
+	del    func(ctx context.Context, i int) (*emu.DeleteResult, error)
+	wait   func(timeout time.Duration)
+	waits  []time.Duration
 }
 
 func (f *fake) Wait(timeout time.Duration) {
@@ -87,15 +92,23 @@ func (f *fake) List(ctx context.Context) (*emu.ListResult, error) {
 	running := sampleInstance(1)
 	running.Status, running.Running, running.Booted, running.PID = emu.StatusOnline, true, true, 4242
 	running.StartedAt = "2026-10-28T15:04:05+01:00"
+	running.Diagnostics = f.diagnostics
+	if f.diagnostics {
+		running.DiagnosticsSince = "2026-11-05T12:00:00Z"
+	}
 	return &emu.ListResult{RootInfo: sampleRoot(), Instances: []emu.InstanceInfo{sampleInstance(0), running}}, nil
 }
 
 func (f *fake) Info(ctx context.Context, i int) (*emu.InstanceInfo, error) {
 	f.record("info %d", i)
 	if i == 9 {
-		return nil, errs.Newf(errs.NotFound, "魔改 AVD 实例 %d 不存在", i).WithAdvice("先用 list_instances 看有哪些实例")
+		return nil, errs.Newf(errs.NotFound, "ModAVD 实例 %d 不存在", i).WithAdvice("先用 list_instances 看有哪些实例")
 	}
 	in := sampleInstance(i)
+	in.Diagnostics = f.diagnostics
+	if f.diagnostics {
+		in.DiagnosticsSince = "2026-11-05T12:00:00Z"
+	}
 	return &in, nil
 }
 
@@ -113,6 +126,9 @@ func (f *fake) Create(ctx context.Context, req emu.CreateRequest) (*emu.Instance
 	f.creates = append(f.creates, req)
 	f.mu.Unlock()
 	f.record("create")
+	if f.create != nil {
+		return f.create(ctx, req)
+	}
 	i := 2
 	if req.Index != nil {
 		i = *req.Index
@@ -190,6 +206,39 @@ func (f *fake) Shell(ctx context.Context, i int, command string, timeout time.Du
 func (f *fake) InstallAPK(ctx context.Context, i int, apkPath string) (*emu.InstallResult, error) {
 	f.record("install %d %s", i, apkPath)
 	return &emu.InstallResult{Index: i, APK: apkPath, Package: "com.example", Output: "Success"}, nil
+}
+
+func (f *fake) DiskInfo(ctx context.Context, i int) (*emu.DiskInfoResult, error) {
+	f.record("disk info %d", i)
+	allocated, reclaim := int64(8<<30), int64(4<<30)
+	return &emu.DiskInfoResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		LogicalBytes: 64 << 30, OnDiskBytes: new(int64(12 << 30)), ClusterBytes: 65536, AllocatedBytes: &allocated,
+		ReclaimableBytes: &reclaim}, nil
+}
+
+func (f *fake) DiskTrim(ctx context.Context, i int) (*emu.DiskTrimResult, error) {
+	f.record("disk trim %d", i)
+	return &emu.DiskTrimResult{Index: i, DiscardMaxBytes: 4 << 20}, nil
+}
+
+func (f *fake) DiskCompact(ctx context.Context, i int) (*emu.DiskCompactResult, error) {
+	f.record("disk compact %d", i)
+	return &emu.DiskCompactResult{Index: i, Overlay: fmt.Sprintf(`D:\r1\avd\mas_%d.avd\userdata-qemu.img.qcow2`, i),
+		BeforeOnDiskBytes: 12 << 30, AfterOnDiskBytes: 8 << 30, FreedBytes: 4 << 30}, nil
+}
+
+func (f *fake) AppProxy(ctx context.Context, i int) (*emu.AppProxyResult, error) {
+	f.record("app_proxy %d", i)
+	return &emu.AppProxyResult{Index: i, Apps: []string{}, Notes: []string{}}, nil
+}
+
+func (f *fake) SetAppProxy(ctx context.Context, i int, c appproxy.Change) (*emu.AppProxyResult, error) {
+	f.mu.Lock()
+	f.proxySets = append(f.proxySets, c)
+	f.mu.Unlock()
+	f.record("set_app_proxy %d", i)
+	return &emu.AppProxyResult{Index: i, Enabled: true, Server: "socks5://10.0.2.2:7890", Apps: []string{"a.b"},
+		Notes: []string{}, Applied: "now", Guest: &appproxy.Status{Running: true, Apps: []appproxy.AppStatus{}}}, nil
 }
 
 // fakeConn is what one tool call gets: the shared fake plus that call's logger.
@@ -476,7 +525,7 @@ func TestLegacySession(t *testing.T) {
 			t.Fatalf("legacy tools/list has %s", k)
 		}
 	}
-	if n := len(r["tools"].([]any)); n != 11 {
+	if n := len(r["tools"].([]any)); n != 16 {
 		t.Fatalf("%d tools", n)
 	}
 
@@ -541,7 +590,7 @@ func TestModernSession(t *testing.T) {
 
 	r := result(t, h.request(1, "tools/list", modernParams(nil, nil)))
 	if r["resultType"] != "complete" || r["ttlMs"] != float64(listTTLMs) || r["cacheScope"] != "public" ||
-		r["_meta"] == nil || len(r["tools"].([]any)) != 11 {
+		r["_meta"] == nil || len(r["tools"].([]any)) != 16 {
 		t.Fatalf("tools/list %v", r)
 	}
 
@@ -727,17 +776,27 @@ func TestToolCalls(t *testing.T) {
 		{"check_host", map[string]any{"memory_mb": 4096}, "check 4096"},
 		{"check_host", map[string]any{}, "check 0"},
 		{"create_instance", map[string]any{"title": "星铁", "index": 3, "memory_mb": 4096, "cpu": 4,
-			"data_partition_gb": 128, "fps": 30}, "create"},
+			"data_partition_gb": 128, "fps": 30, "resolution": 720, "dpi": 320, "orientation": "portrait"}, "create"},
 		{"create_instance", map[string]any{}, "create"},
-		{"update_instance", map[string]any{"index": 1, "memory_mb": 5120.0}, "update 1"},
+		{"update_instance", map[string]any{"index": 1, "memory_mb": 5120.0, "resolution": 1080, "dpi": 0, "orientation": "landscape"}, "update 1"},
 		{"delete_instance", map[string]any{"index": 2, "confirm": true}, "delete 2"},
 		{"start_instance", map[string]any{"index": 1, "window": true, "timeout_s": 120}, "start 1"},
 		{"start_instance", map[string]any{"index": 1}, "start 1"},
+		{"start_instance", map[string]any{"index": 1, "window": false}, "start 1"},
 		{"stop_instance", map[string]any{"index": 1, "force": true}, "stop 1"},
 		{"stop_instance", map[string]any{"index": 1}, "stop 1"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": true}, "stop 1"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": false}, "stop 1"},
 		{"set_window_visible", map[string]any{"index": 1, "visible": false}, "window 1 false"},
 		{"shell", map[string]any{"index": 1, "command": "getprop sys.boot_completed", "timeout_s": 10}, "shell 1"},
 		{"install_apk", map[string]any{"index": 1, "apk_path": `D:\apk\game.apk`}, "install 1 D:\\apk\\game.apk"},
+		{"disk_info", map[string]any{"index": 1}, "disk info 1"},
+		{"trim_disk", map[string]any{"index": 1}, "disk trim 1"},
+		{"compact_disk", map[string]any{"index": 1}, "disk compact 1"},
+		{"get_app_proxy", map[string]any{"index": 2}, "app_proxy 2"},
+		{"set_app_proxy", map[string]any{"index": 2, "enabled": true, "server": "auto", "add_apps": []string{"a.b"}},
+			"set_app_proxy 2"},
+		{"set_app_proxy", map[string]any{"index": 2, "apps": []string{}, "remove_apps": []string{"c.d"}}, "set_app_proxy 2"},
 	}
 	for n, c := range cases {
 		tool := tools[c.name]
@@ -768,27 +827,42 @@ func TestToolCalls(t *testing.T) {
 	f := h.f
 	full := f.creates[0]
 	if full.Title != "星铁" || *full.Index != 3 || *full.MemoryMB != 4096 || *full.CPU != 4 || *full.DataPartitionGB != 128 ||
-		*full.FPS != 30 {
+		*full.FPS != 30 || full.Resolution == nil || *full.Resolution != 720 || full.DPI == nil || *full.DPI != 320 ||
+		full.Orientation == nil || *full.Orientation != "portrait" {
 		t.Fatalf("create request %+v", full)
 	}
 	if empty := f.creates[1]; empty.Title != "" || empty.Index != nil || empty.MemoryMB != nil || empty.CPU != nil ||
-		empty.DataPartitionGB != nil || empty.FPS != nil {
+		empty.DataPartitionGB != nil || empty.FPS != nil || empty.Resolution != nil {
 		t.Fatalf("defaults must stay nil: %+v", empty)
 	}
-	if u := f.updates[0]; *u.MemoryMB != 5120 || u.Title != nil || u.CPU != nil || u.FPS != nil {
+	if u := f.updates[0]; u.Resolution == nil || *u.Resolution != 1080 || *u.MemoryMB != 5120 || u.Title != nil || u.CPU != nil || u.FPS != nil ||
+		u.DPI == nil || *u.DPI != 0 || u.Orientation == nil || *u.Orientation != "landscape" {
 		t.Fatalf("update request %+v", u)
 	}
-	if s := f.starts[0]; !s.Window || s.Timeout != 120*time.Second || s.Progress != nil {
+	if s := f.starts[0]; !s.Window || s.Headless || s.Timeout != 120*time.Second || s.Progress != nil {
 		t.Fatalf("start options %+v (no progressToken: no Progress)", s)
 	}
-	if s := f.starts[1]; s.Window || s.Timeout != 0 {
+	// window omitted: neither (a running instance is adopted as it runs); false: headless asked for
+	if s := f.starts[1]; s.Window || s.Headless || s.Timeout != 0 {
 		t.Fatalf("start defaults %+v", s)
 	}
-	if !f.stops[0].Force || f.stops[1].Force {
+	if s := f.starts[2]; s.Window || !s.Headless {
+		t.Fatalf("window=false %+v", s)
+	}
+	if !f.stops[0].Force || f.stops[0].CancelCreate || f.stops[1].Force || f.stops[1].CancelCreate ||
+		!f.stops[2].CancelCreate || f.stops[2].Force || f.stops[3].CancelCreate {
 		t.Fatalf("stop options %+v", f.stops)
 	}
 	if f.timeout != 10*time.Second {
 		t.Fatalf("shell timeout %v", f.timeout)
+	}
+	if p := f.proxySets[0]; !*p.Enabled || *p.Server != "auto" || p.Apps != nil || !reflect.DeepEqual(p.Add, []string{"a.b"}) {
+		t.Fatalf("set_app_proxy change %+v", p)
+	}
+	// an empty apps array is "clear the list", not "leave it"
+	if p := f.proxySets[1]; p.Enabled != nil || p.Server != nil || p.Apps == nil || len(*p.Apps) != 0 ||
+		!reflect.DeepEqual(p.Remove, []string{"c.d"}) {
+		t.Fatalf("set_app_proxy change %+v", p)
 	}
 }
 
@@ -805,11 +879,12 @@ func TestToolErrors(t *testing.T) {
 		{"get_instance", map[string]any{"index": 3.5}, errs.Usage, "参数 index 必须是整数"},
 		{"get_instance", map[string]any{"index": 3, "root": `D:\ModAVD`}, errs.Usage, "不认识的参数: root"},
 		{"list_instances", map[string]any{"all": true}, errs.Usage, "list_instances 不接受参数"},
-		{"get_instance", map[string]any{"index": 9}, errs.NotFound, "魔改 AVD 实例 9 不存在。先用 list_instances 看有哪些实例"},
+		{"get_instance", map[string]any{"index": 9}, errs.NotFound, "ModAVD 实例 9 不存在。先用 list_instances 看有哪些实例"},
 		{"delete_instance", map[string]any{"index": 2, "confirm": false}, errs.Usage, "confirm 设为 true"},
 		{"delete_instance", map[string]any{"index": 2}, errs.Usage, "缺少参数 confirm"},
 		{"update_instance", map[string]any{"index": 2}, errs.Usage, "至少给一项"},
 		{"start_instance", map[string]any{"index": 1, "window": "yes"}, errs.Usage, "必须是 true 或 false"},
+		{"stop_instance", map[string]any{"index": 1, "cancel_create": "yes"}, errs.Usage, "必须是 true 或 false"},
 		{"start_instance", map[string]any{"index": 1, "timeout_s": 0}, errs.InvalidArgument, "timeout_s"},
 		{"shell", map[string]any{"index": 1, "command": "  "}, errs.InvalidArgument, "command 不能为空"},
 		{"shell", map[string]any{"index": 1, "command": 5}, errs.Usage, "参数 command 必须是字符串"},
@@ -842,6 +917,17 @@ func TestNewManagerError(t *testing.T) {
 	text, isErr, _ := toolText(t, h.call(1, "list_instances", nil, nil))
 	if !isErr || text != "缺少组件：模拟器。运行 补全组件.bat\n错误码: not_ready" {
 		t.Fatalf("text %q", text)
+	}
+}
+
+// TestErrorTextBootDiag: a failed boot's guest state (ModAVD/ModAVD#79) is named after the code, also when the error
+// that has it is wrapped.
+func TestErrorTextBootDiag(t *testing.T) {
+	e := errs.Wrap(errs.Timeout, errs.WithDetail(errs.New(errs.Timeout, "启动超时"), errs.BootDiagDir,
+		`D:\r\logs\mas_1-20261104-100000-bootfail`), "实例 1 启动超时")
+	if got, want := errorText(e), "实例 1 启动超时\n错误码: timeout\n开机失败时的客体现场: D:\\r\\logs\\mas_1-20261104-100000-bootfail\nerror.details: "+
+		`{"boot_diag_dir":"D:\\r\\logs\\mas_1-20261104-100000-bootfail"}`; got != want {
+		t.Errorf("errorText = %q, want %q", got, want)
 	}
 }
 
@@ -916,6 +1002,35 @@ func TestIntegralFloatArgument(t *testing.T) {
 	}
 	if u := h.f.updates[0]; *u.MemoryMB != 4096 || *u.CPU != 4 {
 		t.Fatalf("update %+v", u)
+	}
+}
+
+// TestUpdateSound: update_instance takes sound alone (ModAVD/ModAVD#226), true and false both reaching the manager.
+func TestUpdateSound(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.initialize("2025-11-25")
+	for k, on := range []bool{true, false} {
+		h.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"update_instance","arguments":{"index":1,"sound":%v}}}`, k+2, on))
+		if text, isErr, _ := toolText(t, h.recv()); isErr {
+			t.Fatalf("sound %v: %s", on, text)
+		}
+		if u := h.f.updates[k]; u.Sound == nil || *u.Sound != on || u.MemoryMB != nil {
+			t.Fatalf("sound %v: update %+v", on, u)
+		}
+	}
+}
+
+func TestUpdateAppKeepalive(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	h.initialize("2025-11-25")
+	for k, on := range []bool{true, false} {
+		h.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"update_instance","arguments":{"index":1,"app_keepalive":%v}}}`, k+2, on))
+		if text, isErr, _ := toolText(t, h.recv()); isErr {
+			t.Fatalf("app_keepalive %v: %s", on, text)
+		}
+		if u := h.f.updates[k]; u.AppKeepalive == nil || *u.AppKeepalive != on || u.MemoryMB != nil {
+			t.Fatalf("app_keepalive %v: update %+v", on, u)
+		}
 	}
 }
 
@@ -1000,6 +1115,34 @@ func TestStartProgress(t *testing.T) {
 	}
 }
 
+// TestCreateProgressMessages: create_instance's progress says 新建中 with the percentage until the setup is done.
+func TestCreateProgressMessages(t *testing.T) {
+	f := &fake{create: func(ctx context.Context, req emu.CreateRequest) (*emu.InstanceInfo, error) {
+		for _, p := range []emu.Progress{{Step: "create", Message: "实例 3：后台无头开机", Done: 0, Total: 1000},
+			{Step: "ime", Message: "实例 3 宿主输入法", Done: 357, Total: 1000},
+			{Step: "done", Message: "实例 3 新建完成", Done: 1000, Total: 1000}} {
+			req.Progress(p)
+		}
+		in := sampleInstance(3)
+		return &in, nil
+	}}
+	h := newHarness(t, f, func(s *server) { s.progressEvery = 0 })
+	h.sendJSON(map[string]any{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": modernParams(
+		map[string]any{"name": "create_instance", "arguments": map[string]any{"index": 3}},
+		map[string]any{"progressToken": "create-9"})})
+	var msgs []string
+	for {
+		m := h.recv()
+		if m["method"] != "notifications/progress" {
+			break
+		}
+		msgs = append(msgs, m["params"].(map[string]any)["message"].(string))
+	}
+	if want := []string{"新建中 0%：实例 3：后台无头开机", "新建中 35%：实例 3 宿主输入法", "实例 3 新建完成"}; !reflect.DeepEqual(msgs, want) {
+		t.Fatalf("messages %q, want %q", msgs, want)
+	}
+}
+
 func TestNextProgress(t *testing.T) {
 	last, sent := 0.0, false
 	var got []float64
@@ -1055,7 +1198,7 @@ func TestCancelStart(t *testing.T) {
 	<-started
 
 	// the read loop is free while the instance boots
-	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 11 {
+	if r := result(t, h.request(2, "tools/list", nil)); len(r["tools"].([]any)) != 16 {
 		t.Fatal("tools/list during boot")
 	}
 
@@ -1337,7 +1480,7 @@ func TestWaitsForManagerAfterCall(t *testing.T) {
 func TestKeptTools(t *testing.T) {
 	for _, tool := range toolDefs() {
 		want := tool.Name == "create_instance" || tool.Name == "update_instance" || tool.Name == "delete_instance" ||
-			tool.Name == "install_apk"
+			tool.Name == "install_apk" || tool.Name == "compact_disk" || tool.Name == "set_app_proxy"
 		if tool.keep != want {
 			t.Errorf("%s: keep %v", tool.Name, tool.keep)
 		}
@@ -1349,9 +1492,10 @@ func TestStartDescriptionTellsWhatCancelDoes(t *testing.T) {
 		if tool.Name != "start_instance" {
 			continue
 		}
-		for _, s := range []string{"Cancelling the call or reaching timeout_s only stops waiting",
-			"not killed and keeps booting", "Calling start_instance again adopts it and finishes the setup of that boot",
-			"guest Vulkan fix", "setup_pending=true"} {
+		for _, s := range []string{"Cancelling or reaching timeout_s only stops waiting",
+			"the emulator keeps booting", "calling start_instance again before the deadline",
+			"finishes that boot's setup", "guest library fixes: Vulkan driver, ARM translation layer", "setup_pending=true",
+			"window naming the other way fails with busy (no switch while it runs: stop it first)"} {
 			if !strings.Contains(tool.Description, s) {
 				t.Errorf("description lacks %q: %s", s, tool.Description)
 			}
@@ -1395,7 +1539,8 @@ func TestToolDefinitions(t *testing.T) {
 		t.Fatal("tool list differs between eras / calls")
 	}
 	want := []string{"list_instances", "get_instance", "check_host", "create_instance", "update_instance",
-		"delete_instance", "start_instance", "stop_instance", "set_window_visible", "shell", "install_apk"}
+		"delete_instance", "start_instance", "stop_instance", "set_window_visible", "shell", "install_apk",
+		"disk_info", "trim_disk", "compact_disk", "get_app_proxy", "set_app_proxy"}
 	if len(tools) != len(want) {
 		t.Fatalf("%d tools", len(tools))
 	}
@@ -1453,6 +1598,9 @@ func TestToolDefinitions(t *testing.T) {
 		"delete_instance": {false, true, true},
 		"start_instance":  {false, false, true},
 		"stop_instance":   {false, true, true},
+		"disk_info":       {true, nil, nil},
+		"trim_disk":       {false, false, true},
+		"compact_disk":    {false, true, false},
 	} {
 		ann := byName[name]["annotations"].(map[string]any)
 		if ann["readOnlyHint"] != hints[0] || ann["destructiveHint"] != hints[1] || ann["idempotentHint"] != hints[2] {
@@ -1460,6 +1608,11 @@ func TestToolDefinitions(t *testing.T) {
 		}
 	}
 	del := byName["delete_instance"]["inputSchema"].(map[string]any)
+	trimDescription := byName["trim_disk"]["description"].(string)
+	if !strings.Contains(trimDescription, "not that guest FITRIM finished or succeeded") ||
+		!strings.Contains(trimDescription, "timeout bounds only the request") {
+		t.Fatalf("trim contract must distinguish the request from guest completion: %s", trimDescription)
+	}
 	if !reflect.DeepEqual(del["required"], []any{"index", "confirm"}) {
 		t.Fatalf("delete required %v", del["required"])
 	}
@@ -1485,7 +1638,7 @@ func TestSchemaOf(t *testing.T) {
 	p := jsonRoundTrip(t, schemaOf(reflect.TypeFor[schemaProbe]())).(map[string]any)
 	pp := p["properties"].(map[string]any)
 	if !reflect.DeepEqual(p["required"], []any{"root", "sdk", "local_sdk", "adb_exe", "adb_server_port",
-		"script_adb_server_port", "version", "build", "a", "c", "d", "e", "nested"}) {
+		"script_adb_server_port", "port_base", "version", "build", "a", "c", "d", "e", "nested"}) {
 		t.Fatalf("required %v", p["required"])
 	}
 	for _, k := range []string{"G", "h", "RootInfo"} {
@@ -1643,4 +1796,23 @@ func typeMatches(ty string, v any) bool {
 		return ok && f == math.Trunc(f)
 	}
 	return false
+}
+
+// Drive the normal tools/call error result, rather than the formatter alone.
+func TestLifecycleToolErrorDetails(t *testing.T) {
+	want := map[string]string{errs.Reason: "locked", errs.Lock: "create", errs.InstanceStatus: "create_failed", errs.QemuRunning: "false", errs.InstanceExists: "true", errs.BootDiagDir: "saved-guest-state"}
+	inner := errs.WithDetail(errs.New(errs.Timeout, "boot timeout"), errs.BootDiagDir, "saved-guest-state")
+	failure := errs.WithDetails(errs.Wrap(errs.Timeout, inner, "create failed").WithAdvice("resume or delete"), want)
+	h := newHarness(t, &fake{
+		start:  func(context.Context, int, emu.StartOptions) (*emu.StartResult, error) { return nil, failure },
+		create: func(context.Context, emu.CreateRequest) (*emu.InstanceInfo, error) { return nil, failure },
+	}, nil)
+	for id, tool := range []string{"start_instance", "create_instance"} {
+		text, isErr, _ := toolText(t, h.call(id+1, tool, map[string]any{"index": 3}, nil))
+		before, payload, found := strings.Cut(text, "\nerror.details: ")
+		var got map[string]string
+		if !isErr || !found || json.Unmarshal([]byte(payload), &got) != nil || !reflect.DeepEqual(got, want) || !strings.HasPrefix(before, "create failed。resume or delete\n错误码: timeout") {
+			t.Fatalf("%s: %q", tool, text)
+		}
+	}
 }

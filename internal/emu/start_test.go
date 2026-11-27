@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/root"
+	"modavd/internal/testutil"
 	"modavd/internal/win"
 )
 
@@ -201,7 +203,7 @@ func TestBootSetupZero(t *testing.T) {
 
 func markerTestManager(t *testing.T) *Manager {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r, err := root.New(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +308,10 @@ func TestWithSetupAdvice(t *testing.T) {
 	if got := withSetupAdvice(gone, advice); got != error(gone) || gone.Advice != "" {
 		t.Errorf("launch failed: %v", got)
 	}
+	oom := errs.New(errs.InsufficientMemory, "内存不足").WithAdvice("关程序")
+	if got := withSetupAdvice(oom, advice); got != error(oom) || oom.Advice != "关程序" {
+		t.Errorf("insufficient memory: %v", got)
+	}
 	if withSetupAdvice(nil, advice) != nil {
 		t.Error("nil error")
 	}
@@ -316,7 +322,7 @@ func TestWithSetupAdvice(t *testing.T) {
 // no install.
 func TestSetupAdvice(t *testing.T) {
 	now := time.Date(2026, 10, 28, 18, 0, 0, 0, time.Local)
-	const rules = "这个补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂"
+	const rules = "挂这些补丁要重启 zygote，只在前台没有应用、也没有安装正在进行时才挂"
 	cases := []struct {
 		name  string
 		until time.Time
@@ -324,11 +330,11 @@ func TestSetupAdvice(t *testing.T) {
 		not   []string
 	}{
 		{"default timeout", now.Add(12 * time.Minute), []string{"模拟器没有关：在 18:12 前再启动一次这个实例，就会接着做完这次开机后的设置",
-			"过了这个时间客体 Vulkan 驱动补丁就等下次开机再挂", rules}, []string{"15 分钟"}},
+			"过了这个时间客体库补丁就等下次开机再挂", rules}, []string{"15 分钟"}},
 		// a start with timeout_s 1800 that timed out: qemu start + 30 + 10 min
 		{"30 min timeout", now.Add(10*time.Minute + 30*time.Second), []string{"在 18:10 前再启动一次这个实例", rules}, nil},
 		{"past midnight", time.Date(2026, 10, 29, 0, 20, 0, 0, time.Local), []string{"在 10 月 29 日 00:20 前再启动一次这个实例"}, nil},
-		{"deadline passed", now.Add(-time.Minute), []string{"模拟器没有关；这次开机接着做设置的期限（17:59）已过，客体 Vulkan 驱动补丁等下次开机再挂"},
+		{"deadline passed", now.Add(-time.Minute), []string{"模拟器没有关；这次开机接着做设置的期限（17:59）已过，客体库补丁等下次开机再挂"},
 			[]string{"前再启动一次"}},
 		{"deadline unknown", time.Time{}, []string{"再启动一次这个实例，就会接着做完这次开机后的设置", rules}, []string{"前再启动一次"}},
 	}
@@ -402,8 +408,8 @@ func TestProgressor(t *testing.T) {
 }
 
 func TestProgressOrder(t *testing.T) {
-	order := []int{progressLaunch, bootProgressFrom, bootProgressTo, progressBooted, progressTune, progressIme,
-		progressFirstBoot, progressVulkanFix, progressTotal}
+	order := []int{progressLaunch, bootProgressFrom, bootProgressTo, progressBooted, progressVulkanFix, progressTune,
+		progressIme, progressFirstBoot, progressTotal}
 	for k := 1; k < len(order); k++ {
 		if order[k] <= order[k-1] {
 			t.Errorf("progress constants out of order at %d: %v", k, order)
@@ -423,5 +429,183 @@ func TestSleepOrDone(t *testing.T) {
 	}
 	if err := ctxErr(ctx); errs.As(err) == nil || errs.As(err).Code != errs.Canceled {
 		t.Errorf("ctxErr = %v", err)
+	}
+}
+
+// TestPollUntil: the /sdcard wait's loop. Stops at the first true; gives up after its limit (a timeout is only a
+// warning for start); a canceled start does not probe at all.
+func TestPollUntil(t *testing.T) {
+	ctx := context.Background()
+	n := 0
+	if !pollUntil(ctx, time.Second, time.Millisecond, func() bool { n++; return n == 3 }) || n != 3 {
+		t.Fatalf("true on the third probe: n = %d", n)
+	}
+	n = 0
+	t0 := time.Now()
+	if pollUntil(ctx, 30*time.Millisecond, 5*time.Millisecond, func() bool { n++; return false }) {
+		t.Fatal("never true, yet reported true")
+	}
+	if d := time.Since(t0); d < 30*time.Millisecond || d > 2*time.Second || n < 2 {
+		t.Fatalf("gave up after %v and %d probes", d, n)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	n = 0
+	if pollUntil(cctx, time.Second, time.Millisecond, func() bool { n++; return true }) || n != 0 {
+		t.Fatalf("canceled: probed %d times", n)
+	}
+}
+
+// TestPoweringOff: only a power-off makes a start wait for qemu to exit; a reboot keeps qemu.
+func TestPoweringOff(t *testing.T) {
+	for v, want := range map[string]bool{
+		"shutdown": true, "shutdown\r\n": true, "shutdown,userrequested": true, " shutdown,thermal\n": true,
+		"": false, "reboot": false, "reboot,shutdown": false, "reboot,userspace": false, "shutdownx": false,
+	} {
+		if got := poweringOff(v); got != want {
+			t.Errorf("poweringOff(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// startSleeper runs this test binary as a process that sleeps a minute (TestBootWatchHelperSleeper) and returns it;
+// kill ends it (also at cleanup).
+func startSleeper(t *testing.T) (q win.Process, kill func()) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestBootWatchHelperSleeper$")
+	cmd.Env = append(os.Environ(), "MODAVD_TEST_BOOTWATCH_SLEEPER=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	kill = func() { cmd.Process.Kill(); <-exited }
+	t.Cleanup(kill)
+	q, ok := win.FindProcess(uint32(cmd.Process.Pid))
+	if !ok {
+		t.Fatal("child not found")
+	}
+	return q, kill
+}
+
+// TestWaitShutdown: a start waits for the qemu of a guest that is powering off to exit and then boots; Busy when it
+// is still there after shutdownExitWait, Canceled on a cancel.
+func TestWaitShutdown(t *testing.T) {
+	saved := shutdownExitWait
+	t.Cleanup(func() { shutdownExitWait = saved })
+	m, _ := opsTestManager(t)
+	q, kill := startSleeper(t)
+
+	shutdownExitWait = 300 * time.Millisecond
+	if _, _, err := m.waitShutdown(context.Background(), 3, q, &progressor{}); errs.CodeOf(err) != errs.Busy {
+		t.Fatalf("qemu still running: %v, want busy", err)
+	} else {
+		wantErrorDetails(t, err, map[string]string{errs.Reason: "stopping"})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := m.waitShutdown(ctx, 3, q, &progressor{}); errs.CodeOf(err) != errs.Canceled {
+		t.Fatalf("canceled: %v", err)
+	}
+
+	shutdownExitWait = 30 * time.Second
+	time.AfterFunc(300*time.Millisecond, kill)
+	t0 := time.Now()
+	if _, found, err := m.waitShutdown(context.Background(), 3, q, &progressor{}); err != nil || found {
+		t.Fatalf("qemu exited: found=%v err=%v", found, err)
+	}
+	if d := time.Since(t0); d > 10*time.Second {
+		t.Fatalf("returned %v after the exit", d)
+	}
+}
+
+// TestStartNoSwitchWhileRunning: a start that finds the instance running headless (the -headless build of qemu) and
+// is asked for the window fails with busy before it adopts anything; without a mode, or asking for headless, it goes
+// on to adopt it.
+func TestStartNoSwitchWhileRunning(t *testing.T) {
+	m, i := opsTestInstance(t)
+	saved := startFindQemu
+	t.Cleanup(func() { startFindQemu = saved })
+	startFindQemu = func(*Manager, int) (win.Process, bool, error) {
+		return win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe"}, true, nil
+	}
+	ctx := context.Background()
+	_, err := m.Start(ctx, i, StartOptions{Window: true, Timeout: time.Second})
+	if errs.CodeOf(err) != errs.Busy || !strings.Contains(err.Error(), "正以无头方式运行，运行中不能换成带窗口") {
+		t.Fatalf("--window on a headless qemu: %v", err)
+	}
+	for _, opt := range []StartOptions{{}, {Headless: true}} {
+		opt.Timeout = time.Second
+		if _, err := m.Start(ctx, i, opt); errs.CodeOf(err) == errs.Busy {
+			t.Errorf("%+v did not adopt: %v", opt, err)
+		}
+	}
+}
+
+// TestWaitBootAdoptedGone: an adopted qemu that exits during the boot wait is errAdoptedGone (the start may then boot
+// the instance once more); an emulator.exe this start launched that exits is a plain launch failure. A stop of the
+// instance holding its lock during the wait is reported (stopSeen), and only for an adopted qemu.
+func TestWaitBootAdoptedGone(t *testing.T) {
+	m, _ := opsTestManager(t)
+	q, kill := startSleeper(t)
+	kill()
+	stopSeen := false
+	_, err := m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen, nil)
+	if !errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed || stopSeen {
+		t.Fatalf("adopted qemu gone: %v, stopSeen %v", err, stopSeen)
+	}
+	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, &q, nil, "", &progressor{}, nil, &stopSeen, nil)
+	if errors.Is(err, errAdoptedGone) || errs.CodeOf(err) != errs.LaunchFailed {
+		t.Fatalf("launched emulator gone: %v", err)
+	}
+
+	l, ok, err := win.TryLock(m.lockPath(3, "stop"))
+	if err != nil || !ok {
+		t.Fatalf("stop lock: %v %v", ok, err)
+	}
+	defer l.Unlock()
+	// a launched emulator.exe that still runs: the wait polls (and times out) without looking at the stop lock
+	live, _ := startSleeper(t)
+	_, err = m.waitBoot(context.Background(), 3, 1500*time.Millisecond, &live, nil, "", &progressor{}, nil, &stopSeen, nil)
+	if errs.CodeOf(err) != errs.Timeout || stopSeen {
+		t.Fatalf("launched emulator during a stop: %v, stopSeen %v", err, stopSeen)
+	}
+	_, err = m.waitBoot(context.Background(), 3, 10*time.Second, nil, &q, "", &progressor{}, nil, &stopSeen, nil)
+	if !errors.Is(err, errAdoptedGone) || !stopSeen {
+		t.Fatalf("adopted qemu gone during a stop: %v, stopSeen %v", err, stopSeen)
+	}
+}
+
+// TestRelaunchAfterAdoptedGone: the start boots the instance itself only for an adopted qemu that went away soon after
+// the adopt (the window's ×) without a stop of the instance, in its first round, and never for the boot watch.
+func TestRelaunchAfterAdoptedGone(t *testing.T) {
+	gone := errs.Wrap(errs.LaunchFailed, errAdoptedGone, "gone")
+	other := errs.New(errs.LaunchFailed, "emulator.exe exited")
+	soon, late := 2*time.Second, shutdownExitWait+time.Second
+	for _, c := range []struct {
+		name       string
+		round      int
+		watch      bool
+		err        error
+		adoptedFor time.Duration
+		stopSeen   bool
+		want       bool
+	}{
+		{"× shortly after the adopt", 1, false, gone, soon, false, true},
+		{"right at the limit", 1, false, gone, shutdownExitWait, false, true},
+		{"adopted for longer", 1, false, gone, late, false, false},
+		{"a stop was seen", 1, false, gone, soon, true, false},
+		{"second round", 2, false, gone, soon, false, false},
+		{"boot watch", 1, true, gone, soon, false, false},
+		{"another error", 1, false, other, soon, false, false},
+		{"timeout", 1, false, errs.New(errs.Timeout, "timeout"), soon, false, false},
+	} {
+		if got := relaunchAfterAdoptedGone(c.round, c.watch, c.err, c.adoptedFor, c.stopSeen); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }

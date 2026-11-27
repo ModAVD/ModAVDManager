@@ -1,0 +1,82 @@
+{{BOM}}魔改 AVD 问题信息
+隐私提示：问题包只保存在本机，脚本不会上传。
+- 里面有：summary.txt（电脑和模拟器的情况）、模拟器日志、实例配置、AUTO-MAS 日志（mas 文件夹）；有实例在运行时还有现场截图和安卓状态（live 文件夹）；模拟器近 7 天崩溃过的话还有崩溃转储（crash 文件夹）。不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，也不会有意收集账号密码。
+- 这些文件里都有本机路径，路径里可能有 Windows 用户名；截图和 AUTO-MAS 日志里可能有游戏账号名。
+- 可以公开：在 GitHub Issue（https://github.com/ModAVD/ModAVD/issues）里贴 summary.txt 和日志，或者上传删掉 crash 文件夹后的问题包。上传前看一眼，不想公开的内容先删掉。
+- 不要公开：crash 文件夹（崩溃转储，含模拟器进程的线程栈和少量内存片段）。带 crash 文件夹的完整问题包请发邮件到 qiyinxi@foxmail.com，邮件里写上 Issue 编号。
+生成时间：2026-01-15 12:00:00 +08:00
+PowerShell：{{PSVERSION}}
+
+== ModAVD 目录 ==
+路径：{{BASE}}\模拟器 根目录
+  警告：路径里有中文或其他非 ASCII 字符，模拟器可能起不来，请把 ModAVD 放到纯英文路径下（例如 D:\ModAVD）。
+所在盘剩余空间：读不到（设备未就绪。）
+adb server 端口：20050（mas-avd.json 的 adbServerPort = "5037" 不合规：要 1024–65535 的整数、不是 5037、不占实例端口；按后端规则回到 20050）
+SDK：{{BASE}}\nosdk（mas-avd.json 的 sdkRoot；后端优先用它，包内 sdk 不用）
+  警告：sdkRoot 指向的目录里没有 emulator，后端照样会用它，模拟器起不来。
+
+== 模拟器版本 ==
+emulator：Pkg.Revision=  Pkg.BuildId=
+platform-tools：Pkg.Revision=
+系统镜像：没找到 system-images\…\source.properties
+
+== 本机 ==
+Windows：Microsoft Windows 10 Home  Version=10.0.19045  BuildNumber=19045  UBR=  64-bit
+CPU：AMD Ryzen 5 5600G with Radeon Graphics  物理核 6  逻辑核 12  VirtualizationFirmwareEnabled=False
+内存：共 7.90 GB，可用 1.50 GB
+显卡：Microsoft Basic Display Adapter  DriverVersion=10.0.19041.1  DriverDate=2006-06-21
+
+== 虚拟化相关 Windows 功能（InstallState 1=已开 2=未开 3=缺失；仅供参考，能不能用看下一节 accel-check） ==
+HypervisorPlatform：没查到
+VirtualMachinePlatform：没查到
+Microsoft-Hyper-V-All：InstallState=（未知）
+
+== emulator -accel-check ==
+跳过：没有 {{BASE}}\nosdk\emulator\emulator.exe
+
+== 杀毒软件（SecurityCenter2） ==
+[本节出错] 杀毒软件：无效命名空间 
+
+== 实例 ==
+还没有实例（avd 目录不存在或里面没有 *.ini）。
+
+== 正在运行的 qemu-system 进程 ==
+没有
+
+== 正在监听的 adb server ==
+没有
+
+== 模拟器日志（logs\） ==
+没有 logs 目录
+
+== 模拟器崩溃转储 ==
+收集范围：仅 ModAVD 的 emu-crash-<version>-mas.db；近 7 天内最新 3 份
+{{BASE}}\lad\Temp\AndroidEmulator\emu-crash-37.2.12-mas.db\reports\new.dmp  2026-01-08 12:00:00  200 B
+
+== AUTO-MAS ==
+没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志
+
+== 近 7 天 Application 日志（ID 1000/1001/1002，含 qemu / emulator / adb / AUTO-MAS） ==
+没有
+
+== 现场 ==
+没有实例在运行，跳过
+
+== 收集过程 ==
+收集耗时：0.0 秒
+  ModAVD 目录与版本：0.0 秒
+  Windows / CPU / 内存 / 显卡：0.0 秒
+  虚拟化功能：0.0 秒
+  加速检查（emulator -accel-check）：0.0 秒
+  杀毒软件：0.0 秒
+  实例列表与实例文件：0.0 秒
+  正在运行的模拟器与 adb：0.0 秒
+  模拟器日志：0.0 秒
+  模拟器崩溃转储：0.0 秒
+  AUTO-MAS 日志：0.0 秒
+  系统事件日志：0.0 秒
+  现场截图与状态：0.0 秒
+出错的节：
+  杀毒软件：无效命名空间 
+
+提示：没找到 AUTO-MAS 安装目录，反馈时请附上 AUTO-MAS 的 debug 文件夹里的日志。

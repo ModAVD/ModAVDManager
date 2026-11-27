@@ -60,19 +60,33 @@ func TestFastpathReport(t *testing.T) {
 }
 
 func TestIdlepollReport(t *testing.T) {
-	status := "disk: vdc\r\nwatchers: 3456 \r\nloops: \r\n"
+	status := "disk: vdc\r\nwatchers: 3456 \r\nmax: 2\r\nloops: \r\n"
 	warn, msg := idlepollReport(1, "", status)
-	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 vdc）" {
+	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 vdc，忙等上限 2）" {
 		t.Errorf("running: %v %q", warn, msg)
 	}
 	warn, msg = idlepollReport(1, "", "disk: \nwatchers: 3456\n")
-	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 ?）" {
+	if warn || msg != "实例 1 密集读写加速: 守护已起（pid 3456，数据盘 ?，忙等上限 每个 vCPU 一个）" {
 		t.Errorf("no disk: %v %q", warn, msg)
 	}
 	started := "mas-idlepoll: no stat for the data disk 'x', not watching"
 	warn, msg = idlepollReport(1, started+"\n", "disk: x\nwatchers: \nloops: \n")
 	if !warn || msg != "实例 1 密集读写加速没起来: "+started+" / disk: x\nwatchers: \nloops:" {
 		t.Errorf("down: %v %q", warn, msg)
+	}
+}
+
+func TestGuestPollsItself(t *testing.T) {
+	// what `cat /sys/devices/system/cpu/cpuidle/current_driver` prints: acpi_idle with the _CST table, none without
+	for driver, want := range map[string]bool{
+		"acpi_idle\n": true, "acpi_idle\r\n": true, " acpi_idle ": true,
+		"none\n": false, "": false, "haltpoll\n": false, "intel_idle\n": false,
+		"cat: /sys/devices/system/cpu/cpuidle/current_driver: No such file or directory\n": false,
+		"acpi_idle2\n": false,
+	} {
+		if got := guestPollsItself(driver); got != want {
+			t.Errorf("guestPollsItself(%q) = %v, want %v", driver, got, want)
+		}
 	}
 }
 

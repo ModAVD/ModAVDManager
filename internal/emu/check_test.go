@@ -3,6 +3,7 @@
 package emu
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,6 +11,23 @@ import (
 	"modavd/internal/errs"
 	"modavd/internal/root"
 )
+
+// TestPortsItem: no item for a root on the default plan; a plan of its own shows its range; what CheckPorts refuses
+// blocks, with its message and advice.
+func TestPortsItem(t *testing.T) {
+	if _, ok := portsItem(root.PortPlan{Base: root.DefaultPortBase}, nil); ok {
+		t.Error("an item for the default plan")
+	}
+	it, ok := portsItem(root.PortPlan{Base: 21000}, nil)
+	if !ok || it.ID != "ports" || it.OK == nil || !*it.OK || !it.Blocking || it.Reason != "21000–21092（mas-avd.json 的 portBase）" {
+		t.Errorf("plan 21000: %+v", it)
+	}
+	bad := errs.New(errs.InvalidArgument, "mas-avd.json 的 portBase 不合规").WithAdvice("改成 21000")
+	it, ok = portsItem(root.PortPlan{Base: root.DefaultPortBase}, bad)
+	if !ok || it.OK == nil || *it.OK || !it.Blocking || it.Reason != bad.Message || it.Advice != bad.Advice {
+		t.Errorf("refused: %+v", it)
+	}
+}
 
 func TestAccelSummaryAndOKText(t *testing.T) {
 	// What emulator.exe -accel-check prints on a WHPX host (frame lines around the explanation).
@@ -114,24 +132,38 @@ func TestComponentsItem(t *testing.T) {
 
 func TestEmulatorItem(t *testing.T) {
 	it := emulatorItem(emulatorFacts{})
-	if it.OK == nil || *it.OK || it.Reason != "这个目录里还没有魔改 AVD 内测包" || it.Advice != testPackageAdvice {
+	if it.OK == nil || *it.OK || it.Reason != "这个目录里还没有 ModAVD 内测包" || it.Advice != testPackageAdvice {
 		t.Fatalf("absent = %+v", it)
 	}
 	it = emulatorItem(emulatorFacts{Present: true, Version: "37.1.11"})
-	if it.OK == nil || *it.OK || it.Reason != "这里的模拟器（37.1.11）不是魔改 AVD 内测包里的版本，只支持内测包" {
+	if it.OK == nil || *it.OK || it.Reason != "这里的模拟器（37.1.11）不是 ModAVD 内测包里的版本，只支持内测包" {
 		t.Fatalf("google build = %+v", it)
 	}
 	it = emulatorItem(emulatorFacts{Present: true})
 	if !strings.Contains(it.Reason, "（版本未知）") {
 		t.Fatalf("unknown version = %+v", it)
 	}
-	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.35.0", Build: 35, HasBuild: true})
+	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.35.0", Build: root.LegacyEmuBuild(35)})
 	if it.OK == nil || !*it.OK || it.Reason != "内测包 0.35.0（37.2.10）" {
 		t.Fatalf("ok = %+v", it)
 	}
-	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.24.0", Build: 24, HasBuild: true})
+	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: "0.24.0", Build: root.LegacyEmuBuild(24)})
 	if it.OK == nil || *it.OK || it.Reason != "内测包版本过旧（0.24.0）" || !strings.Contains(it.Advice, "0.25.0") {
 		t.Fatalf("too old = %+v", it)
+	}
+	// The version form (from 0.42 on) is judged by the same minimum, 0.25.0.
+	for id, ok := range map[string]bool{"0.42.0": true, "0.25.0": true, "1.0.0": true, "0.24.9": false, "0.9.0": false} {
+		b, parsed := root.ParseEmuBuild(id)
+		if !parsed {
+			t.Fatalf("parse %s", id)
+		}
+		it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10", Shown: id, Build: b})
+		if it.OK == nil || *it.OK != ok {
+			t.Fatalf("build %s = %+v", id, it)
+		}
+		if !ok && (it.Advice != "请把 ModAVD 更新到 0.25.0 或更新的版本，实例和游戏数据不受影响" || strings.Contains(it.Advice, "mas")) {
+			t.Fatalf("build %s advice = %q", id, it.Advice)
+		}
 	}
 	if strings.Contains(it.Advice, "「") {
 		t.Fatalf("advice must not point at AUTO-MAS buttons: %q", it.Advice)
@@ -139,23 +171,6 @@ func TestEmulatorItem(t *testing.T) {
 	it = emulatorItem(emulatorFacts{Present: true, SelfBuilt: true, Version: "37.2.10"})
 	if it.OK == nil || *it.OK || it.Reason != "内测包版本过旧（未标版本号）" {
 		t.Fatalf("no build id = %+v", it)
-	}
-}
-
-func TestMemoryItem(t *testing.T) {
-	it := memoryItem(6144, 8000, nil)
-	if it.OK == nil || !*it.OK || it.Reason != "实例内存 6 GB，启动约需 7.5 GB，当前可用 7.8 GB" {
-		t.Fatalf("enough = %+v", it)
-	}
-	it = memoryItem(6144, 7679, nil)
-	if it.OK == nil || *it.OK || !strings.HasPrefix(it.Reason, "电脑可用内存不足：实例内存 6 GB") || it.Advice == "" {
-		t.Fatalf("short = %+v", it)
-	}
-	if it := memoryItem(6144, 7680, nil); !*it.OK {
-		t.Fatalf("exactly enough must pass: %+v", it)
-	}
-	if it := memoryItem(4096, 0, errors.New("x")); it.OK != nil || !it.Blocking {
-		t.Fatalf("unreadable = %+v", it)
 	}
 }
 
@@ -187,11 +202,11 @@ func TestFirstBlockingFailureAndPrecheckError(t *testing.T) {
 		{ID: "path", OK: checkOK(true), Blocking: true},
 		{ID: "acceleration", OK: nil, Blocking: true},       // not checkable: does not stop the boot
 		{ID: "vulkan", OK: checkOK(false), Blocking: false}, // only a warning
-		{ID: "memory", OK: checkOK(false), Blocking: true, Reason: "r", Advice: "a"},
-		{ID: "disk", OK: checkOK(false), Blocking: true},
+		{ID: "disk", OK: checkOK(false), Blocking: true, Reason: "r", Advice: "a"},
+		{ID: "ports", OK: checkOK(false), Blocking: true},
 	}
 	bad, failed := firstBlockingFailure(items)
-	if !failed || bad.ID != "memory" {
+	if !failed || bad.ID != "disk" {
 		t.Fatalf("first failure = %+v %v", bad, failed)
 	}
 	if _, failed := firstBlockingFailure(items[:3]); failed {
@@ -200,7 +215,7 @@ func TestFirstBlockingFailureAndPrecheckError(t *testing.T) {
 
 	err := precheckError(bad, func() error { return nil })
 	if errs.CodeOf(err) != errs.PrecheckFailed || err.Error() != "r。a" {
-		t.Fatalf("memory -> %v (%s)", err, errs.CodeOf(err))
+		t.Fatalf("disk -> %v (%s)", err, errs.CodeOf(err))
 	}
 	err = precheckError(CheckItem{ID: "emulator", Reason: "old"}, func() error { return nil })
 	if errs.CodeOf(err) != errs.NotReady {
@@ -223,11 +238,32 @@ func TestPrecheckSummary(t *testing.T) {
 		{Title: "硬件虚拟化", OK: nil, Reason: "没装"},
 		{Title: "显卡 Vulkan", OK: checkOK(false), Reason: "没有"},
 	})
-	want := `魔改 AVD 开机前检查：目录路径通过（D:\r）；硬件虚拟化未查（没装）；显卡 Vulkan未通过（没有）`
+	want := `ModAVD 开机前检查：目录路径通过（D:\r）；硬件虚拟化未查（没装）；显卡 Vulkan未通过（没有）`
 	if got != want {
 		t.Fatalf("summary\n got %s\nwant %s", got, want)
 	}
 	if itemMessage(CheckItem{Reason: "r"}) != "r" || itemMessage(CheckItem{Reason: "r", Advice: "a"}) != "r。a" {
 		t.Fatal("itemMessage")
+	}
+}
+
+func TestRootInfoSetBuild(t *testing.T) {
+	var info RootInfo
+	info.SetBuild(root.LegacyEmuBuild(41))
+	if info.BuildID != "mas-41" || info.Build != 41 {
+		t.Fatalf("mas-41: %+v", info)
+	}
+	b, _ := root.ParseEmuBuild("0.42.0")
+	info.SetBuild(b)
+	if info.BuildID != "0.42.0" || info.Build != 0 {
+		t.Fatalf("0.42.0: %+v", info)
+	}
+	info.SetBuild(root.EmuBuild{})
+	if info.BuildID != "" || info.Build != 0 {
+		t.Fatalf("unknown: %+v", info)
+	}
+	out, _ := json.Marshal(info)
+	if strings.Contains(string(out), "build_id") || !strings.Contains(string(out), `"build":0`) {
+		t.Fatalf("unknown JSON: %s", out)
 	}
 }

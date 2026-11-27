@@ -10,10 +10,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"modavd/internal/testutil"
 )
 
 func TestScriptsHaveNoCR(t *testing.T) {
-	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, VulkanFix} {
+	for _, name := range []string{CPUInfoBind, IdlePoll, WifiFastpath, LibFix, PlayStore, DownloadDisk, VulkanMode, AppKeepalive} {
 		b, err := Script(name)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -25,8 +27,8 @@ func TestScriptsHaveNoCR(t *testing.T) {
 	if _, err := Script("missing.sh"); err == nil {
 		t.Error("a missing script was found")
 	}
-	if Remote(VulkanFix) != "/data/local/tmp/vulkanfix.sh" {
-		t.Errorf("Remote = %s", Remote(VulkanFix))
+	if Remote(LibFix) != "/data/local/tmp/libfix.sh" {
+		t.Errorf("Remote = %s", Remote(LibFix))
 	}
 }
 
@@ -52,7 +54,7 @@ func noTempFiles(t *testing.T, dir string) {
 }
 
 func TestLocalFileContentAddressed(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "modavd-guest") // created by LocalFile
+	dir := filepath.Join(testutil.TempDir(t), "modavd-guest") // created by LocalFile
 	want, b := contentPath(t, dir, IdlePoll)
 	got, err := LocalFile(dir, IdlePoll)
 	if err != nil {
@@ -89,11 +91,11 @@ func TestLocalFileContentAddressed(t *testing.T) {
 	}
 
 	// another script goes to its own address
-	other, err := LocalFile(dir, VulkanFix)
+	other, err := LocalFile(dir, LibFix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantOther, _ := contentPath(t, dir, VulkanFix); other != wantOther {
+	if wantOther, _ := contentPath(t, dir, LibFix); other != wantOther {
 		t.Errorf("other script at %s, want %s", other, wantOther)
 	}
 	noTempFiles(t, dir)
@@ -101,7 +103,7 @@ func TestLocalFileContentAddressed(t *testing.T) {
 
 // TestLocalFileDamaged: other bytes under a content address are replaced by the right ones.
 func TestLocalFileDamaged(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	want, b := contentPath(t, dir, CPUInfoBind)
 	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
 		t.Fatal(err)
@@ -122,13 +124,7 @@ func TestLocalFileDamaged(t *testing.T) {
 // TestLocalFileConcurrent: many writers at once (goroutines here; processes share the same path logic) all succeed
 // with the same complete file.
 func TestLocalFileConcurrent(t *testing.T) {
-	// Known race (10-30): on GitHub's Windows runners (real-time AV scan, slow disk) some writers read the freshly
-	// moved file while it is still held and get ERROR_SHARING_VIOLATION; 200 local runs never hit it. LocalFile will
-	// retry such reads in the next version; until then the test is skipped on CI only.
-	if os.Getenv("CI") == "true" {
-		t.Skip("known sharing-violation race on CI runners, fixed in the next version")
-	}
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	want, b := contentPath(t, dir, WifiFastpath)
 	var wg sync.WaitGroup
 	errs := make([]error, 16)
@@ -150,7 +146,7 @@ func TestLocalFileConcurrent(t *testing.T) {
 
 // TestMoveNoReplace: an existing target is never replaced; a missing one is created.
 func TestMoveNoReplace(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	from, to := filepath.Join(dir, "a.tmp"), filepath.Join(dir, "a")
 	os.WriteFile(from, []byte("new"), 0o644)
 	os.WriteFile(to, []byte("old"), 0o644)

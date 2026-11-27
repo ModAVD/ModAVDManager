@@ -1,23 +1,30 @@
-//go:build windows
-
 package cli
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"modavd/internal/avd"
 	"modavd/internal/buildinfo"
+	"modavd/internal/components"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/mcp"
-	"modavd/internal/win"
+	"modavd/internal/regional"
+	"modavd/internal/report"
+	"modavd/internal/root"
+	"modavd/internal/update"
 )
 
 // command is one subcommand: its help, its arguments and what it runs.
@@ -55,29 +62,125 @@ func (c *command) usageAdvice() string { return "用法：" + c.usage() }
 
 const helpAdvice = "运行 modavd help 查看全部命令"
 
+// dataDiskHelp is the data disk's two modes, in create's and set's help.
+const dataDiskHelp = "数据盘两种：--data-gb auto 自动扩盘（默认），一开始就是 256 GB，磁盘镜像按实际写入增长，宿主盘只为写进去的数据付空间" +
+	"（比 64 GB 多占约 1 GB 的文件系统结构）；--data-gb N 指定 16–512 GB，不自动扩，快满时提醒。"
+
+// dataGBOpt reads --data-gb: auto (true) or a size; neither when not given.
+func dataGBOpt(inv *invocation) (gb *int, auto bool, err error) {
+	if !inv.isSet("data-gb") {
+		return nil, false, nil
+	}
+	v := strings.TrimSpace(inv.strOpt("data-gb"))
+	if strings.EqualFold(v, "auto") {
+		return nil, true, nil
+	}
+	n, convErr := strconv.Atoi(v)
+	if convErr != nil {
+		return nil, false, errs.Newf(errs.InvalidArgument, "--data-gb 只能是 auto 或 %d–%d 的整数（GB），收到「%s」",
+			avd.MinDataPartitionGB, avd.MaxDataPartitionGB, v)
+	}
+	return &n, false, nil
+}
+
 var (
-	optIndex        = flagSpec{"index", kindString, "N", "实例编号（不给就取最小的空闲编号，端口也要空着）"}
-	optTitle        = flagSpec{"title", kindString, "T", "显示名称"}
-	optMemory       = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 MB，也可写 6G"}
-	optCPU          = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
-	optDataGB       = flagSpec{"data-gb", kindInt, "N", "数据盘大小（GB）：16–512"}
-	optFPS          = flagSpec{"fps", kindInt, "F", "帧率：30 / 60"}
-	optYes          = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
-	optWindow       = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）"}
-	optTimeout      = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
-	optForce        = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
-	optAll          = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
-	optShellTO      = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
-	optCheckMB      = flagSpec{"memory", kindString, "M", "按这个实例内存判断电脑内存够不够（默认 6G）"}
-	optNoBridge     = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
+	optIndex         = flagSpec{"index", kindString, "N", "实例编号（不给就取最小的空闲编号，端口也要空着）"}
+	optTitle         = flagSpec{"title", kindString, "T", "显示名称"}
+	optMemory        = flagSpec{"memory", kindString, "M", "内存：3072 / 4096 / 5120 / 6144 / 8192 MB，也可写 6G"}
+	optCPU           = flagSpec{"cpu", kindInt, "N", "核数：2 / 4 / 6"}
+	optDataGB        = flagSpec{"data-gb", kindString, "auto|N", "数据盘：auto 自动扩盘（默认），或指定大小 16–512 GB"}
+	optResolution    = flagSpec{"resolution", kindInt, "", "分辨率：1080 / 720，DPI 随档位切换；新建默认 1080"}
+	optDPI           = flagSpec{"dpi", kindString, "auto|N", "DPI：auto 跟随分辨率（720p 240、1080p 280，默认），或 160 / 240 / 280 / 320 / 400 / 480"}
+	optOrientation   = flagSpec{"orientation", kindString, "landscape|portrait", "方向：landscape 横屏（默认），portrait 竖屏（MAA 等自动化任务要横屏）"}
+	optFPS           = flagSpec{"fps", kindInt, "F", "帧率：1–60 的整数，默认 60"}
+	optLanguage      = flagSpec{"language", kindString, "host|preserve|语言", "Windows：host 按宿主界面语言设置一次，preserve 保持安卓语言，或指定 zh-CN、en-US 等语言"}
+	optTimeZone      = flagSpec{"timezone", kindString, "host|preserve|IANA", "Windows：host 每次冷启动跟随宿主，preserve 沿用原行为，或指定 Asia/Shanghai、Etc/UTC 等 IANA 时区"}
+	optDiagnostics   = flagSpec{"diagnostics", kindString, "on|off", "诊断模式：即时增加日志保留；off 立即删回平常规则"}
+	optAppKeepalive  = flagSpec{"app-keepalive", kindString, "on|off", "应用保活：默认 off，第三方应用连续在后台满 60 秒后结束；on 保留后台应用。下次开机生效。"}
+	optSound         = flagSpec{"sound", kindString, "on|off", "声音：on 下次开机起带声卡、电脑出声（会多占一些 CPU），off 照旧不带（默认）"}
+	optBossKey       = flagSpec{"boss-key", kindString, "组合", "老板键，比如 Ctrl+Alt+Shift+1（Ctrl、Alt、Shift 至少带一个，不收 Win）；none 是不要（只有 Windows）"}
+	optYes           = flagSpec{"yes", kindBool, "", "确认删除（连同游戏数据）"}
+	optWindow        = flagSpec{"window", kindBool, "", "带窗口开机（默认无头）；实例已经无头运行时报错，不接管"}
+	optHeadless      = flagSpec{"headless", kindBool, "", "无头开机（不带 --window 时本来就是无头）；实例已经带窗口运行时报错，不接管"}
+	optTimeout       = flagSpec{"timeout", kindInt, "秒", "最多等 Android 开机多少秒（默认 300；到点只是不再等，模拟器不会被结束）"}
+	optCreateTimeout = flagSpec{"timeout", kindInt, "秒", "新建后的初始化最多做多少秒（默认 1200；到点先正常关机，记为新建失败）"}
+	optResume        = flagSpec{"resume", kindInt, "N", "重做编号 N 的新建初始化（上次失败或被打断的，它开的模拟器还开着就先正常关机；其他选项不用）"}
+	optCount         = flagSpec{"count", kindInt, "N", "一次新建 N 台（1–9），按编号从小到大一台做完再建下一台；不能和 --index、--resume 一起用"}
+	optForce         = flagSpec{"force", kindBool, "", "跳过 Android 正常关机：先 sync，再直接结束"}
+	optCancelCreate  = flagSpec{"cancel-create", kindBool, "", "允许打断新建中的初始化，之后用 create --resume N 重做"}
+	optAll           = flagSpec{"all", kindBool, "", "同时关掉所有在运行的实例"}
+	optShellTO       = flagSpec{"timeout", kindInt, "秒", "命令最多执行多少秒（不给用默认值）"}
+	optCheckMB       = flagSpec{"memory", kindString, "M", "不再起作用，留着兼容以前的调用（开机前不查内存）"}
+	optNoBridge      = flagSpec{"no-bridge", kindBool, "", "不装 arm64 执行桥，以后开机也不装（默认 modavd / 管理器开机时自动装上）"}
+	optAutoMAS       = flagSpec{"automas-version", kindString, "V", "调用方 AUTO-MAS 的版本（新版要求更高的 AUTO-MAS 时不装）"}
+	optAfterPID      = flagSpec{"after-pid", kindInt, "PID", "管理器用：先等这个进程退出（最多 60 秒）再装，只和 install 一起用"}
+	optReopen        = flagSpec{"reopen", kindString, "程序", "管理器用：装完（成不成都）保存本次交接结果，再启动这个程序（完整路径），只和 install 一起用"}
+	optReopenArg     = flagSpec{"reopen-arg", kindStrings, "参数", "管理器用：启动 --reopen 的程序时带的参数，按顺序，可以给多次"}
+	optHandoffID     = flagSpec{"handoff-id", kindString, "ID", "管理器用：本次交接的关联 ID，只和 --reopen 一起用；不给就生成"}
+	optUpdateSource  = flagSpec{"source", kindString, "github|mirrorchyan", "这次用的更新源，盖过「设置」里的，不保存；recover 不用"}
+	optCDKDPAPI      = flagSpec{"cdk-dpapi", kindString, "BASE64",
+		"这次用的 Mirror 酱 CDK，不保存：调用方用 Windows DPAPI（CryptProtectData，不带 entropy）加密 UTF-8 的 CDK 后的 base64；" +
+			"空串（或只有空白）表示这次不用 CDK；只在 Windows 上可用，recover 不用"}
 	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
+	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
+		"不询问，直接视为同意《Android 软件开发套件许可协议》（自动化用；协议全文照样取回并打印，取不到照样退出）；--json 时必须给"}
+	optKeepDownloads = flagSpec{"keep-downloads", kindBool, "", "装好后保留 downloads 里的 zip（默认装好即删，省 1.5 GB）"}
+	optFetchStore    = flagSpec{"play-store", kindBool, "",
+		playStoreFetchHelp()}
+	optMirror    = flagSpec{"mirror", kindString, "ID", "只用一个内置镜像：googledownloads_cn / tencent / google"}
+	optMirrorURL = flagSpec{"mirror-url", kindStrings, "URL",
+		"自建或测试用：用这个目录地址代替内置的三个镜像，可写多次或用逗号隔开，按顺序试；给了就不看 --mirror"}
+	optConnectTO = flagSpec{"connect-timeout", kindInt, "秒",
+		"等服务器回应（连接、TLS 握手、返回响应头）的上限，1–600，默认 20，超时换下一个镜像"}
+	optStallTO = flagSpec{"stall-timeout", kindInt, "秒",
+		"下载或取清单时，连续这么久一个字节都没收到就算卡住，1–600，默认 30，超时换下一个镜像"}
+	optManifestTO    = flagSpec{"manifest-timeout", kindInt, "秒", "取许可协议清单（repository2-3.xml）整体的上限，1–1800，默认 40"}
+	optTestFreeSpace = flagSpec{"test-free-space-mb", kindInt, "MB", "仅测试用：假装磁盘只剩这么多 MB，用来演示「空间不够」的提示"}
+	optNoClipboard   = flagSpec{"no-clipboard", kindBool, "", "不复制到剪贴板"}
+	optOutDir        = flagSpec{"out-dir", kindString, "目录", "问题包输出目录（默认桌面）"}
+	optStageDir      = flagSpec{"stage-dir", kindString, "目录", "暂存目录的父目录（默认 %TEMP%）"}
+	optKeepStage     = flagSpec{"keep-stage", kindBool, "", "保留暂存目录"}
+	optNoExplorer    = flagSpec{"no-explorer", kindBool, "", "不打开资源管理器"}
 )
+
+// fetchFlags are the options only components fetch takes.
+var fetchFlags = []flagSpec{optAcceptLicense, optKeepDownloads, optFetchStore, optMirror, optMirrorURL, optConnectTO,
+	optStallTO, optManifestTO, optTestFreeSpace}
 
 var commands []*command
 
 // The table is built in init: help's run function refers to it.
 func init() {
+	componentDetails := "status（默认）查看组件，和 check 里的组件一样。fetch 补全缺少的组件：" +
+		"先从镜像取《Android 软件开发套件许可协议》全文并显示，输入 y 同意才继续，否则什么也不下；" +
+		"再依次试 googledownloads.cn、腾讯云镜像、dl.google.com，下载缺少的 adb 和系统镜像（约 1.5 GB，中断了再运行会接着下），" +
+		"校验后装进 sdk\\。已经齐全的跳过；不完整的旧目录改名为 <目录>.incomplete-<时间> 留着，不删。" +
+		"--play-store 再补全可选的 Google Play 商店（playstore <i> install 要用；已经有了就跳过）：下 Google Play 版系统镜像，" +
+		"从里面的 system.img 只取出商店、Play 服务、GSF、合作伙伴设置和商店的证书这五个文件，核对 SHA-256 后放进 sdk\\playstore，" +
+		"解出的镜像和下载的压缩包随即删掉，只留这五个文件。" +
+		"import-playstore 用自己的文件补全它，不下载、不问许可协议：给 Google 官方的 Google Play 版镜像压缩包（x86_64-34_r14.zip，名字不限，" +
+		"按 Google 仓库清单核对大小和 SHA-1），或者那五个文件本身（名字不限，逐个核对大小和 SHA-256；给文件夹就取里面同名的几个）；" +
+		"认不出或对不上的一律拒收，什么也不改；只读你的文件，不动它们。" +
+		"status 列出这五个文件在不在、从哪来（download / import），不把它算进必需组件。" +
+		"不带参数时默认查看组件；source 查看或修改记住的下载源（auto、googledownloads_cn、tencent、google）。" +
+		"--json 时必须给 --accept-license（仅 fetch）。只有 Windows 有组件清单，darwin、linux 返回 unsupported。" +
+		"退出码：没同意许可协议是 2（license_declined），路径有中文、空间不够、不是 ModAVD 的文件夹是 4，" +
+		"正在补全是 5，下不成是 9（components_unavailable），下载或解压后没通过校验、导入的文件被拒收也是 9（components_rejected，" +
+		"--json 的 error.details.reason 是 unknown_file、mismatch 或 incomplete）。"
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		componentDetails = "status（默认）查看组件，和 check 里的组件一样。fetch 补全缺少的 adb 和 Android 15 Google APIs ARM64 系统镜像：" +
+			"先从镜像取待下载组件的 Google 许可协议全文，逐份输入 y 同意才继续，否则不下载归档。" +
+			"默认依次试 googledownloads.cn、腾讯云镜像、dl.google.com，下载约 1.8 GB，中断后再次运行会接着下；" +
+			"校验归档、版本和平台后装进 sdk/，保留执行权限。已经齐全的跳过；不完整的旧目录改名为 <目录>.incomplete-<时间> 留着，不删。" +
+			"SDK 使用中会拒绝补全，请先自行关闭使用它的进程。组件补全后，当前 macOS 版本仍未开放实例创建与启动。" +
+			"--play-store 可选下载 Android 15 Google Play arm64-v8a r9 镜像（约 1.8 GB），校验后只保留商店等五个文件。" +
+			"import-playstore 可导入官方 arm64-v8a-35_r09.zip 或五个文件，按固定大小和摘要检查，不下载。" +
+			"这两项仅准备文件，当前 macOS 版本尚未开放实例内安装与移除。" +
+			"source 查看或修改记住的下载源（auto、googledownloads_cn、tencent、google）；--mirror 或 --mirror-url 可覆盖本次选择。" +
+			"--json 时必须给 --accept-license（仅 fetch），表示已同意待下载组件的全部许可协议。" +
+			"退出码：未同意许可是 2（license_declined），未就绪或预检失败是 4，SDK 使用中或正在补全是 5，下载不可用或校验失败是 9。"
+	}
 	commands = []*command{
 		{
 			name: "list", summary: "列出全部实例和状态",
@@ -92,78 +195,137 @@ func init() {
 		},
 		{
 			name: "status", args: "<i>", summary: "一台实例的状态",
-			details: "status：offline 已关机 / starting 开机中 / online 运行中；running 是 qemu 进程在不在，booted 是 Android 开完没有；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它。",
+			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
+				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它，它自己在关（关了窗口、安卓里关机）也报 stopping；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},
 		{
-			name: "create", args: "[--index N] [--title T] [--memory 6G] [--cpu N] [--data-gb N] [--fps 30|60] [--no-bridge]",
-			summary: "新建一台实例",
-			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘 64 GB、60 帧。内存和核数只能取列出的档位，不会自动凑整。" +
-				"默认第一次用 modavd 或管理器开机时装上 arm64 执行桥（只对内置名单里的游戏生效，其余应用照旧），--no-bridge 不装。",
-			flags: []flagSpec{optIndex, optTitle, optMemory, optCPU, optDataGB, optFPS, optNoBridge},
+			name: "create", args: "[--index N | --count N] [--title T] [--memory 6G] [--cpu N] [--data-gb auto|N] [--fps 1-60] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--no-bridge] [--timeout 1200] | --resume N",
+			summary: "新建一台实例，后台开机做完初始化后关机",
+			details: "不给的选项用默认值：内存 6 GB、6 核、数据盘自动扩盘、60 帧、1080p（1920×1080 / DPI 280）。内存和核数只能取列出的档位，不会自动凑整。" +
+				dataDiskHelp +
+				"建好文件后在后台无头开机一次，做完开机设置、宿主输入法、首次初始化和 arm64 执行桥（只对内置名单里的游戏生效，" +
+				"其余应用照旧；--no-bridge 不装，以后也不装），再先 sync 后正常关机，一般要几分钟，进度逐步打印（「新建中 35%」，按做完的步骤算）；" +
+				"之后第一次开机和平常一样快。新建的实例不带 Google Play 商店，要的话建好后用 playstore <i> install 补全。" +
+				"这期间实例的状态是 creating（status、list 里 creation_progress 是百分比），不能开机、修改或删除；失败（或被打断）是 create_failed，" +
+				"用 create --resume N 重做初始化，或者 delete N --yes 删掉。" +
+				"--count N 一次建 N 台：先取 N 个空闲编号（不够就一台不建），再按编号一台一台建，其余选项每台一样，" +
+				"给了 --title 时名称后面加序号（「T 1」「T 2」…）；每台开建前查实例所在盘的剩余空间，低于开机所需就停下，剩下的不建。" +
+				"一台失败不影响后面的；结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
+			flags: []flagSpec{optIndex, optCount, optTitle, optMemory, optCPU, optDataGB, optFPS, optResolution, optDPI, optOrientation, optLanguage, optTimeZone, optNoBridge, optCreateTimeout, optResume},
 			final: true,
-			run:   runCreate, human: humanOf(formatCreate),
+			run:   runCreate, human: humanCreate, exit: exitBatch,
 		},
 		{
-			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--data-gb N]",
-			summary: "修改实例的标题、内存、核数、帧率、数据盘大小",
-			details: "至少给一个选项。改动写进实例配置，下次开机生效。" +
-				"--data-gb 只能改大（16–512），游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。",
-			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optDataGB},
+			name: "set", args: "<i> [--title T] [--memory M] [--cpu N] [--fps F] [--resolution 1080|720] [--dpi auto|N] [--orientation landscape|portrait] [--data-gb auto|N] [--language host|preserve|语言] [--timezone host|preserve|IANA] [--diagnostics on|off] [--sound on|off] [--app-keepalive on|off] [--boss-key 组合|none]",
+			summary: "修改实例设置、诊断模式和老板键",
+			details: "至少给一个选项。诊断模式和老板键立即生效；其它改动下次开机生效。诊断模式最多多用约 4 GiB 磁盘和 48 MiB 客体内存，日志可能含账号信息，只存本机；关闭立即删回平常保留规则。" +
+				dataDiskHelp + "数据盘只能改大，游戏数据不动：下次开机时模拟器（0.36 起）扩大磁盘镜像，开机后再在线扩大文件系统。" +
+				"--sound on 让这台下次开机起有声音（带窗口和无头都是），会多占一些 CPU；默认 off。" +
+				"--boss-key 是这台的老板键：管理器开着时（窗口关了、留在托盘也算），按一下藏起这台带窗口运行的模拟器窗口，再按一下叫回来；" +
+				"几台设成同一个键就一起藏、一起显示。没设过时编号 0–9 默认 Ctrl+Alt+Shift+编号，超过 9 没有；none 是不要。立即生效，只有 Windows。",
+			flags:    []flagSpec{optTitle, optMemory, optCPU, optFPS, optResolution, optDPI, optOrientation, optDataGB, optLanguage, optTimeZone, optDiagnostics, optSound, optAppKeepalive, optBossKey},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runSet, human: humanOf(formatUpdate),
 		},
 		{
-			name: "delete", args: "<i> --yes", summary: "删除一台已关机的实例（连同游戏数据）",
-			details:  "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。",
-			flags:    []flagSpec{optYes},
+			name: "regional", args: "<i>", summary: "查看实例语言和时区（Windows）",
+			details:  "分别显示管理器设置、宿主值和安卓当前值。关机或读不到客体时，当前值留空。语言只在显式设置或新建时设置一次，时区在冷启动时生效。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
+			run: runRegional, human: humanOf(formatRegional),
+		},
+		proxyCommand(),
+		{name: "game-sources", summary: "列出本机 MuMu 和雷电实例", run: runGameImport, human: humanGameImport},
+		{name: "game-apps", args: "<mumu|ldplayer> <source>", summary: "启动所选源实例并列出第三方应用", minPos: 2, maxPos: 2, run: runGameImport, human: humanGameImport},
+		{name: "game-files", args: "<mumu|ldplayer> <source> <package> [path]", summary: "查看游戏公开数据目录中的文件", minPos: 3, maxPos: 4, run: runGameImport, human: humanGameImport},
+		{name: "import-game", args: "<mumu|ldplayer> <source> <target> <package> [--data PATH]", summary: "从源模拟器导入 APK、OBB 和选定的资源", minPos: 4, maxPos: 4, flags: []flagSpec{{"data", kindStrings, "PATH", "Android/data/包名 下要复制的资源路径，可重复指定"}}, final: true, run: runGameImport, human: humanGameImport},
+		{
+			name: "delete", args: "<i> [<j> …] --yes", summary: "删除已关机的实例（连同游戏数据）",
+			details: "删掉 avd\\mas_<i>.avd（含数据盘）、mas_<i>.ini 和 mas-avd.json 里的记录。实例在运行或正在开关机时拒绝。" +
+				"给几个编号就依次删几台：在运行或正在开关机的跳过，一台没删成不影响别的；" +
+				"结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
+			flags:    []flagSpec{optYes},
+			posNames: []string{"实例编号"}, minPos: 1, maxPos: -1,
 			final: true,
-			run:   runDelete, human: humanOf(formatDelete),
+			run:   runDelete, human: humanDelete, exit: exitBatch,
 		},
 		{
-			name: "start", args: "<i> [--window] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
-			details: "默认无头启动，--window 带窗口。第一次开机还会做首次初始化。" +
+			name: "clone", args: "<i> [--title T]", summary: "把一台已关机的实例复制成一台新实例（连同游戏、登录状态和设置）",
+			details: "新实例用最小的空闲编号（所以有自己的端口和 adb 序列号），其余设置照源实例：内存、核数、帧率、分辨率、声音、语言、时区、数据盘方式等；" +
+				"--title 给新实例起名，不给就叫它的实例名。数据盘整份复制，两台互不影响，所以要和源实例差不多大的可用空间；不够就报错（precheck_failed），什么都不复制。" +
+				"源实例在运行或正在开关机时拒绝（busy）。复制失败或按 Ctrl+C 取消时，复制到一半的新实例会删掉。" +
+				"两台的安卓设备标识（Android ID、GSF ID）一样，同时开着登同一个游戏账号可能被顶掉。",
+			flags:    []flagSpec{optTitle},
+			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
+			final: true,
+			run:   runClone, human: humanOf(formatClone),
+		},
+		{
+			name: "start", args: "<i> [--window | --headless] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
+			details: "默认无头启动，--window 带窗口。运行中不能换：实例已经在运行（或正被另一次 start 开着）时，" +
+				"带了 --window 或 --headless 而它不是这种方式，就报错（busy），不接管也不重启，要换先 stop 再 start；" +
+				"两个都不带就照它现在的方式接管。第一次开机还会做首次初始化。" +
 				"按 Ctrl+C 或 --timeout 到点都只是不再等：模拟器不会被结束，会接着开机。" +
-				"之后再运行一次 start 会接管它，把这次开机还没做完的设置补完（包括首次初始化和客体 Vulkan 修复）。" +
+				"之后再运行一次 start 会接管它，把这次开机还没做完的设置补完（包括首次初始化和客体库补丁）。" +
 				"实例已经在运行、设置也都做完时，只重做每次开机都做的设置。" +
+				"返回前确认 /sdcard 能写进文件（一般这时早已就绪，不多花时间；最多再等 60 秒，到点只警告）。" +
 				"实例还没有 arm64 执行桥时，设置做完后自动装上（中间关机再开机一两次）；--no-bridge 这次不装，" +
 				"用 bridge uninstall 卸过或新建时带 --no-bridge 的实例不装，接管已经在运行的实例时也不装。",
-			flags:    []flagSpec{optWindow, optTimeout, optBootNoBridge},
+			flags:    []flagSpec{optWindow, optHeadless, optTimeout, optBootNoBridge},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
 			run:   runStart, human: humanOf(formatStart),
 		},
 		{
-			name: "stop", args: "<i> [--force] | stop --all [--force]", summary: "关机",
+			name: "stop", args: "<i> [--force] [--cancel-create] | stop --all [--force]", summary: "关机",
 			details: "先让 Android 正常关机，不成再 sync 后结束 qemu；--force 跳过正常关机，先 sync 再结束。" +
-				"--all 按进程表找出所有在运行的实例，同时关掉，结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
-			flags:    []flagSpec{optForce, optAll},
+				"新建中的实例默认报 busy，--force 也不例外；确实要打断请加 --cancel-create，之后用 create --resume N 重做。" +
+				"--all 同时关掉所有运行中或新建中的实例（包括两次开机之间），被打断的结果标记 interrupted_create: true；" +
+				"结果分 results 和 failed，有失败时退出码是第一个失败的退出码。",
+			flags:    []flagSpec{optForce, optAll, optCancelCreate},
 			posNames: []string{"实例编号"}, minPos: 0, maxPos: 1,
 			final: true,
 			run:   runStop, human: humanStop, exit: exitStop,
 		},
 		{
-			name: "restart", args: "<i> [--window] [--timeout 300] [--force] [--no-bridge]", summary: "关机再开机",
-			details: fmt.Sprintf("先关机（--force 同 stop），等 qemu 进程退出（最多 %.0f 秒，还在就报超时、不开机），"+
-				"再开机（--window、--timeout、--no-bridge 同 start）。", restartExitWait.Seconds()),
-			flags:    []flagSpec{optWindow, optTimeout, optForce, optBootNoBridge},
-			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
-			final: true,
-			run:   runRestart, human: humanOf(formatStart),
+			name: "check", args: "[--memory M]", summary: "开机前的电脑检查",
+			details: "路径、组件、模拟器版本、硬件加速、Vulkan、磁盘。没通过也返回 0：看 ready（--json）或结论那一行。" +
+				"不查内存：页面文件会补上物理内存的不足，真分不到内存时 start 报 insufficient_memory（退出码 10）。",
+			flags: []flagSpec{optCheckMB},
+			run:   runCheck, human: humanOf(formatCheck),
 		},
 		{
-			name: "check", args: "[--memory M]", summary: "开机前的电脑检查",
-			details: "路径、组件、模拟器版本、硬件加速、Vulkan、磁盘、内存。没通过也返回 0：看 ready（--json）或结论那一行。",
-			flags:   []flagSpec{optCheckMB},
-			run:     runCheck, human: humanOf(formatCheck),
+			name: "report-config", args: "[--no-clipboard]", summary: "复制电脑配置和实例里装的游戏",
+			details: "电脑、模拟器、硬件加速和开着的实例里装的游戏，显示出来并复制到剪贴板（--no-clipboard 不复制）。" +
+				"只读：只在实例开着、它的 adb server 已经在监听时按 adb 主机协议去问，不起 adb server、不调用 adb.exe、不碰 5037；" +
+				"不带用户名、电脑名和完整路径。目前只支持 Windows。",
+			flags: []flagSpec{optNoClipboard}, final: true,
+			run: runReportConfig, human: humanReportConfig,
+		},
+		{
+			name: "collect-info", args: "[--out-dir 目录] [--stage-dir 目录] [--keep-stage] [--no-explorer]",
+			summary: "收集问题信息，打成 zip",
+			details: "打成「ModAVD-问题信息-<时间>.zip」，默认放桌面，再打开资源管理器选中它（--no-explorer 不打开）。" +
+				"--stage-dir 是暂存目录的父目录（默认 %TEMP%），--keep-stage 保留暂存目录。每一节单独收，出错写进 summary.txt 接着收下一节。" +
+				"只读：不收磁盘镜像，不收 AUTO-MAS 的配置和账号数据，不起 adb server、不碰 5037。目前只支持 Windows。",
+			flags: []flagSpec{optOutDir, optStageDir, optKeepStage, optNoExplorer}, final: true,
+			run: runCollectInfo, human: humanCollectInfo,
+		},
+		{
+			name: "components", args: "[status] | source [auto|googledownloads_cn|tencent|google] | fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store] | import-playstore <文件或文件夹>…",
+			summary:  "查看或补全 Google 组件（adb 和系统镜像，可选的 Google Play 商店）",
+			details:  componentDetails,
+			flags:    fetchFlags,
+			posNames: []string{"status、source、fetch 或 import-playstore", "下载源或要导入的文件"}, maxPos: -1,
+			final: true,
+			run:   runComponents, human: formatComponents,
 		},
 		{
 			name: "window", args: "<i> show|hide", summary: "显示或隐藏实例的窗口",
-			details:  "只对带窗口开机的实例有效；无头开机的实例没有窗口。",
+			details:  "只对带窗口开机的实例有效；无头开机的实例没有窗口。藏起来以后照旧渲染、照旧能截图，任务栏上没有它的按钮；也可以用老板键（set --boss-key）藏起、叫回。",
 			posNames: []string{"实例编号", "show 或 hide"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runWindow, human: humanOf(formatWindow),
@@ -173,10 +335,55 @@ func init() {
 			details: "用 modavd 或管理器开机时会自动装上，一般不用手动跑。调用包里的 tools\\modavd-bridge.ps1：" +
 				"install 需要时关机再开机，装上；已经装了的只在载荷有变时更新。uninstall 卸掉桥、开机标记和装桥时加的 asg，" +
 				"并记下以后开机不再自动装（退回更早的版本之前要先卸）；再 install 就恢复。" +
-				"实例原来关着的，做完再关掉。verify：只读核对，实例要开着。",
+				"实例原来关着的，做完再关掉；开着的，中间冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"verify：只读核对，实例要开着。",
 			posNames: []string{"实例编号", "install、uninstall 或 verify"}, minPos: 2, maxPos: 2,
 			final: true,
 			run:   runBridge, human: humanOf(formatBridge), exit: exitBridge,
+		},
+		{
+			name: "playstore", args: "<i> install|uninstall|status|gsfid", summary: "装、卸、查看 Google Play 商店，取 GSF ID",
+			details: "商店的五个文件取自 Google 官方的 Google Play 版系统镜像（和实例的镜像同一期），要先在根目录补全：" +
+				"components fetch --play-store（下载）或 components import-playstore（用自己的文件）；没有就报 not_ready（details.reason 为 playstore_files_missing）。" +
+				"装在执行桥带来的可写系统镜像覆盖层里，所以实例要有执行桥。install 放入商店和 Google 签名的 Play 服务、GSF、合作伙伴设置，" +
+				"藏起镜像自带的同名占位应用，再冷启动一次生效；uninstall 去掉 Google Play 装的更新、删掉这些文件，冷启动后恢复占位应用。" +
+				"实例原来关着的，做完再关掉（没做成也关掉）；开着的，冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"install 中途失败时撤回这次放进去的文件；撤不干净的记为只装了一部分（list 的 play_store_partial），用 uninstall 移除或再 install 补全。" +
+				"status：只读，实例要开着。gsfid：取这台实例的 GSF ID（十进制和十六进制，--json 是 decimal、hex），" +
+				"设备未经 Play 保护机制认证时到 " + emu.PlayStoreUncertifiedURL + " 登记；实例要开着，还没有 ID 时报 not_ready（details.reason 为 no_gsf_id），开着网等一两分钟再试。" +
+				"没有执行桥的报 not_ready（details.reason 为 no_bridge）。装了商店的实例不能卸执行桥，要先卸商店。新建的实例都不带商店。",
+			posNames: []string{"实例编号", "install、uninstall、status 或 gsfid"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runPlayStore, human: humanPlayStore, exit: exitPlayStore,
+		},
+		{
+			name: "gles32", args: "<i> on|off|status", summary: "实验功能：让实例报告 GLES 3.2（只改报的版本）",
+			details: "实验功能。有的游戏在清单里要求 GLES 3.2，Play 商店按实例报的版本把 ModAVD（报 3.1）判成不兼容。" +
+				"on 把 ro.opengles.version 报成 196610（3.2），让商店放行；实际渲染仍是 3.1，走 Vulkan 的游戏能用，" +
+				"真要 GLES 3.2 渲染的应用会装得上、打不开。默认关，按实例开。" +
+				"做法是在执行桥带来的可写系统镜像覆盖层里改 /vendor/build.prop，所以实例要有执行桥；" +
+				"没有的报 not_ready（details.reason 为 gles32_no_bridge）。改完会冷启动一次才生效，再核对实例报的版本，对不上就报错。" +
+				"实例原来关着的，做完再关掉（没做成也关掉）；开着的，冷启动后照原来的方式开回来（带窗口或无头）。" +
+				"status：只读，实例要开着，on、off、pending-on、pending-off 四种（后两种是还没冷启动）。" +
+				"开着的实例不能卸执行桥，要先 off。装了 Google Play 商店的实例，商店会记着旧的设备信息：" +
+				"到 设置 → 应用 → Google Play 商店 → 存储，清除数据（账号不会退出）。list / info 里的 gles32 是开关的记录。",
+			posNames: []string{"实例编号", "on、off 或 status"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runGLES32, human: humanOf(formatGLES32), exit: exitGLES32,
+		},
+		{
+			name: "disk", args: "<i> trim|info|compact", summary: "磁盘回收：触发回收或整理把客体已删文件占的空间还给宿主；看数据盘大小",
+			details: "trim：在客体的数据盘（/data）上触发一次回收（FITRIM，经 vold 空闲维护），" +
+				"让模拟器释放已删除文件在数据盘镜像里占着的空间。实例要开着并已开机完成；" +
+				"命令成功只表示已触发，不等待客体回收完成，也不确认回收成功。" +
+				"模拟器版本太旧、数据盘不支持回收时返回不支持（退出码 4），不会白跑。" +
+				"info：报数据盘的逻辑大小、在宿主上实际占的空间，以及（实例关机时）已分配的大小和估计能回收多少；" +
+				"实例开着时已分配和可回收的数要关机后才有，只读，不改任何东西。" +
+				"compact：关机状态下把数据盘覆盖层重写一遍、丢掉已释放的簇、把文件缩小；" +
+				"转换后先校验（check + compare）再原子替换，原盘在替换成功前不动；实例有快照时拒绝。",
+			posNames: []string{"实例编号", "trim、info 或 compact"}, minPos: 2, maxPos: 2,
+			final: true,
+			run:   runDisk, human: formatDiskHuman,
 		},
 		{
 			name: "install", args: "<i> <apk>", summary: "在已开机的实例上安装 APK（adb install -r）",
@@ -213,6 +420,31 @@ func init() {
 			run:     runVersion, human: humanOf(formatVersion),
 		},
 		{
+			name: "update", args: "[status|check|prepare|install|recover] [--source github|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V] [--package ZIP --sha256 HEX] [--after-pid PID --reopen 程序 [--reopen-arg 参数]... [--handoff-id ID]]",
+			summary: "更新这个根目录的 ModAVD 包（模拟器、组件、脚本和管理器）",
+			details: "按管理器「设置」里选的更新源（GitHub 或 Mirror 酱，Mirror 酱下载要填 CDK）；" +
+				"调用方有自己的设置时用 --source 和 --cdk-dpapi 传这一次的，只盖过「设置」、不保存，status 里的 source、cdk_set 是这次生效的。" +
+				"--cdk-dpapi 是用 Windows DPAPI 加密好的 CDK 的 base64，解不开或格式不对是 invalid_argument，CDK 不进日志和输出。" +
+				"不自动联网，只做给出的那一步：" +
+				"status（默认）只看本地；check 查最新版本；prepare 下载、按清单核对、暂存好，实例开着也行；" +
+				"install 需要时先 prepare，再换上 sdk\\emulator 和包里的其他文件，要先关掉所有实例、管理器（包括托盘里的）和 MCP 客户端；" +
+				"recover 补完或退回上次没做完的换上。和 AUTO-MAS 用同一个 .update 目录，能接着对方没做完的做。" +
+				"--automas-version 是调用方 AUTO-MAS 的版本，新版要求更高的 AUTO-MAS 时不装。" +
+				"--after-pid、--reopen、--reopen-arg、--handoff-id 是管理器「设置」里点「更新」时用的：管理器下载核对好、关掉实例后启动这条命令并退出，" +
+				"命令等它退出再换上新版，然后重新打开管理器。" +
+				"macOS 可用 --package ZIP --sha256 HEX 准备或安装本地完整签名包；摘要需从可信来源独立取得。" +
+				"--json 时每个进度在 stderr 的日志行里多一个 progress 对象（checking、extracting、verifying、installing 开始时各一行，percent 为 -1；" +
+				"downloading 第一行就带真实进度，之后约 2 秒一行，下完那行一定有）：" +
+				`{"stage":"checking|downloading|extracting|verifying|installing","percent":-1 或 0–100,"done_bytes":N,"total_bytes":N}。` +
+				"查不了是退出码 9（update_unavailable），下载没通过核对也是 9（update_rejected），有程序在用是 5。",
+			posNames: []string{"status、check、prepare、install 或 recover"}, maxPos: 1,
+			flags: []flagSpec{optUpdateSource, optCDKDPAPI, optAutoMAS,
+				{name: "package", kind: kindString, arg: "ZIP", help: "macOS 本地完整更新包"},
+				{name: "sha256", kind: kindString, arg: "HEX", help: "本地更新包的独立可信 SHA-256"},
+				optAfterPID, optReopen, optReopenArg, optHandoffID}, final: true,
+			run: runUpdate, human: humanOf(formatUpdateStatus),
+		},
+		{
 			name: "mcp", summary: "在 stdin / stdout 上提供 MCP 服务",
 			details: "给 AI 助手用。根目录启动时找一次，没找到时每次调用工具再找；日志只写 stderr。",
 			raw:     true,
@@ -231,6 +463,20 @@ var helpCmd = &command{
 }
 
 func helpCommand() *command { return helpCmd }
+
+// removedCommands are commands that went away, with what to run instead: an old caller is told that, not 未知命令.
+var removedCommands = map[string]string{
+	"restart": "0.3.0 起没有重启：先 modavd stop <i>，再 modavd start <i>（要窗口加 --window）",
+}
+
+// removedError is the error of removed command name, nil when name was never removed.
+func removedError(name string) error {
+	instead, ok := removedCommands[name]
+	if !ok {
+		return nil
+	}
+	return errs.Newf(errs.Usage, "modavd %s 已经去掉了", name).WithAdvice(instead)
+}
 
 func findCommand(name string) *command {
 	for _, c := range commands {
@@ -254,20 +500,34 @@ func humanOf[T any](f func(io.Writer, *T)) func(io.Writer, any) {
 
 // StatusResult is the `status` subset of emu.InstanceInfo (same JSON names, every field always present like there).
 type StatusResult struct {
-	Index   int        `json:"index"`
-	Name    string     `json:"name"`
-	Status  emu.Status `json:"status"`
-	Running bool       `json:"running"`
-	Booted  bool       `json:"booted"`
-	Busy    string     `json:"busy"`
-	PID     int        `json:"pid"`
+	Index         int        `json:"index"`
+	Name          string     `json:"name"`
+	Status        emu.Status `json:"status"`
+	Running       bool       `json:"running"`
+	Booted        bool       `json:"booted"`
+	Window        bool       `json:"window"` // emu.InstanceInfo.Window
+	Busy          string     `json:"busy"`
+	PID           int        `json:"pid"`
+	Creation      string     `json:"creation"`
+	CreationError string     `json:"creation_error"`
+	CreationLog   string     `json:"creation_log"`
+	// CreationProgress: 0–100 while status is creating (emu.InstanceInfo.CreationProgress)
+	CreationProgress int `json:"creation_progress"`
+	// Where to reach the instance, in its root's port plan (mas-avd.json portBase): take these rather than counting
+	// from 20000 (ModAVD/ModAVD#75).
+	Serial     string    `json:"serial"`
+	AdbAddress string    `json:"adb_address"`
+	Ports      emu.Ports `json:"ports"`
+	// DataSpace: emu.InstanceInfo.DataSpace (the data disk on the host, /data's free space after the last boot)
+	DataSpace emu.DataSpace `json:"data_space"`
 }
 
 // ErrorInfo is an error in JSON: the envelope's "error" and each stop --all failure.
 type ErrorInfo struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Advice  string `json:"advice,omitempty"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Advice  string            `json:"advice,omitempty"`
+	Details map[string]string `json:"details,omitempty"` // errs.DetailsOf: boot_diag_dir ...
 }
 
 func errorInfo(err error) ErrorInfo {
@@ -276,7 +536,7 @@ func errorInfo(err error) ErrorInfo {
 	if msg == "" {
 		msg = e.Code
 	}
-	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice}
+	return ErrorInfo{Code: e.Code, Message: msg, Advice: e.Advice, Details: errs.DetailsOf(e)}
 }
 
 // StopFailure is one instance stop --all could not stop.
@@ -317,10 +577,32 @@ type HelpResult struct {
 	all bool
 }
 
+// ComponentsStatusResult is `components status`: check's component list (emu.ComponentStatus, every field present).
+type ComponentsStatusResult struct {
+	Root       string                `json:"root"`
+	Components []emu.ComponentStatus `json:"components"`
+	// PlayStore is the optional Google Play Store's five files (not one of Components: never counted as missing).
+	PlayStore components.PlayStoreStatus `json:"play_store"`
+}
+
+// ComponentsSourceResult is `components source`: the saved per-user choice.
+// Source is auto, one of the built-in mirror IDs, or custom when URLs are set.
+type ComponentsSourceResult struct {
+	Source     string   `json:"source"`
+	Mirror     string   `json:"mirror"`
+	MirrorURLs []string `json:"mirror_urls"`
+	Configured bool     `json:"configured"`
+}
+
 // ---- request building (pure, tested directly) --------------------------------------------------------------------
 
 func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 	req := emu.CreateRequest{Title: inv.strOpt("title")}
+	var err error
+	req.Language, req.TimeZone, err = regionalOptions(inv)
+	if err != nil {
+		return req, err
+	}
 	if inv.isSet("index") {
 		i, err := parseIndex(inv.strOpt("index"))
 		if err != nil {
@@ -336,14 +618,49 @@ func buildCreateRequest(inv *invocation) (emu.CreateRequest, error) {
 		req.MemoryMB = &mb
 	}
 	req.CPU = intPtrOpt(inv, "cpu")
-	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
+	// auto and not given are the same: 自动扩盘
+	gb, _, err := dataGBOpt(inv)
+	if err != nil {
+		return req, err
+	}
+	req.DataPartitionGB = gb
 	req.FPS = intPtrOpt(inv, "fps")
+	req.Resolution = intPtrOpt(inv, "resolution")
+	if req.DPI, err = dpiOpt(inv); err != nil {
+		return req, err
+	}
+	req.Orientation = strPtrOpt(inv, "orientation")
 	req.NoBridge = inv.boolOpt("no-bridge")
+	if inv.isSet("timeout") {
+		n := inv.intOpt("timeout")
+		if n <= 0 {
+			return req, errs.New(errs.InvalidArgument, "timeout 必须是正整数")
+		}
+		req.Timeout = time.Duration(n) * time.Second
+	}
+	if inv.isSet("resume") {
+		for _, o := range []string{"index", "title", "memory", "cpu", "data-gb", "fps", "resolution", "dpi", "orientation", "language", "timezone", "no-bridge"} {
+			if inv.isSet(o) {
+				return req, errs.Newf(errs.Usage, "--resume 只重做初始化，不能再给 --%s", o)
+			}
+		}
+		i := inv.intOpt("resume")
+		if !root.ValidIndex(i) {
+			return req, errs.Newf(errs.InvalidArgument, "实例编号 %d 不可用（只能是 0–9，5 除外）", i)
+		}
+		req.Index = &i
+		req.Resume = true
+	}
 	return req, nil
 }
 
 func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	var req emu.UpdateRequest
+	var err error
+	req.Language, req.TimeZone, err = regionalOptions(inv)
+	if err != nil {
+		return req, err
+	}
 	if inv.isSet("title") {
 		t := inv.strOpt("title")
 		req.Title = &t
@@ -357,16 +674,77 @@ func buildUpdateRequest(inv *invocation) (emu.UpdateRequest, error) {
 	}
 	req.CPU = intPtrOpt(inv, "cpu")
 	req.FPS = intPtrOpt(inv, "fps")
-	req.DataPartitionGB = intPtrOpt(inv, "data-gb")
-	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.DataPartitionGB == nil {
-		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--data-gb 中的一个").
+	req.Resolution = intPtrOpt(inv, "resolution")
+	if req.DPI, err = dpiOpt(inv); err != nil {
+		return req, err
+	}
+	req.Orientation = strPtrOpt(inv, "orientation")
+	gb, auto, err := dataGBOpt(inv)
+	if err != nil {
+		return req, err
+	}
+	req.DataPartitionGB, req.DataDiskAuto = gb, auto
+	if inv.isSet("diagnostics") {
+		value := strings.ToLower(inv.strOpt("diagnostics"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--diagnostics 只能是 on 或 off")
+		}
+		enabled := value == "on"
+		req.Diagnostics = &enabled
+	}
+	if inv.isSet("sound") {
+		value := strings.ToLower(inv.strOpt("sound"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--sound 只能是 on 或 off")
+		}
+		on := value == "on"
+		req.Sound = &on
+	}
+	if inv.isSet("app-keepalive") {
+		value := strings.ToLower(inv.strOpt("app-keepalive"))
+		if value != "on" && value != "off" {
+			return req, errs.New(errs.InvalidArgument, "--app-keepalive 只能是 on 或 off")
+		}
+		on := value == "on"
+		req.AppKeepalive = &on
+	}
+	if inv.isSet("boss-key") {
+		k := inv.strOpt("boss-key")
+		req.BossKey = &k
+	}
+	if req.Title == nil && req.MemoryMB == nil && req.CPU == nil && req.FPS == nil && req.Resolution == nil && req.DPI == nil && req.Orientation == nil && req.DataPartitionGB == nil &&
+		!req.DataDiskAuto && req.Diagnostics == nil && req.Sound == nil && req.AppKeepalive == nil && req.BossKey == nil && req.Language == nil && req.TimeZone == nil {
+		return req, errs.New(errs.Usage, "没有要改的内容：至少给 --title、--memory、--cpu、--fps、--resolution、--dpi、--orientation、--data-gb、--language、--timezone、--diagnostics、--sound、--app-keepalive、--boss-key 中的一个").
 			WithAdvice(findCommand("set").usageAdvice())
 	}
 	return req, nil
 }
 
+func regionalOptions(inv *invocation) (language, zone *string, err error) {
+	if inv.isSet("language") {
+		var value string
+		value, err = regional.Language(inv.strOpt("language"))
+		if err != nil {
+			return
+		}
+		language = &value
+	}
+	if inv.isSet("timezone") {
+		var value string
+		value, err = regional.TimeZone(inv.strOpt("timezone"))
+		if err != nil {
+			return
+		}
+		zone = &value
+	}
+	return
+}
+
 func buildStartOptions(inv *invocation) (emu.StartOptions, error) {
-	opt := emu.StartOptions{Window: inv.boolOpt("window"), NoBridge: inv.boolOpt("no-bridge")}
+	opt := emu.StartOptions{Window: inv.boolOpt("window"), Headless: inv.boolOpt("headless"), NoBridge: inv.boolOpt("no-bridge")}
+	if opt.Window && opt.Headless {
+		return opt, errs.New(errs.Usage, "--window 和 --headless 只能给一个").WithAdvice(findCommand("start").usageAdvice())
+	}
 	if inv.isSet("timeout") {
 		s := inv.intOpt("timeout")
 		if s <= 0 {
@@ -375,6 +753,32 @@ func buildStartOptions(inv *invocation) (emu.StartOptions, error) {
 		opt.Timeout = time.Duration(s) * time.Second
 	}
 	return opt, nil
+}
+
+func strPtrOpt(inv *invocation, name string) *string {
+	if !inv.isSet(name) {
+		return nil
+	}
+	v := strings.ToLower(strings.TrimSpace(inv.strOpt(name)))
+	return &v
+}
+
+// dpiOpt is --dpi: auto (0, the resolution's own density) or a number; nil when not given. The choices are checked
+// by avd.ValidateDPI.
+func dpiOpt(inv *invocation) (*int, error) {
+	if !inv.isSet("dpi") {
+		return nil, nil
+	}
+	s := strings.ToLower(strings.TrimSpace(inv.strOpt("dpi")))
+	if s == "auto" {
+		zero := 0
+		return &zero, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil, errs.Newf(errs.InvalidArgument, "--dpi 只能是 auto 或数字，收到 %q", inv.strOpt("dpi"))
+	}
+	return &n, nil
 }
 
 func intPtrOpt(inv *invocation, name string) *int {
@@ -386,8 +790,9 @@ func intPtrOpt(inv *invocation, name string) *int {
 }
 
 func statusOf(in *emu.InstanceInfo) *StatusResult {
-	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted,
-		Busy: in.Busy, PID: in.PID}
+	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted, Window: in.Window,
+		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
+		CreationProgress: in.CreationProgress, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports, DataSpace: in.DataSpace}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------
@@ -446,15 +851,31 @@ func runCreate(c *cmdCtx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	count, err := createCount(c.inv)
+	if err != nil {
+		return nil, err
+	}
 	m, err := c.mgr()
 	if err != nil {
 		return nil, err
 	}
+	if count > 1 {
+		return createBatch(c, m, req, count)
+	}
+	req.Progress = func(p emu.Progress) { c.log.Infof("%s", createProgressLine(p)) }
 	in, err := m.Create(c.ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return in, nil
+}
+
+// createProgressLine is one progress line of create: "新建中 35%：…" until the setup is done.
+func createProgressLine(p emu.Progress) string {
+	if p.Step == "done" {
+		return p.Message
+	}
+	return fmt.Sprintf("新建中 %d%%：%s", p.Percent(), p.Message)
 }
 
 func runSet(c *cmdCtx) (any, error) {
@@ -478,22 +899,194 @@ func runSet(c *cmdCtx) (any, error) {
 }
 
 func runDelete(c *cmdCtx) (any, error) {
-	i, err := parseIndex(c.inv.pos[0])
-	if err != nil {
-		return nil, err
+	var indexes []int
+	for _, p := range c.inv.pos {
+		i, err := parseIndex(p)
+		if err != nil {
+			return nil, err
+		}
+		indexes = append(indexes, i)
 	}
+	slices.Sort(indexes)
+	indexes = slices.Compact(indexes)
 	if !c.inv.boolOpt("yes") {
+		if len(indexes) > 1 {
+			return nil, errs.Newf(errs.Usage, "要删除实例 %s，会连同游戏数据一起删掉，确认请加 --yes", joinInts(indexes, "、"))
+		}
 		return nil, errs.New(errs.Usage, "删除会连同游戏数据一起删掉，确认请加 --yes")
 	}
 	m, err := c.mgr()
 	if err != nil {
 		return nil, err
 	}
-	r, err := m.Delete(c.ctx, i)
+	if len(indexes) > 1 {
+		return deleteBatch(c, m, indexes), nil
+	}
+	r, err := m.Delete(c.ctx, indexes[0])
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+func runClone(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	last := -5 // so 0 % gets its line
+	req := emu.CloneRequest{Title: c.inv.strOpt("title"), Progress: func(p emu.Progress) {
+		// one line per 5 %: a copy of 100 GB takes minutes
+		if pct := p.Percent(); pct/5 != last/5 {
+			last = pct
+			c.log.Infof("复制中 %d%%：%s", pct, p.Message)
+		}
+	}}
+	return m.Clone(c.ctx, i, req)
+}
+
+// ---- batch create and delete (ModAVD/ModAVD#240) ----------------------------------------------------------------
+
+// InstanceFailure is one instance a batch create or delete did not do.
+type InstanceFailure struct {
+	Index int       `json:"index"`
+	Error ErrorInfo `json:"error"`
+}
+
+// CreateBatchResult is `create --count N` (N > 1): both lists in index order, never null.
+type CreateBatchResult struct {
+	Results []emu.InstanceInfo `json:"results"`
+	Failed  []InstanceFailure  `json:"failed"`
+}
+
+// DeleteBatchResult is `delete <i> <j> …` with more than one index: both lists in index order, never null.
+type DeleteBatchResult struct {
+	Results []emu.DeleteResult `json:"results"`
+	Failed  []InstanceFailure  `json:"failed"`
+}
+
+// createCount is --count: 1 when not given; more than one only without --index and --resume.
+func createCount(inv *invocation) (int, error) {
+	if !inv.isSet("count") {
+		return 1, nil
+	}
+	n := inv.intOpt("count")
+	if n < 1 || n > 9 {
+		return 0, errs.Newf(errs.InvalidArgument, "--count 要给 1–9 的整数，收到 %d", n)
+	}
+	if n > 1 && (inv.isSet("index") || inv.isSet("resume")) {
+		return 0, errs.New(errs.Usage, "--count 不能和 --index、--resume 一起用：一次建几台时编号按空闲的从小到大取").
+			WithAdvice(findCommand("create").usageAdvice())
+	}
+	return n, nil
+}
+
+// createBatch creates n instances one after another, on the n smallest free indexes taken up front (none when fewer
+// are free). One at a time: each create boots its instance for the setup, so only one of them takes memory at once.
+// Before each the disk holding the instances must have the space a boot needs; when it has not, that one and the rest
+// are not made. A failed create does not stop the next.
+func createBatch(c *cmdCtx, m manager, req emu.CreateRequest, n int) (*CreateBatchResult, error) {
+	indexes, err := m.FreeIndexes(n)
+	if err != nil {
+		return nil, err
+	}
+	res := &CreateBatchResult{Results: []emu.InstanceInfo{}, Failed: []InstanceFailure{}}
+	c.log.Infof("依次新建 %d 台实例：%s", n, joinInts(indexes, "、"))
+	fail := func(i int, err error) {
+		if c.ctx.Err() != nil && errs.CodeOf(err) != errs.Canceled {
+			err = errs.Wrap(errs.Canceled, err, "已取消")
+		}
+		c.log.Warnf("实例 %d 没建成: %s", i, errs.As(err).Error())
+		res.Failed = append(res.Failed, InstanceFailure{Index: i, Error: errorInfo(err)})
+	}
+	for k, i := range indexes {
+		if err := c.ctx.Err(); err != nil {
+			fail(i, errs.Wrap(errs.Canceled, err, "已取消"))
+			continue
+		}
+		if err := m.CreateSpaceError(); err != nil {
+			for _, rest := range indexes[k:] {
+				fail(rest, err)
+			}
+			break
+		}
+		r := req
+		r.Index = &i
+		if req.Title != "" {
+			r.Title = fmt.Sprintf("%s %d", req.Title, k+1)
+		}
+		r.Progress = func(p emu.Progress) { c.log.Infof("[%d/%d] %s", k+1, n, createProgressLine(p)) }
+		in, err := m.Create(c.ctx, r)
+		if err == nil && in == nil {
+			err = errs.Newf(errs.Internal, "实例 %d 新建没有返回结果", i)
+		}
+		if err != nil {
+			fail(i, err)
+			continue
+		}
+		res.Results = append(res.Results, *in)
+	}
+	return res, nil
+}
+
+// deleteBatch deletes the instances one after another; one that runs (or is being started, stopped, created) is
+// refused by Delete and reported, and the others go on.
+func deleteBatch(c *cmdCtx, m manager, indexes []int) *DeleteBatchResult {
+	res := &DeleteBatchResult{Results: []emu.DeleteResult{}, Failed: []InstanceFailure{}}
+	c.log.Infof("依次删除 %d 台实例：%s", len(indexes), joinInts(indexes, "、"))
+	for _, i := range indexes {
+		var r *emu.DeleteResult
+		err := c.ctx.Err()
+		if err != nil {
+			err = errs.Wrap(errs.Canceled, err, "已取消")
+		} else if r, err = m.Delete(c.ctx, i); err == nil && r == nil {
+			err = errs.Newf(errs.Internal, "实例 %d 删除没有返回结果", i)
+		}
+		if err != nil {
+			c.log.Warnf("实例 %d 没删: %s", i, errs.As(err).Error())
+			res.Failed = append(res.Failed, InstanceFailure{Index: i, Error: errorInfo(err)})
+			continue
+		}
+		res.Results = append(res.Results, *r)
+	}
+	return res
+}
+
+// exitBatch: a batch create or delete exits with its first failure's code, like stop --all.
+func exitBatch(data any, _ bool) int {
+	var failed []InstanceFailure
+	switch r := data.(type) {
+	case *CreateBatchResult:
+		failed = r.Failed
+	case *DeleteBatchResult:
+		failed = r.Failed
+	}
+	if len(failed) > 0 {
+		return errs.ExitCode(errs.New(failed[0].Error.Code, failed[0].Error.Message))
+	}
+	return 0
+}
+
+func humanCreate(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.InstanceInfo:
+		formatCreate(w, r)
+	case *CreateBatchResult:
+		formatCreateBatch(w, r)
+	}
+}
+
+func humanDelete(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.DeleteResult:
+		formatDelete(w, r)
+	case *DeleteBatchResult:
+		formatDeleteBatch(w, r)
+	}
 }
 
 func runStart(c *cmdCtx) (any, error) {
@@ -520,7 +1113,7 @@ func runStart(c *cmdCtx) (any, error) {
 }
 
 func runStop(c *cmdCtx) (any, error) {
-	opt := emu.StopOptions{Force: c.inv.boolOpt("force")}
+	opt := emu.StopOptions{Force: c.inv.boolOpt("force"), CancelCreate: c.inv.boolOpt("cancel-create")}
 	if c.inv.boolOpt("all") {
 		if len(c.inv.pos) > 0 {
 			return nil, errs.New(errs.Usage, "stop --all 不能再给实例编号").WithAdvice(findCommand("stop").usageAdvice())
@@ -549,19 +1142,21 @@ func runStop(c *cmdCtx) (any, error) {
 	return r, nil
 }
 
-// stopAll stops every running instance concurrently: the caller (AUTO-MAS before a power action) gives the whole
-// thing about 30 s, the same budget one stop has.
+// stopAll stops every running or actively creating instance concurrently: the
+// caller (AUTO-MAS before a power action) gives it about 30 s, the budget one stop has.
 //
-// The targets come from the process table only, like AUTO-MAS close_running_instances (_scan_processes). List would
+// The targets come from the process table and creation metadata / locks, without adb. List would
 // first start the private server and run a getprop with re-registration on each instance, up to 5 s for a stuck
 // adbd, before the first stop begins; and a server it started would make each Stop trust it and skip its own "start
 // the server and register" step, so an instance not registered yet would be killed without a sync.
 func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) {
-	running, err := m.Running(c.ctx)
+	// A power action must also stop creations, with the same sync / graceful shutdown as other instances.
+	opt.CancelCreate = true
+	targets, err := m.StopTargets(c.ctx)
 	if err != nil {
 		return nil, err
 	}
-	targets := slices.Clone(running)
+	targets = slices.Clone(targets)
 	slices.Sort(targets)
 	targets = slices.Compact(targets)
 	res := &StopAllResult{Results: []emu.StopResult{}, Failed: []StopFailure{}}
@@ -569,7 +1164,7 @@ func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) 
 		c.log.Infof("没有正在运行的实例")
 		return res, nil
 	}
-	c.log.Infof("同时正常关闭 %d 台魔改 AVD 实例（安卓正常关机）：%s", len(targets), joinInts(targets, "、"))
+	c.log.Infof("同时正常关闭 %d 台 ModAVD 实例（安卓正常关机）：%s", len(targets), joinInts(targets, "、"))
 	type outcome struct {
 		r   *emu.StopResult
 		err error
@@ -594,7 +1189,7 @@ func stopAll(c *cmdCtx, m manager, opt emu.StopOptions) (*StopAllResult, error) 
 			if c.ctx.Err() != nil && errs.CodeOf(e) != errs.Canceled {
 				e = errs.Wrap(errs.Canceled, e, "已取消")
 			}
-			c.log.Warnf("魔改 AVD 实例 %d 关机失败: %s", targets[k], errs.As(e).Error())
+			c.log.Warnf("ModAVD 实例 %d 关机失败: %s", targets[k], errs.As(e).Error())
 			res.Failed = append(res.Failed, StopFailure{Index: targets[k], Error: errorInfo(e)})
 			continue
 		}
@@ -623,95 +1218,6 @@ func humanStop(w io.Writer, data any) {
 	}
 }
 
-func runRestart(c *cmdCtx) (any, error) {
-	i, err := parseIndex(c.inv.pos[0])
-	if err != nil {
-		return nil, err
-	}
-	opt, err := buildStartOptions(c.inv)
-	if err != nil {
-		return nil, err
-	}
-	m, err := c.mgr()
-	if err != nil {
-		return nil, err
-	}
-	sr, err := m.Stop(c.ctx, i, emu.StopOptions{Force: c.inv.boolOpt("force")})
-	if err != nil {
-		return nil, err
-	}
-	c.log.Infof("%s，接着开机", stopLine(sr))
-	if err := waitQemuGone(c, m, i, sr.Process); err != nil {
-		return nil, err
-	}
-	r, err := m.Start(c.ctx, i, opt)
-	if err != nil {
-		return nil, err
-	}
-	// The stop's warnings belong to this restart too.
-	r.Warnings = append(append([]string{}, sr.Warnings...), r.Warnings...)
-	return r, nil
-}
-
-// How long restart waits for the qemu to be gone after Stop, and how often it looks (variables for tests).
-var (
-	restartExitWait = 15 * time.Second
-	restartExitPoll = 500 * time.Millisecond
-)
-
-// stoppedQemuAlive: the very process Stop ended still exists (a variable for tests). With its creation time known,
-// Process.Alive checks the identity, so a reused PID is not taken for it; without one only the PID and the executable
-// name can be compared.
-var stoppedQemuAlive = func(p win.Process) bool {
-	if p.PID == 0 {
-		return false // the instance was already offline: nothing to wait for
-	}
-	if p.Created != 0 {
-		return p.Alive()
-	}
-	q, ok := win.FindProcess(p.PID)
-	return ok && (p.Name == "" || strings.EqualFold(q.Name, p.Name))
-}
-
-// waitQemuGone waits until instance i is no longer running (process table only, no adb) and the qemu process Stop
-// handled (stopped, zero when it was offline) is really gone, at most restartExitWait.
-//
-// Stop's kill paths do not confirm the exit: a big WHPX qemu can take seconds to end after TerminateProcess, and one
-// running elevated cannot be ended by us at all. A Start right then would adopt that qemu, then either report a
-// launch failure once it is gone or "succeed" without any restart. Running alone is not enough: it recognises an
-// instance's qemu by its runtime file and run lock, which go away before a terminated qemu has released its memory
-// and exited, so Running stops listing it while the process (and its gigabytes of guest memory) is still there.
-func waitQemuGone(c *cmdCtx, m manager, i int, stopped win.Process) error {
-	deadline := time.Now().Add(restartExitWait)
-	logged := false
-	for {
-		running, err := m.Running(c.ctx)
-		if err != nil {
-			return err
-		}
-		if !slices.Contains(running, i) && !stoppedQemuAlive(stopped) {
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			return errs.Newf(errs.Timeout, "实例 %d 关机后等了 %.0f 秒，qemu 进程仍在运行，没有重新开机", i,
-				restartExitWait.Seconds()).
-				WithAdvice(fmt.Sprintf("等 qemu 退出后再运行 modavd start %d；它一直不退出时，可能是以管理员身份运行的，"+
-					"modavd 结束不了它", i))
-		}
-		if !logged {
-			c.log.Infof("实例 %d 的 qemu 进程还没退出，等它退出再开机（最多 %.0f 秒）", i, restartExitWait.Seconds())
-			logged = true
-		}
-		t := time.NewTimer(restartExitPoll)
-		select {
-		case <-c.ctx.Done():
-			t.Stop()
-			return errs.Wrap(errs.Canceled, c.ctx.Err(), "已取消")
-		case <-t.C:
-		}
-	}
-}
-
 func runCheck(c *cmdCtx) (any, error) {
 	var opt emu.CheckOptions
 	if c.inv.isSet("memory") {
@@ -730,6 +1236,290 @@ func runCheck(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+func runReportConfig(c *cmdCtx) (any, error) {
+	r, err := c.deps.resolveRoot(c.inv.root)
+	if err != nil {
+		return nil, err
+	}
+	return report.BuildConfig(c.ctx, r, report.ConfigOptions{NoClipboard: c.inv.boolOpt("no-clipboard")})
+}
+
+// humanReportConfig prints what report-config.ps1 prints: a blank line, the lines, a blank line, then whether they
+// were copied.
+func humanReportConfig(w io.Writer, data any) {
+	r, ok := data.(*report.ConfigResult)
+	if !ok || r == nil {
+		return
+	}
+	fmt.Fprintln(w)
+	for _, l := range r.Lines {
+		fmt.Fprintln(w, l)
+	}
+	fmt.Fprintln(w)
+	if r.Message != "" {
+		fmt.Fprintln(w, r.Message)
+	}
+}
+
+func runCollectInfo(c *cmdCtx) (any, error) {
+	r, err := c.deps.resolveRoot(c.inv.root)
+	if err != nil {
+		return nil, err
+	}
+	return report.Collect(c.ctx, r, report.CollectOptions{
+		OutDir: c.inv.strOpt("out-dir"), StageDir: c.inv.strOpt("stage-dir"),
+		KeepStage: c.inv.boolOpt("keep-stage"), NoExplorer: c.inv.boolOpt("no-explorer"),
+		Progress: func(msg string) { c.log.Infof("%s", msg) },
+	})
+}
+
+// humanCollectInfo prints the end of collect-info.ps1's output (its progress lines went to the log).
+func humanCollectInfo(w io.Writer, data any) {
+	r, ok := data.(*report.CollectResult)
+	if !ok || r == nil {
+		return
+	}
+	if r.StageError != "" {
+		fmt.Fprintln(w, "暂存目录没删掉："+r.Stage)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "收集完成。")
+	fmt.Fprintln(w, "文件："+r.ZipPath)
+	fmt.Fprintln(w, "大小："+r.ZipSize)
+	for _, l := range strings.Split(r.PrivacyNote, "\r\n") {
+		fmt.Fprintln(w, l)
+	}
+	if !r.MasFound {
+		fmt.Fprintln(w, report.MasMissingNote)
+	}
+	if len(r.Problems) > 0 {
+		fmt.Fprintf(w, "有 %d 节没收集成功，原因写在 zip 里的 summary.txt，照样提交就行。\n", len(r.Problems))
+	}
+	if r.StageKept && r.StageError == "" {
+		fmt.Fprintln(w, "暂存目录保留在："+r.Stage)
+	}
+}
+
+func runComponents(c *cmdCtx) (any, error) {
+	action := "status"
+	if len(c.inv.pos) > 0 {
+		action = strings.ToLower(c.inv.pos[0])
+	}
+	if action != "fetch" && action != "status" && action != "source" && action != "import-playstore" {
+		return nil, errs.Newf(errs.Usage, "只能是 status、source、fetch 或 import-playstore，收到「%s」", c.inv.pos[0]).WithAdvice(findCommand("components").usageAdvice())
+	}
+	if action == "import-playstore" {
+		return runImportPlayStore(c)
+	}
+	if action == "source" {
+		for _, f := range fetchFlags {
+			if c.inv.isSet(f.name) {
+				return nil, errs.Newf(errs.Usage, "%s 只用于 components fetch", strings.Join([]string{"--" + f.name}, "、")).
+					WithAdvice(findCommand("components").usageAdvice())
+			}
+		}
+		if len(c.inv.pos) > 2 {
+			return nil, errs.New(errs.Usage, "components source 最多带一个下载源").WithAdvice(findCommand("components").usageAdvice())
+		}
+		if len(c.inv.pos) == 1 {
+			return componentsSourceResult(components.LoadSourceSettings()), nil
+		}
+		choice := strings.ToLower(strings.TrimSpace(c.inv.pos[1]))
+		if choice == "auto" {
+			choice = ""
+		}
+		if choice != "" {
+			if _, err := components.ChooseMirrors(choice, nil); err != nil {
+				return nil, err
+			}
+		}
+		s, err := components.SaveSourceSettings(choice, nil)
+		if err != nil {
+			return nil, err
+		}
+		return componentsSourceResult(s), nil
+	}
+	if len(c.inv.pos) > 1 {
+		return nil, errs.Newf(errs.Usage, "components %s 只接受一个参数", action).WithAdvice(findCommand("components").usageAdvice())
+	}
+	if action == "status" {
+		var given []string
+		for _, f := range fetchFlags {
+			if c.inv.isSet(f.name) {
+				given = append(given, "--"+f.name)
+			}
+		}
+		if len(given) > 0 {
+			return nil, errs.Newf(errs.Usage, "%s 只用于 components fetch", strings.Join(given, "、")).
+				WithAdvice(findCommand("components").usageAdvice())
+		}
+		r, err := c.deps.resolveRoot(c.inv.root)
+		if err != nil {
+			return nil, err
+		}
+		return &ComponentsStatusResult{Root: r.Dir, Components: emu.ComponentStatuses(r.Components()),
+			PlayStore: components.PlayStoreState(r)}, nil
+	}
+	var (
+		r   *root.Root
+		err error
+	)
+	// Legacy releases kept the choice in <root>\downloads\source.txt. Read it
+	// once before the first interactive fetch, then use the per-user setting.
+	if !c.inv.isSet("mirror") && !c.inv.isSet("mirror-url") && !c.inv.json && !c.inv.boolOpt("accept-license") && c.deps.stdinTerminal(c.stdin) {
+		r, err = c.deps.resolveRoot(c.inv.root)
+		if err != nil {
+			return nil, err
+		}
+		if _, _, err := components.ImportLegacySource(r.Dir); err != nil {
+			return nil, err
+		}
+	}
+	opt, err := fetchOptions(c)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		r, err = c.deps.resolveRoot(c.inv.root)
+		if err != nil {
+			return nil, err
+		}
+	}
+	fetch := c.deps.fetchComponents
+	if fetch == nil {
+		fetch = components.Fetch
+	}
+	result, err := fetch(c.ctx, r, opt)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func componentsSourceResult(s components.SourceSettings) *ComponentsSourceResult {
+	source := "auto"
+	if len(s.MirrorURLs) > 0 {
+		source = "custom"
+	} else if strings.TrimSpace(s.Mirror) != "" {
+		source = strings.ToLower(strings.TrimSpace(s.Mirror))
+	}
+	urls := append([]string{}, s.MirrorURLs...)
+	return &ComponentsSourceResult{Source: source, Mirror: s.Mirror, MirrorURLs: urls, Configured: s.Set}
+}
+
+// fetchOptions checks every option of components fetch (before the root is looked up) and wires the output: the
+// script's messages and progress lines go to the log, progress at most every 2 s like update; the license text and
+// the question are written whatever the log level (raw on stderr, or one log line each with --json).
+func fetchOptions(c *cmdCtx) (components.Options, error) {
+	inv := c.inv
+	input := c.stdin
+	if input == nil {
+		input = os.Stdin
+	}
+	o := components.Options{
+		AcceptLicense: inv.boolOpt("accept-license"), JSON: inv.json, Input: input,
+		KeepDownloads: inv.boolOpt("keep-downloads"), Mirror: inv.strOpt("mirror"), MirrorURLs: inv.strsOpt("mirror-url"),
+		PlayStore: inv.boolOpt("play-store"),
+		Log:       c.log,
+	}
+	// --mirror / --mirror-url win. Otherwise the saved per-user source; with none saved, someone at a console is
+	// asked once (and the answer saved), while --accept-license (automation), --json and a stdin that is not a
+	// console (pipe, file, NUL) are never asked: they use the default order and save nothing.
+	if !inv.isSet("mirror") && !inv.isSet("mirror-url") {
+		saved := components.LoadSourceSettings()
+		if !saved.Set && !o.AcceptLicense && !o.JSON && c.deps.stdinTerminal(input) {
+			buffered := bufio.NewReader(input)
+			choice, err := askComponentSource(c, buffered)
+			if err != nil {
+				return o, err
+			}
+			// Keep the reader that may already have buffered the answer to the
+			// subsequent license question.
+			o.Input = buffered
+			saved = choice
+		}
+		if saved.Set {
+			o.Mirror, o.MirrorURLs = saved.Mirror, append([]string(nil), saved.MirrorURLs...)
+			o.SourceOrigin = components.SourceFromSettings
+		}
+	}
+	for _, t := range []struct {
+		name string
+		d    *time.Duration
+		max  time.Duration
+	}{
+		{"connect-timeout", &o.ConnectTimeout, components.MaxConnectTimeout},
+		{"stall-timeout", &o.StallTimeout, components.MaxStallTimeout},
+		{"manifest-timeout", &o.ManifestTimeout, components.MaxManifestTimeout},
+	} {
+		if !inv.isSet(t.name) {
+			continue
+		}
+		n := inv.intOpt(t.name)
+		if n < 1 || int64(n) > int64(t.max/time.Second) {
+			return o, errs.Newf(errs.InvalidArgument, "--%s 要在 1–%.0f 秒之间，收到 %d", t.name, t.max.Seconds(), n)
+		}
+		*t.d = time.Duration(n) * time.Second
+	}
+	if inv.isSet("test-free-space-mb") {
+		n := int64(inv.intOpt("test-free-space-mb"))
+		if n < 0 {
+			return o, errs.New(errs.InvalidArgument, "--test-free-space-mb 不能是负数")
+		}
+		o.TestFreeSpaceMB = &n
+	}
+	if _, err := components.ChooseMirrors(o.Mirror, o.MirrorURLs); err != nil {
+		return o, err
+	}
+	// whatever the root holds: a script that sometimes gets ok and sometimes usage for the same command line (by
+	// whether components were missing) would only learn of the license at the worst moment
+	if o.JSON && !o.AcceptLicense {
+		return o, components.JSONNeedsLicense()
+	}
+	var last time.Time
+	o.Progress = func(p components.Progress) {
+		if !p.Final && !last.IsZero() && time.Since(last) < 2*time.Second {
+			return
+		}
+		last = time.Now()
+		c.log.Infof("%s", p.Message)
+	}
+	unfiltered := logx.JSONSink(c.stderr, logx.Debug)
+	o.Notice = func(text string) {
+		if !inv.json {
+			fmt.Fprint(c.stderr, text)
+		} else if s := strings.Trim(text, "\n"); s != "" {
+			unfiltered(logx.Info, s)
+		}
+	}
+	return o, nil
+}
+
+func askComponentSource(c *cmdCtx, input io.Reader) (components.SourceSettings, error) {
+	fmt.Fprintln(c.stderr, "组件下载源还没有设置，请选择：")
+	fmt.Fprintln(c.stderr, "  1. 自动（googledownloads_cn、tencent、google，按顺序尝试）")
+	fmt.Fprintln(c.stderr, "  2. googledownloads_cn")
+	fmt.Fprintln(c.stderr, "  3. tencent")
+	fmt.Fprintln(c.stderr, "  4. google")
+	fmt.Fprint(c.stderr, "选择 [1]：")
+	line, err := bufio.NewReader(input).ReadString('\n')
+	if err == io.EOF {
+		// EOF without an interactive answer means automatic order for this run;
+		// do not persist a choice inferred from a closed pipe.
+		return components.SourceSettings{}, nil
+	}
+	choice := strings.TrimSpace(line)
+	if choice == "" || choice == "1" {
+		return components.SaveSourceSettings("", nil)
+	}
+	ids := map[string]string{"2": "googledownloads_cn", "3": "tencent", "4": "google"}
+	mirror, ok := ids[choice]
+	if !ok {
+		return components.SourceSettings{}, errs.Newf(errs.InvalidArgument, "组件下载源编号无效：%s", choice)
+	}
+	return components.SaveSourceSettings(mirror, nil)
 }
 
 func runWindow(c *cmdCtx) (any, error) {
@@ -774,6 +1564,110 @@ func runBridge(c *cmdCtx) (any, error) {
 		return nil, err
 	}
 	return m.Bridge(c.ctx, i, action)
+}
+
+func runPlayStore(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "install", "uninstall", "status", "gsfid":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 install、uninstall、status 或 gsfid，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("playstore").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	if action == "gsfid" {
+		return m.PlayStoreGSFID(c.ctx, i)
+	}
+	return m.PlayStore(c.ctx, i, action)
+}
+
+func runGLES32(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "on", "off", "status":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 on、off 或 status，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("gles32").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	return m.GLES32(c.ctx, i, action)
+}
+
+// exitGLES32: 1 when the switch did not end up as asked (on after on, off after off). status and --json: 0, the
+// result says it.
+func exitGLES32(data any, json bool) int {
+	r, ok := data.(*emu.GLES32Result)
+	if json || !ok {
+		return 0
+	}
+	if r.Action == "on" && r.State != "on" || r.Action == "off" && r.State != "off" {
+		return 1
+	}
+	return 0
+}
+
+func humanPlayStore(w io.Writer, data any) {
+	switch r := data.(type) {
+	case *emu.PlayStoreResult:
+		formatPlayStore(w, r)
+	case *emu.PlayStoreGSFIDResult:
+		formatPlayStoreGSFID(w, r)
+	}
+}
+
+// exitPlayStore: 1 when the store did not end up as asked (installed after install, absent after uninstall). status
+// and --json: 0, the result says it.
+func exitPlayStore(data any, json bool) int {
+	r, ok := data.(*emu.PlayStoreResult)
+	if json || !ok {
+		return 0
+	}
+	if r.Action == "install" && !r.Installed || r.Action == "uninstall" && r.State != "absent" {
+		return 1
+	}
+	return 0
+}
+
+// runDisk dispatches `disk <i> <action>` (trim, info, compact); add a case per new action.
+func runDisk(c *cmdCtx) (any, error) {
+	i, err := parseIndex(c.inv.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(c.inv.pos[1])
+	switch action {
+	case "trim", "info", "compact":
+	default:
+		return nil, errs.Newf(errs.Usage, "第二个参数只能是 trim、info 或 compact，收到「%s」", c.inv.pos[1]).
+			WithAdvice(findCommand("disk").usageAdvice())
+	}
+	m, err := c.mgr()
+	if err != nil {
+		return nil, err
+	}
+	switch action {
+	case "trim":
+		return m.DiskTrim(c.ctx, i)
+	case "info":
+		return m.DiskInfo(c.ctx, i)
+	case "compact":
+		return m.DiskCompact(c.ctx, i)
+	}
+	return nil, errs.Newf(errs.Internal, "disk 动作 %s 没有实现", action)
 }
 
 // exitBridge: 1 when the bridge did not end up as asked (installed after install, gone after uninstall), the script's
@@ -885,6 +1779,200 @@ func runVersion(c *cmdCtx) (any, error) {
 	return &VersionResult{Version: buildinfo.Version, Protocol: buildinfo.Protocol, Go: runtime.Version()}, nil
 }
 
+func runUpdate(c *cmdCtx) (any, error) {
+	action := "status"
+	if len(c.inv.pos) > 0 {
+		action = strings.ToLower(c.inv.pos[0])
+	}
+	switch action {
+	case "status", "check", "prepare", "install", "recover":
+	default:
+		return nil, errs.Newf(errs.Usage, "只能是 status、check、prepare、install 或 recover，收到「%s」", c.inv.shownPos(c.inv.pos[0])).
+			WithAdvice(findCommand("update").usageAdvice())
+	}
+	if (c.inv.strOpt("package") != "" || c.inv.strOpt("sha256") != "") && action != "prepare" && action != "install" {
+		return nil, errs.New(errs.Usage, "--package 和 --sha256 只用于 update prepare 或 install")
+	}
+	afterPID, reopen, reopenArgs := c.inv.intOpt("after-pid"), c.inv.strOpt("reopen"), c.inv.strsOpt("reopen-arg")
+	idArg := c.inv.strOpt("handoff-id")
+	handoff := afterPID != 0 || reopen != "" || len(reopenArgs) > 0 || idArg != ""
+	switch {
+	case handoff && action != "install":
+		return nil, errs.New(errs.Usage, "--after-pid、--reopen、--reopen-arg、--handoff-id 只能和 install 一起用").
+			WithAdvice(findCommand("update").usageAdvice())
+	case afterPID < 0:
+		return nil, errs.Newf(errs.Usage, "--after-pid 要给进程号，收到 %d", afterPID)
+	case len(reopenArgs) > 0 && reopen == "":
+		return nil, errs.New(errs.Usage, "--reopen-arg 要和 --reopen 一起用")
+	case reopen != "" && !filepath.IsAbs(reopen):
+		return nil, errs.Newf(errs.Usage, "--reopen 要给程序的完整路径，收到「%s」", reopen)
+	case idArg != "" && reopen == "":
+		return nil, errs.New(errs.Usage, "--handoff-id 要和 --reopen 一起用")
+	}
+	var id update.HandoffID
+	if reopen != "" {
+		var err error
+		if idArg != "" {
+			id, err = update.ParseHandoffID(idArg)
+		} else {
+			id, err = update.NewHandoffID()
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	opt := update.Options{AutoMASVersion: c.inv.strOpt("automas-version"),
+		PackagePath: c.inv.strOpt("package"), PackageSHA256: c.inv.strOpt("sha256")}
+	if err := updateCallerSettings(c.inv, action, &opt); err != nil {
+		return nil, err
+	}
+	r, err := c.deps.resolveRoot(c.inv.root)
+	if err != nil {
+		return nil, err
+	}
+	// Stage changes are logged by the updater itself (with their progress fields); downloads here, about every 2 s,
+	// the first of each download and the last.
+	var last time.Time
+	lastStage := ""
+	opt.Progress = func(p update.Progress) {
+		first := p.Stage != lastStage
+		lastStage = p.Stage
+		if p.Stage != "downloading" || (!first && time.Since(last) < 2*time.Second && p.Done != p.Total) {
+			return
+		}
+		last = time.Now()
+		c.log.LogFields(logx.Info, fmt.Sprintf("%s：%.1f%%（%.1f / %.1f MB）", p.Message, p.Percent,
+			float64(p.Done)/(1<<20), float64(p.Total)/(1<<20)), p.Fields())
+	}
+	u := update.New(r, c.log, opt)
+	switch action {
+	case "check":
+		return u.Check(c.ctx)
+	case "prepare":
+		return u.Prepare(c.ctx)
+	case "install":
+		if handoff {
+			return installHandoff(c, r, u, afterPID, reopen, reopenArgs, id)
+		}
+		return c.deps.updateInstall(c.ctx, u)
+	case "recover":
+		return u.Recover(c.ctx)
+	}
+	return u.Status(), nil
+}
+
+// updateCallerSettings puts --source and --cdk-dpapi into opt: this run's source and CDK, never saved. Checked before
+// the root is looked up; no message quotes the --cdk-dpapi value or the CDK.
+func updateCallerSettings(inv *invocation, action string, opt *update.Options) error {
+	hasSource, hasCDK := inv.isSet("source"), inv.isSet("cdk-dpapi")
+	if (hasSource || hasCDK) && action == "recover" {
+		return errs.New(errs.Usage, "--source、--cdk-dpapi 不能和 recover 一起用").WithAdvice(findCommand("update").usageAdvice())
+	}
+	if hasSource {
+		s, err := update.CheckSource(strings.ToLower(strings.TrimSpace(inv.strOpt("source"))))
+		if err != nil {
+			return err
+		}
+		opt.Source = s
+	}
+	if hasCDK {
+		cdk, err := update.CallerCDK(inv.strOpt("cdk-dpapi"))
+		if err != nil {
+			return err
+		}
+		opt.CDK = &cdk
+	}
+	return nil
+}
+
+// installHandoff is `update install` for the manager's 更新 (update/handoff.go): wait for the manager (afterPID) to exit,
+// install, then, with reopen, leave the result for the manager and start it again whatever happened, so the user is
+// never left without a manager.
+func installHandoff(c *cmdCtx, r *root.Root, u *update.Updater, afterPID int, reopen string, args []string, id update.HandoffID) (*update.Status, error) {
+	var st *update.Status
+	var err error
+	waitCtx := c.ctx
+	var guard *update.HandoffGuard
+	if reopen != "" {
+		guard, err = update.BeginHandoff(r, id)
+		if err != nil {
+			// Another owner must not get an extra restart or result from us.
+			return u.Status(), err
+		}
+		defer guard.Close()
+		var cancel context.CancelFunc
+		waitCtx, cancel = guard.WaitContext(c.ctx)
+		defer cancel()
+	}
+	if afterPID > 0 {
+		c.log.Infof("等管理器（pid %d）退出", afterPID)
+		if !c.deps.waitExit(waitCtx, afterPID, update.AfterPIDWait) {
+			st = u.Status()
+			err = errs.Newf(errs.Busy, "管理器（pid %d）%d 秒内没有退出，新版没有换上", afterPID, int(update.AfterPIDWait/time.Second)).
+				WithAdvice("关掉管理器窗口后再在「设置」里点「更新」；下载好的新版留着，不用重新下载")
+		}
+	}
+	if waitCtx.Err() != nil || guard != nil && guard.Canceled() {
+		// The manager stayed and canceled its own hand-off. Nothing was swapped,
+		// and no restart should reopen a window or publish an obsolete result.
+		return u.Status(), errs.Wrap(errs.Canceled, context.Canceled, "已取消更新交接，新版没有换上")
+	}
+	if err == nil {
+		if reopen != "" {
+			st, err = c.deps.updateHandoff(c.ctx, u)
+		} else {
+			st, err = c.deps.updateInstall(c.ctx, u)
+		}
+	}
+	if reopen != "" {
+		if serr := update.SaveHandoff(r, update.NewHandoffResult(id, st, err, time.Now())); serr != nil {
+			c.log.Warnf("写不了给管理器的更新结果: %v", serr)
+		}
+		guard.Close() // a restart can take the gate, including result forwarding
+		args = append(args, update.HandoffArg, string(id))
+		if rerr := c.deps.reopen(reopen, args); rerr != nil {
+			update.TakeHandoff(r, id, time.Now())
+			c.log.Warnf("重新打开管理器（%s）失败: %v", reopen, rerr)
+		} else {
+			c.log.Infof("已重新打开管理器")
+		}
+	}
+	return st, err
+}
+
+func formatUpdateStatus(w io.Writer, r *update.Status) {
+	cur := "未知"
+	if r.CurrentVersion != "" {
+		cur = strings.TrimPrefix(r.CurrentVersion, "v")
+	}
+	if r.CurrentBuild != "" && r.CurrentBuild != strings.TrimPrefix(r.CurrentVersion, "v") {
+		cur += "（" + r.CurrentBuild + "）"
+	}
+	fmt.Fprintf(w, "ModAVD：%s，根目录 %s\n", cur, r.Root)
+	src := "GitHub"
+	if r.Source == update.SourceMirrorChyan {
+		src = "Mirror 酱（CDK " + map[bool]string{true: "已填", false: "没填，只能从 GitHub 下载"}[r.CDKSet] + "）"
+	}
+	fmt.Fprintf(w, "更新源：%s\n", src)
+	if !r.Updatable {
+		fmt.Fprintf(w, "不能更新：%s\n", r.NotUpdatableReason)
+	}
+	if r.Checked {
+		fmt.Fprintf(w, "最新版本：%s（%s）\n", strings.TrimPrefix(r.LatestVersion, "v"), r.LatestSource)
+	}
+	if r.PreparedVersion != "" {
+		fmt.Fprintf(w, "已下载并核对好、待安装：%s\n", strings.TrimPrefix(r.PreparedVersion, "v"))
+	}
+	if r.Recovered != "" {
+		fmt.Fprintln(w, r.Recovered)
+	}
+	for _, n := range r.Notices {
+		fmt.Fprintln(w, n)
+	}
+	if r.Message != "" {
+		fmt.Fprintln(w, r.Message)
+	}
+}
 func runMCP(c *cmdCtx) (any, error) {
 	r, rerr := c.deps.resolveRoot(c.inv.root)
 	if rerr != nil {
@@ -921,6 +2009,9 @@ func runHelp(c *cmdCtx) (any, error) {
 	}
 	cmd := findCommand(c.inv.pos[0])
 	if cmd == nil {
+		if err := removedError(c.inv.pos[0]); err != nil {
+			return nil, err
+		}
 		return nil, errs.Newf(errs.Usage, "未知命令 %s", c.inv.pos[0]).WithAdvice(helpAdvice)
 	}
 	return helpFor(cmd), nil
