@@ -232,6 +232,15 @@ func TestResumePublishedBeforeQemuProbe(t *testing.T) {
 	}
 	h := &createHooks{}
 	h.install(t)
+	// Start's own process scan is a real one (qemuScan does not reach it); a real mas_6 on this machine must not be
+	// found. The boot is canceled before it would look, so the scan is never asked for.
+	savedFind := startFindQemu
+	t.Cleanup(func() { startFindQemu = savedFind })
+	probed := false
+	startFindQemu = func(*Manager, int) (win.Process, bool, error) {
+		probed = true
+		return win.Process{}, false, nil
+	}
 	h.start = func(m *Manager, ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
 		// No watcher scheduling is needed: the next boot must synchronously see the marker.
 		return m.Start(ctx, i, opt)
@@ -253,6 +262,9 @@ func TestResumePublishedBeforeQemuProbe(t *testing.T) {
 	if errs.CodeOf(err) != errs.Canceled || errs.DetailsOf(err)[errs.InstanceStatus] != "create_failed" ||
 		errs.DetailsOf(err)[errs.QemuRunning] != "false" || m.createCanceled(i) {
 		t.Fatalf("canceled resume: %v, details %v, marker %v", err, errs.DetailsOf(err), m.createCanceled(i))
+	}
+	if probed {
+		t.Fatal("the boot looked for a qemu before it saw the cancellation")
 	}
 }
 
