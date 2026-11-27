@@ -7,12 +7,16 @@ import (
 	"modavd/internal/adb"
 	"modavd/internal/appproxy"
 	"modavd/internal/emu"
+	"modavd/internal/gamesource"
 	"modavd/internal/root"
 )
 
 // backend is the part of emu.Manager the server uses; tests inject a fake. One backend is built per job (its
 // logger carries the job's messages), plus one for plain requests and one for the instance poller.
 type backend interface {
+	SourcePackages(context.Context, gamesource.Source) ([]string, error)
+	SourceFiles(context.Context, gamesource.Source, string, string) ([]emu.ResourceEntry, error)
+	ImportGames(context.Context, int, gamesource.Source, []emu.ImportGame, func(emu.Progress)) ([]emu.GameImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)
