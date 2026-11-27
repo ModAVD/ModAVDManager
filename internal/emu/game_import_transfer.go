@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -152,6 +153,41 @@ func (d importDevice) stage(ctx context.Context, parent string) (string, func(),
 			d.m.Log.Warnf("清理导入临时目录失败：%v", err)
 		}
 	}, nil
+}
+
+// as returns the device running its commands as the given su identity.
+func (d importDevice) as(identity string) importDevice {
+	d.identity = identity
+	return d
+}
+
+// resourceParents lists, without repeats, the directories the staging directories of resources are made in.
+func resourceParents(resources []string) []string {
+	var parents []string
+	for _, f := range resources {
+		if dir := path.Dir(f); !slices.Contains(parents, dir) {
+			parents = append(parents, dir)
+		}
+	}
+	return parents
+}
+
+// removeStaleImportDirs deletes the staging directories (see stage) an interrupted import left in parents. It runs
+// under the instance lock, so no other import can own one. Only directories directly in a parent whose name is
+// exactly .modavd-import. and eight more characters are removed. Failing to remove them only wastes space, so it is
+// logged and the import goes on.
+func removeStaleImportDirs(ctx context.Context, d importDevice, parents []string) error {
+	for _, parent := range parents {
+		p := importQuote(parent)
+		_, err := d.shell(ctx, "[ ! -d "+p+" ] || find "+p+" -mindepth 1 -maxdepth 1 -type d -name '.modavd-import.????????' -exec rm -rf {} +")
+		if e := ctxErr(ctx); e != nil {
+			return e
+		}
+		if err != nil {
+			d.m.Log.Warnf("清理上次导入留下的临时目录失败：%v", err)
+		}
+	}
+	return nil
 }
 
 // An existing directory may already hold settings or completed items from an

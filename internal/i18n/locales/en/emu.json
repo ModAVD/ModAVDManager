@@ -695,6 +695,7 @@
   "没认出是哪个程序，多半是 MAA 这类用 ModAVD 截图的工具": "Cannot tell which program it is; most likely a tool such as MAA that takes screenshots through ModAVD",
   "没设": "not set",
   "清理 %s 的空间，或把 ModAVD 根目录放到空间更大的盘": "Free up space on %s, or put the ModAVD root folder on a drive with more space",
+  "清理上次导入留下的临时目录失败：%v": "Could not remove the temporary folders a previous import left behind: %v",
   "清理导入临时目录失败：%v": "Could not clean up the import folder: %v",
   "清理新建取消标记失败": "Failed to clear the create-cancel marker",
   "游戏开着，等它退出后再写": "The game is open; wait for it to exit, then write",

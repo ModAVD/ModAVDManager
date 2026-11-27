@@ -2,8 +2,16 @@
 package emu
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,21 +23,27 @@ import (
 // scriptedGuest answers the shell commands of the import code the way a guest would, and records every script.
 // Nothing here starts adb: importDevice.exec stands in for it.
 type scriptedGuest struct {
+	m       *Manager // for tests that need a root
 	mu      sync.Mutex
 	scripts []string
 	reply   func(script string) (string, error)
 }
 
+var mktempParent = regexp.MustCompile(`(/[^'"\s]+)/\.modavd-import\.XXXXXXXX`)
+
 func (g *scriptedGuest) device() importDevice {
-	return importDevice{m: &Manager{Log: logx.Nop()}, exec: func(_ context.Context, args ...string) (string, error) {
+	m := g.m
+	if m == nil {
+		m = &Manager{Log: logx.Nop()}
+	}
+	return importDevice{m: m, exec: func(_ context.Context, args ...string) (string, error) {
 		script := args[len(args)-1]
 		g.mu.Lock()
 		g.scripts = append(g.scripts, script)
 		g.mu.Unlock()
 		if strings.Contains(script, "mktemp -d") {
-			// mktemp -d '<parent>/.modavd-import.XXXXXXXX'
-			parent := script[strings.Index(script, "&& mktemp -d '")+len("&& mktemp -d '"):]
-			parent = parent[:strings.Index(parent, "/.modavd-import.")]
+			// mktemp -d '<parent>/.modavd-import.XXXXXXXX', possibly inside the su wrapper's extra quoting
+			parent := mktempParent.FindStringSubmatch(script)[1]
 			return parent + "/.modavd-import.AbCd1234\n", nil
 		}
 		if g.reply != nil {
@@ -50,13 +64,30 @@ func (g *scriptedGuest) ran(sub string) bool {
 	return false
 }
 
-func fakeStream(t *testing.T, bytes int, p *importProgress) {
+// fakeStream replaces the adb transfer: size gives the number of bytes the source delivers for a read/write pair.
+// An APK goes through as raw bytes, a resource as a tar holding one file named like the item.
+func fakeStream(t *testing.T, size func(read, write string) int) {
 	t.Helper()
 	saved := importStreamFunc
 	t.Cleanup(func() { importStreamFunc = saved })
-	importStreamFunc = func(context.Context, importDevice, importDevice, string, string, func(io.Writer, io.Reader) error) error {
-		p.Write(make([]byte, bytes))
-		return nil
+	importStreamFunc = func(_ context.Context, _, _ importDevice, read, write string, copyData func(io.Writer, io.Reader) error) error {
+		n := size(read, write)
+		if strings.HasPrefix(write, "cat > ") {
+			return copyData(io.Discard, bytes.NewReader(make([]byte, n)))
+		}
+		name := strings.TrimSuffix(read[strings.Index(read, "tar -cf - './")+len("tar -cf - './"):], "'")
+		var buf bytes.Buffer
+		w := tar.NewWriter(&buf)
+		if err := w.WriteHeader(&tar.Header{Name: name, Size: int64(n), Mode: 0660, Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		if _, err := w.Write(make([]byte, n)); err != nil {
+			return err
+		}
+		if err := w.Close(); err != nil {
+			return err
+		}
+		return copyData(io.Discard, &buf)
 	}
 }
 
@@ -74,7 +105,7 @@ func TestCopyResourceDoesNotPublishChangedSource(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &importProgress{done: 1000} // earlier items of the same import
-			fakeStream(t, tc.got, p)
+			fakeStream(t, func(string, string) int { return tc.got })
 			g := &scriptedGuest{}
 			dev := g.device()
 			err := copyResource(context.Background(), dev, dev, full, int64(tc.want), p)
@@ -96,5 +127,103 @@ func TestCopyResourceDoesNotPublishChangedSource(t *testing.T) {
 				t.Fatalf("removed the final directory: %q", g.scripts)
 			}
 		})
+	}
+}
+
+// ModAVD/ModAVD#272: staging directories an interrupted import left behind are removed from the parents of the
+// resources and from /data/local/tmp, and only those whose name is exactly .modavd-import. plus eight characters.
+func TestRemoveStaleImportDirsScript(t *testing.T) {
+	g := &scriptedGuest{}
+	dev := g.device().as("10123,10123,9997")
+	parents := resourceParents([]string{
+		"/sdcard/Android/data/example.game/files/a", "/sdcard/Android/data/example.game/files/b",
+		"/sdcard/Android/obb/example.game/main.1.example.game.obb",
+	})
+	want := []string{"/sdcard/Android/data/example.game/files", "/sdcard/Android/obb/example.game"}
+	if !slices.Equal(parents, want) {
+		t.Fatalf("parents=%q", parents)
+	}
+	if err := removeStaleImportDirs(context.Background(), dev, append(parents, "/data/local/tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.scripts) != 3 {
+		t.Fatalf("scripts=%q", g.scripts)
+	}
+	for i, parent := range append(want, "/data/local/tmp") {
+		s := g.scripts[i]
+		for _, sub := range []string{"su 10123,10123,9997", "find '\"'\"'" + parent + "'\"'\"' -mindepth 1 -maxdepth 1 -type d", ".modavd-import.????????", "rm -rf"} {
+			if !strings.Contains(s, sub) {
+				t.Fatalf("script %d lacks %q: %s", i, sub, s)
+			}
+		}
+	}
+}
+
+func TestRemoveStaleImportDirsKeepsGoingAfterAFailure(t *testing.T) {
+	g := &scriptedGuest{reply: func(string) (string, error) { return "", errors.New("permission denied") }}
+	if err := removeStaleImportDirs(context.Background(), g.device(), []string{"/a", "/b"}); err != nil || len(g.scripts) != 2 {
+		t.Fatalf("err=%v scripts=%d", err, len(g.scripts))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := removeStaleImportDirs(ctx, g.device(), []string{"/a"}); errs.CodeOf(err) != errs.Canceled {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// Runs the generated command with a real POSIX shell (skipped without one) on a temporary directory.
+func TestRemoveStaleImportDirsOnDisk(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	parent := filepath.ToSlash(t.TempDir())
+	mkdir := func(name string) {
+		if err := os.MkdirAll(parent+"/"+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{
+		".modavd-import.AbCd1234/data", ".modavd-import.ZZZZ9999",
+		".modavd-import.short", ".modavd-import.AbCd12345", "modavd-import.AbCd1234", "keep/.modavd-import.AbCd1234",
+	} {
+		mkdir(name)
+	}
+	if err := os.WriteFile(parent+"/.modavd-import.FileFile", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parent+"/.modavd-import.AbCd1234/data/big", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Git for Windows keeps find in ..\usr\bin; Windows' own find.exe must not be the one that runs.
+	posix := func(script string) (string, error) {
+		cmd := exec.Command(sh, "-c", script)
+		bin := filepath.Dir(sh)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+filepath.Join(bin, "..", "usr", "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if _, err := posix("find '" + parent + "' -mindepth 1 -maxdepth 1 -type d -name 'nothing' -exec rm -rf {} +"); err != nil {
+		t.Skip("sh has no POSIX find: ", err)
+	}
+	g := &scriptedGuest{reply: posix}
+	dev := g.device()
+	if err := removeStaleImportDirs(context.Background(), dev, []string{parent, parent + "/missing"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	want := []string{".modavd-import.AbCd12345", ".modavd-import.FileFile", ".modavd-import.short", "keep", "modavd-import.AbCd1234"}
+	if !slices.Equal(left, want) {
+		t.Fatalf("left %q, want %q", left, want)
+	}
+	if _, err := os.Stat(parent + "/keep/.modavd-import.AbCd1234"); err != nil {
+		t.Fatal("removed a nested directory")
 	}
 }
