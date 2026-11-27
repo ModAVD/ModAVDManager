@@ -7,7 +7,7 @@ import { toast, toastError, copyText } from './ui.js';
 import { quoted, dur, diskInfoText, diskTrimText, diskCompactText, playStoreText, gles32Text } from './format.js';
 import { openActivity, runCheck } from './panels.js';
 
-const VERB = { start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), 'disk-info': t('查看磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'), clone: t('复制实例'),
+const VERB = { 'import-mumu': t('导入游戏'), start: t('开机'), stop: t('关机'), install: t('安装 APK'), create: t('新建'), 'disk-info': t('查看磁盘占用'), 'disk-trim': t('回收磁盘空间'), 'disk-compact': t('整理磁盘'), clone: t('复制实例'),
   components: t('补全组件'), 'collect-info': t('收集问题信息'), 'playstore-install': t('补全 Google Play 商店'), 'playstore-uninstall': t('移除 Google Play 商店'),
   'playstore-import': t('导入 Google Play 商店的文件'), 'gles32-on': t('开启报告 GLES 3.2'), 'gles32-off': t('关闭报告 GLES 3.2'),
   update: t('整包更新') };
@@ -68,6 +68,7 @@ function notify(job) {
   else if (job.kind === 'collect-info') toast({ title: t('问题信息已收集'), text: r.zip_path ? t('问题包：{zip_path}', { zip_path: r.zip_path }) : '', timeout: 9000 });
   else if (job.kind === 'create') toast({ title: t('{who}新建好了', { who }), text: t('初始化已做完，已关机；第一次开机和平常一样快。') });
   else if (job.kind === 'stop') toast({ title: t('{who}已关机', { who }) });
+  else if (job.kind === 'import-mumu') toast({ title: t('游戏已导入到{who}', { who }) });
   else if (job.kind === 'install') toast({ title: t('安装完成'), text: t('{who}装好了 {name}', { who, name: r.package || 'APK' }) });
   // the sizes are the answer, so they stay long enough to read
   else if (job.kind === 'disk-info') toast({ tone: 'info', title: t('{who}的磁盘占用', { who }), text: diskInfoText(r), timeout: 9000 });
@@ -124,6 +125,8 @@ export const stop = (i, force = false) => run(i, 'stop', { force });
 export const cancelCreate = (i) => run(i, 'stop', { cancel_create: true });
 // 重试初始化: the setup of a new instance that failed (its job is a create job)
 export const resumeCreate = (i) => run(i, 'resume', {});
+
+export const importMuMu = (i, source, games) => run(i, 'import-mumu', { source, games });
 
 export async function install(i, file) {
   const fd = new FormData();

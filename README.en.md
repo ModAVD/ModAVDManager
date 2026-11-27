@@ -77,6 +77,8 @@ modavd [--root <dir>] [--json] [--quiet] [--verbose] <command> [args]
 | `report-config [--no-clipboard]` | Copy the computer configuration and the game info from the running instances (read-only) |
 | `collect-info [--out-dir D] [--stage-dir D] [--keep-stage] [--no-explorer]` | Collect a problem report and zip it (read-only). Besides the emulator logs it takes the logs of the manager, the boot watch and the private adb servers (`modavd-ui.log`, `modavd-bootwatch.log`, `adb-server.log` and their `.1`, the last 5 MB of each), every adb.exe process and the adb server log (the last 2 MB of `%TEMP%\adb.log`), and the TCP ports Windows reserves (netsh), saying whether a port this root uses is among them. Ctrl+C before ZIP completion returns `canceled`, deletes the unfinished ZIP and removes staging; `--keep-stage` preserves staging and includes its path in the error |
 | `components [status]`, `components source [auto\|googledownloads_cn\|tencent\|google]`, `components fetch [--accept-license] [--mirror ID] [--mirror-url URL] [--keep-downloads] [--play-store]`, `components import-playstore <file or folder>...` | View, choose, or fetch the Google components (adb and the system image; see "Fetching the Google components"); `--play-store` and `import-playstore` add the optional Google Play Store (see below) |
+| `mumu-list` / `mumu-apps <source>` / `mumu-files <source> <package> [path]` | List local MuMu players, third-party apps and public game resources. Reading apps starts the selected player if needed. |
+| `import-mumu <source> <target> <package> [--data path]` | Start the target first. To use a new instance, create it as usual. Copies the base APK, splits and public OBB files. Repeat `--data` for resource files or folders under `Android/data/<package>`. In the target instance’s More actions menu, choose Import games from MuMu. |
 | `window <i> show\|hide`, `install <i> <apk>`, `shell <i> <command>`, `adb <i> -- <args>` | Window, install an APK, guest command, adb passthrough |
 | `update [status\|check\|prepare\|install\|recover] [--source github\|mirrorchyan] [--cdk-dpapi BASE64] [--automas-version V]` | Update the whole ModAVD package in the root folder, using the update source from "Settings", or the source and CDK the caller passes for this run (see "Updating ModAVD") |
 | `servers`, `version`, `mcp`, `help [command]` | |
@@ -215,6 +217,12 @@ Two display presets are available: 1080p is 1920×1080 / DPI 280; 720p is 1280×
 DPI follows the resolution by default; the manager settings, CLI `--dpi` and MCP `dpi` can set 160 / 240 / 280 / 320 / 400 / 480 instead (`--dpi auto` follows again), kept across resolution changes. The orientation is landscape by default and can be portrait (`--orientation portrait`): the canvas stays wide, config.ini's `hw.initialOrientation` is set to portrait and Android turns to portrait after boot. Both take effect at the next boot. Automation such as MAA needs landscape; portrait is for playing yourself.
 
 AUTO-MAS currently prefers the packaged CLI, which preserves the selected preset. Old roots without a usable CLI fall back to the Python launch path, which still forces 720p. Update the packaged CLI before using 1080p there. AUTO-MAS creation and display settings still need matching two-preset support; use the ModAVD manager to set the preset meanwhile.
+
+### Import games from MuMu
+
+Open More actions on the target instance, choose Import games from MuMu, then select the source and games. Selecting a game includes its APKs and OBB files. Expand Android/data to choose resource files or folders. Leave accounts, saves and settings unchecked. Exit the game on both devices during import. You can shut down the source afterward.
+
+On an existing target, the importer reuses identical APKs and asks you to choose another instance if the builds differ. It adds resources one at a time and stops if an existing file at the same path has different contents. Retry with the same selection after cancellation or failure. The CLI reports the file bytes transferred in `apk_bytes` and `resource_bytes`. The game may still need downloads. Sign in on the target if prompted.
 
 ## Language and time zone on Windows
 

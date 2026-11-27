@@ -125,6 +125,9 @@ import (
 
 // manager is the part of *emu.Manager the commands use; tests substitute a fake.
 type manager interface {
+	MuMuPackages(context.Context, int) ([]string, error)
+	MuMuFiles(context.Context, int, string, string) ([]emu.MuMuEntry, error)
+	ImportMuMu(context.Context, int, int, []emu.MuMuGame, func(emu.Progress)) ([]emu.MuMuImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)

@@ -13,6 +13,9 @@ import (
 // backend is the part of emu.Manager the server uses; tests inject a fake. One backend is built per job (its
 // logger carries the job's messages), plus one for plain requests and one for the instance poller.
 type backend interface {
+	MuMuPackages(context.Context, int) ([]string, error)
+	MuMuFiles(context.Context, int, string, string) ([]emu.MuMuEntry, error)
+	ImportMuMu(context.Context, int, int, []emu.MuMuGame, func(emu.Progress)) ([]emu.MuMuImportResult, error)
 	List(ctx context.Context) (*emu.ListResult, error)
 	Info(ctx context.Context, i int) (*emu.InstanceInfo, error)
 	Regional(ctx context.Context, i int) (*emu.RegionalResult, error)

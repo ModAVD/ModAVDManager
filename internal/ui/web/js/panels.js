@@ -361,7 +361,7 @@ function updateJob(r, j) {
     r.bar.classList.toggle('indet', n == null);
     r.fill.style.width = n == null ? '' : n.toFixed(1) + '%';
   }
-  const cancelBackend = j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import';
+  const cancelBackend = j.kind === 'import-mumu' || j.kind === 'components' || j.kind === 'collect-info' || j.kind === 'playstore-import';
   r.acts.hidden = !(running && (j.kind === 'start' || j.kind === 'disk-compact' || j.kind === 'clone' || cancelBackend));
   setText(r.cancel, j.kind === 'disk-compact' ? t('取消整理') : j.kind === 'clone' ? t('取消复制') : cancelBackend ? t('取消') : t('取消等待'));
   r.cancelHint.hidden = j.kind === 'disk-compact' || j.kind === 'clone' || cancelBackend;
