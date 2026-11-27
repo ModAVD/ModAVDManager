@@ -139,8 +139,9 @@ func importSize(ctx context.Context, d importDevice, files []string) (int64, err
 	return strconv.ParseInt(strings.TrimSpace(out), 10, 64)
 }
 
-func checkImportSpace(ctx context.Context, dst importDevice, need int64) error {
-	out, err := dst.shell(ctx, "df -Pk /data")
+// The closest existing ancestor determines the filesystem for a new resource.
+func checkGuestSpace(ctx context.Context, dst importDevice, target string, need int64) error {
+	out, err := dst.shell(ctx, "p="+importQuote(target)+`; while [ ! -e "$p" ]; do p=${p%/*}; [ -n "$p" ] || exit 1; done; df -Pk "$p"`)
 	if err != nil {
 		return err
 	}
@@ -153,11 +154,20 @@ func checkImportSpace(ctx context.Context, dst importDevice, need int64) error {
 	if err != nil {
 		return err
 	}
+	if kb < 0 || need > kb*1024 {
+		return errs.Newf(errs.PrecheckFailed, "目标 %s 空间不足，需要 %d MiB", target, (need+(1<<20)-1)>>20)
+	}
+	return nil
+}
+func checkImportSpace(ctx context.Context, dst importDevice, need int64) error {
+	if err := checkGuestSpace(ctx, dst, "/data", need); err != nil {
+		return err
+	}
 	free, err := host.DiskFree(dst.m.Root.AvdHome())
 	if err != nil {
 		return err
 	}
-	if kb < 0 || need > kb*1024 || uint64(need) > free {
+	if uint64(need) > free {
 		return errs.Newf(errs.PrecheckFailed, "导入需要 %d MiB，请检查目标数据盘和电脑磁盘的剩余空间", (need+(1<<20)-1)>>20)
 	}
 	return nil
@@ -200,9 +210,14 @@ func importGame(ctx context.Context, src, dst importDevice, g MuMuGame, progress
 			return result, err
 		}
 	}
-	result.ResourceBytes, err = importSize(ctx, src, resources)
-	if err != nil {
-		return result, err
+	sizes := make(map[string]int64, len(resources))
+	for _, f := range resources {
+		n, err := importSize(ctx, src, []string{f})
+		if err != nil {
+			return result, err
+		}
+		sizes[f] = n
+		result.ResourceBytes += n
 	}
 	// pm holds its own copy of the APKs while installing them. Allow space for small files and dex optimization.
 	if err := checkImportSpace(ctx, dst, 2*result.APKBytes+result.ResourceBytes+(64<<20)); err != nil {
@@ -234,6 +249,9 @@ func importGame(ctx context.Context, src, dst importDevice, g MuMuGame, progress
 		}
 	}
 	for _, f := range resources {
+		if err := checkGuestSpace(ctx, dst, f, sizes[f]); err != nil {
+			return result, err
+		}
 		if err := copyResource(ctx, src, dst, f, &p); err != nil {
 			return result, errs.Newf(errs.CodeOf(err), "导入 %s 失败：%v", f, err)
 		}

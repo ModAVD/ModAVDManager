@@ -144,6 +144,9 @@ const publishResources = `publish() {
    # non-atomic copy directly into the final name; stage inside that mount instead.
    srcdev=$(stat -c %d "$1") && dstdev=$(stat -c %d "${2%/*}") || return 1
    if [ "$srcdev" != "$dstdev" ]; then
+     need=$(du -sk "$1") && avail=$(df -Pk "${2%/*}") || return 1
+     avail=$(echo "$avail" | tail -1 | awk '{print $4}')
+     [ "${need%%[[:space:]]*}" -le "$avail" ] || { echo "$2" >&2; return 74; }
      (tmp=$(mktemp -d "${2%/*}/.modavd-import.XXXXXXXX") || exit 1
       trap 'rm -rf "$tmp"' EXIT
       cp -R "$1" "$tmp/item" && publish "$tmp/item" "$2")
@@ -203,8 +206,13 @@ func copyResource(ctx context.Context, src, dst importDevice, full string, p *im
 	staged, final := importQuote(path.Join(dir, name)), importQuote(full)
 	_, err = dst.shell(ctx, publishResources+"\npublish "+staged+" "+final)
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 73 {
-		return errs.Newf(errs.AlreadyExists, "目标已有不同内容，请另选实例或资源：%v", err)
+	if errors.As(err, &exit) {
+		switch exit.ExitCode() {
+		case 73:
+			return errs.Newf(errs.AlreadyExists, "目标已有不同内容，请另选实例或资源：%v", err)
+		case 74:
+			return errs.Newf(errs.PrecheckFailed, "目标资源目录空间不足：%v", err)
+		}
 	}
 	return err
 }
