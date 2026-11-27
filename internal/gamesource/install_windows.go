@@ -3,7 +3,6 @@ package gamesource
 
 import (
 	"os"
-	"path/filepath"
 	"syscall"
 	"unsafe"
 )
@@ -32,21 +31,14 @@ func mumuDirs() []string {
 	return dirs
 }
 func ldInstallations() []installation {
-	var result []installation
+	var records []ldRecord
 	for _, version := range []string{"14", "9"} {
 		key := `Software\leidian\LDPlayer` + version
-		dir := regString(syscall.HKEY_CURRENT_USER, key, "InstallDir", 0)
-		data := regString(syscall.HKEY_CURRENT_USER, key, "DataDir", 0)
-		for _, base := range []string{dir, filepath.Join(os.Getenv("SystemDrive")+`\`, "leidian", "LDPlayer"+version)} {
-			if !filepath.IsAbs(base) {
-				continue
-			}
-			vms := filepath.Join(base, "vms")
-			if base == dir && filepath.IsAbs(data) {
-				vms = data
-			}
-			result = append(result, installation{kind: "ldplayer", exe: filepath.Join(base, "ldconsole.exe"), data: vms})
-		}
+		records = append(records, ldRecord{
+			version: version,
+			dir:     regString(syscall.HKEY_CURRENT_USER, key, "InstallDir", 0),
+			data:    regString(syscall.HKEY_CURRENT_USER, key, "DataDir", 0),
+		})
 	}
-	return result
+	return ldInstallationsOf(records, os.Getenv("SystemDrive"))
 }

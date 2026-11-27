@@ -75,6 +75,16 @@ test('ordinary force stop does not opt into canceling creation', async () => {
   assert.notEqual(h.requests[0].body.cancel_create, true);
 });
 
+test('import-from-emulator menu entry only where the manager can import', async () => {
+  const h = await harness();
+  const item = () => h.cards.menuItems({ i: 3, inst: { index: 3, status: 'online', running: true } }).find(x => x && x.label === '从模拟器导入游戏…');
+  assert.equal(item(), undefined);
+  h.state.list = { instances: [] };
+  assert.equal(item(), undefined);
+  h.state.list = { instances: [], game_import_supported: true };
+  assert.equal(item().disabled, false);
+});
+
 // Small browser boundary for the actual settings submit and card update paths. No emulator or network is used.
 class Element {
   constructor(tag) {

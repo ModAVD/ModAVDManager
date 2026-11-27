@@ -2,6 +2,7 @@
 package gamesource
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -40,5 +41,42 @@ func TestLDRuntimeForwarding(t *testing.T) {
 	}
 	if got := ldForwardedPort(strings.NewReader(strings.ReplaceAll(log, `"adb"`, `"other"`))); got != 0 {
 		t.Fatalf("unrelated port %d", got)
+	}
+}
+
+// The default folder on the system drive is a guess for an install without registry records, never an alternative
+// to a registered one.
+func TestLDFallbackOnlyWithoutRegistryRecords(t *testing.T) {
+	drive, dir14, dir9 := t.TempDir(), t.TempDir(), t.TempDir()
+	exes := func(list []installation) []string {
+		var out []string
+		for _, i := range list {
+			out = append(out, i.exe)
+		}
+		return out
+	}
+	none := []ldRecord{{version: "14"}, {version: "9"}}
+	got := ldInstallationsOf(none, drive)
+	if len(got) != 2 || !strings.Contains(got[0].exe, "LDPlayer14") || !strings.Contains(got[1].exe, "LDPlayer9") || !strings.HasPrefix(got[0].exe, drive) {
+		t.Fatalf("no record: %v", exes(got))
+	}
+	for name, records := range map[string][]ldRecord{
+		"both":     {{version: "14", dir: dir14, data: filepath.Join(dir14, "data")}, {version: "9", dir: dir9}},
+		"only 9":   {{version: "14"}, {version: "9", dir: dir9}},
+		"relative": {{version: "14", dir: `relative\LDPlayer14`}, {version: "9"}},
+	} {
+		for _, i := range ldInstallationsOf(records, drive) {
+			if strings.HasPrefix(i.exe, drive) {
+				t.Fatalf("%s: used the fallback next to a record: %v", name, i.exe)
+			}
+		}
+	}
+	got = ldInstallationsOf([]ldRecord{{version: "14", dir: dir14, data: filepath.Join(dir14, "data")}, {version: "9", dir: dir9}}, drive)
+	if len(got) != 2 || got[0].exe != filepath.Join(dir14, "ldconsole.exe") || got[0].data != filepath.Join(dir14, "data") ||
+		got[1].exe != filepath.Join(dir9, "ldconsole.exe") || got[1].data != filepath.Join(dir9, "vms") {
+		t.Fatalf("registered: %+v", got)
+	}
+	if got := ldInstallationsOf(none, ""); len(got) != 0 {
+		t.Fatalf("no system drive: %v", exes(got))
 	}
 }

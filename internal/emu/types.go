@@ -126,6 +126,7 @@ type InstanceInfo struct {
 // RootInfo describes the root a command worked on.
 type RootInfo struct {
 	RegionalSupported   bool   `json:"regional_supported,omitempty"`
+	GameImportSupported bool   `json:"game_import_supported,omitempty"`
 	Root                string `json:"root"`
 	SDK                 string `json:"sdk"`       // the SDK actually used (sdkRoot or <root>\sdk)
 	LocalSDK            bool   `json:"local_sdk"` // mas-avd.json sets sdkRoot

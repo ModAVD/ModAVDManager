@@ -405,6 +405,7 @@ func (m *Manager) instance(i int) (*avd.Instance, error) {
 func (m *Manager) rootInfo() RootInfo {
 	info := RootInfo{
 		RegionalSupported:   root.CurrentPlatform().Windows(),
+		GameImportSupported: root.CurrentPlatform().Windows(),
 		Root:                m.Root.Dir,
 		SDK:                 m.Root.RuntimeSDK(),
 		LocalSDK:            m.Root.LocalSDKRoot() != "",

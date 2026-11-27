@@ -58,7 +58,7 @@ func mumuRowOf(raw json.RawMessage) (Player, bool) {
 // value in the output is looked at, and only the instance rows (those with an index and a name) are used.
 func parseMuMuPlayers(out []byte) ([]Player, error) {
 	var found []Player
-	values := 0
+	values, content := 0, false
 	for pos := 0; ; {
 		n := bytes.IndexByte(out[pos:], '{')
 		if n < 0 {
@@ -81,6 +81,7 @@ func parseMuMuPlayers(out []byte) ([]Player, error) {
 		if json.Unmarshal(raw, &keyed) != nil {
 			continue
 		}
+		content = content || len(keyed) > 0
 		for _, v := range keyed {
 			if p, ok := mumuRowOf(v); ok {
 				found = append(found, p)
@@ -89,6 +90,11 @@ func parseMuMuPlayers(out []byte) ([]Player, error) {
 	}
 	if values == 0 {
 		return nil, errs.Newf(errs.Internal, "MuMu info：输出里没有可读的实例信息：%s", snippet(out))
+	}
+	// An empty object is a MuMu without instances. Objects with content but no instance in them (only tracking
+	// records, an error reply) are output this code does not understand, which must not read as "no instances".
+	if len(found) == 0 && content {
+		return nil, errs.Newf(errs.Internal, "MuMu info：输出里没有实例信息：%s", snippet(out))
 	}
 	sort.SliceStable(found, func(a, b int) bool { return found[a].Index < found[b].Index })
 	result := make([]Player, 0, len(found))

@@ -16,6 +16,41 @@ import (
 	"modavd/internal/host"
 )
 
+// ldRecord is what the registry holds for one LDPlayer version (empty when it holds nothing).
+type ldRecord struct{ version, dir, data string }
+
+// ldInstallationsOf lists the registered installations in the order of records. The default folder on the system
+// drive is only a guess for an install that left no registry record: any local user may create it, so it is used
+// when no record exists at all, and never next to one.
+func ldInstallationsOf(records []ldRecord, systemDrive string) []installation {
+	var result []installation
+	registered := false
+	for _, r := range records {
+		if r.dir == "" {
+			continue
+		}
+		registered = true
+		if !filepath.IsAbs(r.dir) {
+			continue
+		}
+		vms := filepath.Join(r.dir, "vms")
+		if filepath.IsAbs(r.data) {
+			vms = r.data
+		}
+		result = append(result, installation{kind: "ldplayer", exe: filepath.Join(r.dir, "ldconsole.exe"), data: vms})
+	}
+	if registered {
+		return result
+	}
+	for _, r := range records {
+		base := filepath.Join(systemDrive+`\`, "leidian", "LDPlayer"+r.version)
+		if filepath.IsAbs(base) {
+			result = append(result, installation{kind: "ldplayer", exe: filepath.Join(base, "ldconsole.exe"), data: filepath.Join(base, "vms")})
+		}
+	}
+	return result
+}
+
 // list2 is ANSI on Windows. Names can contain commas; the optional final fields are width, height and DPI.
 var ldRow = regexp.MustCompile(`^(\d+),(.+?),-?\d+,-?\d+,([0-9]),(-?\d+),(-?\d+)(?:,\d+,\d+,\d+)?$`)
 
