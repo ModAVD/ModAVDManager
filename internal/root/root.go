@@ -22,6 +22,7 @@ package root
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -383,12 +384,17 @@ const metadataAdvice = "这份文件没有被改动；请修好它（JSON 格式
 // ReadMetadata reads mas-avd.json: a missing file is an empty object; a file that exists but cannot be read, is not
 // JSON or is not an object is an errs.MetadataUnreadable error (callers that write must stop then, never overwrite).
 func (r *Root) ReadMetadata() (*jsonord.Value, error) {
+	v, err := r.readMetadata()
+	if errors.Is(err, fs.ErrNotExist) {
+		return jsonord.NewObject(), nil
+	}
+	return v, err
+}
+
+func (r *Root) readMetadata() (*jsonord.Value, error) {
 	path := r.MetadataPath()
 	data, err := ReadFileShared(path)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return jsonord.NewObject(), nil
-		}
 		reason := err.Error()
 		if errors.Is(err, fs.ErrPermission) {
 			reason = "拒绝访问（可能正被别的程序独占）"
@@ -434,7 +440,11 @@ func (r *Root) EditMetadata(fn func(o *jsonord.Obj) (bool, error)) error { retur
 
 // editMetadata is UpdateMetadata where fn also says whether it changed anything (no write when not).
 func (r *Root) editMetadata(fn func(o *jsonord.Obj) (bool, error)) error {
-	l, err := r.lockMetadata()
+	return r.editMetadataContext(context.Background(), fn)
+}
+
+func (r *Root) editMetadataContext(ctx context.Context, fn func(o *jsonord.Obj) (bool, error)) error {
+	l, err := r.lockMetadata(ctx)
 	if err != nil {
 		return err
 	}
@@ -447,12 +457,23 @@ func (r *Root) editMetadata(fn func(o *jsonord.Obj) (bool, error)) error {
 	if err != nil || !changed {
 		return err
 	}
-	return r.writeMetadata(v)
+	return r.writeMetadata(ctx, v)
 }
 
-func (r *Root) lockMetadata() (*fileLock, error) {
+func (r *Root) lockMetadata(ctx context.Context) (*fileLock, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	wait := metadataLockWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline))
+	}
 	path := r.MetadataPath() + ".lock"
-	l, ok, err := lockFile(path, metadataLockWait)
+	l, ok, err := lockFile(path, wait)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		l.unlock()
+		return nil, ctxErr
+	}
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "mas-avd.json 的锁文件打不开: "+path)
 	}
@@ -470,7 +491,10 @@ func metadataBytes(v *jsonord.Value) []byte {
 }
 
 // writeMetadata writes the temp file (flushed to disk) and renames it over mas-avd.json. Caller holds the lock.
-func (r *Root) writeMetadata(v *jsonord.Value) error {
+func (r *Root) writeMetadata(ctx context.Context, v *jsonord.Value) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := r.MetadataPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return errs.Wrap(errs.Internal, err, "建不了目录: "+filepath.Dir(path))
@@ -480,7 +504,7 @@ func (r *Root) writeMetadata(v *jsonord.Value) error {
 		os.Remove(tmp)
 		return errs.Wrap(errs.Internal, err, fmt.Sprintf("写 %s 失败：%v", tmp, err))
 	}
-	if err := ReplaceWithRetry(tmp, path); err != nil {
+	if err := replaceWithRetry(ctx, tmp, path); err != nil {
 		os.Remove(tmp)
 		return errs.Wrap(errs.Internal, err, fmt.Sprintf("替换 %s 失败：%v", path, err)).
 			WithAdvice("可能正被别的程序独占；关掉占用它的程序后再试")
@@ -506,13 +530,27 @@ func writeFileSync(path string, data []byte) error {
 // ReplaceWithRetry renames source over target, retrying for up to 3 s while target (or source) is open somewhere
 // (AUTO-MAS replace_with_retry). Any open handle blocks the rename, delete sharing or not (see OpenShared).
 func ReplaceWithRetry(source, target string) error {
+	return replaceWithRetry(context.Background(), source, target)
+}
+
+func replaceWithRetry(ctx context.Context, source, target string) error {
 	deadline := time.Now().Add(replaceRetry)
 	for {
+		// The rename commits the write. A timed-out retry must never publish the staged file.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := os.Rename(source, target)
 		if err == nil || !retryableReplaceError(err) || !time.Now().Before(deadline) {
 			return err
 		}
-		time.Sleep(50 * time.Millisecond)
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
@@ -533,7 +571,7 @@ func (r *Root) EnsureMetadata() (bool, error) {
 	if ok, err := exists(); ok || err != nil {
 		return false, err
 	}
-	l, err := r.lockMetadata()
+	l, err := r.lockMetadata(context.Background())
 	if err != nil {
 		return false, err
 	}
@@ -550,7 +588,7 @@ func (r *Root) EnsureMetadata() (bool, error) {
 	v := jsonord.NewObject()
 	v.Obj().Set("components", components)
 	v.Obj().Set("addedAt", jsonord.NewString(NowISO()))
-	if err := r.writeMetadata(v); err != nil {
+	if err := r.writeMetadata(context.Background(), v); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -562,6 +600,15 @@ func NowISO() string { return time.Now().Format("2006-01-02T15:04:05") }
 // InstanceMeta is a copy of instances.<i> (empty object when absent or not an object).
 func (r *Root) InstanceMeta(i int) *jsonord.Obj {
 	return r.MetadataLoose().Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj().Clone()
+}
+
+// ReadInstanceMeta reads instances.<i> from one snapshot, reporting even a missing mas-avd.json as an error.
+func (r *Root) ReadInstanceMeta(i int) (*jsonord.Obj, error) {
+	v, err := r.readMetadata()
+	if err != nil {
+		return nil, err
+	}
+	return v.Obj().Get("instances").Obj().Get(strconv.Itoa(i)).Obj(), nil
 }
 
 // instanceKeyOrder is the order AUTO-MAS's keyword arguments add these keys in (create: memoryMb, initialized,
@@ -605,8 +652,14 @@ func (r *Root) UpdateInstanceMeta(i int, changes map[string]*jsonord.Value) erro
 // and stores the result back in place; for changes whose new keys must come in a given order. fn returning an error
 // aborts without writing.
 func (r *Root) EditInstanceMeta(i int, fn func(meta *jsonord.Obj) error) error {
+	return r.EditInstanceMetaContext(context.Background(), i, fn)
+}
+
+// EditInstanceMetaContext is EditInstanceMeta with a deadline on lock acquisition and a cancellation check
+// before committing the update.
+func (r *Root) EditInstanceMetaContext(ctx context.Context, i int, fn func(meta *jsonord.Obj) error) error {
 	key := strconv.Itoa(i)
-	return r.UpdateMetadata(func(o *jsonord.Obj) error {
+	return r.editMetadataContext(ctx, func(o *jsonord.Obj) (bool, error) {
 		instances := o.Get("instances")
 		if instances.Kind() != jsonord.Object {
 			instances = jsonord.NewObject()
@@ -616,11 +669,11 @@ func (r *Root) EditInstanceMeta(i int, fn func(meta *jsonord.Obj) error) error {
 			meta = jsonord.NewObject()
 		}
 		if err := fn(meta.Obj()); err != nil {
-			return err
+			return false, err
 		}
 		instances.Obj().Set(key, meta)
 		o.Set("instances", instances)
-		return nil
+		return true, nil
 	})
 }
 

@@ -106,6 +106,10 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 	}
 
 	steps := []func(){
+		// 0) the notification tone off, once per instance and not in the first boot of a new one (notifysound.go,
+		//    ModAVD/ModAVD#280): first of all, before the guest posts a notification the sound would play for (the
+		//    Safety Center's, about 18 s after the boot)
+		func() { m.setupNotificationSound(ctx, i) },
 		func() {
 			// 0a) the guest library fixes (Vulkan driver, ARM translation layer). A launched boot of an initialized
 			//     instance has mounted them during the boot animation already (earlyGuestFixes): this only finds them
