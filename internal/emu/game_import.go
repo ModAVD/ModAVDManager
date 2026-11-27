@@ -339,6 +339,9 @@ func (m *Manager) ImportGames(ctx context.Context, target int, source gamesource
 			return nil, errs.New(errs.InvalidArgument, "请选择第三方应用")
 		}
 	}
+	if err := checkGamesStopped(ctx, src, dst, games); err != nil {
+		return nil, err
+	}
 	results := make([]GameImportResult, 0, len(games))
 	for _, g := range games {
 		r, err := importGame(ctx, src, dst, g, progress)

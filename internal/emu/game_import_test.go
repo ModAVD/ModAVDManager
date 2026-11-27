@@ -227,3 +227,83 @@ func TestRemoveStaleImportDirsOnDisk(t *testing.T) {
 		t.Fatal("removed a nested directory")
 	}
 }
+
+// ModAVD/ModAVD#273: a game running on either side stops the import before anything is touched.
+func TestAppRunningReadsProcessNames(t *testing.T) {
+	list := func(names ...string) string {
+		return "NAME\ninit\nzygote64\n" + strings.Join(names, "\n") + "\nsystem_server\nexit:0\n"
+	}
+	for _, tc := range []struct {
+		name, out string
+		running   bool
+		fail      bool
+	}{
+		{"main process", list("example.game"), true, false},
+		{"only a service", list("example.game:download"), true, false},
+		{"main process and service", list("example.game", "example.game:push"), true, false},
+		{"CRLF", strings.ReplaceAll(list("example.game:download"), "\n", "\r\n"), true, false},
+		{"no header", "init\nexample.game\nexit:0\n", true, false},
+		{"padded names", "NAME                       \ninit                       \nexample.game               \nexit:0\n", true, false},
+		{"not running", list(), false, false},
+		{"longer package name", list("example.gamex", "example.game.extra"), false, false},
+		{"other package's service named like the game", list("other.app:example.game"), false, false},
+		{"suffix only", list("my.example.game", "my.example.game:svc"), false, false},
+		{"no ps", "/system/bin/sh: ps: inaccessible or not found\nexit:127\n", false, true},
+		{"ps failed after a partial list", "NAME\ninit\nexit:1\n", false, true},
+		{"no process list", "NAME\nexit:0\n", false, true},
+		{"no output", "", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &scriptedGuest{reply: func(string) (string, error) { return tc.out, nil }}
+			running, err := appRunning(context.Background(), g.device(), "example.game")
+			if running != tc.running || (err != nil) != tc.fail {
+				t.Fatalf("running=%v err=%v", running, err)
+			}
+			if len(g.scripts) != 1 || !strings.Contains(g.scripts[0], "ps -A -o NAME") {
+				t.Fatalf("scripts=%q", g.scripts)
+			}
+		})
+	}
+}
+
+func TestCheckGamesStopped(t *testing.T) {
+	games := []ImportGame{{Package: "example.one"}, {Package: "example.two"}}
+	answer := func(names ...string) func(string) (string, error) {
+		return func(string) (string, error) {
+			return "NAME\ninit\n" + strings.Join(names, "\n") + "\nexit:0\n", nil
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		dst, src []string
+		wantErr  string
+		srcAsked bool
+	}{
+		{"both stopped", nil, nil, "", true},
+		{"target running", []string{"example.two"}, nil, "目标实例上的 example.two 正在运行", false},
+		{"target service only", []string{"example.two:download"}, nil, "目标实例上的 example.two 正在运行", false},
+		{"source running", nil, []string{"example.one"}, "源模拟器上的 example.one 正在运行", true},
+		{"source service only", nil, []string{"example.one:download"}, "源模拟器上的 example.one 正在运行", true},
+		{"both running", []string{"example.one"}, []string{"example.one"}, "目标实例上的 example.one 正在运行", false},
+		{"similar names are not the game", []string{"example.onex", "other:example.one"}, []string{"example.two.x"}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst, src := &scriptedGuest{reply: answer(tc.dst...)}, &scriptedGuest{reply: answer(tc.src...)}
+			err := checkGamesStopped(context.Background(), src.device(), dst.device(), games)
+			if tc.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantErr != "" && (errs.CodeOf(err) != errs.PrecheckFailed || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("err=%v", err)
+			}
+			if (len(src.scripts) > 0) != tc.srcAsked {
+				t.Fatalf("source asked=%v", len(src.scripts) > 0)
+			}
+			for _, s := range append(slices.Clone(src.scripts), dst.scripts...) {
+				if strings.Contains(s, "kill") || strings.Contains(s, "force-stop") || strings.Contains(s, "am ") {
+					t.Fatalf("not read-only: %q", s)
+				}
+			}
+		})
+	}
+}
