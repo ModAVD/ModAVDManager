@@ -129,6 +129,12 @@ func (m *Manager) connectImportDevice(ctx context.Context, port int) (importDevi
 	return d, nil
 }
 
+// importPortConflict reports whether a source's adb port belongs to ModAVD: one of the instances' ports, the default
+// adb server's 5037, or one of the reserved adb server ports.
+func importPortConflict(port int, instancePorts map[int]bool, reserved ...int) bool {
+	return instancePorts[port] || port == 5037 || slices.Contains(reserved, port)
+}
+
 // disconnect drops this device's transport from the script adb server, which every script on the machine shares.
 // Failing only leaves the connection where it was, so it is logged.
 func (d importDevice) disconnect() {
@@ -156,7 +162,7 @@ func (m *Manager) gameSource(ctx context.Context, source gamesource.Source) (_ i
 	if err != nil {
 		return importDevice{}, err
 	}
-	if m.Root.Ports().InstancePorts()[p.Port] || p.Port == 5037 || p.Port == m.Root.ScriptAdbServerPort() || p.Port == m.Root.AdbServerPort() {
+	if importPortConflict(p.Port, m.Root.Ports().InstancePorts(), m.Root.ScriptAdbServerPort(), m.Root.AdbServerPort()) {
 		return importDevice{}, errs.Newf(errs.PortConflict, "源实例端口 %d 与 ModAVD 冲突", p.Port)
 	}
 	// An instance can be in the vendor's running list before Android has started
