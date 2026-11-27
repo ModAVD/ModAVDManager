@@ -267,11 +267,18 @@ func (r *overlayRun) maintain(o *win.Overlay, now time.Time) {
 	if r.released {
 		return
 	}
+	// Qt may enable its windows again on its own (a restore, a show); while the cover is up they are disabled again at once.
+	for h := range r.disabled {
+		if r.ops.Enabled(h) {
+			r.ops.SetEnabled(h, false)
+		}
+	}
 	// Covers first, then the windows stop taking input: no moment in which neither holds. The mark names a window
 	// before it is disabled, so a process that is ended between the two still leaves what the recovery needs.
 	var fresh []uintptr
 	for _, s := range specs {
-		if !r.disabled[s.Owner] && o.CoverOf(s.Owner) != 0 {
+		// only a window that takes input now is ours to disable and to give back; one that was disabled before is left as it was
+		if !r.disabled[s.Owner] && o.CoverOf(s.Owner) != 0 && r.ops.Enabled(s.Owner) {
 			r.disabled[s.Owner] = true
 			fresh = append(fresh, s.Owner)
 		}

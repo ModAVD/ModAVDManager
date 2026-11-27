@@ -252,3 +252,82 @@ func TestCoverPaintsAFrame(t *testing.T) {
 		t.Errorf("no text in the picture (%d light pixels)", white)
 	}
 }
+
+// A disabled window can still be minimized and restored from outside (Win+D and back, the boss key): ShowWindow works
+// on it, and the cover follows. Qt's own windows may enable themselves again meanwhile, which the overlay answers by
+// disabling them again (emu overlay_windows.go maintain).
+func TestDisabledWindowMinimizesAndRestores(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var mainCover uintptr
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)); mainCover = o.CoverOf(f.Main) })
+	if !SetWindowEnabled(f.Main, false) {
+		t.Fatal("cannot disable")
+	}
+	f.Minimize()
+	deadline := time.Now().Add(3 * time.Second)
+	for !GeometryOf(f.Main).Minimized && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !GeometryOf(f.Main).Minimized {
+		t.Fatal("did not minimize")
+	}
+	f.Restore()
+	deadline = time.Now().Add(3 * time.Second)
+	for GeometryOf(f.Main).Minimized && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if GeometryOf(f.Main).Minimized {
+		t.Fatal("a disabled window did not restore")
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for !GeometryOf(mainCover).Visible && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !GeometryOf(mainCover).Visible {
+		t.Error("the cover did not come back")
+	}
+}
+
+// Qt's hidden helper window of the emulator process (Qt..ScreenChangeObserverWindow: no title, never shown, as big as a
+// screen) is no emulator window: it is not listed, and a whole overlay session (covers, disabling, enabling, minimize,
+// restore) leaves it hidden, enabled and where it was. (11-28: a script that showed it put a white 1920 x 1023 window on
+// the desktop.)
+func TestHelperWindowIsNeverTouched(t *testing.T) {
+	f := startFakeEmulator(t)
+	state := func() (Geometry, bool) { return GeometryOf(f.Helper), IsWindowEnabled(f.Helper) }
+	before, enabled := state()
+	if !before.Exists || before.Visible || !enabled {
+		t.Fatalf("the stand-in helper window is not hidden and enabled to begin with: %+v %v", before, enabled)
+	}
+	wins, err := EmulatorWindows(f.PID)
+	if err != nil || len(wins) != 2 {
+		t.Fatalf("emulator windows %v %v", wins, err)
+	}
+	for _, w := range wins {
+		if w == f.Helper {
+			t.Fatal("the helper window is listed as an emulator window")
+		}
+	}
+	h := startOverlay(t, OverlayOptions{Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)) })
+	for _, w := range wins {
+		SetWindowEnabled(w, false)
+	}
+	f.Minimize()
+	time.Sleep(200 * time.Millisecond)
+	f.Restore()
+	f.Hide()
+	f.Show()
+	time.Sleep(200 * time.Millisecond)
+	for _, w := range wins {
+		SetWindowEnabled(w, true)
+	}
+	h.on(func(o *Overlay) { o.Sync(nil) })
+	after, enabledAfter := state()
+	if after != before || enabledAfter != enabled {
+		t.Errorf("the helper window changed: %+v enabled %v, was %+v enabled %v", after, enabledAfter, before, enabled)
+	}
+}

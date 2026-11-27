@@ -84,7 +84,7 @@ func ChildMain() int {
 		r, _, _ := procDefWindowProcW.Call(hwnd, m, wparam, lparam)
 		return r
 	})
-	for _, name := range []string{"Qt653QWindowIcon", "Qt653QWindowToolSaveBits"} {
+	for _, name := range []string{"Qt653QWindowIcon", "Qt653QWindowToolSaveBits", "Qt653ScreenChangeObserverWindow"} {
 		cls, _ := syscall.UTF16PtrFromString(name)
 		wc := wndClassEx{WndProc: proc, Instance: inst, ClassName: cls}
 		wc.Size = uint32(unsafe.Sizeof(wc))
@@ -106,9 +106,11 @@ func ChildMain() int {
 	)
 	mainW = mk("Qt653QWindowIcon", "cover-test", 0, overlapped, X, Y, 640, 400)
 	tool := mk("Qt653QWindowToolSaveBits", "Emulator", toolWindow|noActivate, popup, X+660, Y, 60, 400)
+	// Qt's hidden helper window (no title, never shown, big): nothing may show, move or enable it
+	helper := mk("Qt653ScreenChangeObserverWindow", "", 0, overlapped, X-3000, Y, 1920, 1023)
 	procShowWindow.Call(mainW, showNoAct)
 	procShowWindow.Call(tool, showNoAct)
-	fmt.Printf("READY %d %d %d\n", os.Getpid(), mainW, tool)
+	fmt.Printf("READY %d %d %d %d\n", os.Getpid(), mainW, tool, helper)
 	go func() {
 		io.Copy(io.Discard, os.Stdin) // the parent closing our stdin (or exiting) ends us
 		procPostMessageW.Call(mainW, 0x0010, 0, 0)
@@ -126,8 +128,8 @@ func ChildMain() int {
 
 // Emulator is a started stand-in.
 type Emulator struct {
-	PID        uint32
-	Main, Tool uintptr
+	PID                uint32
+	Main, Tool, Helper uintptr
 }
 
 // Start runs the stand-in (this test binary again) and waits for its windows; it ends with the test.
@@ -166,7 +168,7 @@ func Start(t testing.TB) *Emulator {
 		t.Fatalf("fake emulator: %v", err)
 	}
 	e := &Emulator{}
-	if _, err := fmt.Sscanf(strings.TrimSpace(line), "READY %d %d %d", &e.PID, &e.Main, &e.Tool); err != nil {
+	if _, err := fmt.Sscanf(strings.TrimSpace(line), "READY %d %d %d %d", &e.PID, &e.Main, &e.Tool, &e.Helper); err != nil {
 		t.Fatalf("fake emulator said %q", line)
 	}
 	return e

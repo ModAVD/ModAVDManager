@@ -550,6 +550,10 @@ func TestOverlayRunCoversUntilTheInstanceIsOnline(t *testing.T) {
 		t.Fatalf("while the setup runs: enabled %v %v covered %v ended %v", a, b, f.covered(), f.ended.Load())
 	}
 
+	// a window that enables itself again (Qt does, on a restore) is disabled again while the cover is up
+	win.SetWindowEnabled(f.emu.Main, true)
+	f.waitFor("the window disabled again", 2*time.Second, func() bool { return !win.IsWindowEnabled(f.emu.Main) })
+
 	// done: the windows are back at once and the overlay ends
 	done := time.Now()
 	putRecord(t, f.m, f.i, f.q, func(r *readyRecord) { r.Done = true })
@@ -566,6 +570,40 @@ func TestOverlayRunCoversUntilTheInstanceIsOnline(t *testing.T) {
 		t.Error("still covered")
 	}
 	t.Logf("windows back and cover gone %v after the setup was recorded as done", time.Since(done).Round(10*time.Millisecond))
+}
+
+// What the overlay does not own it does not touch: Qt's hidden helper window stays hidden, enabled and where it was, and a
+// window that was disabled before the overlay came is left disabled when the windows are given back (only what the
+// overlay disabled is given back, to the state it had).
+func TestOverlayRunTouchesOnlyWhatItDisabled(t *testing.T) {
+	f := newOverlayFixture(t)
+	unlock := lockStart(t, f.m, f.i)
+	defer unlock()
+	helperBefore := win.GeometryOf(f.emu.Helper)
+	if helperBefore.Visible || !win.IsWindowEnabled(f.emu.Helper) {
+		t.Fatalf("the stand-in helper window: %+v", helperBefore)
+	}
+	win.SetWindowEnabled(f.emu.Tool, false) // disabled before the overlay comes
+	f.start()
+	f.waitFor("the main window disabled", 10*time.Second, func() bool { return !win.IsWindowEnabled(f.emu.Main) })
+	k, ok := f.m.readOverlayMark(f.i)
+	if !ok || len(k.Windows) != 1 || k.Windows[0] != uint64(f.emu.Main) {
+		t.Errorf("mark %+v: want the main window only", k)
+	}
+	f.boot.Store(&[2]bool{true, true})
+	putRecord(t, f.m, f.i, f.q, func(r *readyRecord) { r.Done = true })
+	if c := f.wait("done", 5*time.Second); c != 0 {
+		t.Errorf("exit code %d", c)
+	}
+	if !win.IsWindowEnabled(f.emu.Main) {
+		t.Error("the main window was not given back")
+	}
+	if win.IsWindowEnabled(f.emu.Tool) {
+		t.Error("a window that was disabled before was enabled")
+	}
+	if g := win.GeometryOf(f.emu.Helper); g != helperBefore || !win.IsWindowEnabled(f.emu.Helper) {
+		t.Errorf("the helper window changed: %+v", g)
+	}
 }
 
 // The start is cancelled or killed (nobody holds the start lock any more): the windows are back within 1.5 s plus a
