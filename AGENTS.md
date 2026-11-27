@@ -20,7 +20,7 @@
 ## 做事
 
 - 脚本和测试使用临时根目录，不读取生产根目录或真实用户数据。
-- 管理器的用户可见改动在同一个 PR 中补 `changelog.d/<名字>.<feat|fix|change|remove>.md`。
+- 管理器的用户可见改动在同一个 PR 中补 `changelog.d/<名字>.<feat|fix|change|remove>.md`，两行：先中文、再英文。
 - 界面和命令行显示的中文就是翻译的键：新加或改了中文字符串，按 `internal/i18n/README.md` 补英文译文（`TestCatalog` 会查）。
 - 中英成对的文档（`X.md`、`X.en.md`）两份一起改。
 - `scripts/privacy.py`、`scripts/repo_checks.py`、`scripts/test_repo_checks.py` 和 ModAVD 主仓库的逐字节相同（CI 会核对），要改先在 ModAVD 改；只有 `scripts/privacy-allowlist.json` 是本仓库自己的。
