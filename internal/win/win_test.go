@@ -5,6 +5,7 @@ package win
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -820,6 +821,119 @@ func TestL3Parse(t *testing.T) {
 	// A truncated last entry is ignored.
 	if g := parseL3Groups(cat(entry(3, 32<<20, 0xFF00), entry(3, 16<<20, 0xF)[:47])); len(g) != 1 {
 		t.Errorf("truncated entry: %+v", g)
+	}
+}
+
+func TestCoreClasses(t *testing.T) {
+	raw := processorTopology(relationProcessorCore)
+	classes := CoreClasses()
+	t.Logf("core topology %d bytes, classes %+v", len(raw), classes)
+	if len(classes) == 0 {
+		t.Fatal("no core classes")
+	}
+	logical := 0
+	for _, c := range classes {
+		logical += c.Logical
+	}
+	if logical < runtime.NumCPU() {
+		t.Errorf("%d logical processors in the classes, runtime.NumCPU %d", logical, runtime.NumCPU())
+	}
+}
+
+func TestCoreClassParse(t *testing.T) {
+	// core is one RelationProcessorCore entry: Flags, EfficiencyClass, then one GROUP_AFFINITY per mask.
+	core := func(class byte, masks ...uint64) []byte {
+		b := make([]byte, 32+16*len(masks))
+		binary.LittleEndian.PutUint32(b[0:], relationProcessorCore)
+		binary.LittleEndian.PutUint32(b[4:], uint32(len(b)))
+		b[9] = class
+		binary.LittleEndian.PutUint16(b[30:], uint16(len(masks)))
+		for g, m := range masks {
+			binary.LittleEndian.PutUint64(b[32+16*g:], m)
+			binary.LittleEndian.PutUint16(b[40+16*g:], uint16(g))
+		}
+		return b
+	}
+	other := make([]byte, 48) // an entry of another relationship is skipped
+	binary.LittleEndian.PutUint32(other[0:], relationCache)
+	binary.LittleEndian.PutUint32(other[4:], 48)
+	other[9] = 7
+
+	// Intel 12th gen like: 2 P-cores with SMT (class 1), 4 E-cores (class 0), listed P first
+	hybrid := slices.Concat(core(1, 0b11), core(1, 0b1100), other, core(0, 1<<4), core(0, 1<<5), core(0, 1<<6),
+		core(0, 1<<7))
+	got := parseCoreClasses(hybrid)
+	want := []CoreClass{{Class: 0, Cores: 4, Logical: 4}, {Class: 1, Cores: 2, Logical: 4}}
+	if !slices.Equal(got, want) {
+		t.Errorf("hybrid: %+v, want %+v", got, want)
+	}
+	// one class; a core spread over two groups counts both masks
+	if got := parseCoreClasses(slices.Concat(core(0, 0b11), core(0, 0b1, 0b1))); !slices.Equal(got,
+		[]CoreClass{{Class: 0, Cores: 2, Logical: 4}}) {
+		t.Errorf("uniform: %+v", got)
+	}
+	if got := parseCoreClasses(nil); got != nil {
+		t.Errorf("empty: %+v", got)
+	}
+	// a zero size stops the walk, a truncated last entry is left out
+	broken := core(1, 0b11)
+	binary.LittleEndian.PutUint32(broken[4:], 0)
+	if got := parseCoreClasses(slices.Concat(core(0, 1), broken, core(1, 0b11))); !slices.Equal(got,
+		[]CoreClass{{Class: 0, Cores: 1, Logical: 1}}) {
+		t.Errorf("zero size: %+v", got)
+	}
+	if got := parseCoreClasses(slices.Concat(core(0, 1), core(1, 0b11)[:40])); !slices.Equal(got,
+		[]CoreClass{{Class: 0, Cores: 1, Logical: 1}}) {
+		t.Errorf("truncated: %+v", got)
+	}
+	// GroupCount larger than the entry: only the masks inside it count
+	lying := core(2, 0b111)
+	binary.LittleEndian.PutUint16(lying[30:], 5)
+	if got := parseCoreClasses(lying); !slices.Equal(got, []CoreClass{{Class: 2, Cores: 1, Logical: 3}}) {
+		t.Errorf("group count past the entry: %+v", got)
+	}
+}
+
+// The switch on a child of the test: Windows decides before, the child stays unthrottled after; a killed process is
+// an error that is not "unsupported".
+func TestDisableExecutionThrottling(t *testing.T) {
+	p := startChild(t, StartOptions{}, "60")
+	controlled, throttled, err := ExecutionThrottling(p)
+	if errs.CodeOf(err) == errs.Unsupported {
+		t.Skipf("GetProcessInformation(ProcessPowerThrottling) not supported here: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("before: controlled %v throttled %v", controlled, throttled)
+	if err := DisableExecutionThrottling(p); err != nil {
+		t.Fatal(err)
+	}
+	controlled, throttled, err = ExecutionThrottling(p)
+	if err != nil || !controlled || throttled {
+		t.Errorf("after: controlled %v throttled %v %v, want controlled and not throttled", controlled, throttled, err)
+	}
+	if err := DisableExecutionThrottling(p); err != nil { // again: nothing changes
+		t.Errorf("second call: %v", err)
+	}
+	p.Kill()
+	p.Wait(5 * time.Second)
+	if err := DisableExecutionThrottling(p); err == nil || errs.CodeOf(err) == errs.Unsupported {
+		t.Errorf("on a killed process: %v", err)
+	}
+}
+
+func TestThrottlingUnsupported(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{syscall.Errno(87), true}, {syscall.Errno(50), true}, {syscall.Errno(120), true}, {syscall.Errno(1), true},
+		{syscall.ERROR_ACCESS_DENIED, false}, {syscall.EINVAL, false}, {errors.New("x"), false}, {nil, false},
+	} {
+		if got := throttlingUnsupported(c.err); got != c.want {
+			t.Errorf("%v: %v, want %v", c.err, got, c.want)
+		}
 	}
 }
 

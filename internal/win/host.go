@@ -5,8 +5,10 @@ package win
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -16,9 +18,138 @@ import (
 
 const (
 	aboveNormalPriorityClass = 0x00008000
+	relationProcessorCore    = 0 // LOGICAL_PROCESSOR_RELATIONSHIP RelationProcessorCore (winnt.h)
 	relationCache            = 2 // LOGICAL_PROCESSOR_RELATIONSHIP RelationCache
 	fileMapRead              = 0x0004
+
+	// processthreadsapi.h (Windows SDK 10.0.26100.0): ProcessPowerThrottling is the fifth PROCESS_INFORMATION_CLASS
+	// (after ProcessMemoryPriority, ProcessMemoryExhaustionInfo, ProcessAppMemoryInfo, ProcessInPrivateInfo).
+	processPowerThrottling               = 4
+	processPowerThrottlingCurrentVersion = 1   // PROCESS_POWER_THROTTLING_CURRENT_VERSION
+	processPowerThrottlingExecutionSpeed = 0x1 // PROCESS_POWER_THROTTLING_EXECUTION_SPEED
 )
+
+// powerThrottlingState is PROCESS_POWER_THROTTLING_STATE: three ULONGs, Version, ControlMask, StateMask.
+type powerThrottlingState struct {
+	Version     uint32
+	ControlMask uint32
+	StateMask   uint32
+}
+
+// DisableExecutionThrottling tells Windows never to throttle the execution speed of p (EcoQoS), visible or not:
+// SetProcessInformation(ProcessPowerThrottling) with EXECUTION_SPEED in the control mask and cleared in the state
+// mask. On hybrid processors the process is then scheduled as high QoS, which prefers the performance cores. An
+// errs.Unsupported error when this Windows has no such switch (no SetProcessInformation before Windows 8, the
+// information class rejected before Windows 10 1709).
+func DisableExecutionThrottling(p Process) error {
+	if procSetProcessInformation.Find() != nil {
+		return errs.New(errs.Unsupported, "这个 Windows 版本没有 SetProcessInformation")
+	}
+	h, err := p.openRunning(processSetInformation, "关闭进程节流")
+	if err != nil {
+		return err
+	}
+	defer syscall.CloseHandle(h)
+	st := powerThrottlingState{Version: processPowerThrottlingCurrentVersion,
+		ControlMask: processPowerThrottlingExecutionSpeed, StateMask: 0}
+	if r, err := call(procSetProcessInformation, uintptr(h), processPowerThrottling, uintptr(unsafe.Pointer(&st)),
+		unsafe.Sizeof(st)); r == 0 {
+		if throttlingUnsupported(err) {
+			return errs.Wrap(errs.Unsupported, err, "这个 Windows 版本不支持关闭进程节流: "+err.Error())
+		}
+		return errs.Wrap(errs.Internal, err, fmt.Sprintf("关闭%s的进程节流失败: %v", p.label(), err))
+	}
+	return nil
+}
+
+// throttlingUnsupported: the error of a Windows that does not know the information class or the structure.
+func throttlingUnsupported(err error) bool {
+	const (
+		errorInvalidFunction    = 1   // ERROR_INVALID_FUNCTION
+		errorNotSupported       = 50  // ERROR_NOT_SUPPORTED
+		errorInvalidParameter   = 87  // ERROR_INVALID_PARAMETER
+		errorCallNotImplemented = 120 // ERROR_CALL_NOT_IMPLEMENTED
+	)
+	en, ok := err.(syscall.Errno)
+	return ok && (en == errorInvalidParameter || en == errorNotSupported || en == errorCallNotImplemented ||
+		en == errorInvalidFunction)
+}
+
+// ExecutionThrottling reads p's PROCESS_POWER_THROTTLING_STATE back (GetProcessInformation): controlled is true
+// when the process decides its execution speed throttling itself, throttled when it asked for it. Not controlled
+// means Windows decides (the default).
+func ExecutionThrottling(p Process) (controlled, throttled bool, err error) {
+	if procGetProcessInformation.Find() != nil {
+		return false, false, errs.New(errs.Unsupported, "这个 Windows 版本没有 GetProcessInformation")
+	}
+	h, err := p.openRunning(processQueryLimitedInformation, "读取进程节流")
+	if err != nil {
+		return false, false, err
+	}
+	defer syscall.CloseHandle(h)
+	st := powerThrottlingState{Version: processPowerThrottlingCurrentVersion}
+	if r, err := call(procGetProcessInformation, uintptr(h), processPowerThrottling, uintptr(unsafe.Pointer(&st)),
+		unsafe.Sizeof(st)); r == 0 {
+		code := errs.Internal
+		if throttlingUnsupported(err) {
+			code = errs.Unsupported
+		}
+		return false, false, errs.Wrap(code, err, fmt.Sprintf("读取%s的进程节流失败: %v", p.label(), err))
+	}
+	return st.ControlMask&processPowerThrottlingExecutionSpeed != 0,
+		st.StateMask&processPowerThrottlingExecutionSpeed != 0, nil
+}
+
+// CoreClass is one EfficiencyClass of the host's cores: how many cores and logical processors have it. A higher
+// class is a faster core; a host without hybrid cores has a single class 0.
+type CoreClass struct {
+	Class   uint8
+	Cores   int
+	Logical int
+}
+
+// CoreClasses are the efficiency classes of the host's cores, lowest first (every processor group); nil when the
+// topology is unreadable.
+func CoreClasses() []CoreClass { return parseCoreClasses(processorTopology(relationProcessorCore)) }
+
+// parseCoreClasses walks SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX entries of RelationProcessorCore (winnt.h):
+// Relationship at +0, Size at +4, then PROCESSOR_RELATIONSHIP: Flags +8, EfficiencyClass +9, Reserved[20],
+// GroupCount (WORD) +30, GroupMask[GroupCount] from +32, 16 bytes each (GROUP_AFFINITY: KAFFINITY Mask, WORD Group,
+// WORD Reserved[3]). An entry that is cut short ends the walk.
+func parseCoreClasses(raw []byte) []CoreClass {
+	byClass := map[uint8]*CoreClass{}
+	for off := 0; off+8 <= len(raw); {
+		size := int(binary.LittleEndian.Uint32(raw[off+4:]))
+		if size <= 0 || off+size > len(raw) {
+			break
+		}
+		if binary.LittleEndian.Uint32(raw[off:]) == relationProcessorCore && size >= 32 {
+			class := raw[off+9]
+			n := int(binary.LittleEndian.Uint16(raw[off+30:]))
+			logical := 0
+			for g := 0; g < n && off+32+16*(g+1) <= off+size; g++ {
+				logical += bits.OnesCount64(binary.LittleEndian.Uint64(raw[off+32+16*g:]))
+			}
+			c := byClass[class]
+			if c == nil {
+				c = &CoreClass{Class: class}
+				byClass[class] = c
+			}
+			c.Cores++
+			c.Logical += logical
+		}
+		off += size
+	}
+	if len(byClass) == 0 {
+		return nil
+	}
+	out := make([]CoreClass, 0, len(byClass))
+	for _, c := range byClass {
+		out = append(out, *c)
+	}
+	slices.SortFunc(out, func(a, b CoreClass) int { return int(a.Class) - int(b.Class) })
+	return out
+}
 
 // SetAboveNormalPriority sets ABOVE_NORMAL_PRIORITY_CLASS.
 func SetAboveNormalPriority(p Process) error {
@@ -86,17 +217,21 @@ type l3Group struct {
 
 // cacheTopology is the raw GetLogicalProcessorInformationEx(RelationCache) buffer, nil when unreadable (AUTO-MAS
 // emulator_native.cpu_cache_topology).
-func cacheTopology() []byte {
+func cacheTopology() []byte { return processorTopology(relationCache) }
+
+// processorTopology is the raw GetLogicalProcessorInformationEx buffer of one LOGICAL_PROCESSOR_RELATIONSHIP, nil
+// when unreadable.
+func processorTopology(relation uintptr) []byte {
 	if procGetLogicalProcessorInformationEx.Find() != nil {
 		return nil
 	}
 	var n uint32
-	procGetLogicalProcessorInformationEx.Call(relationCache, 0, uintptr(unsafe.Pointer(&n)))
+	procGetLogicalProcessorInformationEx.Call(relation, 0, uintptr(unsafe.Pointer(&n)))
 	if n == 0 {
 		return nil
 	}
 	buf := make([]byte, n)
-	r, _, _ := procGetLogicalProcessorInformationEx.Call(relationCache, uintptr(unsafe.Pointer(&buf[0])),
+	r, _, _ := procGetLogicalProcessorInformationEx.Call(relation, uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&n)))
 	if r == 0 || int(n) > len(buf) {
 		return nil

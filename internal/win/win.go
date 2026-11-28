@@ -70,6 +70,8 @@ var (
 	procSetPriorityClass                 = modkernel32.NewProc("SetPriorityClass")
 	procSetProcessAffinityMask           = modkernel32.NewProc("SetProcessAffinityMask")
 	procGetProcessAffinityMask           = modkernel32.NewProc("GetProcessAffinityMask")
+	procSetProcessInformation            = modkernel32.NewProc("SetProcessInformation")
+	procGetProcessInformation            = modkernel32.NewProc("GetProcessInformation")
 	procOpenFileMappingW                 = modkernel32.NewProc("OpenFileMappingW")
 	procGetDiskFreeSpaceExW              = modkernel32.NewProc("GetDiskFreeSpaceExW")
 	procGetVolumePathNameW               = modkernel32.NewProc("GetVolumePathNameW")

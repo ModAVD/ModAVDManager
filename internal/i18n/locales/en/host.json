@@ -1,4 +1,8 @@
 {
   "当前平台暂不支持此操作": "This operation is not supported on this platform yet",
-  "当前平台暂不支持消息框": "Message boxes are not supported on this platform yet"
+  "当前平台暂不支持消息框": "Message boxes are not supported on this platform yet",
+  "有大小核（效率等级越高越快）：%v": "hybrid cores (a higher efficiency class is faster): %v",
+  "没有大小核（%d 核 %d 个逻辑处理器，效率等级都是 %d）": "no hybrid cores (%d cores, %d logical processors, all of efficiency class %d)",
+  "等级 %d：%d 核 %d 个逻辑处理器": "class %d: %d cores, %d logical processors",
+  "读不到": "unreadable"
 }

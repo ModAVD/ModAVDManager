@@ -163,6 +163,7 @@
   "启动卡死线程转储（startup-*-hang-threads.txt）：没有": null,
   "命令行一直在变长": null,
   "图形说明：宿主 Metal 支持不代表模拟器 Vulkan 或游戏兼容性已通过验证": null,
+  "处理器核的效率等级（大小核）": null,
   "复制 %v 失败：%v": null,
   "复制 mas-avd.json 失败：%v": null,
   "复制到剪贴板": "Copying to the clipboard",
