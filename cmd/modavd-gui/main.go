@@ -212,6 +212,12 @@ func run(args []string) (code int) {
 		// let go of the root first: the message box stays up until it is clicked away, and a new launch meanwhile
 		// must not take this dead manager for a running one
 		inst.release()
+		var refused *ui.StartRefusedError
+		if errors.As(err, &refused) {
+			// nothing was begun: not the same as a job that was accepted and could not open the app
+			fatalErr(fmt.Sprintf("管理器没有受理开实例 %d 的请求", refused.Index), err)
+			return 1
+		}
 		fatalErr("管理器启动失败", err)
 		return errs.ExitCode(err)
 	}

@@ -53,24 +53,23 @@ func TestParseAppTarget(t *testing.T) {
 	}
 }
 
-// fakeApp is a guest for launchApp: canned answers per command, every command recorded, a clock that only moves when
-// the code sleeps.
+// fakeApp is a guest for launchApp: canned answers per command, every command recorded. The wait for the front is
+// short in real time (200 ms, a look every 5 ms).
 type fakeApp struct {
 	t        *testing.T
-	now      time.Time
 	commands []string
 	pmPath   adb.Result
 	resolve  adb.Result
 	amStart  adb.Result
 	tops     []string // successive foregroundTopScript outputs; the last one repeats
-	slept    time.Duration
 	probes   int
+	// probe, when set, answers a look at the front instead of tops (k counts from 0); it gets the context of the call.
+	probe func(ctx context.Context, k int) adb.Result
 }
 
 func (f *fakeApp) guest() appGuest {
-	f.now = time.Unix(1_000, 0)
 	return appGuest{
-		shell: func(command string, _ time.Duration) adb.Result {
+		shell: func(ctx context.Context, command string, _ time.Duration) adb.Result {
 			f.commands = append(f.commands, command)
 			switch {
 			case strings.HasPrefix(command, "pm path "):
@@ -80,16 +79,18 @@ func (f *fakeApp) guest() appGuest {
 			case strings.HasPrefix(command, "am start "):
 				return f.amStart
 			case command == foregroundTopScript:
-				k := min(f.probes, len(f.tops)-1)
+				k := f.probes
 				f.probes++
-				return adb.Result{Out: f.tops[k]}
+				if f.probe != nil {
+					return f.probe(ctx, k)
+				}
+				return adb.Result{Out: f.tops[min(k, len(f.tops)-1)]}
 			}
 			f.t.Errorf("unexpected command %q", command)
 			return adb.Result{Code: 1}
 		},
-		sleep:   func(_ context.Context, d time.Duration) { f.now = f.now.Add(d); f.slept += d },
-		now:     func() time.Time { return f.now },
-		timeout: 3 * time.Second,
+		timeout: 200 * time.Millisecond,
+		poll:    5 * time.Millisecond,
 	}
 }
 
@@ -119,8 +120,8 @@ func TestLaunchAppResolvesLauncherActivity(t *testing.T) {
 	if fmt.Sprint(f.commands) != fmt.Sprint(want) {
 		t.Errorf("commands %q, want %q", f.commands, want)
 	}
-	if f.slept != 2*appPollEvery || r.Seconds != (2*appPollEvery).Seconds() {
-		t.Errorf("slept %v, seconds %v", f.slept, r.Seconds)
+	if f.probes != 3 || r.Seconds < (2*5*time.Millisecond).Seconds() {
+		t.Errorf("probes %d, seconds %v", f.probes, r.Seconds)
 	}
 }
 
@@ -147,8 +148,8 @@ func TestLaunchAppAlreadyInFront(t *testing.T) {
 		amStart: adb.Result{Out: "Starting: Intent { cmp=com.example.app/.Main }\r\nWarning: Activity not started, its current task has been brought to the front\r\n"},
 		tops:    []string{topOf("com.example.app/.Main")}}
 	r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"})
-	if !r.OK || f.slept != 0 {
-		t.Fatalf("%+v slept %v", r, f.slept)
+	if !r.OK || f.probes != 1 {
+		t.Fatalf("%+v probes %d", r, f.probes)
 	}
 }
 
@@ -211,12 +212,13 @@ func TestLaunchAppStartRefused(t *testing.T) {
 func TestLaunchAppNeverInFront(t *testing.T) {
 	f := &fakeApp{t: t, pmPath: adb.Result{Out: installed},
 		tops: []string{topOf("com.android.permissioncontroller/.GrantPermissionsActivity")}}
+	began := time.Now()
 	r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"})
 	if r.OK || r.Code != errs.Timeout || !strings.Contains(r.Message, "permissioncontroller") || errs.ExitCode(r.Err()) != 6 {
 		t.Fatalf("%+v", r)
 	}
-	if f.slept < 3*time.Second || f.slept > 4*time.Second {
-		t.Errorf("waited %v for a timeout of 3 s", f.slept)
+	if d := time.Since(began); d < 200*time.Millisecond || d > 3*time.Second {
+		t.Errorf("waited %v for a timeout of 200 ms", d)
 	}
 	f = &fakeApp{t: t, pmPath: adb.Result{Out: installed}, tops: []string{"garbage"}}
 	if r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"}); r.Code != errs.Timeout ||
@@ -228,11 +230,75 @@ func TestLaunchAppNeverInFront(t *testing.T) {
 func TestLaunchAppCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeApp{t: t, pmPath: adb.Result{Out: installed}, tops: []string{"top: topResumedActivity=null"}}
-	g := f.guest()
-	g.sleep = func(context.Context, time.Duration) { cancel() }
-	r := launchApp(ctx, g, AppTarget{Package: "com.example.app", Activity: ".Main"})
+	f.probe = func(context.Context, int) adb.Result {
+		cancel()
+		return adb.Result{Out: topOf("com.example.app/.Main")} // the app is there, but the call was canceled meanwhile
+	}
+	r := launchApp(ctx, f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"})
 	if r.OK || r.Code != errs.Canceled || errs.ExitCode(r.Err()) != 8 {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// One deadline covers the whole wait: an adb call that hangs ends with it (it gets the deadline's context), and a
+// success that only comes back after the deadline is not the app being in front.
+func TestLaunchAppDeadlineCoversEveryProbe(t *testing.T) {
+	f := &fakeApp{t: t, pmPath: adb.Result{Out: installed}}
+	f.probe = func(ctx context.Context, k int) adb.Result {
+		<-ctx.Done() // a hanging adb: only the context ends it
+		return adb.Result{Code: -1}
+	}
+	began := time.Now()
+	r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"})
+	if r.OK || r.Code != errs.Timeout || f.probes != 1 || time.Since(began) > 3*time.Second {
+		t.Fatalf("hanging probe: %+v, probes %d, took %v", r, f.probes, time.Since(began))
+	}
+
+	f = &fakeApp{t: t, pmPath: adb.Result{Out: installed}}
+	f.probe = func(ctx context.Context, k int) adb.Result {
+		time.Sleep(400 * time.Millisecond) // does not look at ctx: answers late, past the 200 ms deadline
+		return adb.Result{Out: topOf("com.example.app/.Main")}
+	}
+	if r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"}); r.OK || r.Code != errs.Timeout {
+		t.Fatalf("late success counted: %+v", r)
+	}
+
+	// looks that come in time still win before the deadline, however slow each one is
+	f = &fakeApp{t: t, pmPath: adb.Result{Out: installed}}
+	f.probe = func(ctx context.Context, k int) adb.Result {
+		time.Sleep(30 * time.Millisecond)
+		if k < 3 {
+			return adb.Result{Out: "top: topResumedActivity=null"}
+		}
+		return adb.Result{Out: topOf("com.example.app/.Main")}
+	}
+	if r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: ".Main"}); !r.OK || f.probes != 4 {
+		t.Fatalf("slow looks: %+v, probes %d", r, f.probes)
+	}
+}
+
+// The word Exception in an activity name is no error: only the diagnostic lines of am count.
+func TestLaunchAppActivityNameWithException(t *testing.T) {
+	for _, activity := range []string{".ExceptionActivity", ".UncaughtExceptionHandlerActivity", "com.example.app.ErrorActivity"} {
+		f := &fakeApp{t: t, pmPath: adb.Result{Out: installed},
+			amStart: adb.Result{Out: "Starting: Intent { cmp=com.example.app/" + activity + " }\r\nWarning: Activity not started, its current task has been brought to the front\r\n"},
+			tops:    []string{topOf("com.example.app/" + activity)}}
+		if r := launchApp(context.Background(), f.guest(), AppTarget{Package: "com.example.app", Activity: activity}); !r.OK {
+			t.Errorf("%s: %+v", activity, r)
+		}
+	}
+	for _, out := range []string{
+		"Starting: Intent { cmp=com.example.app/.Main }\r\nError: Activity class {com.example.app/com.example.app.Main} does not exist.",
+		"Starting: Intent { cmp=com.example.app/.Main }\r\nError type 3",
+		"Exception occurred while executing 'start':\r\njava.lang.SecurityException: Permission Denial: starting Intent",
+		"java.lang.SecurityException: Permission Denial: starting Intent",
+	} {
+		if failed, _ := amStartFailed(adb.Result{Out: out}); !failed {
+			t.Errorf("not taken as an error: %q", out)
+		}
+	}
+	if failed, _ := amStartFailed(adb.Result{Out: "Starting: Intent { cmp=com.example.app/.ExceptionActivity }"}); failed {
+		t.Error("the echoed activity name was taken as an error")
 	}
 }
 
@@ -262,13 +328,13 @@ func TestStartLaunchesAfterTheBoot(t *testing.T) {
 		f := &fakeApp{t: t, pmPath: adb.Result{Out: installed}, tops: []string{topOf("com.example.app/.Main")}}
 		g := f.guest()
 		inner := g.shell
-		g.shell = func(c string, d time.Duration) adb.Result {
+		g.shell = func(ctx context.Context, c string, d time.Duration) adb.Result {
 			if len(order) == 1 {
 				order = append(order, "app")
 			}
-			return inner(c, d)
+			return inner(ctx, c, d)
 		}
-		appGuestOf = func(*Manager, context.Context, int) appGuest { return g }
+		appGuestOf = func(*Manager, int) appGuest { return g }
 		res, err := m.Start(context.Background(), 3, StartOptions{Launch: &AppTarget{Package: "com.example.app", Activity: ".Main"}})
 		if err != nil || res.Launched != launched || res.App == nil || !res.App.OK || res.App.Component != "com.example.app/.Main" {
 			t.Fatalf("launched=%v: %+v, %v", launched, res, err)
@@ -287,7 +353,7 @@ func TestStartLaunchFailureKeepsTheStart(t *testing.T) {
 		return &StartResult{Launched: true}, nil
 	}
 	f := &fakeApp{t: t, pmPath: adb.Result{Code: 1}}
-	appGuestOf = func(*Manager, context.Context, int) appGuest { return f.guest() }
+	appGuestOf = func(*Manager, int) appGuest { return f.guest() }
 	res, err := (&Manager{Log: logx.Nop()}).Start(context.Background(), 3, StartOptions{Launch: &AppTarget{Package: "com.example.missing"}})
 	if err != nil || !res.Launched || res.App == nil || res.App.OK || res.App.Code != errs.AppNotInstalled {
 		t.Fatalf("%+v, %v", res, err)

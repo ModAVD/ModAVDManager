@@ -136,30 +136,24 @@ func (a *AppLaunch) Err() error {
 	return errs.New(a.Code, a.Message).WithAdvice(a.Advice)
 }
 
-// appGuest is how launchApp reaches the guest; tests use a fake with a clock.
+// appGuest is how launchApp reaches the guest; tests use a fake. Every call carries the context it must stop with.
 type appGuest struct {
-	shell   func(command string, timeout time.Duration) adb.Result
-	sleep   func(ctx context.Context, d time.Duration)
-	now     func() time.Time
+	shell func(ctx context.Context, command string, timeout time.Duration) adb.Result
+	// timeout is how long the app has to become the resumed activity; poll is the pause between two looks.
 	timeout time.Duration
+	poll    time.Duration
 }
 
 // appGuestOf is how openApp reaches the guest; a test replaces it with a fake guest.
 var appGuestOf = (*Manager).appGuest
 
-func (m *Manager) appGuest(ctx context.Context, i int) appGuest {
+func (m *Manager) appGuest(i int) appGuest {
 	return appGuest{
-		shell: func(command string, timeout time.Duration) adb.Result { return m.shell(ctx, i, command, timeout) },
-		sleep: func(ctx context.Context, d time.Duration) {
-			t := time.NewTimer(d)
-			defer t.Stop()
-			select {
-			case <-ctx.Done():
-			case <-t.C:
-			}
+		shell: func(ctx context.Context, command string, timeout time.Duration) adb.Result {
+			return m.shell(ctx, i, command, timeout)
 		},
-		now:     time.Now,
 		timeout: AppLaunchTimeout,
+		poll:    appPollEvery,
 	}
 }
 
@@ -169,11 +163,11 @@ const foregroundTopScript = `echo "top: $(dumpsys activity activities | grep -m1
 
 // launchApp opens t in the guest and waits for it to be in front. It never returns an error: a failure is the result.
 func launchApp(ctx context.Context, g appGuest, t AppTarget) *AppLaunch {
-	start := g.now()
+	start := time.Now()
 	res := &AppLaunch{Package: t.Package}
 	fail := func(code, msg, advice string) *AppLaunch {
 		res.OK, res.Code, res.Message, res.Advice = false, code, msg, advice
-		res.Seconds = g.now().Sub(start).Seconds()
+		res.Seconds = time.Since(start).Seconds()
 		if ctx.Err() != nil {
 			res.Code, res.Message, res.Advice = errs.Canceled, "已取消", ""
 		}
@@ -181,7 +175,7 @@ func launchApp(ctx context.Context, g appGuest, t AppTarget) *AppLaunch {
 	}
 
 	// pm path is exact (pm list packages matches by prefix) and prints nothing for a package that is not there.
-	out := g.shell("pm path "+t.Package, 20*time.Second)
+	out := g.shell(ctx, "pm path "+t.Package, 20*time.Second)
 	switch installed, ok := parsePmPath(out); {
 	case installed:
 	case ok:
@@ -195,7 +189,7 @@ func launchApp(ctx context.Context, g appGuest, t AppTarget) *AppLaunch {
 	if t.Activity != "" {
 		component = t.Package + "/" + t.Activity
 	} else {
-		out := g.shell("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "+
+		out := g.shell(ctx, "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "+
 			t.Package, 20*time.Second)
 		c, ok := parseLauncherComponent(t.Package, out.Out)
 		if !ok {
@@ -206,28 +200,36 @@ func launchApp(ctx context.Context, g appGuest, t AppTarget) *AppLaunch {
 	}
 	res.Component = component
 
-	if failed, why := amStartFailed(g.shell("am start -n "+component, 30*time.Second)); failed {
+	if failed, why := amStartFailed(g.shell(ctx, "am start -n "+component, 30*time.Second)); failed {
 		return fail(errs.AppLaunchFailed, fmt.Sprintf("打开 %s 失败：%s", component, why), "")
 	}
 
-	deadline := g.now().Add(g.timeout)
+	// One deadline for the whole wait, and every look carries it: a look that hangs ends with it, and what comes back
+	// after the deadline or a cancel is not taken as the app being in front.
+	dctx, stop := context.WithTimeout(ctx, g.timeout)
+	defer stop()
 	front := ""
-	for {
-		probe := g.shell(foregroundTopScript, 10*time.Second)
+	for dctx.Err() == nil {
+		probe := g.shell(dctx, foregroundTopScript, 10*time.Second)
+		if dctx.Err() != nil {
+			break
+		}
 		if top, _, topOK, _ := parseForegroundProbe(probe.Out); topOK {
 			if pkg, none, ok := resumedPackage(top); ok && !none {
 				front = pkg
 				if pkg == t.Package {
 					res.OK = true
-					res.Seconds = g.now().Sub(start).Seconds()
+					res.Seconds = time.Since(start).Seconds()
 					return res
 				}
 			}
 		}
-		if ctx.Err() != nil || !g.now().Before(deadline) {
-			break
+		pause := time.NewTimer(g.poll)
+		select {
+		case <-dctx.Done():
+		case <-pause.C:
 		}
-		g.sleep(ctx, appPollEvery)
+		pause.Stop()
 	}
 	if front == "" {
 		front = "读不出来"
@@ -265,14 +267,19 @@ func parseLauncherComponent(pkg, out string) (string, bool) {
 	return last, true
 }
 
-// amStartFailed: `am start` printed an error (it does not always exit non-zero). The "Warning: Activity not started,
-// its current task has been brought to the front" of an app that was running already is no failure.
+// amStartFailed: `am start` printed an error (it does not always exit non-zero). Only the diagnostic lines count
+// ("Error: ...", "Error type N", "Exception occurred while executing ...", a SecurityException, "Permission Denial"):
+// the "Starting: Intent { cmp=... }" line echoes the activity name, which may well contain a word like Exception, and
+// the "Warning: Activity not started, its current task has been brought to the front" of an app that was running
+// already is no failure.
 func amStartFailed(r adb.Result) (bool, string) {
 	text := strings.TrimSpace(r.Out)
 	for _, line := range outputLines(text) {
 		l := strings.TrimSpace(line)
-		if strings.HasPrefix(l, "Error") || strings.Contains(l, "Exception") || strings.Contains(l, "Permission Denial") {
-			return true, tail(text, 300)
+		for _, prefix := range []string{"Error:", "Error type ", "Exception occurred", "java.lang.SecurityException", "Permission Denial"} {
+			if strings.HasPrefix(l, prefix) {
+				return true, tail(text, 300)
+			}
 		}
 	}
 	if r.Code != 0 {
@@ -288,7 +295,7 @@ func amStartFailed(r adb.Result) (bool, string) {
 // the call's.
 func (m *Manager) openApp(ctx context.Context, i int, t AppTarget) *AppLaunch {
 	m.Log.Infof("实例 %d 正在打开应用 %s", i, t)
-	r := launchApp(ctx, appGuestOf(m, ctx, i), t)
+	r := launchApp(ctx, appGuestOf(m, i), t)
 	if r.OK {
 		m.Log.Infof("实例 %d 已打开应用 %s（%.1f 秒）", i, r.Component, r.Seconds)
 	} else {

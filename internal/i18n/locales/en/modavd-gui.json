@@ -37,6 +37,7 @@
   "管理器崩溃: %v\n%s": "Manager crashed: %v\\n%s",
   "管理器已在运行（%s），重新打开窗口": "The manager is already running (%s); reopening the window",
   "管理器接收更新结果失败（HTTP %d）": "The manager failed to receive the update result (HTTP %d)",
+  "管理器没有受理开实例 %d 的请求": "The manager did not accept the request to start instance %d",
   "管理器没有接受开机请求（HTTP %d）": "The manager did not accept the start request (HTTP %d)",
   "警告": "Warning",
   "请关掉已经打开的管理器窗口，等十几秒后再打开；还不行就在任务管理器里结束 ModAVD.exe。": "Close the open manager window, wait about ten seconds, and open it again. If that does not help, end ModAVD.exe in Task Manager.",

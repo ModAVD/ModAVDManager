@@ -324,7 +324,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Launch string `json:"launch"`
+		Launch *string `json:"launch"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -332,11 +332,12 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.respondJob(w)(s.startInstanceJob(i, body.Launch))
 }
 
-// startInstanceJob is the start job of instance i, with the app to open afterwards when launch is not "".
-func (s *server) startInstanceJob(i int, launch string) (jobView, error) {
+// startInstanceJob is the start job of instance i, with the app to open afterwards when launch is given (nil: none;
+// an empty name is a bad name like any other, not "none").
+func (s *server) startInstanceJob(i int, launch *string) (jobView, error) {
 	var target *emu.AppTarget
-	if launch != "" {
-		t, err := emu.ParseAppTarget(launch)
+	if launch != nil {
+		t, err := emu.ParseAppTarget(*launch)
 		if err != nil {
 			return jobView{}, err
 		}
