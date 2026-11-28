@@ -37,6 +37,21 @@ import (
 	"modavd/internal/update"
 )
 
+// StartRequest is an instance for Run to start, and the app (package or package/activity) to open on it afterwards.
+type StartRequest struct {
+	Index  int
+	Launch string
+}
+
+// StartRefusedError is the error of Run when Options.Start was not accepted: no job was begun.
+type StartRefusedError struct {
+	Index int
+	Err   error
+}
+
+func (e *StartRefusedError) Error() string { return e.Err.Error() }
+func (e *StartRefusedError) Unwrap() error { return e.Err }
+
 // Options of Run.
 type Options struct {
 	Root *root.Root
@@ -65,6 +80,11 @@ type Options struct {
 	// Windows only, ignored elsewhere). The manager then stays after its window closed, in the tray, until 退出 in the
 	// icon's menu (or the process is told to end).
 	Tray bool
+	// Start, when set, starts that instance with its window as soon as the server listens, the same job as POST
+	// /api/instances/{i}/start (ModAVD.exe --start). A request the manager does not accept (an update is being handed
+	// over, the instance is busy ...) ends Run with *StartRefusedError, the manager does not stay up for nothing; one
+	// that is accepted is a job whose outcome (the app that could not be opened included) is on its page.
+	Start *StartRequest
 
 	// Test hooks.
 	newTray        newTrayFunc // the tray of Tray; nil = the real one
@@ -333,8 +353,19 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.Ready != nil {
 		opt.Ready(base, s.token)
 	}
+	var startErr error
+	if opt.Start != nil {
+		var launch *string
+		if opt.Start.Launch != "" {
+			launch = &opt.Start.Launch
+		}
+		if _, err := s.startInstanceJob(opt.Start.Index, launch); err != nil {
+			s.log.Errorf("按命令行要求开实例 %d，管理器没有受理: %v", opt.Start.Index, err)
+			startErr = &StartRefusedError{Index: opt.Start.Index, Err: err}
+		}
+	}
 	var w *Window
-	if opt.OpenWindow {
+	if opt.OpenWindow && startErr == nil {
 		if w, err = s.launch(base + "?t=" + s.token); err != nil {
 			s.log.Errorf("打不开管理器窗口: %v", err)
 		} else if w.Edge {
@@ -350,7 +381,9 @@ func Run(ctx context.Context, opt Options) error {
 		go s.removeOld(s.log)
 	}
 
-	s.waitForExit(ctx, w)
+	if startErr == nil {
+		s.waitForExit(ctx, w)
+	}
 	s.stopTray()
 
 	s.log.Infof("管理器退出")
@@ -362,7 +395,7 @@ func Run(ctx context.Context, opt Options) error {
 		srv.Close()
 	}
 	<-served
-	return nil
+	return startErr
 }
 
 // waitForExit returns when the manager should exit: ctx ended (jobs cancelled, waited for briefly), or the window is

@@ -154,6 +154,7 @@
   "打开实例文件夹要给 index": "index is required to open an instance folder",
   "打开问题包所在文件夹要给 job（收集问题信息的任务 id）": "job (the id of the problem report collection task) is required to open the folder of the problem report",
   "批量新建只开始了 %d 台，实例 %d 没开始: %s": "The batch create started only %d, instance %d did not start: %s",
+  "按命令行要求开实例 %d，管理器没有受理: %v": "The manager did not accept the command-line request to start instance %d: %v",
   "换一个端口（--port），或者不带 --port 让系统挑一个空闲端口": "Use another port (--port), or omit --port to let the system pick a free one",
   "排队：等实例 %d 新建完": "Queued: waiting for instance %d to be created",
   "收集问题信息": "collecting problem report info",

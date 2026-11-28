@@ -16,7 +16,10 @@
 //	proxy <i> test                                        emu.AppProxyTestResult
 //	delete <i> --yes                                      emu.DeleteResult (without --yes: usage error)
 //	clone <i> [--title T]                                 emu.CloneResult {source,instance,copied_bytes}
-//	start <i> [--window|--headless] [--timeout 300]       emu.StartResult (running the other way than asked: busy)
+//	start <i> [--window|--headless] [--timeout 300] [--launch PKG[/ACTIVITY]]   emu.StartResult (running the other way
+//	                                                      than asked: busy; with --launch the result has "app", and a
+//	                                                      failure to open the app is the exit code of its error:
+//	                                                      app_not_installed 3, timeout 6, app_launch_failed 7)
 //	stop <i> [--force]                                    emu.StopResult
 //	stop --all [--force]                                  StopAllResult {"results":[StopResult],"failed":[{index,error}]}
 //	check [--memory M]                                    emu.CheckResult (exit 0 even when not ready: see "ready")

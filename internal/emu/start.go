@@ -88,7 +88,28 @@ var startFindQemu = (*Manager).findQemu
 // A start that finishes records the guest boot it set up and leaves a boot watch on its qemu (bootwatch.go): when
 // the guest reboots on its own (qemu stays), the watch runs this start again, and so does any start that finds the
 // recorded boot_id changed. The per-boot steps then run again and the guest library fixes are owed as above.
+//
+// With opt.Launch, the app is opened once all of that is done (launchapp.go). The name is checked first, so a bad one
+// boots nothing; an app that cannot be opened leaves the instance up and is reported in StartResult.App.
 func (m *Manager) Start(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
+	if opt.Launch != nil {
+		if err := opt.Launch.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	res, err := startBootedStep(m, ctx, i, opt)
+	if err != nil || opt.Launch == nil || res == nil {
+		return res, err
+	}
+	res.App = m.openApp(ctx, i, *opt.Launch)
+	return res, nil
+}
+
+// startBootedStep is the boot part of Start; a test replaces it.
+var startBootedStep = (*Manager).startBooted
+
+// startBooted is Start without opt.Launch.
+func (m *Manager) startBooted(ctx context.Context, i int, opt StartOptions) (*StartResult, error) {
 	if err := requireLifecycle(); err != nil {
 		return nil, err
 	}

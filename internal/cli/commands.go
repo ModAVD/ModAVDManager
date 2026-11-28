@@ -123,6 +123,8 @@ var (
 			"空串（或只有空白）表示这次不用 CDK；只在 Windows 上可用，recover 不用"}
 	optBootNoBridge = flagSpec{"no-bridge", kindBool, "",
 		"这次开机不自动装执行桥（实例有执行桥的开机标记、桥还没装时默认会装）"}
+	optLaunch = flagSpec{"launch", kindString, "包名[/Activity]",
+		"开机并做完开机后的设置以后，打开这个应用并等它到前台（最多 30 秒）；实例已经在运行就直接打开"}
 	optAcceptLicense = flagSpec{"accept-license", kindBool, "",
 		"不询问，直接视为同意《Android 软件开发套件许可协议》（自动化用；协议全文照样取回并打印，取不到照样退出）；--json 时必须给"}
 	optKeepDownloads = flagSpec{"keep-downloads", kindBool, "", "装好后保留 downloads 里的 zip（默认装好即删，省 1.5 GB）"}
@@ -264,7 +266,7 @@ func init() {
 			run:   runClone, human: humanOf(formatClone),
 		},
 		{
-			name: "start", args: "<i> [--window | --headless] [--timeout 300] [--no-bridge]", summary: "开机，等 Android 开完并做好开机后的设置",
+			name: "start", args: "<i> [--window | --headless] [--timeout 300] [--no-bridge] [--launch 包名[/Activity]]", summary: "开机，等 Android 开完并做好开机后的设置",
 			details: "默认无头启动，--window 带窗口。运行中不能换：实例已经在运行（或正被另一次 start 开着）时，" +
 				"带了 --window 或 --headless 而它不是这种方式，就报错（busy），不接管也不重启，要换先 stop 再 start；" +
 				"两个都不带就照它现在的方式接管。第一次开机还会做首次初始化。" +
@@ -273,11 +275,17 @@ func init() {
 				"实例已经在运行、设置也都做完时，只重做每次开机都做的设置。" +
 				"返回前确认 /sdcard 能写进文件（一般这时早已就绪，不多花时间；最多再等 60 秒，到点只警告）。" +
 				"实例还没有 arm64 执行桥时，设置做完后自动装上（中间关机再开机一两次）；--no-bridge 这次不装，" +
-				"用 bridge uninstall 卸过或新建时带 --no-bridge 的实例不装，接管已经在运行的实例时也不装。",
-			flags:    []flagSpec{optWindow, optHeadless, optTimeout, optBootNoBridge},
+				"用 bridge uninstall 卸过或新建时带 --no-bridge 的实例不装，接管已经在运行的实例时也不装。" +
+				"--launch 包名[/Activity] 在上面都做完以后打开这个应用（桌面快捷方式、脚本里「开机并直接进游戏」用）：" +
+				"只给包名就打开它的桌面启动入口，给了 Activity（.Main 或完整类名）就直接打开那个；打开后等它到前台，最多 30 秒。" +
+				"包名和 Activity 开机前先检查，格式不对（只许字母、数字、下划线和点）就报错、不开机。" +
+				"没装这个应用不算开机失败：实例照常开着，结果的 app 里 ok 是 false、code 是 app_not_installed，退出码 3；" +
+				"打不开（没有启动入口、am start 报错）是 app_launch_failed，退出码 7；30 秒没到前台是 timeout，退出码 6。" +
+				"--json 的 data.app 是 {package, component, ok, seconds, code, message, advice}。",
+			flags:    []flagSpec{optWindow, optHeadless, optTimeout, optBootNoBridge, optLaunch},
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			final: true,
-			run:   runStart, human: humanOf(formatStart),
+			run:   runStart, human: humanOf(formatStart), exit: exitStart,
 		},
 		{
 			name: "stop", args: "<i> [--force] [--cancel-create] | stop --all [--force]", summary: "关机",
@@ -752,7 +760,23 @@ func buildStartOptions(inv *invocation) (emu.StartOptions, error) {
 		}
 		opt.Timeout = time.Duration(s) * time.Second
 	}
+	if inv.isSet("launch") {
+		t, err := emu.ParseAppTarget(inv.strOpt("launch"))
+		if err != nil {
+			return opt, err
+		}
+		opt.Launch = &t
+	}
 	return opt, nil
+}
+
+// exitStart: the instance is up but the app asked for with --launch could not be opened: the exit code of that
+// failure (the envelope still says ok, the same as stop --all with a failed instance).
+func exitStart(data any, _ bool) int {
+	if r, ok := data.(*emu.StartResult); ok {
+		return errs.ExitCode(r.App.Err())
+	}
+	return 0
 }
 
 func strPtrOpt(inv *invocation, name string) *string {

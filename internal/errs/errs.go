@@ -37,6 +37,12 @@ const (
 	ComponentsRejected    = "components_rejected"    // a download failed its checks (SHA-1 on every mirror; files, pins, version unpacked)
 )
 
+// Codes of start --launch: the instance booted, the app could not be opened (StartResult.App).
+const (
+	AppNotInstalled = "app_not_installed" // the package is not installed in the instance
+	AppLaunchFailed = "app_launch_failed" // no launcher activity, or am start refused
+)
+
 // Code of the per-app proxy (modavd proxy).
 const (
 	ProxyUnavailable = "proxy_unavailable" // the proxy does not answer, or not as SOCKS5 / HTTP; none set on the host for auto
@@ -152,8 +158,9 @@ func As(err error) *Error {
 }
 
 // ExitCode maps an error to the process exit code (part of the contract, see README):
-// 0 ok, 1 internal / other, 2 usage / invalid argument / license declined, 3 not found, 4 not ready / precheck
-// failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed, 8 canceled, 9 update or
+// 0 ok, 1 internal / other, 2 usage / invalid argument / license declined, 3 not found / app not installed, 4 not
+// ready / precheck failed / unsupported, 5 busy / already exists / port conflict, 6 timeout, 7 launch failed / app
+// launch failed, 8 canceled, 9 update or
 // components unavailable / rejected, proxy unavailable, 10 insufficient memory.
 func ExitCode(err error) int {
 	switch CodeOf(err) {
@@ -161,7 +168,7 @@ func ExitCode(err error) int {
 		return 0
 	case Usage, InvalidArgument, LicenseDeclined:
 		return 2
-	case NotFound:
+	case NotFound, AppNotInstalled:
 		return 3
 	case NotReady, PrecheckFailed, Unsupported:
 		return 4
@@ -169,7 +176,7 @@ func ExitCode(err error) int {
 		return 5
 	case Timeout:
 		return 6
-	case LaunchFailed:
+	case LaunchFailed, AppLaunchFailed:
 		return 7
 	case Canceled:
 		return 8

@@ -557,6 +557,16 @@ func formatStart(w io.Writer, r *emu.StartResult) {
 		fmt.Fprintf(w, "logcat：%s\n", r.LogcatFile)
 	}
 	writeWarnings(w, r.Warnings)
+	if a := r.App; a != nil {
+		if a.OK {
+			fmt.Fprintf(w, "已打开应用 %s（%.1f 秒）\n", a.Component, a.Seconds)
+		} else {
+			fmt.Fprintf(w, "没能打开应用 %s（%s）：%s\n", a.Package, a.Code, a.Message)
+			if a.Advice != "" {
+				fmt.Fprintf(w, "建议：%s\n", a.Advice)
+			}
+		}
+	}
 }
 
 // stopMethodText describes StopResult.Method.

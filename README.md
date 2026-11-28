@@ -67,7 +67,7 @@ modavd [--root <目录>] [--json] [--quiet] [--verbose] <命令> [参数]
 | `proxy <i> [on\|off\|test] [--server URL\|auto] [--add 包名] [--remove 包名] [--apps 包名]` | 按应用走代理：名单里的应用走代理，其余直连（见下） |
 | `delete <i> --yes` | 删除已关机的实例，连同游戏数据 |
 | `clone <i> [--title T]` | 把已关机的实例整份复制成一台新实例（游戏、登录状态、设置都带上）：新实例用最小的空闲编号和它的端口，其余设置照源实例；数据盘整份复制，两台互不影响，可用空间不够时报错（`precheck_failed`）、什么都不复制；失败或取消时复制到一半的会删掉。两台的安卓设备标识（Android ID、GSF ID）相同 |
-| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装；装桥要冷启动一两次，带 `--window` 时这几次准备用的开机都无头，装好后正常关机，最后一次才带窗口开机（实例还没有开机标记、一定要装桥时，第一次开机就无头；有标记的要开起来才知道装没装，第一次照样带窗口）。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管 |
+| `start <i> [--window \| --headless] [--timeout 300] [--no-bridge] [--launch 包名[/Activity]]` | 开机（默认无头，`--window` 带窗口），等开完并做完开机后的设置，返回前确认 `/sdcard` 能写进文件（一般这时早已就绪；最多再等 60 秒，到点只警告）；实例正在关机时（比如刚点了模拟器窗口的 ×）先等它关完（最多 30 秒）再开机；实例还没有执行桥时接着装上，`--no-bridge` 这次不装；装桥要冷启动一两次，带 `--window` 时这几次准备用的开机都无头，装好后正常关机，最后一次才带窗口开机（实例还没有开机标记、一定要装桥时，第一次开机就无头；有标记的要开起来才知道装没装，第一次照样带窗口）。运行中不换方式：实例已经在运行时，给了 `--window` / `--headless` 而它不是这种方式，就报错（退出码 5），不接管也不重启，要换先 `stop` 再 `start`；两个都不给就照原样接管。`--launch` 在上面都做完以后打开一个应用（桌面快捷方式、脚本里「开机并直接进游戏」用）：只给包名就打开它的桌面启动入口（`cmd package resolve-activity` 解出），给了 `包名/Activity`（`.Main` 或完整类名）就直接打开那个，然后等它到前台（最多 30 秒）；实例已经开着就直接打开。包名和 Activity 开机前先检查，只许字母、数字、下划线和点（不支持带 `$` 的内部类），不合格报 `invalid_argument`、不开机。没装这个应用不算开机失败，实例照常开着：`--json` 的 `data.app` 是 `{package, component, ok, seconds, code, message, advice}`，`ok:false` 时 `code` 是 `app_not_installed`（退出码 3）、`app_launch_failed`（没有桌面启动入口或 `am start` 报错，退出码 7）、`timeout`（30 秒没到前台，退出码 6），信封里的 `ok` 仍是 `true`。MCP `start_instance` 有同名可选参数 `launch`，结果里同样有 `app`（不算工具错误） |
 | `stop <i> [--force] [--cancel-create]`、`stop --all [--force]` | 关机：前台开着应用时先按 HOME，等 2 秒让它保存；再 sync，让安卓正常关机（前台应用先收到暂停、停止），不成再 sync + kill；`--force` 是 sync + 强杀。新建中默认拒绝，`--cancel-create` 显式取消；`--all` 也关闭新建中的实例，结果标记 `interrupted_create: true` |
 | `bridge <i> install\|uninstall\|verify` | 装、卸、检查 arm64 执行桥；开机时会自动装，一般不用手动跑（见下） |
 | `playstore <i> install\|uninstall\|status` | 给实例补全、移除、查看 Google Play 商店（见下） |
@@ -177,7 +177,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
   - 新字段 `creation`（`""` / `creating` / `failed`）、`creation_error`、`creation_log` 一直出现；状态记在 `mas-avd.json` 的 `instances.<i>.creationState` 等键里，做完就删掉。调用方（AUTO-MAS）认不出的 `status` 取值一律按忙处理。
   - 进度：命令行逐步打印到 stderr，每行带「新建中 NN%」；MCP 的 `create_instance` 发进度通知（带 progressToken 时）；管理器在卡片上显示「新建中 NN%」和进度条（别处发起的新建也显示），「更多」里可以取消新建，关掉窗口会在后台做完。
 
-**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到，10 电脑内存不足、模拟器分不到实例的内存而退出（`insufficient_memory`）。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
+**退出码**：0 成功，1 内部错误，2 用法或参数不对 / 没同意许可协议，3 实例不存在，4 根目录没就绪 / 检查没通过 / 不支持，5 实例忙 / 已存在 / 端口被占，6 超时，7 启动失败，8 已取消，9 更新或补全组件时查不了、下不成 / 下载没通过核对，或者按应用走代理的代理探测不到，10 电脑内存不足、模拟器分不到实例的内存而退出（`insufficient_memory`）。`start --launch` 开机成功但应用没能打开时，退出码是 3（`app_not_installed`）、6（`timeout`）或 7（`app_launch_failed`），见 `start`。`shell` 不带 `--json` 时是客体命令的退出码，`adb` 是 adb 的退出码；`bridge` 不带 `--json` 时，`install` 后没装上、`uninstall` 后还在都是 1，`verify` 是脚本的退出码。
 
 **约定**（和 AUTO-MAS 一致）：
 
@@ -273,7 +273,7 @@ Windows 时区使用 `GetDynamicTimeZoneInformation` 的稳定键名，按 [CLDR
 modavd mcp --root D:\ModAVD
 ```
 
-同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
+同时支持 MCP 2026-07-28（无状态，`server/discover`）和 2025-11-25 / 2025-06-18（`initialize` 握手）。根目录在启动时定，不是工具参数。工具：`list_instances`、`get_instance`、`check_host`、`create_instance`、`update_instance`、`delete_instance`、`start_instance`（带进度；可选 `launch` 开机后打开应用）、`stop_instance`、`set_window_visible`、`shell`、`install_apk`、`disk_info`（数据盘大小）、`trim_disk`（开机态回收空间，模拟器要支持 discard）、`compact_disk`（关机态整理数据盘，实例须已关机）、`get_app_proxy`、`set_app_proxy`（按应用走代理）。
 
 诊断字段仅在 `list_instances` 公开，不提供诊断开关参数；关闭会删日志，需在管理器或 CLI 执行。
 
@@ -332,7 +332,8 @@ Apple Silicon macOS 可运行 `ModAVD` 管理器；`ModAVD.app` 放在包根目�
 - 安全：每次启动随机令牌，换成 HttpOnly cookie（名字带端口，两个根目录的管理器同时开不会互相顶掉）；校验 Host（防 DNS 重绑定）和 Origin；严格的 CSP。
 - 一个根目录只开一个服务，再双击只是把窗口重新打开；状态文件在 `%LOCALAPPDATA%\ModAVD\`，日志在 `<根>\logs\modavd-ui.log`。
 - 关掉窗口后：Windows 上留在托盘（见上）；macOS 上等正在跑的任务做完再退出。托盘图标放不成时也按后者。
-- 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）。
+- 选项：`--root`、`--port`、`--no-window`（只起服务）、`--dev`（放出 `/dev/` 下的假后端，给页面调样式用）、`--start <编号>`、`--launch <包名[/Activity]>`。
+- `ModAVD.exe --start 3 [--launch 包名[/Activity]]`：起来以后带窗口开 3 号实例，`--launch` 再在开好后打开这个应用，适合做桌面快捷方式。这个根目录的管理器已经在运行时，不再起第二个，请求发给正在运行的那个（和再次启动重开窗口是同一套办法，它带窗口开机并打开应用）；没在运行就先起管理器再开。`--no-window` 照旧不弹管理器窗口。编号或包名不对按「用法和参数错误」那条输出、退出码 2，什么也不开；管理器拒绝（比如这台实例上正有别的任务）按启动错误输出、退出码 1；应用没装等打开失败只在管理器里那条开机任务的结果里看（`app`，退出码不反映它）。管理器页面的开机接口 `POST /api/instances/{i}/start` 也接受可选的 `launch`。
 - 用法和参数错误（Windows）：`--help` 退出码 0，参数不对 2。标准输出、标准错误重定向到文件或管道时，用法写进标准输出、错误写进标准错误；没重定向但从终端启动的，写到那个终端；双击、快捷方式启动的照旧弹框。启动以后的错误（找不到根目录等）也这样输出。PowerShell 不等 GUI 程序退出，要拿输出和退出码就用 `Start-Process -Wait -PassThru` 加重定向，例如 `(Start-Process .\ModAVD.exe '--help' -Wait -PassThru -RedirectStandardOutput help.txt).ExitCode`。
 - 前后端接口：`internal/ui/API.md`。页面在 `internal/ui/web/`，图标不随代码许可授权（见 `internal/ui/web/assets/README.md` 和 [NOTICE](NOTICE)）。
 

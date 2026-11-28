@@ -927,7 +927,7 @@ func TestHelp(t *testing.T) {
 	}
 	r = h.run(t, nil, "help", "start")
 	if r.code != 0 || !strings.HasPrefix(r.stdout, "用法：modavd start <i>") || !strings.Contains(r.stdout, "\n选项：\n  --window ") ||
-		!strings.Contains(r.stdout, "  --timeout 秒  最多等") {
+		!strings.Contains(r.stdout, "  --timeout 秒 ") || !strings.Contains(r.stdout, "  最多等 Android 开机多少秒") {
 		t.Errorf("help start: %q", r.stdout)
 	}
 	if r2 := h.run(t, nil, "start", "--help"); r2.stdout != r.stdout {

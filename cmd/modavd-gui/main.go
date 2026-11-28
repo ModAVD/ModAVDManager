@@ -5,7 +5,13 @@
 // closing the page ends it after running jobs finish. A second launch on the same
 // root reopens the page.
 //
-//	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev]
+// --start <i> boots instance i with its window as soon as the manager is up (what the page's start button does), and
+// --launch opens that app once it is up (for desktop shortcuts: boot and go straight into a game). When a manager of
+// the root is running already, the request goes to it (POST /api/instances/{i}/start, the way a second launch hands
+// over an update result) instead of starting a second server; the window is reopened as for any second launch, unless
+// --no-window.
+//
+//	ModAVD.exe [--root <dir>] [--port N] [--no-window] [--dev] [--start <i> [--launch <package>[/<activity>]]]
 //	ModAVD.exe __version      (hidden: version JSON on stdout, see versionArg)
 //
 // On Windows the usage (--help) and startup errors go to a redirected stdout / stderr, or else to the console of
@@ -73,13 +79,13 @@ func main() {
 
 var usage = func() string {
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		return "用法：ModAVD [--root 根目录] [--port 端口] [--no-window] [--chrome-window] [--dev]"
+		return "用法：ModAVD [--root 根目录] [--port 端口] [--no-window] [--chrome-window] [--dev] [--start 实例编号 [--launch 包名[/Activity]]]"
 	}
-	return "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev]"
+	return "用法：ModAVD.exe [--root 根目录] [--port 端口] [--no-window] [--dev] [--start 实例编号 [--launch 包名[/Activity]]]"
 }()
 
 // flagValueNames are the placeholders the usage line gives the options that take a value.
-var flagValueNames = map[string]string{"root": "根目录", "port": "端口"}
+var flagValueNames = map[string]string{"root": "根目录", "port": "端口", "start": "实例编号", "launch": "包名[/Activity]"}
 
 // helpText is what --help shows: the usage line, then every option with what it does.
 func helpText(fs *flag.FlagSet) string {
@@ -174,7 +180,7 @@ func run(args []string) (code int) {
 		return 1
 	}
 	if inst == nil {
-		return reopen(r, a.noWindow, a.chromeWindow, log, a.handoffID)
+		return reopen(r, a.noWindow, a.chromeWindow, log, a.handoffID, a.start)
 	}
 	defer inst.release()
 
@@ -199,12 +205,19 @@ func run(args []string) (code int) {
 	if a.dev {
 		opt.IdleExit = -1
 	}
+	opt.Start = a.start
 	opt.Reopen = reopenArgs(r, a.port, a.noWindow, a.dev, log)
 	if err := ui.Run(ctx, opt); err != nil {
 		log.Errorf("%v", err)
 		// let go of the root first: the message box stays up until it is clicked away, and a new launch meanwhile
 		// must not take this dead manager for a running one
 		inst.release()
+		var refused *ui.StartRefusedError
+		if errors.As(err, &refused) {
+			// nothing was begun: not the same as a job that was accepted and could not open the app
+			fatalErr(fmt.Sprintf("管理器没有受理开实例 %d 的请求", refused.Index), err)
+			return 1
+		}
 		fatalErr("管理器启动失败", err)
 		return errs.ExitCode(err)
 	}
@@ -219,6 +232,7 @@ type guiArgs struct {
 	chromeWindow bool // only an option on macOS arm64
 	dev          bool
 	handoffID    update.HandoffID
+	start        *ui.StartRequest // --start / --launch
 }
 
 // parseArgs reads the command line without looking up the root or starting anything. When the manager is not to
@@ -235,6 +249,8 @@ func parseArgs(args []string, report func(msg string, isErr bool)) (a guiArgs, e
 		fs.BoolVar(&chromeWindow, "chrome-window", false, "用独立 Chrome 应用窗口打开（默认使用系统浏览器）")
 	}
 	dev := fs.Bool("dev", false, "开发模式：提供 /dev/ 的模拟后端页面，没有窗口也不自动退出")
+	startFlag := fs.String("start", "", "启动时带窗口开这台实例（比如 3 或 mas_3）；管理器已在运行就交给它去开")
+	launchFlag := fs.String("launch", "", "和 --start 一起用：实例开好后打开这个应用（包名，或 包名/Activity），等它到前台")
 	handoffArg := fs.String(strings.TrimPrefix(update.HandoffArg, "--"), "", "更新交接 ID")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -261,8 +277,43 @@ func parseArgs(args []string, report func(msg string, isErr bool)) (a guiArgs, e
 			return guiArgs{}, 2, false
 		}
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	start, err := parseStart(*startFlag, *launchFlag, given["start"], given["launch"])
+	if err != nil {
+		report(err.Error()+"\n\n"+usage, true)
+		return guiArgs{}, 2, false
+	}
 	return guiArgs{root: *rootFlag, port: *port, noWindow: *noWindow, chromeWindow: chromeWindow, dev: *dev,
-		handoffID: handoffID}, 0, true
+		handoffID: handoffID, start: start}, 0, true
+}
+
+// parseStart reads --start and --launch: nil when neither is given. Both are checked before anything runs, so a
+// shortcut with a typo shows the usage instead of booting an instance or reaching a running manager.
+func parseStart(start, launch string, startGiven, launchGiven bool) (*ui.StartRequest, error) {
+	if !startGiven {
+		if launchGiven {
+			return nil, errors.New("--launch 要和 --start 一起用")
+		}
+		return nil, nil
+	}
+	n := strings.TrimSpace(start)
+	if len(n) >= len(root.AvdNamePrefix) && strings.EqualFold(n[:len(root.AvdNamePrefix)], root.AvdNamePrefix) {
+		n = n[len(root.AvdNamePrefix):]
+	}
+	i, err := strconv.Atoi(n)
+	if err != nil || len(n) > 2 || !root.ValidIndex(i) {
+		return nil, fmt.Errorf("实例编号 %q 不对（写成 3 或 mas_3，只能是 0–9，5 除外）", start)
+	}
+	req := &ui.StartRequest{Index: i}
+	if launchGiven {
+		t, err := emu.ParseAppTarget(launch)
+		if err != nil {
+			return nil, errors.New(errs.As(err).Message)
+		}
+		req.Launch = t.String()
+	}
+	return req, nil
 }
 
 // reopenArgs is how the CLI starts this manager again after 设置 → 更新: this executable on the same root, with the
@@ -287,7 +338,7 @@ func reopenArgs(r *root.Root, port int, noWindow, dev bool, log *logx.Logger) *u
 }
 
 // reopen is the second launch on a root: the running manager gets a new window.
-func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger, id update.HandoffID) int {
+func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger, id update.HandoffID, start *ui.StartRequest) int {
 	if id != "" {
 		// A failed delivery must not leave this result for a later launch.
 		defer update.TakeHandoff(r, id, time.Now())
@@ -306,6 +357,15 @@ func reopen(r *root.Root, noWindow, chromeWindow bool, log *logx.Logger, id upda
 		if err := forwardHandoff(st, id); err != nil {
 			log.Warnf("把本次更新结果交给已运行的管理器失败: %v", err)
 		}
+	}
+	if start != nil {
+		// to the running manager: it boots the instance with its window and opens the app
+		if err := forwardStart(st, *start); err != nil {
+			log.Errorf("请已运行的管理器开实例 %d 失败: %v", start.Index, err)
+			fatal(fmt.Sprintf("没能请管理器开实例 %d：\n\n%v", start.Index, err))
+			return 1
+		}
+		log.Infof("已请管理器开实例 %d", start.Index)
 	}
 	if noWindow {
 		return 0

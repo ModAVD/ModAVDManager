@@ -379,6 +379,13 @@ func toolDefs() []*toolDef {
 						"running instance is adopted either way."}},
 				timeoutProp(emu.DefaultBootTimeout, "Seconds to wait for Android to finish booting; when they run "+
 					"out the call fails with a timeout but the emulator keeps booting."),
+				{"launch", false, map[string]any{"type": "string",
+					"description": "App to open once the instance is booted and set up: a package name (its launcher " +
+						"activity is opened) or <package>/<activity> (.Main or a full class name). Only letters, digits, " +
+						"underscores and dots are accepted; a bad name fails before anything boots. An instance that is " +
+						"running already just opens it. Waits up to 30 s for the app to be in front. The result's app " +
+						"says how it went (ok, or code app_not_installed / app_launch_failed / timeout with message and " +
+						"advice); the instance is up either way, so a failure to open the app is not a tool error."}},
 			},
 			func(ctx context.Context, b backend, a args, progress func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")
@@ -386,6 +393,17 @@ func toolDefs() []*toolDef {
 					return nil, err
 				}
 				opt := emu.StartOptions{Progress: progress}
+				launch, err := a.optString("launch")
+				if err != nil {
+					return nil, err
+				}
+				if launch != nil {
+					t, err := emu.ParseAppTarget(*launch)
+					if err != nil {
+						return nil, err
+					}
+					opt.Launch = &t
+				}
 				window, err := a.optBool("window")
 				if err != nil {
 					return nil, err
