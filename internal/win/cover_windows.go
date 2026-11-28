@@ -707,8 +707,13 @@ func (cv *Canvas) font(px int, bold bool) uintptr {
 	return f
 }
 
-// Text draws one centred line (wrapped when it does not fit) of s, px pixels high, colour 0xRRGGBB, in the rectangle.
+// Text draws one centred line of s, px pixels high, colour 0xRRGGBB, in the rectangle.
 func (cv *Canvas) Text(s string, r Rect, px int, rgb uint32, bold bool) {
+	cv.TextAligned(s, r, px, rgb, bold, false)
+}
+
+// TextAligned is Text, at the left of the rectangle when left is set.
+func (cv *Canvas) TextAligned(s string, r Rect, px int, rgb uint32, bold, left bool) {
 	if s == "" || cv.dc == 0 || px < 6 {
 		return
 	}
@@ -720,8 +725,11 @@ func (cv *Canvas) Text(s string, r Rect, px int, rgb uint32, bold bool) {
 	old, _, _ := procSelectObject.Call(cv.dc, f)
 	procSetBkMode.Call(cv.dc, transparentBk)
 	procSetTextColor.Call(cv.dc, uintptr(rgb&0xFF)<<16|uintptr(rgb>>8&0xFF)<<8|uintptr(rgb>>16&0xFF))
-	procDrawTextW.Call(cv.dc, uintptr(unsafe.Pointer(u)), ^uintptr(0), uintptr(unsafe.Pointer(&r)),
-		dtCenter|dtVCenter|dtNoPrefix|dtEndEllipsis|dtSingleLine)
+	flags := uintptr(dtCenter | dtVCenter | dtNoPrefix | dtEndEllipsis | dtSingleLine)
+	if left {
+		flags = dtVCenter | dtNoPrefix | dtEndEllipsis | dtSingleLine // DT_LEFT is 0
+	}
+	procDrawTextW.Call(cv.dc, uintptr(unsafe.Pointer(u)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), flags)
 	procSelectObject.Call(cv.dc, old)
 }
 

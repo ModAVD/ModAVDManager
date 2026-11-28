@@ -3,16 +3,20 @@
 // code here: a Screen paints a frame into an image and says which lines of text go over it, and whoever owns a window
 // (emu's overlay, the page) shows that.
 //
-// The picture is the placeholder: the brand avatar (avatar.png, the brand's transparent avatar at 512 px) in the
-// middle on the deep brown of the brand banner, an ordinary progress bar under it, and a light that keeps moving along
-// the bar, so the screen is alive while the progress stands still. It is built from layers drawn back to front
-// (Layer), so the final artwork (the character in parts, the screen she holds filling in with the progress) replaces
-// the avatar layer and adds layers that read State.Progress, without touching the windows or the progress logic.
+// The picture is the placeholder: the brand avatar (avatar.png, the brand's transparent avatar at 512 px) on the brand
+// brown with the layout the final artwork (v3, layers.json "progressUi") has: under the character a thin rounded
+// progress bar about 60 % as wide as the character (cream 20 % track, coral #F07060 fill, a small warm light at the head
+// of the fill), the percentage to the right of the bar and the step that is being done under it, the lines drawn by
+// the code, not by the picture. While there is no real percentage the bar is indeterminate (a light running to and fro)
+// and the number is "…". It is built from layers drawn back to front (Layer), so the final artwork (the character in
+// parts that move a little, the screen she holds filling in with the progress, the eruption at the end) replaces the
+// avatar layer and adds layers that read State.Progress, without touching the windows or the progress logic.
 package bootscreen
 
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -25,36 +29,37 @@ import (
 //go:embed avatar.png
 var avatarPNG []byte
 
-// The brand colours of the placeholder (0xRRGGBB, as the banner has them).
+// Colours (0xRRGGBB): the progress bar and the text, from layers.json of the artwork.
 const (
-	Background = 0x36211E
-	BarTrack   = 0x55372F
-	BarFill    = 0xF2A65A
-	BarGlow    = 0xFFE2B8
-	TextMain   = 0xF6E7D8
-	TextSub    = 0xC9A894
+	Background = 0x251915 // the dark end of the background's radial gradient
+	BarFill    = 0xF07060
+	TextPct    = 0xFFEDDB
+	TextStep   = 0xEED7C5
 	TextNote   = 0xFFC98A
 )
 
 // State is everything one frame depends on.
 type State struct {
-	// Progress is the bar, 0 to 1 (already smoothed by the caller, see Ease).
-	Progress float64
-	// Elapsed is the animation clock: any increasing time, the light along the bar goes by it.
+	// Progress is the bar, 0 to 1 (already smoothed by the caller, see Ease); Indeterminate: there is no real
+	// percentage to show (the bar runs to and fro and the number is "…").
+	Progress      float64
+	Indeterminate bool
+	// Elapsed is the animation clock: any increasing time, the movement of the bar goes by it.
 	Elapsed time.Duration
-	// Title is the main line (what is being done), Detail the small line under the bar (the percentage and the like),
-	// Note a line at the bottom for what the user should know (the setup did not finish in time). All already in the
-	// language of the manager.
-	Title, Detail, Note string
+	// Step is the line under the bar (what is being done), Note replaces it when there is something the user should
+	// know (the setup did not finish in time). Both already in the language of the manager.
+	Step, Note string
 }
 
-// Label is a line of text to draw over the frame: centred in the rectangle, Px pixels high.
+// Label is a line of text to draw over the frame in the rectangle X, Y, W, H, Px pixels high: centred, or at the left of
+// the rectangle (Left).
 type Label struct {
 	Text       string
 	X, Y, W, H int
 	Px         int
 	RGB        uint32
 	Bold       bool
+	Left       bool
 }
 
 // Screen paints frames.
@@ -119,92 +124,200 @@ func (s *Stack) Draw(dst *image.RGBA, st State) []Label {
 
 func rgba(rgb uint32) color.RGBA { return color.RGBA{byte(rgb >> 16), byte(rgb >> 8), byte(rgb), 255} }
 
-// FillLayer paints the whole frame one colour.
-type FillLayer struct{ RGB uint32 }
+// The reference composition of the artwork is 1280 x 720 around the middle of the frame; everything scales with
+// s = min(height / 720, width / 810) and is placed by its offset from the middle (layers.json "responsive"), so a wide,
+// a square and a tall window keep the same picture without cropping or letterboxing.
+const (
+	refW, refH   = 1280, 720
+	refAvatarX   = 277    // the avatar's top-left in the reference composition (its rig space is 1024 px at 0.71)
+	refAvatarY   = -31    // (the picture's own margin is transparent)
+	refAvatarPx  = 727.04 // 1024 * 0.71
+	refBarX      = 443
+	refBarY      = 646
+	refBarW      = 352
+	refBarH      = 7
+	refPctGap    = 16
+	refPctPx     = 18
+	refStepDown  = 25 // from the bar's bottom to the middle of the step line
+	refStepPx    = 16
+	refCapCenter = 640
+)
 
-func (FillLayer) Static() bool { return true }
-func (f FillLayer) Draw(dst *image.RGBA, _ State) {
-	draw.Draw(dst, dst.Bounds(), &image.Uniform{rgba(f.RGB)}, image.Point{}, draw.Src)
+// Layout is where everything is in a frame of w x h pixels.
+type Layout struct {
+	S                  float64
+	AvatarX, AvatarY   int
+	AvatarSize         int
+	BarX, BarY         int
+	BarW, BarH         int
+	PctX, PctW, PctPx  int // the percentage, at the right of the bar, left aligned
+	StepY, StepPx      int // the middle of the step line, and its size
+	CenterX            int
+	HeadR, HaloR       float64
+	BarMid             int
+	NoteW, StepW, PctH int
 }
 
-// ImageLayer paints an image (with its transparency) of a fixed share of the frame's height, centred horizontally and
-// with its centre at CenterY of the frame's height.
-type ImageLayer struct {
-	Img     image.Image
-	HeightF float64 // the picture's height as a share of the frame's
-	CenterY float64 // where its middle is, as a share of the frame's height
+// LayoutFor computes the layout of a frame of w x h pixels.
+func LayoutFor(w, h int) Layout {
+	s := math.Min(float64(h)/refH, float64(w)/810)
+	cx, cy := float64(w)/2, float64(h)/2
+	at := func(ref float64, c float64) float64 { return c + ref*s }
+	l := Layout{S: s, CenterX: int(cx + 0.5)}
+	l.AvatarX = int(math.Round(at(refAvatarX-refW/2, cx)))
+	l.AvatarY = int(math.Round(at(refAvatarY-refH/2, cy)))
+	l.AvatarSize = int(refAvatarPx*s + 0.5)
+	l.BarX = int(math.Round(at(refBarX-refW/2, cx)))
+	l.BarY = int(math.Round(at(refBarY-refH/2, cy)))
+	l.BarW = max(int(refBarW*s+0.5), 40)
+	l.BarH = max(int(refBarH*s+0.5), 4)
+	l.BarMid = l.BarY + l.BarH/2
+	l.PctX = l.BarX + l.BarW + max(int(refPctGap*s+0.5), 6)
+	l.PctPx = max(int(refPctPx*s+0.5), 11)
+	l.PctW = l.PctPx * 4
+	l.PctH = l.PctPx * 3 / 2
+	l.StepY = l.BarY + l.BarH + max(int(refStepDown*s+0.5), 8)
+	l.StepPx = max(int(refStepPx*s+0.5), 11)
+	l.StepW = min(w-8, int(float64(l.BarW)*1.6))
+	l.NoteW = min(w-8, int(float64(l.BarW)*2.0))
+	l.HeadR, l.HaloR = math.Max(3*s, 1.5), math.Max(5*s, 2.5)
+	return l
 }
 
-func (ImageLayer) Static() bool { return true }
-func (l ImageLayer) Draw(dst *image.RGBA, _ State) {
+// RadialLayer paints the background: the brand brown with a lighter glow behind the character (layers.json
+// "canvas.background": an elliptical radial gradient).
+type RadialLayer struct{}
+
+func (RadialLayer) Static() bool { return true }
+func (RadialLayer) Draw(dst *image.RGBA, _ State) {
 	b := dst.Bounds()
-	h := int(float64(b.Dy())*l.HeightF + 0.5)
-	sb := l.Img.Bounds()
-	if h <= 0 || sb.Dy() <= 0 {
+	w, h := b.Dx(), b.Dy()
+	s := math.Min(float64(h)/refH, float64(w)/810)
+	cx, cy := float64(w)/2, float64(h)/2+(296-refH/2)*s
+	rx, ry := 710*s, 514*s
+	stops := []struct {
+		at      float64
+		r, g, b float64
+	}{{0, 82, 53, 42}, {0.48, 60, 39, 31}, {1, 37, 25, 21}}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			dx, dy := (float64(x)+0.5-cx)/rx, (float64(y)+0.5-cy)/ry
+			t := math.Min(math.Sqrt(dx*dx+dy*dy), 1)
+			a, c := stops[0], stops[1]
+			if t > stops[1].at {
+				a, c = stops[1], stops[2]
+			}
+			k := (t - a.at) / (c.at - a.at)
+			dst.SetRGBA(b.Min.X+x, b.Min.Y+y, color.RGBA{uint8(a.r + (c.r-a.r)*k + 0.5), uint8(a.g + (c.g-a.g)*k + 0.5),
+				uint8(a.b + (c.b-a.b)*k + 0.5), 255})
+		}
+	}
+}
+
+// AvatarLayer paints the avatar where the artwork's rig has it. (The final artwork replaces this layer by the parts of
+// the character.)
+type AvatarLayer struct{ Img image.Image }
+
+func (AvatarLayer) Static() bool { return true }
+func (l AvatarLayer) Draw(dst *image.RGBA, _ State) {
+	b := dst.Bounds()
+	lay := LayoutFor(b.Dx(), b.Dy())
+	if lay.AvatarSize <= 0 {
 		return
 	}
-	w := h * sb.Dx() / sb.Dy()
-	scaled := Resample(l.Img, w, h)
-	x := b.Min.X + (b.Dx()-w)/2
-	y := b.Min.Y + int(float64(b.Dy())*l.CenterY) - h/2
-	draw.Draw(dst, image.Rect(x, y, x+w, y+h), scaled, image.Point{}, draw.Over)
+	scaled := Resample(l.Img, lay.AvatarSize, lay.AvatarSize)
+	x, y := b.Min.X+lay.AvatarX, b.Min.Y+lay.AvatarY
+	draw.Draw(dst, image.Rect(x, y, x+lay.AvatarSize, y+lay.AvatarSize), scaled, image.Point{}, draw.Over)
 }
 
-// BarGeometry is where the progress bar is in a frame of w x h pixels: the track's rectangle, and how round it is.
-func BarGeometry(w, h int) (x, y, bw, bh int) {
-	bw = max(int(float64(w)*0.46), min(w-16, 240))
-	bh = max(int(float64(h)*0.014), 6)
-	x = (w - bw) / 2
-	y = int(float64(h) * 0.775)
-	return
-}
-
-// BarLayer is the progress bar and the light that moves along it.
+// BarLayer is the progress bar: a cream track of 20 % opacity, the coral fill with a warm light at its head and a
+// brighter band running along it, or, while the percentage is unknown, a coral piece running to and fro.
 type BarLayer struct{}
 
 func (BarLayer) Static() bool { return false }
 func (BarLayer) Draw(dst *image.RGBA, st State) {
 	b := dst.Bounds()
-	x0, y0, bw, bh := BarGeometry(b.Dx(), b.Dy())
-	x0 += b.Min.X
-	y0 += b.Min.Y
-	p := math.Min(math.Max(st.Progress, 0), 1)
-	fill := int(float64(bw)*p + 0.5)
-	// the light: a soft band travelling along the filled part, a new one every 1.8 s
-	const period = 1800 * time.Millisecond
-	phase := float64(st.Elapsed%period) / float64(period)
-	band := math.Max(float64(bw)*0.18, 24)
-	centre := phase*(float64(fill)+band) - band/2
-	track, fillC, glow := rgba(BarTrack), rgba(BarFill), rgba(BarGlow)
+	lay := LayoutFor(b.Dx(), b.Dy())
+	x0, y0, bw, bh := b.Min.X+lay.BarX, b.Min.Y+lay.BarY, lay.BarW, lay.BarH
 	r := float64(bh) / 2
+	fill := rgba(BarFill)
+	cream := color.RGBA{255, 245, 229, 255}
+	// coverage of the pill at (dx, dy): 1 inside, soft at the edge
+	cover := func(dx, dy int) float64 {
+		cx := math.Min(math.Max(float64(dx)+0.5, r), float64(bw)-r)
+		d := math.Hypot(float64(dx)+0.5-cx, float64(dy)+0.5-r)
+		return math.Min(math.Max(r-d+0.5, 0), 1)
+	}
+	var lo, hi, band float64 // the lit part of the bar in pixels, and where the bright band is
+	if st.Indeterminate {
+		seg := float64(bw) * 0.3
+		phase := float64(st.Elapsed%(2400*time.Millisecond)) / float64(2400*time.Millisecond)
+		pp := 1 - math.Abs(2*phase-1) // 0 -> 1 -> 0
+		pp = pp * pp * (3 - 2*pp)
+		lo = pp * (float64(bw) - seg)
+		hi = lo + seg
+		band = -1
+	} else {
+		p := math.Min(math.Max(st.Progress, 0), 1)
+		hi = float64(bw) * p
+		const period = 1800 * time.Millisecond
+		band = float64(st.Elapsed%period)/float64(period)*(hi+float64(bw)*0.18) - float64(bw)*0.09
+	}
 	for dy := 0; dy < bh; dy++ {
 		for dx := 0; dx < bw; dx++ {
-			// pill shape: the ends are half circles
-			cx := math.Min(math.Max(float64(dx)+0.5, r), float64(bw)-r)
-			d := math.Hypot(float64(dx)+0.5-cx, float64(dy)+0.5-r)
-			if d > r {
+			cov := cover(dx, dy)
+			if cov <= 0 {
 				continue
 			}
-			c := track
-			if dx < fill {
-				c = fillC
-				if k := 1 - math.Abs(float64(dx)-centre)/(band/2); k > 0 && fill > 0 {
-					c = mix(fillC, glow, k*k*0.85)
+			px := dst.RGBAAt(x0+dx, y0+dy)
+			c := blend(px, cream, 0.2*cov) // the track
+			if fx := float64(dx) + 0.5; fx >= lo && fx < hi {
+				a := cov
+				if st.Indeterminate { // soft ends of the moving piece
+					a *= math.Min(1, math.Min(fx-lo, hi-fx)/(float64(bw)*0.05))
 				}
-			}
-			if d > r-1 { // a soft edge
-				c = mix(rgba(Background), c, r-d)
+				fc := fill
+				if band >= 0 {
+					if k := 1 - math.Abs(fx-band)/(float64(bw)*0.09); k > 0 {
+						fc = mix(fill, color.RGBA{255, 214, 190, 255}, k*k*0.55)
+					}
+				}
+				c = blend(c, fc, a)
 			}
 			dst.SetRGBA(x0+dx, y0+dy, c)
 		}
 	}
+	if !st.Indeterminate && hi > 0 {
+		// the warm light at the head of the fill, kept inside the track
+		hx := math.Min(math.Max(hi, lay.HaloR), float64(bw)-lay.HaloR)
+		dot(dst, float64(x0)+hx, float64(y0)+r, lay.HaloR, color.RGBA{255, 153, 91, 255}, 57.0/255)
+		dot(dst, float64(x0)+hx, float64(y0)+r, lay.HeadR, color.RGBA{255, 189, 109, 255}, 1)
+	}
 }
 
-func mix(a, b color.RGBA, t float64) color.RGBA {
-	t = math.Min(math.Max(t, 0), 1)
-	f := func(x, y uint8) uint8 { return uint8(float64(x)*(1-t) + float64(y)*t + 0.5) }
-	return color.RGBA{f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), 255}
+// dot blends a disc of colour c (opacity alpha) around (cx, cy) into dst.
+func dot(dst *image.RGBA, cx, cy, rad float64, c color.RGBA, alpha float64) {
+	b := dst.Bounds()
+	for y := int(cy - rad - 1); y <= int(cy+rad+1); y++ {
+		for x := int(cx - rad - 1); x <= int(cx+rad+1); x++ {
+			if !(image.Point{x, y}).In(b) {
+				continue
+			}
+			d := math.Hypot(float64(x)+0.5-cx, float64(y)+0.5-cy)
+			if k := math.Min(math.Max(rad-d+0.5, 0), 1); k > 0 {
+				dst.SetRGBA(x, y, blend(dst.RGBAAt(x, y), c, alpha*k))
+			}
+		}
+	}
 }
+
+func blend(under, over color.RGBA, a float64) color.RGBA {
+	a = math.Min(math.Max(a, 0), 1)
+	f := func(u, o uint8) uint8 { return uint8(float64(u)*(1-a) + float64(o)*a + 0.5) }
+	return color.RGBA{f(under.R, over.R), f(under.G, over.G), f(under.B, over.B), 255}
+}
+
+func mix(a, b color.RGBA, t float64) color.RGBA { return blend(a, b, t) }
 
 var (
 	avatarOnce sync.Once
@@ -226,33 +339,36 @@ func Avatar() image.Image {
 // AvatarPNG is the embedded avatar file as it is (the manager's page serves the same bytes from its own assets).
 func AvatarPNG() []byte { return avatarPNG }
 
-// NewPlaceholder is the placeholder screen: the avatar on the brand brown, the bar, and the lines of State.
+// NewPlaceholder is the placeholder screen: the avatar on the brand brown, the bar, the percentage and the step.
 func NewPlaceholder() *Stack {
-	layers := []Layer{FillLayer{Background}}
+	layers := []Layer{RadialLayer{}}
 	if a := Avatar(); a != nil {
-		layers = append(layers, ImageLayer{Img: a, HeightF: 0.62, CenterY: 0.38})
+		layers = append(layers, AvatarLayer{Img: a})
 	}
 	layers = append(layers, BarLayer{})
 	return &Stack{Layers: layers, Lines: placeholderLines}
 }
 
-// placeholderLines puts the title above the bar, the detail under it and the note at the bottom.
+// Percent is the number shown at the right of the bar: "NN%", or "…" while there is no real percentage.
+func Percent(st State) string {
+	if st.Indeterminate {
+		return "…"
+	}
+	return fmt.Sprintf("%d%%", int(math.Min(math.Max(st.Progress, 0), 1)*100+0.5))
+}
+
+// placeholderLines puts the percentage at the right of the bar, centred under it the step, or the note instead.
 func placeholderLines(w, h int, st State) []Label {
-	x, y, bw, bh := BarGeometry(w, h)
-	pad := bw / 8
-	line := func(text string, top, px int, rgb uint32, bold bool) Label {
-		return Label{Text: text, X: x - pad, Y: top, W: bw + 2*pad, H: px * 3 / 2, Px: px, RGB: rgb, Bold: bold}
-	}
-	big, small := max(h*34/1000, 14), max(h*26/1000, 12)
-	var out []Label
-	if st.Title != "" {
-		out = append(out, line(st.Title, y-big*2-bh, big, TextMain, true))
-	}
-	if st.Detail != "" {
-		out = append(out, line(st.Detail, y+bh+small/2, small, TextSub, false))
-	}
-	if st.Note != "" {
-		out = append(out, line(st.Note, y+bh+small*3, small, TextNote, true))
+	l := LayoutFor(w, h)
+	out := []Label{{Text: Percent(st), X: l.PctX, Y: l.BarMid - l.PctH/2, W: min(l.PctW, w-l.PctX), H: l.PctH, Px: l.PctPx, RGB: TextPct,
+		Bold: true, Left: true}}
+	switch {
+	case st.Note != "":
+		out = append(out, Label{Text: st.Note, X: l.CenterX - l.NoteW/2, Y: l.StepY - l.StepPx*3/4, W: l.NoteW, H: l.StepPx * 3 / 2,
+			Px: l.StepPx, RGB: TextNote, Bold: true})
+	case st.Step != "":
+		out = append(out, Label{Text: st.Step, X: l.CenterX - l.StepW/2, Y: l.StepY - l.StepPx*3/4, W: l.StepW, H: l.StepPx * 3 / 2,
+			Px: l.StepPx, RGB: TextStep})
 	}
 	return out
 }

@@ -3,9 +3,13 @@
 package emu
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"image/png"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -95,53 +99,43 @@ func TestOverlayMachineLifecycle(t *testing.T) {
 	}
 	step := func(i overlayIn) overlayOut { return om.Next(i) }
 
-	// no qemu yet, then the qemu, adb answering, Android booted with the setup running, ready
+	// Before the setup says how far it is there is no real percentage: the bar is indeterminate. No qemu yet, the qemu,
+	// adb answering, Android booted but no record of the setup yet.
 	o := step(overlayIn{Now: at(0.2), StartHeld: true, WatchAlive: true})
-	if o.Exit || o.Release || o.Stage != "launch" || o.Percent <= 0 {
+	if o.Exit || o.Release || o.Stage != "launch" || o.Percent >= 0 {
 		t.Fatalf("waiting for the qemu: %+v", o)
 	}
-	o = step(in(1))
-	if o.Exit || o.Stage != "launch" || o.Percent < 0.05 {
+	if o = step(in(1)); o.Exit || o.Stage != "launch" || o.Percent >= 0 {
 		t.Fatalf("qemu up: %+v", o)
 	}
-	var last = o.Percent
-	check := func(what string, o overlayOut) {
-		t.Helper()
-		if o.Exit || o.Release {
-			t.Fatalf("%s: %+v", what, o)
-		}
-		if o.Percent < last {
-			t.Fatalf("%s: the bar went back %.3f -> %.3f", what, last, o.Percent)
+	a := in(14)
+	a.Answered = true
+	if o = step(a); o.Exit || o.Stage != "android" || o.Percent >= 0 {
+		t.Fatalf("Android booting: %+v", o)
+	}
+	b := in(26)
+	b.Answered, b.Booted, b.Setup = true, true, bootSetupState{Step: readyStepBoot}
+	if o = step(b); o.Exit || o.Release || o.Stage != readyStepBoot || o.Percent >= 0 {
+		t.Fatalf("booted, no setup record yet: %+v", o)
+	}
+	// the setup's own steps: the bar is its percentage, the stage its step
+	last := -1.0
+	for k, s := range []bootSetupState{{Step: "vulkan_fix", Progress: 5}, {Step: "tune", Progress: 40}, {Step: "ime", Progress: 70},
+		{Step: readyStepSDCard, Progress: 95}} {
+		b := in(27 + float64(k))
+		b.Answered, b.Booted, b.Setup = true, true, s
+		o = step(b)
+		if o.Exit || o.Release || o.Stage != s.Step || o.Percent != float64(s.Progress)/100 || o.Percent < last {
+			t.Fatalf("setup step %s: %+v (last %.2f)", s.Step, o, last)
 		}
 		last = o.Percent
 	}
-	a := in(8)
-	a.Answered = true
-	check("adb answers", step(a))
-	a = in(14)
-	a.Answered = true
-	o = step(a)
-	check("Android booting", o)
-	if o.Stage != "android" || o.Percent < overlayAndroidFrom || o.Percent > overlayAndroidTo {
-		t.Fatalf("android stage: %+v", o)
-	}
-	for k, s := range []bootSetupState{{Step: readyStepBoot}, {Step: "vulkan_fix", Progress: 5}, {Step: "tune", Progress: 40},
-		{Step: "ime", Progress: 70}, {Step: readyStepSDCard, Progress: 95}} {
-		b := in(26 + float64(k))
-		b.Answered, b.Booted, b.Setup = true, true, s
-		o = step(b)
-		check("setup "+s.Step, o)
-		if o.Stage != s.Step || o.Percent < overlaySetupFrom || o.Percent >= 1 {
-			t.Fatalf("setup stage %s: %+v", s.Step, o)
-		}
-	}
-	b := in(32)
+	b = in(32)
 	b.Answered, b.Booted, b.Setup = true, true, bootSetupState{Ready: true}
-	if o = step(b); !o.Exit || o.Reason != "ready" || !o.Release {
+	if o = step(b); !o.Exit || o.Reason != "ready" || !o.Release || o.Percent != 1 {
 		t.Fatalf("ready: %+v (the windows come back at once, no wait)", o)
 	}
 }
-
 func TestOverlayMachineEndsWhenThereIsNothingToCover(t *testing.T) {
 	t0 := time.Date(2026, 11, 27, 22, 0, 0, 0, time.UTC)
 	at := func(s float64) time.Time { return t0.Add(time.Duration(s * float64(time.Second))) }
@@ -724,3 +718,56 @@ func TestBootOverlayArguments(t *testing.T) {
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// TestOverlayPreview writes pictures of the cover (the window read back with PrintWindow, text and all) when
+// MODAVD_OVERLAY_PREVIEW names a folder: the states the screen has, at the shapes a window has. For looking at; the
+// stand-in windows are far off the screen.
+func TestOverlayPreview(t *testing.T) {
+	dir := os.Getenv("MODAVD_OVERLAY_PREVIEW")
+	if dir == "" {
+		t.Skip("set MODAVD_OVERLAY_PREVIEW to a folder")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	type shot struct {
+		name string
+		out  overlayOut
+	}
+	shots := []shot{
+		{"launch-indeterminate", overlayOut{Stage: "launch", Percent: -1}},
+		{"tune-40", overlayOut{Stage: "tune", Percent: 0.40}},
+		{"ime-80", overlayOut{Stage: "ime", Percent: 0.80}},
+		{"cap-note", overlayOut{Stage: "ime", Percent: 1, Note: "ime"}},
+	}
+	for _, size := range [][2]int{{1280, 720}, {960, 720}, {720, 1280}} {
+		for _, sh := range shots {
+			f := newOverlayFixture(t)
+			unlock := lockStart(t, f.m, f.i)
+			f.emu.Move(wintest.X, wintest.Y, size[0]+16, size[1]+39)
+			out := sh.out
+			f.run.fixed.Store(&out)
+			f.start()
+			f.waitFor("covered", 10*time.Second, func() bool { return f.covered() })
+			time.Sleep(700 * time.Millisecond)
+			cover := win.WindowFromPoint(int32(wintest.X+size[0]/2), int32(wintest.Y+size[1]/2+30))
+			img, ok := win.CapturePixels(cover, false)
+			if !ok {
+				t.Fatalf("cannot read the cover back")
+			}
+			name := filepath.Join(dir, fmt.Sprintf("%dx%d-%s.png", img.Bounds().Dx(), img.Bounds().Dy(), sh.name))
+			var b bytes.Buffer
+			if err := png.Encode(&b, img); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(name, b.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			f.run.fixed.Store(&overlayOut{Exit: true, Reason: "test", Release: true})
+			unlock()
+			if c := f.wait("end", 8*time.Second); c != 0 {
+				t.Errorf("exit code %d", c)
+			}
+		}
+	}
+}

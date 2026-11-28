@@ -81,6 +81,7 @@ type overlayRun struct {
 	// what it looks at (the tests replace them): the qemu of the instance, and the guest's boot state
 	find  func() (host.Process, bool, error)
 	probe func(ctx context.Context) (booted, answered bool)
+	fixed atomic.Pointer[overlayOut] // tests: publish this instead of the machine's decision (pictures of a state)
 
 	start time.Time
 	// the poller's last answer, read by the window thread
@@ -94,6 +95,7 @@ type overlayRun struct {
 	ease       bootscreen.Ease
 	lastEase   time.Time
 	shownPct   float64
+	indet      bool // no real percentage: the bar is indeterminate
 	title      string
 	note       string
 	frame      *image.RGBA
@@ -114,7 +116,7 @@ func (r *overlayRun) run() int {
 	r.start = time.Now()
 	r.lastEase = r.start
 	om := newOverlayMachine(r.start)
-	first := overlayOut{Stage: "launch", Percent: 0.03}
+	first := overlayOut{Stage: "launch", Percent: -1}
 	r.out.Store(&first)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,14 +160,14 @@ func (r *overlayRun) run() int {
 	return 0
 }
 
-// poll is the looking: every 250 ms what status would look at, the decision of the machine, published for the window
+// poll is the looking: every 100 ms what status would look at, the decision of the machine, published for the window
 // thread. It also ends the overlay (quit) when the machine says so.
 func (r *overlayRun) poll(ctx context.Context, om *overlayMachine, quit func()) {
 	var booted, answered bool
 	var lastProbe, lastScan time.Time
 	var q host.Process
 	var found bool
-	t := time.NewTicker(250 * time.Millisecond)
+	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 	for {
 		now := time.Now()
@@ -192,6 +194,9 @@ func (r *overlayRun) poll(ctx context.Context, om *overlayMachine, quit func()) 
 			in.Setup = r.m.bootSetupOf(r.i, q, startHeld, now, r.m.guestBootIDOf(ctx, r.i))
 		}
 		out := om.Next(in)
+		if f := r.fixed.Load(); f != nil {
+			out = *f
+		}
 		r.out.Store(&out)
 		if out.Exit {
 			r.log.Infof("实例 %d 开机遮罩该结束了: %s", r.i, out.Reason)
@@ -220,7 +225,10 @@ func (r *overlayRun) tick(o *win.Overlay) {
 		r.maintain(o, now)
 	}
 	// the bar and the lines
-	r.ease.Step(out.Percent, now.Sub(r.lastEase))
+	r.indet = out.Percent < 0
+	if !r.indet {
+		r.ease.Step(out.Percent, now.Sub(r.lastEase))
+	}
 	r.lastEase = now
 	r.shownPct = r.ease.Value()
 	r.title = overlayTitle(out.Stage)
@@ -341,13 +349,10 @@ func (r *overlayRun) paint(c *win.Canvas, main bool) {
 	if r.frame == nil || r.frame.Bounds().Dx() != w || r.frame.Bounds().Dy() != h {
 		r.frame = image.NewRGBA(image.Rect(0, 0, w, h))
 	}
-	st := bootscreen.State{Progress: r.shownPct, Elapsed: time.Since(r.start), Title: r.title, Note: r.note}
-	if r.note == "" {
-		st.Detail = strconv.Itoa(int(r.shownPct*100+0.5)) + "%"
-	}
+	st := bootscreen.State{Progress: r.shownPct, Indeterminate: r.indet, Elapsed: time.Since(r.start), Step: r.title, Note: r.note}
 	labels := r.screen.Draw(r.frame, st)
 	c.Image(r.frame)
 	for _, l := range labels {
-		c.Text(l.Text, win.Rect{Left: int32(l.X), Top: int32(l.Y), Right: int32(l.X + l.W), Bottom: int32(l.Y + l.H)}, l.Px, l.RGB, l.Bold)
+		c.TextAligned(l.Text, win.Rect{Left: int32(l.X), Top: int32(l.Y), Right: int32(l.X + l.W), Bottom: int32(l.Y + l.H)}, l.Px, l.RGB, l.Bold, l.Left)
 	}
 }

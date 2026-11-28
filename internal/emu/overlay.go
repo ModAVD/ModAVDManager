@@ -243,11 +243,11 @@ type overlayIn struct {
 // overlayOut is what the overlay does about it.
 type overlayOut struct {
 	Exit    bool
-	Reason  string // why it exits: ready, cap, qemu-gone, qemu-never, start-gone, watch-gone
-	Release bool   // the emulator windows are given back now (the instance is ready, or the cap passed)
-	Note    string // the step that was not finished, while the cover stays up with its note
-	Percent float64
-	Stage   string // launch, android, or the setup step
+	Reason  string  // why it exits: ready, cap, qemu-gone, qemu-never, start-gone, watch-gone
+	Release bool    // the emulator windows are given back now (the instance is ready, or the cap passed)
+	Note    string  // the step that was not finished, while the cover stays up with its note
+	Percent float64 // the bar, 0 to 1; negative: no real percentage yet (the bar is indeterminate)
+	Stage   string  // launch, android, or the setup step
 }
 
 // overlayMachine decides, look after look. Not safe for concurrent use.
@@ -256,7 +256,6 @@ type overlayMachine struct {
 	qemuSeen     bool
 	qemuMissing  time.Time // since when the qemu has not been found (zero: it was)
 	noStart      time.Time // since when no start holds the lock (zero: one does)
-	answeredAt   time.Time // when adb first answered
 	releasedAt   time.Time // when the cap put the windows back
 	releasedStep string
 }
@@ -298,44 +297,23 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 		}
 		return out
 	}
-	if in.Answered && om.answeredAt.IsZero() {
-		om.answeredAt = in.Now
-	}
 	switch {
 	case in.Booted && in.Setup.Ready && in.Setup.Unfinished != "":
 		om.releasedAt, om.releasedStep = in.Now, in.Setup.Unfinished
 		out.Release, out.Note, out.Percent, out.Stage = true, in.Setup.Unfinished, 1, in.Setup.Unfinished
 	case in.Booted && in.Setup.Ready:
 		return overlayOut{Exit: true, Release: true, Reason: "ready", Percent: 1}
+	case in.Booted && in.Setup.Step != "" && in.Setup.Step != readyStepBoot:
+		// the setup says how far it is: the bar is that percentage
+		out.Percent, out.Stage = float64(min(max(in.Setup.Progress, 0), 100))/100, in.Setup.Step
 	case in.Booted:
-		step := orText(in.Setup.Step, readyStepBoot)
-		out.Percent, out.Stage = overlaySetupFraction(in.Setup.Progress), step
+		out.Percent, out.Stage = -1, readyStepBoot // no record yet: nothing reliable to show
 	case in.Answered:
-		out.Percent, out.Stage = overlayAndroidFraction(in.Now.Sub(om.answeredAt)), "android"
-	case in.QemuFound:
-		out.Percent, out.Stage = 0.08, "launch"
+		out.Percent, out.Stage = -1, "android"
 	default:
-		out.Percent = 0.03
+		out.Percent, out.Stage = -1, "launch"
 	}
 	return out
-}
-
-// The bar's scale: the launch, Android's boot (from adb answering to sys.boot_completed), then the setup's own
-// percentage. Real signals, not time, except inside the Android stage where nothing but time is known between the two
-// observations: it creeps from 0.30 toward 0.68.
-const (
-	overlayAndroidFrom = 0.30
-	overlayAndroidTo   = 0.68
-	overlaySetupFrom   = 0.70
-)
-
-func overlayAndroidFraction(sinceAnswered time.Duration) float64 {
-	k := 1 - 1/(1+sinceAnswered.Seconds()/6)
-	return overlayAndroidFrom + (overlayAndroidTo-overlayAndroidFrom)*k
-}
-
-func overlaySetupFraction(percent int) float64 {
-	return overlaySetupFrom + (1-overlaySetupFrom)*float64(min(max(percent, 0), 100))/100
 }
 
 // overlayTitle is the main line of the cover for a stage, in the manager's language.
