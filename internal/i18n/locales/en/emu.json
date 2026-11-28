@@ -516,6 +516,7 @@
   "实例 %d 读不到数据盘剩余空间": "Instance %d: cannot read the free space of the data disk",
   "实例 %d 读不到数据盘大小，没检查要不要扩: %s": "Instance %d: cannot read the data disk size; did not check whether to grow it: %s",
   "实例 %d 读不到现场收集进程身份，继续保存客体现场": "Instance %d: cannot read the identity of the snapshot collector process; continuing to save the guest snapshot",
+  "实例 %d 读不到模拟器进程的创建时间，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）": null,
   "实例 %d 读不到遮罩进程自己的创建时间，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）": null,
   "实例 %d 轻量桌面偏好没预置上: %v": "Instance %d: lightweight launcher preferences were not preset: %v",
   "实例 %d 轻量桌面偏好没预置上（%s）: %s": "Instance %d: lightweight launcher preferences were not preset (%s): %s",

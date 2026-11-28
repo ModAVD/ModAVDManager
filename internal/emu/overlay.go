@@ -413,10 +413,17 @@ type windowKeeper struct {
 	carried     []overlayWin           // windows an earlier overlay left in the mark and did not get back: given back, never disabled
 	markPending bool                   // the mark still has to be removed or rewritten
 	warned      map[string]bool
-	guardOK     bool
+	guardSeen   qemuID // the qemu ready() looked at last
+	guardFor    qemuID // the qemu whose boot watch was found running (zero: none yet); another qemu waits afresh
 	firstWant   time.Time
 	gaveUp      bool
 	lastLeft    string
+}
+
+// qemuID is a qemu's identity: the PID alone can be reused, with the creation time it cannot.
+type qemuID struct {
+	PID     uint32
+	Created uint64
 }
 
 func newWindowKeeper(m *Manager, i int, ops overlayWindows, log *logx.Logger, round string, self host.Process,
@@ -700,10 +707,17 @@ func (k *windowKeeper) ready(qemu host.Process) bool {
 		return false
 	}
 	if qemu.PID == 0 || qemu.Created == 0 {
+		if qemu.PID != 0 { // found, but its start time cannot be read (PID 0: not found yet, nothing to say)
+			k.warnOnce("qemu", "实例 %d 读不到模拟器进程的创建时间，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i)
+		}
 		return false
 	}
+	id := qemuID{qemu.PID, qemu.Created}
 	k.mu.Lock()
-	gaveUp, ok := k.gaveUp, k.guardOK
+	if k.guardSeen != id { // another qemu (the instance was started again): its boot watch is waited for from now
+		k.guardSeen, k.guardFor, k.firstWant, k.gaveUp = id, qemuID{}, time.Time{}, false
+	}
+	gaveUp, ok := k.gaveUp, k.guardFor == id
 	first := k.firstWant
 	if first.IsZero() {
 		k.firstWant = time.Now()
@@ -718,7 +732,9 @@ func (k *windowKeeper) ready(qemu host.Process) bool {
 	}
 	if k.guardian(qemu) {
 		k.mu.Lock()
-		k.guardOK = true
+		if k.guardSeen == id {
+			k.guardFor = id
+		}
 		k.mu.Unlock()
 		return true
 	}
@@ -726,7 +742,7 @@ func (k *windowKeeper) ready(qemu host.Process) bool {
 		k.mu.Lock()
 		k.gaveUp = true
 		k.mu.Unlock()
-		k.warnOnce("guardian", "实例 %d 的开机守护 %v 内没就位，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, overlayGuardianWait)
+		k.warnOnce(fmt.Sprintf("guardian-%d-%d", qemu.PID, qemu.Created), "实例 %d 的开机守护 %v 内没就位，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, overlayGuardianWait)
 	}
 	return false
 }

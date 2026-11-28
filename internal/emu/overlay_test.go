@@ -1498,6 +1498,41 @@ func TestKeeperNeedsWholeIdentities(t *testing.T) {
 	if g.ops.calls != 0 {
 		t.Error("a window was disabled for a qemu whose identity is not whole")
 	}
+	warned = 0
+	for _, msg := range g.logs.Messages() {
+		if strings.Contains(msg, "读不到模拟器进程的创建时间") {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Errorf("%d warnings about the qemu's identity, want 1: %q", warned, g.logs.Messages())
+	}
+}
+
+// The boot watch that was found is the one of that qemu: when the instance is started again (another qemu) and the overlay
+// goes on, nothing of the new qemu is disabled before the boot watch of the new qemu is there.
+func TestKeeperWaitsForTheBootWatchOfTheNewQemu(t *testing.T) {
+	withVar(t, &overlayGuardianWait, 5*time.Second)
+	f := newKeeperFixture(t, nil, 421, 422)
+	q2, _ := startSleeper(t)
+	f.ops.reown(422, q2.PID)
+	var up2 atomic.Bool
+	f.k.guardian = func(q host.Process) bool {
+		if q == f.q {
+			return true
+		}
+		return q == q2 && up2.Load()
+	}
+	f.k.Track(f.q, handlesOf(421))
+	f.k.Decide()
+	eventually(t, "the first qemu's window is disabled", 3*time.Second, func() bool { return !f.ops.Enabled(421) })
+	f.k.Track(q2, handlesOf(422))
+	time.Sleep(700 * time.Millisecond)
+	if f.ops.setCallsOf(422) != 0 || !f.ops.Enabled(422) {
+		t.Fatal("a window of the new qemu was disabled before its boot watch was there")
+	}
+	up2.Store(true)
+	eventually(t, "disabled once the new qemu's watch is there", 3*time.Second, func() bool { return !f.ops.Enabled(422) })
 }
 
 // A mark that is there and cannot be read is not "no mark": nothing is disabled, and the file is left as it was.
