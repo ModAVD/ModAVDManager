@@ -315,9 +315,12 @@ func gracefulShutdown(log *logx.Logger, i int, window time.Duration, s gracefulS
 	ran := time.Since(started)
 	if res.Code == 0 && s.alive() {
 		if left := window - ran; left > 0 {
-			sign := shutdownSign(s.probe(min(shutdownProbeTimeout, left)))
+			probe := s.probe(min(shutdownProbeTimeout, left))
+			sign := shutdownSign(probe)
 			if sign == "" && s.alive() {
-				return fmt.Sprintf("关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: %s", res.Out)
+				// with the probe's own output: an empty property may also be one the shell cannot read
+				return fmt.Sprintf("关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: %s；查关机状态: %s",
+					res.Out, strings.Join(outputLines(probe.Out), " "))
 			}
 			log.Infof("ModAVD 实例 %d 的关机命令返回了 0，看来安卓已经在关机（%s），照常等模拟器自己退出", i, orText(sign, "模拟器已退出"))
 		}

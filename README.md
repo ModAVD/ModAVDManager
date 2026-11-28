@@ -184,7 +184,7 @@ Apple Silicon macOS 的下载与导入使用 Android 15 Google Play `arm64-v8a` 
 - modavd 自己的 adb 命令只走根目录的私有 server（`mas-avd.json` 的 `adbServerPort`，默认 20050）。
   - 实例开着时，开机守护每 30 秒看一下默认的 adb server（5037）。有人开着它、它又不认识这台实例，就替实例登记过去，那边显示成 `emulator-<控制台端口>`。这样用 `adb devices` 找设备的工具（比如 MAA 的自动检测）也能看到 ModAVD 的实例（ModAVD/ModAVD#196）。
   - 5037 上没有 server 时什么都不做，不替别人起 server。不想登记就在 `mas-avd.json` 里写 `"shareDefaultAdbServer": false`。
-- 脚本（MAS、MAA 这类）用根目录的脚本专用 server（`scriptAdbServerPort`，默认 20049），按 `list` / `info` 的 `adb_address` 连实例。这个 server 可能被别的程序结束（比如有的安装程序会按进程名结束所有 adb.exe），里面的连接跟着断开（ModAVD/ModAVD#292）。脚本要能自己把它起来（`modavd servers`，或者自己的 adb 客户端），并重新 `adb connect` 到 `adb_address` 再接着用。实例开着时，开机守护看到它原来在跑、后来没了，会把它重新起来，并把实例以 `emulator-<控制台端口>` 登记上去；没起过的不会替你起。
+- 脚本（MAS、MAA 这类）用根目录的脚本专用 server（`scriptAdbServerPort`，默认 20049），按 `list` / `info` 的 `adb_address` 连实例。这个 server 可能被别的程序结束（比如有的安装程序会按进程名结束所有 adb.exe），里面的连接跟着断开（ModAVD/ModAVD#292）。脚本要能自己把它起来（`modavd servers`，或者自己的 adb 客户端），并重新 `adb connect` 到 `adb_address` 再接着用。实例开着时，开机守护看到它原来在跑、后来没了，会把它重新起来，并把实例以 `emulator-<控制台端口>` 登记上去；没起过的不会替你起。脚本再 connect 以后同一台会列出两条，用 `-s <adb_address>` 指定设备就不受影响。
 - 端口：实例 i 的控制台端口是 20000 + 10 × i，adb 加 1、gRPC 加 2，编号 0–9、不含 5。
   - 开发、测试用的根目录可以在 `mas-avd.json` 里写 `"portBase": 21000`，换一段端口（这是 modavd 自己的键，AUTO-MAS 不认）。这样它的实例不会和同一台电脑上日常用的根目录（比如 AUTO-MAS 管的那个）里同编号的实例抢端口，也不会被认成那一台。
   - `portBase` 只能是 1100–49000 之间 100 的整数倍，且不能是 5500。5500 段会被别的 adb server 自动扫描；49100 及以上会与 Windows 默认临时端口重叠。已有这些配置仍可查状态和关机，但不能再开机，先关掉全部实例再换段。默认值仍是 20000。设了别的端口段，`adbServerPort`、`scriptAdbServerPort` 都要配上，而且不能是 20049、20050，也不能落在 20000 段的实例端口上。

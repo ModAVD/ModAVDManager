@@ -206,7 +206,7 @@
   "关信箱引导: %v": "Closing mailbox bootstrap: %v",
   "关掉占用这些文件的程序后再运行一次 modavd delete %d --yes，会接着删": "Close the programs using these files, then run modavd delete %d --yes again; it will continue deleting",
   "关掉应用后": "after closing the app",
-  "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: %s": "The shutdown command returned by itself, the guest answers normally and shows no sign of shutting down: Android did not start shutting down: %s",
+  "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: %s；查关机状态: %s": "The shutdown command returned by itself, the guest answers normally and shows no sign of shutting down: Android did not start shutting down: %s; shutdown state check: %s",
   "关进程节流失败（%v）": "Turning off power throttling failed (%v)",
   "其他": "Other",
   "内测包 %s 低于 %s": "Beta package %s is lower than %s",

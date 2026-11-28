@@ -488,7 +488,8 @@ func TestGracefulShutdownAfterExitZero(t *testing.T) {
 			"shutdown,probe,wait", "20 秒内没有自己退出", "sys.powerctl"},
 		{"svc 0, guest answers and is not shutting down",
 			gracefulFake{svc: adb.Result{Out: "usage: svc power ..."}, probe: probeOut("", ""), alive: []bool{true}},
-			"shutdown,probe", "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: usage: svc power ...", ""},
+			"shutdown,probe", "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: usage: svc power ...；查关机状态: " +
+				"req= ctl= " + shutdownProbeEnd, ""},
 		{"svc 0, not shutting down, but qemu exited meanwhile",
 			gracefulFake{probe: probeOut("", ""), alive: []bool{true, false}},
 			"shutdown,probe,wait", "", ""},

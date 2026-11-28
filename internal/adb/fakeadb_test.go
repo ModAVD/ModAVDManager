@@ -627,6 +627,19 @@ func TestReregisterFakeAdb(t *testing.T) {
 		}
 	})
 
+	// the boot wait's RegisterBooted leaves an offline connection alone (adbd may still be coming up): it only
+	// registers, as before ModAVD/ModAVD#292
+	t.Run("offline, boot wait", func(t *testing.T) {
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, win.Process{PID: 1, Created: filetimeOf(time.Now())}, true)
+		if !f.c.RegisterBooted(ctx, serial) {
+			t.Fatalf("RegisterBooted = false: %q", f.logs.msgs)
+		}
+		if len(f.kicked()) != 0 || len(f.registered()) != 1 || f.logs.count("断开重连") != 0 {
+			t.Errorf("dropped %v, registered %v, logs %q", f.kicked(), f.registered(), f.logs.msgs)
+		}
+	})
+
 	t.Run("offline, adbd does not answer", func(t *testing.T) {
 		f.reset(t, "offline:"+serial, "adbd-down:"+serial)
 		stubQemu(t, old, true)

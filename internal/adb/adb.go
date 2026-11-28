@@ -724,9 +724,11 @@ func (c *Client) reregister(ctx context.Context, serial string, booted bool) boo
 	if !registrationStillOwned(c, console, qemu) {
 		return false
 	}
-	if state == CloseOffline {
+	if state == CloseOffline && !booted {
 		// The server ignores a registration of a port it still has a connection to (ModAVD/ModAVD#292): drop that
-		// first. Within the same reregisterWait; the guards above (booting, a young qemu) still apply.
+		// first. Within the same reregisterWait; the guards above (booting, a young qemu) still apply. Not in the boot
+		// wait (RegisterBooted): offline there is mostly an adbd that is still coming up, and dropping its connection
+		// every bootRegisterEvery would only start that over; it registers as before.
 		c.Log.Warnf("私有 adb server（端口 %d）上 %s 是 offline，断开重连一次", serverPort, serial)
 		started := time.Now()
 		if !c.recoverOffline(ctx, console, started.Add(reregisterWait)) {
