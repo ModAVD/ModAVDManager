@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/adb"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
 	"modavd/internal/win"
@@ -356,8 +357,9 @@ func TestStopOpsShutdownCommands(t *testing.T) {
 }
 
 // svc power shutdown's exit code (measured: adb exits 255 about 2.4 s after it, when the shutdown ends adbd): anything
-// but 0 waits for qemu to the end of the window; 0 means it came back by itself and no shutdown is under way, so the
-// fallback starts at once instead of after the whole window.
+// but 0 waits for qemu to the end of the window; 0 is followed by the probe, and only a guest that answers it normally
+// without a shutdown property starts the fallback at once (ModAVD/ModAVD#291). Through the real side effects and the
+// fake adb: the probe goes to the instance on the private server.
 func TestStopOpsShutdownExitCode(t *testing.T) {
 	r, _ := portPlanRoot(t)
 	m := New(r, logx.Nop())
@@ -382,8 +384,201 @@ func TestStopOpsShutdownExitCode(t *testing.T) {
 	t.Setenv(fakeAdbSvcExitEnv, "0")
 	began = time.Now()
 	why = ops.graceful(window)
-	if took := time.Since(began); took >= window || !strings.HasPrefix(why, "关机命令自己返回了，安卓没有开始关机") {
-		t.Errorf("exit 0: %q after %v, want it at once", why, took)
+	if took := time.Since(began); took >= window || !strings.HasPrefix(why, "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机") {
+		t.Errorf("exit 0, guest not shutting down: %q after %v, want it at once", why, took)
+	}
+
+	// exit 0 while Android is in its low-level shutdown: wait for qemu as for any other code
+	for name, probe := range map[string]struct{ out, code string }{
+		"powerctl set":   {"req=0userrequested\nctl=shutdown,userrequested\n" + shutdownProbeEnd + "\n", "0"},
+		"adbd gone":      {"error: closed\n", "255"},
+		"cut short":      {"req=\n", "0"},
+		"device offline": {"error: device offline\n", "1"},
+	} {
+		t.Setenv(fakeAdbProbeEnv, probe.out)
+		t.Setenv(fakeAdbProbeExitEnv, probe.code)
+		began = time.Now()
+		why = ops.graceful(window)
+		if took := time.Since(began); took < window || why != "2 秒内没有自己退出" {
+			t.Errorf("exit 0, %s: %q after %v, want the whole %v", name, why, took, window)
+		}
+	}
+}
+
+// gracefulFake records what gracefulShutdown does.
+type gracefulFake struct {
+	svc      adb.Result
+	svcTakes time.Duration // how long the shutdown command runs (slept)
+	probe    adb.Result
+	alive    []bool // successive answers of alive; the last one repeats
+	exitsAt  string // "wait": qemu exits during waitExit (alive is false from then on)
+	calls    []string
+	probeFor time.Duration
+	waitFor  time.Duration
+}
+
+func (f *gracefulFake) steps() gracefulSteps {
+	gone := false
+	return gracefulSteps{
+		shutdown: func(timeout time.Duration) adb.Result {
+			f.calls = append(f.calls, "shutdown")
+			time.Sleep(f.svcTakes)
+			return f.svc
+		},
+		probe: func(timeout time.Duration) adb.Result {
+			f.calls = append(f.calls, "probe")
+			f.probeFor = timeout
+			return f.probe
+		},
+		alive: func() bool {
+			if gone {
+				return false
+			}
+			a := f.alive[0]
+			if len(f.alive) > 1 {
+				f.alive = f.alive[1:]
+			}
+			return a
+		},
+		waitExit: func(d time.Duration) {
+			f.calls = append(f.calls, "wait")
+			f.waitFor = d
+			if f.exitsAt == "wait" {
+				gone = true
+			}
+		},
+	}
+}
+
+func probeOut(req, ctl string) adb.Result {
+	return adb.Result{Out: "req=" + req + "\nctl=" + ctl + "\n" + shutdownProbeEnd}
+}
+
+// ModAVD/ModAVD#291: svc power shutdown came back with 0 while Android was already in its low-level shutdown, and the
+// stop fell back to sync_kill at once. A 0 is now followed by the probe: a shutdown under way (a property set, or the
+// guest no longer answering normally) waits for qemu as any other code does; only a guest that answers normally without
+// either property has not begun, and that falls back at once.
+func TestGracefulShutdownAfterExitZero(t *testing.T) {
+	const window = 20 * time.Second
+	cases := []struct {
+		name     string
+		f        gracefulFake
+		calls    string
+		why      string // "" = shut down; a prefix otherwise
+		logsSign string // the info line names this
+	}{
+		{"svc 0, qemu then exits by itself (powerctl)",
+			gracefulFake{probe: probeOut("", "shutdown,userrequested"), alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,probe,wait", "", "sys.powerctl=shutdown,userrequested"},
+		{"svc 0, shutdown requested",
+			gracefulFake{probe: probeOut("0userrequested", ""), alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,probe,wait", "", "sys.shutdown.requested=0userrequested"},
+		{"svc 0, adbd already gone",
+			gracefulFake{probe: adb.Result{Code: 255, Out: "error: closed"}, alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,probe,wait", "", "返回码 255"},
+		{"svc 0, device offline",
+			gracefulFake{probe: adb.Result{Code: 1, Out: "error: device offline"}, alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,probe,wait", "", "device offline"},
+		{"svc 0, probe cut short",
+			gracefulFake{probe: adb.Result{Out: "req="}, alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,probe,wait", "", "没有跑完"},
+		{"svc 0, shutting down but qemu never exits",
+			gracefulFake{probe: probeOut("", "shutdown,userrequested"), alive: []bool{true}},
+			"shutdown,probe,wait", "20 秒内没有自己退出", "sys.powerctl"},
+		{"svc 0, guest answers and is not shutting down",
+			gracefulFake{svc: adb.Result{Out: "usage: svc power ..."}, probe: probeOut("", ""), alive: []bool{true}},
+			"shutdown,probe", "关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: usage: svc power ...", ""},
+		{"svc 0, not shutting down, but qemu exited meanwhile",
+			gracefulFake{probe: probeOut("", ""), alive: []bool{true, false}},
+			"shutdown,probe,wait", "", ""},
+		{"svc 0 after qemu exited",
+			gracefulFake{alive: []bool{false}},
+			"shutdown,wait", "", ""},
+		{"svc 255 (adbd gone), qemu exits",
+			gracefulFake{svc: adb.Result{Code: 255}, alive: []bool{true}, exitsAt: "wait"},
+			"shutdown,wait", "", ""},
+		{"svc failed early, qemu never exits",
+			gracefulFake{svc: adb.Result{Code: 1, Out: "error: device offline"}, alive: []bool{true}},
+			"shutdown,wait", "20 秒内没有自己退出；关机命令返回码 1: error: device offline", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var lines []string
+			f := c.f
+			why := gracefulShutdown(logx.New(func(_ logx.Level, msg string) { lines = append(lines, msg) }), 3, window,
+				f.steps())
+			if got := strings.Join(f.calls, ","); got != c.calls {
+				t.Errorf("calls %s, want %s", got, c.calls)
+			}
+			if (c.why == "") != (why == "") || !strings.HasPrefix(why, c.why) {
+				t.Errorf("why = %q, want %q", why, c.why)
+			}
+			if slices.Contains(f.calls, "probe") && f.probeFor != shutdownProbeTimeout {
+				t.Errorf("probe within %v, want %v", f.probeFor, shutdownProbeTimeout)
+			}
+			if slices.Contains(f.calls, "wait") && (f.waitFor > window || f.waitFor < window-time.Second) {
+				t.Errorf("waited %v, want what is left of %v", f.waitFor, window)
+			}
+			info := strings.Join(lines, "\n")
+			if c.logsSign != "" && !strings.Contains(info, c.logsSign) {
+				t.Errorf("logs %q do not name %q", info, c.logsSign)
+			}
+		})
+	}
+}
+
+// The probe counts against the window: it gets what the shutdown command left of it (at most shutdownProbeTimeout),
+// the wait after it the rest, and a command that ran all of the window leaves no probe.
+func TestGracefulShutdownProbeWithinWindow(t *testing.T) {
+	const window = 1500 * time.Millisecond
+	f := gracefulFake{svcTakes: 600 * time.Millisecond, probe: adb.Result{Code: 255}, alive: []bool{true}}
+	why := gracefulShutdown(logx.Nop(), 3, window, f.steps())
+	if f.probeFor > window-600*time.Millisecond || f.probeFor < window-time.Second {
+		t.Errorf("probe within %v after a 600 ms command in a %v window", f.probeFor, window)
+	}
+	if f.waitFor > window-600*time.Millisecond || why != "2 秒内没有自己退出" {
+		t.Errorf("waited %v (%q)", f.waitFor, why)
+	}
+
+	f = gracefulFake{svcTakes: 100 * time.Millisecond, alive: []bool{true}}
+	why = gracefulShutdown(logx.Nop(), 3, 50*time.Millisecond, f.steps())
+	if got := strings.Join(f.calls, ","); got != "shutdown" || why != "0 秒内没有自己退出" {
+		t.Errorf("no window left: calls %s, %q", got, why)
+	}
+}
+
+func TestShutdownSign(t *testing.T) {
+	cases := []struct {
+		name string
+		res  adb.Result
+		want string // "" = not shutting down; a substring otherwise
+	}{
+		{"guest answers, nothing set", probeOut("", ""), ""},
+		{"crlf", adb.Result{Out: "req=\r\nctl=\r\n" + shutdownProbeEnd + "\r\n"}, ""},
+		{"shutdown requested", probeOut("0userrequested", ""), "sys.shutdown.requested=0userrequested"},
+		{"reboot requested", probeOut("1reboot", ""), "sys.shutdown.requested=1reboot"},
+		{"powerctl", probeOut("", "shutdown,userrequested"), "sys.powerctl=shutdown,userrequested"},
+		{"both", probeOut("0userrequested", "shutdown,userrequested"), "sys.shutdown.requested"},
+		{"adbd gone", adb.Result{Code: 255, Out: "error: closed"}, "返回码 255"},
+		{"offline", adb.Result{Code: 1, Out: "error: device offline"}, "device offline"},
+		{"not found", adb.Result{Code: 1, Out: "adb: device 'emulator-20030' not found"}, "not found"},
+		{"timeout", adb.Result{Code: -1, Out: "adb shell 超时（2 秒）"}, "超时"},
+		{"0 with nothing", adb.Result{}, "没有跑完"},
+		{"0 with an error text", adb.Result{Out: "error: closed"}, "没有跑完"},
+		{"no end line", adb.Result{Out: "req=\nctl="}, "没有跑完"},
+		{"no req line", adb.Result{Out: "ctl=\n" + shutdownProbeEnd}, "没有跑完"},
+		{"no ctl line", adb.Result{Out: "req=\n" + shutdownProbeEnd}, "没有跑完"},
+		{"cut short after a property", adb.Result{Out: "req=0userrequested"}, "没有跑完"},
+	}
+	for _, c := range cases {
+		got := shutdownSign(c.res)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: shutdownSign = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if strings.Contains(guestShutdownProbe, "'") || !strings.Contains(guestShutdownProbe, "getprop sys.powerctl") ||
+		!strings.Contains(guestShutdownProbe, "getprop sys.shutdown.requested") || strings.Contains(guestShutdownProbe, "su ") {
+		t.Errorf("guestShutdownProbe = %q", guestShutdownProbe)
 	}
 }
 

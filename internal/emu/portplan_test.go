@@ -191,6 +191,14 @@ func fakeAdbClientMain(args []string) int {
 	case strings.Contains(all, guestShutdownCommand):
 		code, _ := strconv.Atoi(os.Getenv(fakeAdbSvcExitEnv))
 		return code
+	case strings.Contains(all, shutdownProbeEnd): // guestShutdownProbe
+		if out, ok := os.LookupEnv(fakeAdbProbeEnv); ok {
+			fmt.Print(out)
+		} else {
+			fmt.Println("req=\nctl=\n" + shutdownProbeEnd)
+		}
+		code, _ := strconv.Atoi(os.Getenv(fakeAdbProbeExitEnv))
+		return code
 	case strings.Contains(all, "logcat -d -b all"): // bootdiag.go
 		fmt.Println("11-04 10:00:00.000 E zygote: fake")
 	case strings.HasSuffix(all, "shell getprop"):
@@ -199,11 +207,14 @@ func fakeAdbClientMain(args []string) int {
 	return 0
 }
 
-// The fake adb client's answers for the stop tests: what guestHomeScript prints ("app" / "home", default "home") and
-// the exit code of the shutdown command (default 0).
+// The fake adb client's answers for the stop tests: what guestHomeScript prints ("app" / "home", default "home"), the
+// exit code of the shutdown command (default 0), and what guestShutdownProbe prints (default: neither property set)
+// and its exit code (default 0).
 const (
 	fakeAdbHomeEnv               = "MODAVD_EMU_FAKE_ADB_HOME"
 	fakeAdbSvcExitEnv            = "MODAVD_EMU_FAKE_ADB_SVC_EXIT"
+	fakeAdbProbeEnv              = "MODAVD_EMU_FAKE_ADB_PROBE"
+	fakeAdbProbeExitEnv          = "MODAVD_EMU_FAKE_ADB_PROBE_EXIT"
 	fakeAdbNoBootEnv             = "MODAVD_EMU_FAKE_ADB_NOBOOT" // set: sys.boot_completed stays empty (a boot that never ends)
 	fakeAdbRegionalPropertiesEnv = "MODAVD_EMU_FAKE_REGIONAL_PROPERTIES"
 	fakeAdbRegionalAppliedEnv    = "MODAVD_EMU_FAKE_REGIONAL_APPLIED"
