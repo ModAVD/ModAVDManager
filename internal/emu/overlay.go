@@ -113,6 +113,9 @@ const (
 	overlayNoStartGrace = 1500 * time.Millisecond
 	// overlayQemuGrace: a process scan that misses the qemu for this long means it is gone.
 	overlayQemuGrace = 2 * time.Second
+	// overlayDoneCap: once the instance is ready (the windows are back) the picture is up at most this long, whatever
+	// overlayDoneShow says: nothing the overlay waits for after that point may keep it alive.
+	overlayDoneCap = 5 * time.Second
 	// overlayGuardRetry: how often the start's guard tries again to give back windows that did not answer.
 	overlayGuardRetry = 500 * time.Millisecond
 )
@@ -1022,8 +1025,12 @@ func newOverlayMachine(now time.Time) *overlayMachine { return &overlayMachine{s
 // Next is the decision for the look in.
 func (om *overlayMachine) Next(in overlayIn) overlayOut {
 	out := overlayOut{Stage: "launch", Decided: true}
+	// Once the instance is ready (doneAt set) the windows are already back and the cover is only a picture playing. The
+	// process that started it ("start" returns right after it let go) and the start lock say nothing about the picture any
+	// more: only its own length (capped) and the qemu going away end it. Before that, nobody left to start things ends it at once.
+	done := !om.doneAt.IsZero()
 	switch {
-	case !in.WatchAlive:
+	case !in.WatchAlive && !done:
 		return overlayOut{Exit: true, Reason: "watch-gone"}
 	case in.QemuFound:
 		om.qemuSeen, om.qemuMissing = true, time.Time{}
@@ -1037,7 +1044,7 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 	case in.Now.Sub(om.started) >= overlayStartLimit:
 		return overlayOut{Exit: true, Reason: "qemu-never"}
 	}
-	if in.StartHeld {
+	if in.StartHeld || done {
 		om.noStart = time.Time{}
 	} else {
 		if om.noStart.IsZero() {
@@ -1060,7 +1067,9 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 	}
 	if !om.doneAt.IsZero() { // ready: the windows are back, the eruption is shown and fades, then the cover goes
 		out.Release, out.Done, out.Percent, out.Stage = true, true, 1, "ready"
-		if in.Now.Sub(om.doneAt) >= overlayDoneShow {
+		if el := in.Now.Sub(om.doneAt); el >= overlayDoneCap {
+			out.Exit, out.Reason = true, "done-cap"
+		} else if el >= overlayDoneShow {
 			out.Exit, out.Reason = true, "ready"
 		}
 		return out

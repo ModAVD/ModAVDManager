@@ -1016,6 +1016,78 @@ func TestOverlayDoneShowCoversTheEruption(t *testing.T) {
 		t.Errorf("the qemu went while the eruption was shown: %+v", o)
 	}
 }
+// "start" returns right after it let the windows go: from the moment the instance is ready the process that started the
+// overlay and the start lock say nothing about the picture, which is played to its end. Only its own length (capped) and
+// the qemu going away end it.
+func TestOverlayMachineDonePhaseIgnoresTheStarterAndTheStartLock(t *testing.T) {
+	t0 := time.Date(2026, 11, 27, 22, 0, 0, 0, time.UTC)
+	at := func(s float64) time.Time { return t0.Add(time.Duration(s * float64(time.Second))) }
+	ready := func(s float64) overlayIn {
+		return overlayIn{Now: at(s), QemuFound: true, StartHeld: true, WatchAlive: true, Tracked: true, Answered: true, Booted: true,
+			Setup: bootSetupState{Ready: true}}
+	}
+	// the starter and the lock gone: the same look as after "start" has returned
+	gone := func(i overlayIn) overlayIn { i.WatchAlive, i.StartHeld = false, false; return i }
+	show := overlayDoneShow.Seconds()
+
+	t.Run("the starter is gone while the picture plays: it plays to its end", func(t *testing.T) {
+		om := newOverlayMachine(t0)
+		if o := om.Next(ready(10)); !o.Done || o.Exit {
+			t.Fatalf("ready: %+v", o)
+		}
+		// 0.22 s after the release (the first run's "watch-gone"), then well past the 1.5 s of the start lock
+		for _, s := range []float64{10.22, 10.98, 11.6, 12.0, 10 + show - 0.05} {
+			if o := om.Next(gone(ready(s))); o.Exit || !o.Done || !o.Release || o.Stage != "ready" {
+				t.Fatalf("at %.2f s: the picture was cut: %+v", s, o)
+			}
+		}
+		if o := om.Next(gone(ready(10 + show + 0.05))); !o.Exit || o.Reason != "ready" {
+			t.Errorf("after the show: %+v", o)
+		}
+	})
+	t.Run("before ready the starter gone ends it at once, the lock gone after 1.5 s", func(t *testing.T) {
+		om := newOverlayMachine(t0)
+		x := overlayIn{Now: at(5), QemuFound: true, StartHeld: true, WatchAlive: false, Tracked: true}
+		if o := om.Next(x); !o.Exit || o.Reason != "watch-gone" {
+			t.Errorf("starter gone, not ready: %+v", o)
+		}
+		om = newOverlayMachine(t0)
+		a := overlayIn{Now: at(5), QemuFound: true, WatchAlive: true, Tracked: true}
+		b := a
+		b.Now = at(6.6)
+		if o := om.Next(a); o.Exit {
+			t.Fatalf("too early: %+v", o)
+		}
+		if o := om.Next(b); !o.Exit || o.Reason != "start-gone" {
+			t.Errorf("lock gone, not ready: %+v", o)
+		}
+	})
+	t.Run("the qemu going away in the done phase ends it, starter or not", func(t *testing.T) {
+		om := newOverlayMachine(t0)
+		om.Next(ready(10))
+		lost := func(s float64) overlayIn { i := gone(ready(s)); i.QemuFound = false; return i }
+		if o := om.Next(lost(10.2)); o.Exit {
+			t.Fatalf("one missed scan: %+v", o)
+		}
+		if o := om.Next(lost(10.2 + overlayQemuGrace.Seconds() + 0.05)); !o.Exit || o.Reason != "qemu-gone" {
+			t.Errorf("qemu gone: %+v", o)
+		}
+	})
+	t.Run("the picture is up at most overlayDoneCap whatever the show length", func(t *testing.T) {
+		saved := overlayDoneShow
+		overlayDoneShow = time.Hour
+		t.Cleanup(func() { overlayDoneShow = saved })
+		om := newOverlayMachine(t0)
+		om.Next(ready(10))
+		c := overlayDoneCap.Seconds()
+		if o := om.Next(gone(ready(10 + c - 0.05))); o.Exit {
+			t.Fatalf("before the cap: %+v", o)
+		}
+		if o := om.Next(gone(ready(10 + c + 0.05))); !o.Exit || o.Reason != "done-cap" || !o.Release {
+			t.Errorf("at the cap: %+v", o)
+		}
+	})
+}
 func TestOverlayMachineEndsWhenThereIsNothingToCover(t *testing.T) {
 	t0 := time.Date(2026, 11, 27, 22, 0, 0, 0, time.UTC)
 	at := func(s float64) time.Time { return t0.Add(time.Duration(s * float64(time.Second))) }
