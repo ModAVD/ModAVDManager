@@ -174,7 +174,7 @@ func TestRealAdb(t *testing.T) {
 				if res.Code != -1 || res.Out != want {
 					t.Errorf("Run on a foreign listener = %d %q", res.Code, res.Out)
 				}
-				if reason := c.PrepareForClose(ctx, 20080, 4*time.Second); reason != want {
+				if _, reason := c.PrepareForClose(ctx, 20080, 4*time.Second); reason != want {
 					t.Errorf("PrepareForClose on a foreign listener = %q", reason)
 				}
 			}
@@ -218,7 +218,7 @@ func TestRealAdb(t *testing.T) {
 		// PrepareForClose with the server up asks it first; it does not know emulator-20080, and no qemu of this
 		// (fresh) root listens on 20081, so nothing is registered
 		want := "adb 端口 20081 上不是这台实例的模拟器，不替它登记"
-		if reason := c.PrepareForClose(ctx, 20080, 4*time.Second); reason != want {
+		if _, reason := c.PrepareForClose(ctx, 20080, 4*time.Second); reason != want {
 			t.Errorf("PrepareForClose with the server up = %q, want %q", reason, want)
 		}
 	})
@@ -320,7 +320,7 @@ func TestRealAdb(t *testing.T) {
 			t.Skipf("端口 %d 有人在监听，跳过", console+1)
 		}
 		killServer(t, adbExe, testServerPort)
-		reason := c.PrepareForClose(ctx, console, 10*time.Second)
+		_, reason := c.PrepareForClose(ctx, console, 10*time.Second)
 		if want := fmt.Sprintf("adb 端口 %d 上不是这台实例的模拟器，不替它登记", console+1); reason != want {
 			t.Errorf("PrepareForClose = %q, want %q", reason, want)
 		}

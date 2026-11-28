@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,12 +85,26 @@ func fakeAdbServer() int {
 		go func() {
 			defer conn.Close()
 			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			b, _ := io.ReadAll(conn) // Register closes the connection itself
-			if msg := string(b); len(msg) > 4 {
-				if port, ok := strings.CutPrefix(msg[4:], "host:emulator:"); ok {
-					appendState(state, "registered:"+port)
-				}
+			msg, err := readHexPrefixed(conn)
+			if err != nil {
+				return
 			}
+			if msg == "host:devices" { // the serials registered with this server (ShareWithScriptServer)
+				var list strings.Builder
+				for _, line := range stateLines(state) {
+					if p, ok := strings.CutPrefix(line, "on:"+os.Getenv(fakeAdbPortEnv)+":"); ok {
+						n, _ := strconv.Atoi(p)
+						fmt.Fprintf(&list, "emulator-%d\tdevice\n", n-1)
+					}
+				}
+				fmt.Fprintf(conn, "OKAY%04x%s", list.Len(), list.String())
+				return
+			}
+			if port, ok := strings.CutPrefix(msg, "host:emulator:"); ok {
+				appendState(state, "registered:"+port)
+				appendState(state, "on:"+os.Getenv(fakeAdbPortEnv)+":"+port)
+			}
+			io.Copy(io.Discard, conn) // Register closes the connection itself
 		}()
 	}
 }
@@ -128,15 +143,20 @@ func fakeAdbClient(args []string) int {
 		}
 		return 1
 	case "get-state":
-		console, _ := strconv.Atoi(strings.TrimPrefix(serial, "emulator-"))
-		for _, line := range stateLines(os.Getenv(fakeAdbStateEnv)) {
-			if line == "device:"+serial || line == "registered:"+strconv.Itoa(console+1) {
-				fmt.Println("device")
-				return 0
-			}
+		switch fakeDeviceState(serial) {
+		case "device":
+			fmt.Println("device")
+			return 0
+		case "offline":
+			fmt.Fprintln(os.Stderr, "error: device offline")
+			return 1
 		}
 		fmt.Fprintf(os.Stderr, "error: device '%s' not found\n", serial)
 		return 1
+	case "reconnect": // the server drops serial's connection; an emulator's does not come back by itself
+		appendState(os.Getenv(fakeAdbStateEnv), "kicked:"+serial)
+		fmt.Printf("reconnecting %s [offline]\n", serial)
+		return 0
 	case "partial-hang": // a command that gives some output, then hangs (RunOptions.Stdout)
 		fmt.Println("first half")
 		time.Sleep(30 * time.Second)
@@ -147,6 +167,43 @@ func fakeAdbClient(args []string) int {
 		return 3
 	}
 	return 1
+}
+
+// fakeDeviceState is what the fake server has of serial, by the state file read in order (the last line about it
+// wins): "device:<serial>" and "offline:<serial>" preset it, "kicked:<serial>" (reconnect) drops it, and a
+// "registered:<adb port>" adds it as device, or as offline when the file has "adbd-down:<serial>" (adbd does not
+// answer). "" when the server does not have it.
+func fakeDeviceState(serial string) string {
+	console, _ := strconv.Atoi(strings.TrimPrefix(serial, "emulator-"))
+	lines := stateLines(os.Getenv(fakeAdbStateEnv))
+	registered := "device"
+	if slices.Contains(lines, "adbd-down:"+serial) {
+		registered = "offline"
+	}
+	state := ""
+	for _, line := range lines {
+		switch line {
+		case "device:" + serial:
+			state = "device"
+		case "offline:" + serial:
+			state = "offline"
+		case "kicked:" + serial:
+			state = ""
+		case "registered:" + strconv.Itoa(console+1):
+			state = registered
+		}
+	}
+	return state
+}
+
+func (f *fakeAdb) kicked() []string {
+	var out []string
+	for _, line := range stateLines(f.state) {
+		if strings.HasPrefix(line, "kicked:") {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 type fakeAdb struct {
@@ -169,7 +226,7 @@ func (f *fakeAdb) registered() []string {
 // reset sets the state file to lines and forgets the log so far.
 func (f *fakeAdb) reset(t *testing.T, lines ...string) {
 	t.Helper()
-	if err := os.WriteFile(f.state, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+	if err := os.WriteFile(f.state, []byte(strings.Join(append(lines, ""), "\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.logs.mu.Lock()
@@ -265,20 +322,21 @@ func TestPrepareForCloseFakeAdb(t *testing.T) {
 	t.Run("listening and known", func(t *testing.T) {
 		f.reset(t, "device:"+serial)
 		calls := stubQemu(t, win.Process{}, false)
-		if reason := f.c.PrepareForClose(ctx, console, 4*time.Second); reason != "" {
-			t.Errorf("PrepareForClose = %q", reason)
+		if state, reason := f.c.PrepareForClose(ctx, console, 4*time.Second); reason != "" || state != CloseDevice {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
 		}
-		if len(*calls) != 0 || len(f.registered()) != 0 {
-			t.Errorf("a known instance was checked (%v) or registered (%v)", *calls, f.registered())
+		if len(*calls) != 0 || len(f.registered()) != 0 || len(f.kicked()) != 0 {
+			t.Errorf("a known instance was checked (%v), registered (%v) or dropped (%v)", *calls, f.registered(),
+				f.kicked())
 		}
 	})
 
 	t.Run("listening, unknown, not our qemu", func(t *testing.T) {
 		f.reset(t)
 		calls := stubQemu(t, win.Process{}, false)
-		reason := f.c.PrepareForClose(ctx, console, 4*time.Second)
-		if want := "adb 端口 20081 上不是这台实例的模拟器，不替它登记"; reason != want {
-			t.Errorf("PrepareForClose = %q, want %q", reason, want)
+		state, reason := f.c.PrepareForClose(ctx, console, 4*time.Second)
+		if want := "adb 端口 20081 上不是这台实例的模拟器，不替它登记"; reason != want || state != CloseNotFound {
+			t.Errorf("PrepareForClose = %q, %q, want %q", state, reason, want)
 		}
 		if len(*calls) != 1 || (*calls)[0] != console {
 			t.Errorf("qemu check calls = %v", *calls)
@@ -292,8 +350,8 @@ func TestPrepareForCloseFakeAdb(t *testing.T) {
 		f.reset(t)
 		stubQemu(t, win.Process{PID: 1}, true)
 		start := time.Now()
-		if reason := f.c.PrepareForClose(ctx, console, 4*time.Second); reason != "" {
-			t.Errorf("PrepareForClose = %q", reason)
+		if state, reason := f.c.PrepareForClose(ctx, console, 4*time.Second); reason != "" || state != CloseRegistered {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
 		}
 		t.Logf("registered within %v", time.Since(start))
 		if got := f.registered(); len(got) != 1 || got[0] != "registered:20081" {
@@ -309,8 +367,8 @@ func TestPrepareForCloseFakeAdb(t *testing.T) {
 		// Not "device not found": left to the shutdown commands that follow, as before.
 		f.reset(t)
 		calls := stubQemu(t, win.Process{PID: 1}, true)
-		if reason := f.c.PrepareForClose(ctx, console, time.Millisecond); reason != "" {
-			t.Errorf("PrepareForClose with 1 ms = %q", reason)
+		if state, reason := f.c.PrepareForClose(ctx, console, time.Millisecond); reason != "" || state != CloseUnknown {
+			t.Errorf("PrepareForClose with 1 ms = %q, %q", state, reason)
 		}
 		if len(*calls) != 0 || len(f.registered()) != 0 {
 			t.Errorf("calls %v, registrations %v", *calls, f.registered())
@@ -321,8 +379,8 @@ func TestPrepareForCloseFakeAdb(t *testing.T) {
 		f.killServer(t)
 		f.reset(t)
 		stubQemu(t, win.Process{PID: 1}, true)
-		if reason := f.c.PrepareForClose(ctx, console, 10*time.Second); reason != "" {
-			t.Errorf("PrepareForClose = %q", reason)
+		if state, reason := f.c.PrepareForClose(ctx, console, 10*time.Second); reason != "" || state != CloseRegistered {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
 		}
 		if got := f.registered(); len(got) != 1 {
 			t.Errorf("registrations = %v", got)
@@ -331,6 +389,164 @@ func TestPrepareForCloseFakeAdb(t *testing.T) {
 			t.Errorf("logs = %q", f.logs.msgs)
 		}
 	})
+
+	// ModAVD/ModAVD#292: an instance the server shows offline. Left as it was, HOME, sync and the shutdown command all
+	// fail on it and qemu is ended without a sync; it gets one try: dropped (reconnect), registered again, online.
+	t.Run("offline, recovers", func(t *testing.T) {
+		if ok, err := f.c.EnsureServer(ctx, 10*time.Second); err != nil || !ok {
+			t.Fatalf("fake server: %v %v", ok, err)
+		}
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, win.Process{PID: 1}, true)
+		start := time.Now()
+		state, reason := f.c.PrepareForClose(ctx, console, 4*time.Second)
+		if reason != "" || state != CloseRecovered {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
+		}
+		if took := time.Since(start); took > 4*time.Second {
+			t.Errorf("took %v", took)
+		}
+		if got := f.kicked(); len(got) != 1 || got[0] != "kicked:"+serial {
+			t.Errorf("dropped %v", got)
+		}
+		if got := f.registered(); len(got) != 1 || got[0] != "registered:20081" {
+			t.Errorf("registrations = %v", got)
+		}
+		if f.logs.count("上 "+serial+" 是 offline，关机前断开重连一次") != 1 || f.logs.count("关机前 "+serial+" 已重新连上") != 1 {
+			t.Errorf("logs = %q", f.logs.msgs)
+		}
+	})
+
+	t.Run("offline, adbd does not answer", func(t *testing.T) {
+		f.reset(t, "offline:"+serial, "adbd-down:"+serial)
+		stubQemu(t, win.Process{PID: 1}, true)
+		start := time.Now()
+		state, reason := f.c.PrepareForClose(ctx, console, 10*time.Second)
+		// still offline: left to the shutdown commands, not the console path
+		if reason != "" || state != CloseOffline {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
+		}
+		// the try takes at most offlineRecoverWait after the first get-state, however long the timeout
+		if took := time.Since(start); took > offlineRecoverWait+3*time.Second {
+			t.Errorf("took %v, want the first get-state and at most %v", took, offlineRecoverWait)
+		}
+		if len(f.kicked()) != 1 || len(f.registered()) != 1 {
+			t.Errorf("dropped %v, registered %v: want one try", f.kicked(), f.registered())
+		}
+		if f.logs.count("断开重连后仍然不在线") != 1 {
+			t.Errorf("logs = %q", f.logs.msgs)
+		}
+	})
+
+	t.Run("offline, not our qemu", func(t *testing.T) {
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, win.Process{}, false)
+		if state, reason := f.c.PrepareForClose(ctx, console, 4*time.Second); reason != "" || state != CloseOffline {
+			t.Errorf("PrepareForClose = %q, %q", state, reason)
+		}
+		if len(f.kicked()) != 0 || len(f.registered()) != 0 {
+			t.Errorf("another program's port: dropped %v, registered %v", f.kicked(), f.registered())
+		}
+	})
+
+	t.Run("offline, the try fits what is left of the timeout", func(t *testing.T) {
+		f.reset(t, "offline:"+serial, "adbd-down:"+serial)
+		stubQemu(t, win.Process{PID: 1}, true)
+		start := time.Now()
+		if state, _ := f.c.PrepareForClose(ctx, console, 800*time.Millisecond); state != CloseOffline {
+			t.Errorf("state = %q", state)
+		}
+		if took := time.Since(start); took > 800*time.Millisecond+time.Second {
+			t.Errorf("took %v with an 800 ms timeout", took)
+		}
+	})
+}
+
+// What the boot watch uses to tell a restarted private server (ModAVD/ModAVD#292): ServerStarts counts the servers
+// this process started, ServerPID names who listens now. And the script server: whether it listens, starting it, and
+// registering the instance with it once (as emulator-<console>), not again while it lists the instance.
+func TestServerStartsAndScriptServer(t *testing.T) {
+	f := newFakeAdb(t)
+	ctx := context.Background()
+	if ok, err := f.c.EnsureServer(ctx, 10*time.Second); err != nil || !ok {
+		t.Fatalf("fake server: %v %v", ok, err)
+	}
+	starts, pid := f.c.ServerStarts(), f.c.ServerPID()
+	if pid == 0 {
+		t.Fatal("ServerPID = 0 with the fake server listening")
+	}
+	if ok, err := f.c.EnsureServer(ctx, 10*time.Second); err != nil || !ok || f.c.ServerStarts() != starts {
+		t.Fatalf("a listening server counted as started again: %v %v, %d -> %d", ok, err, starts, f.c.ServerStarts())
+	}
+	f.killServer(t)
+	if got := f.c.ServerPID(); got != 0 {
+		t.Errorf("ServerPID = %d with no server", got)
+	}
+	if ok, err := f.c.EnsureServer(ctx, 10*time.Second); err != nil || !ok {
+		t.Fatalf("restart: %v %v", ok, err)
+	}
+	if f.c.ServerStarts() != starts+1 {
+		t.Errorf("ServerStarts %d -> %d after a restart", starts, f.c.ServerStarts())
+	}
+	if got := f.c.ServerPID(); got == 0 || got == pid {
+		t.Errorf("ServerPID %d -> %d after a restart", pid, got)
+	}
+
+	scriptPort := f.c.Root.ScriptAdbServerPort()
+	if up, err := f.c.ScriptServerUp(); err != nil || up {
+		t.Fatalf("script server up before it was started: %v %v", up, err)
+	}
+	if registered, err := f.c.ShareWithScriptServer(ctx, 20080); err != nil || registered {
+		t.Fatalf("registered without a script server: %v %v", registered, err)
+	}
+	if ok, err := f.c.EnsureScriptServer(ctx, 10*time.Second); err != nil || !ok {
+		t.Fatalf("script server: %v %v", ok, err)
+	}
+	t.Cleanup(func() {
+		if pid, up, _ := win.ListenerPID(scriptPort); up {
+			if p, ok := win.FindProcess(pid); ok && isAdbName(p.Name) {
+				p.Kill()
+				p.Wait(5 * time.Second)
+			}
+		}
+	})
+	if f.c.ServerStarts() != starts+1 {
+		t.Error("the script server counted as a private server start")
+	}
+	if up, err := f.c.ScriptServerUp(); err != nil || !up {
+		t.Fatalf("ScriptServerUp = %v %v", up, err)
+	}
+	if registered, err := f.c.ShareWithScriptServer(ctx, 20080); err != nil || !registered {
+		t.Fatalf("ShareWithScriptServer = %v %v", registered, err)
+	}
+	if registered, err := f.c.ShareWithScriptServer(ctx, 20080); err != nil || registered {
+		t.Errorf("registered again while listed: %v %v", registered, err)
+	}
+	want := "on:" + strconv.Itoa(scriptPort) + ":20081"
+	if n := strings.Count(strings.Join(stateLines(f.state), " "), want); n != 1 {
+		t.Errorf("%s registered %d times: %v", want, n, stateLines(f.state))
+	}
+}
+
+func TestStateOf(t *testing.T) {
+	const serial = "emulator-20080"
+	for _, c := range []struct {
+		res  Result
+		want string
+	}{
+		{Result{Out: "device"}, CloseDevice},
+		{Result{Code: 1, Out: "error: device offline"}, CloseOffline},
+		{Result{Out: "offline"}, CloseOffline},
+		{Result{Code: 1, Out: "error: device 'emulator-20080' not found"}, CloseNotFound},
+		{Result{Code: 1, Out: "error: device 'emulator-20090' not found"}, CloseUnknown},
+		{Result{Code: 1, Out: "error: device unauthorized."}, CloseUnknown},
+		{Result{Code: -1, Out: "adb get-state 超时（5 秒）"}, CloseUnknown},
+		{Result{Out: "bootloader"}, CloseUnknown},
+	} {
+		if got := stateOf(serial, c.res); got != c.want {
+			t.Errorf("stateOf(%+v) = %q, want %q", c.res, got, c.want)
+		}
+	}
 }
 
 func TestReregisterFakeAdb(t *testing.T) {
@@ -384,6 +600,58 @@ func TestReregisterFakeAdb(t *testing.T) {
 			}
 		default:
 			t.Error("WaitHooks returned before the hook was done")
+		}
+	})
+
+	// ModAVD/ModAVD#292: an offline instance (the server keeps the connection, so registering it again would be
+	// ignored) is dropped first, then registered; the boot guards still apply.
+	t.Run("offline, recovers", func(t *testing.T) {
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, old, true)
+		if !f.c.Reregister(ctx, serial) {
+			t.Fatalf("Reregister = false: %q", f.logs.msgs)
+		}
+		if len(f.kicked()) != 1 || len(f.registered()) != 1 {
+			t.Errorf("dropped %v, registered %v", f.kicked(), f.registered())
+		}
+		if f.logs.count(serial+" 是 offline，断开重连一次") != 1 || f.logs.count(serial+" 已重新连上私有 adb server") != 1 {
+			t.Errorf("logs = %q", f.logs.msgs)
+		}
+	})
+
+	t.Run("offline, young qemu", func(t *testing.T) {
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, win.Process{PID: 1, Created: filetimeOf(time.Now())}, true)
+		if f.c.Reregister(ctx, serial) || len(f.kicked()) != 0 || len(f.registered()) != 0 {
+			t.Errorf("a qemu younger than 60 s was touched: dropped %v, registered %v", f.kicked(), f.registered())
+		}
+	})
+
+	// the boot wait's RegisterBooted leaves an offline connection alone (adbd may still be coming up): it only
+	// registers, as before ModAVD/ModAVD#292
+	t.Run("offline, boot wait", func(t *testing.T) {
+		f.reset(t, "offline:"+serial)
+		stubQemu(t, win.Process{PID: 1, Created: filetimeOf(time.Now())}, true)
+		if !f.c.RegisterBooted(ctx, serial) {
+			t.Fatalf("RegisterBooted = false: %q", f.logs.msgs)
+		}
+		if len(f.kicked()) != 0 || len(f.registered()) != 1 || f.logs.count("断开重连") != 0 {
+			t.Errorf("dropped %v, registered %v, logs %q", f.kicked(), f.registered(), f.logs.msgs)
+		}
+	})
+
+	t.Run("offline, adbd does not answer", func(t *testing.T) {
+		f.reset(t, "offline:"+serial, "adbd-down:"+serial)
+		stubQemu(t, old, true)
+		start := time.Now()
+		if f.c.Reregister(ctx, serial) {
+			t.Error("Reregister = true for a device that stays offline")
+		}
+		if took := time.Since(start); took > reregisterWait+2*time.Second {
+			t.Errorf("took %v", took)
+		}
+		if len(f.kicked()) != 1 || len(f.registered()) != 1 {
+			t.Errorf("dropped %v, registered %v: want one try", f.kicked(), f.registered())
 		}
 	})
 

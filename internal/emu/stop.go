@@ -21,7 +21,10 @@ package emu
 //
 // Time limits: AUTO-MAS gives close 30 s in all, see the shutdown constants in manager.go (worst case 28 s,
 // stopBudget). The graceful path counts from the first look for qemu: Android gets until gracefulDeadline, and the
-// fallback the rest of the budget (fallbackKillTimeout). adb commands here never re-register (that costs 5 s more),
+// fallback the rest of the budget (fallbackKillTimeout). A shutdown command that comes back with 0 is followed by one
+// look at the guest (guestShutdownProbe, at most shutdownProbeTimeout), inside that same window, so it moves no limit.
+// Making the private adb usable (adb.Client.PrepareForClose) takes at most adbServerStartOnClose, the try to bring an
+// offline instance back (ModAVD/ModAVD#292) included. adb commands here never re-register (that costs 5 s more),
 // and starting the private server counts against the command's own limit (TotalTimeout).
 //
 // A stop that comes while a start holds the start lock but has not launched qemu yet (prechecks, the private server
@@ -64,6 +67,20 @@ const stopBudget = 28 * time.Second
 
 // guestShutdownCommand asks Android to shut down through its framework (see the header comment).
 const guestShutdownCommand = "svc power shutdown"
+
+// guestShutdownProbe is the look at the guest after a shutdown command that came back with 0 (gracefulShutdown): the
+// two properties Android's shutdown sets, labeled (adb trims the output, so position says nothing about an empty one),
+// and a last line that says the shell ran to the end. sys.shutdown.requested is set by the ShutdownThread as it begins
+// (before the shutdown broadcast), sys.powerctl at its low-level shutdown, which hands over to init; both are cleared
+// by the next boot. Readable as shell, no su.
+const guestShutdownProbe = `echo "req=$(getprop sys.shutdown.requested)"; echo "ctl=$(getprop sys.powerctl)"; echo ` +
+	shutdownProbeEnd
+
+const shutdownProbeEnd = "modavd-probe-end"
+
+// shutdownProbeTimeout bounds guestShutdownProbe (it is answered in tens of ms by a guest that runs normally); it
+// counts against the graceful window, which stays within gracefulDeadline.
+const shutdownProbeTimeout = 2 * time.Second
 
 // guestHomeScript presses HOME unless nothing or the home screen is in front (the top resumed activity is the home
 // activity's package), and says which: "app" when it pressed it, "home" when not.
@@ -158,6 +175,13 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	// The qemu this stop handles: restart waits for this very process (PID and creation time) to be gone.
 	res.PID, res.Process = int(p.PID), p
 	ops := stopOpsOf(mm, ctx, i, p)
+	if prepare := ops.prepare; prepare != nil {
+		ops.prepare = func() (string, string) {
+			state, problem := prepare()
+			res.AdbState = state
+			return state, problem
+		}
+	}
 	var method string
 	var synced bool
 	if launching {
@@ -241,8 +265,9 @@ func fallbackKillTimeout(elapsed time.Duration) time.Duration {
 
 // stopOps are the side effects of a stop, separated so the path selection can be tested without an emulator.
 type stopOps struct {
-	// prepare makes the private adb server usable for this instance; "" when it is, else why not.
-	prepare func() string
+	// prepare makes the private adb server usable for this instance (adb.Client.PrepareForClose): what the server had
+	// of it (StopResult.AdbState), and "" when it is usable, else why not.
+	prepare func() (state, problem string)
 	// home sends an app in the foreground home within timeout (guestHomeScript): sent, and adb's output when the
 	// command failed ("" when it ran).
 	home func(timeout time.Duration) (bool, string)
@@ -260,6 +285,90 @@ type stopOps struct {
 	forceKill func(wait time.Duration) error
 }
 
+// gracefulSteps are the side effects of gracefulShutdown, separated for tests: the shutdown command and the probe
+// (guestShutdownProbe), each an adb shell within timeout; alive and waitExit (up to d) on qemu.
+type gracefulSteps struct {
+	shutdown func(timeout time.Duration) adb.Result
+	probe    func(timeout time.Duration) adb.Result
+	alive    func() bool
+	waitExit func(d time.Duration)
+}
+
+// gracefulShutdown asks Android to shut down (guestShutdownCommand) and waits up to window, from the command on, for
+// qemu to exit by itself; "" when it did, else why not (stopOps.graceful).
+//
+// The command waits for the device to go off: adb loses adbd on the way (exit 255, about 2.4 s after it), or it runs
+// all of window while the framework takes its time, so a code other than 0 says nothing about the shutdown and only
+// qemu's exit counts. It can also come back with 0 while qemu still runs, and that alone tells nothing either: svc
+// returns by itself with a usage text or an unknown subcommand (no shutdown under way, and waiting would only use up
+// the budget), but it has also come back with 0 while Android was in its low-level shutdown with adbd already gone
+// (ModAVD/ModAVD#291; why is not known, so nothing here depends on the reason). So it then looks once more, within
+// shutdownProbeTimeout: only a guest that still answers normally (the probe runs to its end) and shows neither
+// shutdown property has not begun to shut down, and the fallback starts at once. Everything else counts as a shutdown
+// under way and waits for qemu as usual: a property set, and also an adb that fails or a probe cut short (offline,
+// device not found, closed, a timeout), because adbd going away right after the command is what a shutdown does. A
+// guest that hangs instead costs the rest of the window, as a command that runs all of it does. The probe counts
+// against window.
+func gracefulShutdown(log *logx.Logger, i int, window time.Duration, s gracefulSteps) string {
+	started := time.Now()
+	res := s.shutdown(window)
+	ran := time.Since(started)
+	if res.Code == 0 && s.alive() {
+		if left := window - ran; left > 0 {
+			probe := s.probe(min(shutdownProbeTimeout, left))
+			sign := shutdownSign(probe)
+			if sign == "" && s.alive() {
+				// with the probe's own output: an empty property may also be one the shell cannot read
+				return fmt.Sprintf("关机命令自己返回了，客体照常应答、没有关机的迹象，安卓没有开始关机: %s；查关机状态: %s",
+					res.Out, strings.Join(outputLines(probe.Out), " "))
+			}
+			log.Infof("ModAVD 实例 %d 的关机命令返回了 0，看来安卓已经在关机（%s），照常等模拟器自己退出", i, orText(sign, "模拟器已退出"))
+		}
+	}
+	if remaining := window - time.Since(started); remaining > 0 {
+		s.waitExit(remaining)
+	}
+	if s.alive() {
+		// one that failed before the window was over says why; one that ran all of it only timed out
+		if res.Code != 0 && res.Out != "" && ran < window {
+			return fmt.Sprintf("%.0f 秒内没有自己退出；关机命令返回码 %d: %s", window.Seconds(), res.Code, res.Out)
+		}
+		return fmt.Sprintf("%.0f 秒内没有自己退出", window.Seconds())
+	}
+	return ""
+}
+
+// shutdownSign reads guestShutdownProbe's result: "" when the guest answered normally (adb succeeded, the shell printed
+// both properties and its last line) and neither property is set; else what says Android is shutting down: the
+// property, or why the guest did not answer normally (adbd going away is part of a shutdown).
+func shutdownSign(res adb.Result) string {
+	if res.Code != 0 {
+		return fmt.Sprintf("查关机状态时 adb 返回码 %d: %s", res.Code, res.Out)
+	}
+	var req, ctl string
+	var haveReq, haveCtl, end bool
+	for _, line := range outputLines(res.Out) {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == shutdownProbeEnd:
+			end = true
+		case strings.HasPrefix(line, "req="):
+			req, haveReq = strings.TrimPrefix(line, "req="), true
+		case strings.HasPrefix(line, "ctl="):
+			ctl, haveCtl = strings.TrimPrefix(line, "ctl="), true
+		}
+	}
+	switch {
+	case !haveReq || !haveCtl || !end:
+		return fmt.Sprintf("查关机状态的命令没有跑完: %s", res.Out)
+	case req != "":
+		return "sys.shutdown.requested=" + req
+	case ctl != "":
+		return "sys.powerctl=" + ctl
+	}
+	return ""
+}
+
 // runStop picks the path like AUTO-MAS _close and returns StopResult.Method and Synced; started is the first look for
 // qemu, which the graceful path's time limits count from. A cancel never escalates: at every step that would end qemu
 // harder it returns errs.Canceled instead (the instance may still be shutting down). When Windows refuses even the
@@ -268,7 +377,7 @@ type stopOps struct {
 func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started time.Time, ops stopOps) (string, bool, error) {
 	// Starting the private server and registering the instance count against the budget too: when that fails
 	// there is neither a graceful shutdown nor a sync, only the console.
-	problem := ops.prepare()
+	_, problem := ops.prepare()
 
 	if force {
 		synced := syncBeforeKill(log, i, problem, syncTimeout, ops.sync)
@@ -407,7 +516,7 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p host.Process) stopOps
 		return m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: timeout, Reregister: false, TotalTimeout: true}, args...)
 	}
 	return stopOps{
-		prepare: func() string { return m.ADB.PrepareForClose(ctx, console, adbServerStartOnClose) },
+		prepare: func() (string, string) { return m.ADB.PrepareForClose(ctx, console, adbServerStartOnClose) },
 		home: func(timeout time.Duration) (bool, string) {
 			res := closeRun(timeout, "shell", guestHomeScript)
 			if res.Code != 0 {
@@ -416,28 +525,12 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p host.Process) stopOps
 			return strings.TrimSpace(res.Out) == "app", ""
 		},
 		graceful: func(window time.Duration) string {
-			// Android's own shutdown (see the header comment). The command waits for the device to go off: adb loses
-			// adbd on the way (exit 255, about 2.4 s after it), or it runs all of window while the framework takes
-			// its time, so a code other than 0 says nothing about the shutdown and only qemu's exit counts. svc coming
-			// back by itself with 0 (a usage text, an unknown subcommand) means no shutdown is under way: waiting
-			// would only use up the budget.
-			started := time.Now()
-			res := closeRun(window, "shell", guestShutdownCommand)
-			ran := time.Since(started)
-			if res.Code == 0 && p.Alive() {
-				return fmt.Sprintf("关机命令自己返回了，安卓没有开始关机: %s", res.Out)
-			}
-			if remaining := window - ran; remaining > 0 {
-				waitQemuExit(ctx, p, remaining)
-			}
-			if p.Alive() {
-				// one that failed before the window was over says why; one that ran all of it only timed out
-				if res.Code != 0 && res.Out != "" && ran < window {
-					return fmt.Sprintf("%.0f 秒内没有自己退出；关机命令返回码 %d: %s", window.Seconds(), res.Code, res.Out)
-				}
-				return fmt.Sprintf("%.0f 秒内没有自己退出", window.Seconds())
-			}
-			return ""
+			return gracefulShutdown(m.Log, i, window, gracefulSteps{
+				shutdown: func(timeout time.Duration) adb.Result { return closeRun(timeout, "shell", guestShutdownCommand) },
+				probe:    func(timeout time.Duration) adb.Result { return closeRun(timeout, "shell", guestShutdownProbe) },
+				alive:    p.Alive,
+				waitExit: func(d time.Duration) { waitQemuExit(ctx, p, d) },
+			})
 		},
 		sync: func(timeout time.Duration) (bool, string) {
 			res := closeRun(timeout, "shell", "sync")

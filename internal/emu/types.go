@@ -339,6 +339,13 @@ type StopResult struct {
 	Warnings          []string `json:"warnings"`
 	// PID of the qemu this stop ended; 0 when it was already offline.
 	PID int `json:"pid"`
+	// AdbState: what the private adb server had of the instance before the shutdown (ModAVD/ModAVD#292): device /
+	// registered (it did not know the instance, a restarted server; registered then) / recovered (it was offline,
+	// dropped and registered again) / offline (still, after that) / unknown (get-state answered neither, e.g. a
+	// timeout) / not_found (unknown to it and not registered: console kill without sync) / server_down (the private
+	// server could not be used: console kill without sync). Absent for already_offline and launching_kill. With
+	// Method, it tells why a stop ended in sync_kill or console_kill.
+	AdbState string `json:"adb_state,omitempty"`
 	// Process is that qemu (PID + creation time), for callers in this process that must wait until it is really gone
 	// before booting it again: a qemu that was terminated can take seconds to release its memory, and by then the
 	// root-identity checks no longer recognise it (its runtime file and run lock are gone first).
