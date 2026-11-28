@@ -589,6 +589,34 @@ func TestBootWatchRecoversAnOrphanMark(t *testing.T) {
 	}
 }
 
+// The boot watch of a qemu only gives back the marks of that qemu (process and creation time): the mark of another qemu of
+// the same instance (an earlier or a later boot) is not its business, whoever left it.
+func TestBootWatchLeavesTheMarkOfAnotherQemu(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	other, _ := startSleeper(t)
+	sameNumber := win.Process{PID: qemu.PID, Created: qemu.Created + 1} // the same PID with another creation time: a reused PID
+	dead := deadProcess(t)
+	ops := newFakeOverlayWindows(other.PID, 811, 812)
+	withOverlayOS(t, ops)
+	w := &bootWatch{m: m, i: i, q: qemu}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.watchOverlayMarks(ctx, 50*time.Millisecond); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	for _, q := range []win.Process{other, sameNumber} {
+		putMark(t, m, i, markOf("r", dead, q, winsOf(q, 811, 812)))
+		time.Sleep(400 * time.Millisecond)
+		if ops.calls != 0 || ops.Enabled(811) {
+			t.Fatalf("the watch of another qemu gave back windows of %+v: %d calls", q, ops.calls)
+		}
+		if _, ok := m.readOverlayMark(i); !ok {
+			t.Fatal("the mark of another qemu was deleted")
+		}
+	}
+}
+
 // ---- the start's side: the guard and the check at the end ----------------------------------------------------------------
 
 // Layer 2: the start's guard waits on a handle to the overlay's process and gives the windows back the moment it ends,
@@ -1544,29 +1572,82 @@ func TestKeeperNeedsWholeIdentities(t *testing.T) {
 }
 
 // The boot watch that was found is the one of that qemu: when the instance is started again (another qemu) and the overlay
-// goes on, nothing of the new qemu is disabled before the boot watch of the new qemu is there.
+// goes on, nothing of the new qemu is disabled before the boot watch of the new qemu is there, and the new qemu has the whole
+// wait (the time already spent on the first one does not count), also after the first one was given up on.
 func TestKeeperWaitsForTheBootWatchOfTheNewQemu(t *testing.T) {
-	withVar(t, &overlayGuardianWait, 5*time.Second)
+	withVar(t, &overlayGuardianWait, 800*time.Millisecond)
 	f := newKeeperFixture(t, nil, 421, 422)
 	q2, _ := startSleeper(t)
 	f.ops.reown(422, q2.PID)
 	var up2 atomic.Bool
 	f.k.guardian = func(q host.Process) bool {
-		if q == f.q {
+		if q.PID == f.q.PID {
 			return true
 		}
-		return q == q2 && up2.Load()
+		return q.PID == q2.PID && up2.Load()
 	}
 	f.k.Track(f.q, handlesOf(421))
 	f.k.Decide()
 	eventually(t, "the first qemu's window is disabled", 3*time.Second, func() bool { return !f.ops.Enabled(421) })
+	time.Sleep(1100 * time.Millisecond) // longer than the wait: it must not count against the new qemu
 	f.k.Track(q2, handlesOf(422))
-	time.Sleep(700 * time.Millisecond)
+	time.Sleep(450 * time.Millisecond)
 	if f.ops.setCallsOf(422) != 0 || !f.ops.Enabled(422) {
 		t.Fatal("a window of the new qemu was disabled before its boot watch was there")
 	}
 	up2.Store(true)
 	eventually(t, "disabled once the new qemu's watch is there", 3*time.Second, func() bool { return !f.ops.Enabled(422) })
+
+	// the first qemu's watch never came: given up on; the new qemu is another wait
+	g := newKeeperFixture(t, nil, 423, 424)
+	r2, _ := startSleeper(t)
+	g.ops.reown(424, r2.PID)
+	g.k.guardian = func(q host.Process) bool { return q.PID == r2.PID }
+	g.k.Track(g.q, handlesOf(423))
+	g.k.Decide()
+	time.Sleep(1500 * time.Millisecond)
+	if g.ops.calls != 0 {
+		t.Fatal("a window was disabled although the boot watch never came")
+	}
+	g.k.Track(r2, handlesOf(424))
+	eventually(t, "the new qemu is not given up on with the first", 3*time.Second, func() bool { return !g.ops.Enabled(424) })
+}
+
+// A mark that is there and is not a file that can be read (a directory, say) is not "no mark" either.
+func TestKeeperDoesNotDisableWhenTheMarkIsNotAReadableFile(t *testing.T) {
+	f := newKeeperFixture(t, nil, 431)
+	if err := os.MkdirAll(f.m.overlayMarkPath(f.i), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.k.Track(f.q, handlesOf(431))
+	f.k.Decide()
+	time.Sleep(900 * time.Millisecond)
+	if f.ops.calls != 0 || !f.ops.Enabled(431) {
+		t.Fatal("a window was disabled although the mark that is there could not be read")
+	}
+}
+
+// Release in the middle of a step (the instance became ready while the keeper was disabling the covered windows): the
+// windows that are not disabled yet are never disabled.
+func TestKeeperStopsDisablingWhenReleasedInTheMiddleOfAStep(t *testing.T) {
+	f := newKeeperFixture(t, nil, 441, 442)
+	var second atomic.Bool
+	f.ops.onSet = func(h uintptr, on bool) {
+		if h == 441 && !on {
+			f.k.Release()
+		}
+		if h == 442 && !on {
+			second.Store(true)
+		}
+	}
+	f.k.Track(f.q, handlesOf(441, 442))
+	f.k.Decide()
+	eventually(t, "the first window is disabled", 3*time.Second, func() bool { return f.ops.setCallsOf(441) > 0 })
+	time.Sleep(900 * time.Millisecond)
+	if second.Load() {
+		t.Error("the second window was disabled after Release")
+	}
+	eventually(t, "everything is given back", 3*time.Second, func() bool { return f.ops.Enabled(441) && f.ops.Enabled(442) })
 }
 
 // A mark that is there and cannot be read is not "no mark": nothing is disabled, and the file is left as it was.
