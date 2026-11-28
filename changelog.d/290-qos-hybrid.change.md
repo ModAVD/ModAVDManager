@@ -1,2 +1,2 @@
-大小核处理器上，无头或在后台运行的模拟器不再被 Windows 降速 (ModAVD/ModAVD#290)
-On CPUs with efficiency cores, Windows no longer slows down emulators that run headless or in the background
+模拟器开机后要求 Windows 不对它做后台降速，大小核处理器上更不容易被排到小核 (ModAVD/ModAVD#290)
+The emulator now opts out of Windows background throttling, making efficiency-core placement less likely on hybrid CPUs
