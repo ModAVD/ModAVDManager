@@ -102,7 +102,33 @@ var serverState = struct {
 	sync.Mutex
 	started  map[string]startedServer // by serverKey
 	reported map[string]string        // the log lines last reported, by serverKey
-}{started: map[string]startedServer{}, reported: map[string]string{}}
+	starts   map[string]uint64        // servers this process started and saw listening, by serverKey
+}{started: map[string]startedServer{}, reported: map[string]string{}, starts: map[string]uint64{}}
+
+// countServerStart counts a server this process started on port and saw listening (ServerStarts).
+func (c *Client) countServerStart(port int) {
+	serverState.Lock()
+	serverState.starts[serverKey(c.Root, port)]++
+	serverState.Unlock()
+}
+
+// ServerStarts is how many private servers this process has started (and seen listening) for the root: one that
+// changed between two looks says the private server had gone and was started again in between (ModAVD/ModAVD#292).
+func (c *Client) ServerStarts() uint64 {
+	serverState.Lock()
+	defer serverState.Unlock()
+	return serverState.starts[serverKey(c.Root, c.Root.AdbServerPort())]
+}
+
+// ServerPID is who listens on the private server's port by the system table; 0 when it shows nobody or cannot be read
+// (on some Windows builds it misses a server that answers, see listening).
+func (c *Client) ServerPID() uint32 {
+	pid, up, err := listenerPID(c.Root.AdbServerPort())
+	if err != nil || !up {
+		return 0
+	}
+	return pid
+}
 
 func serverKey(r *root.Root, port int) string {
 	return strings.ToLower(filepath.Clean(r.Dir)) + "|" + strconv.Itoa(port)

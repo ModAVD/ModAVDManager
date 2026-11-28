@@ -22,7 +22,9 @@ package emu
 // Time limits: AUTO-MAS gives close 30 s in all, see the shutdown constants in manager.go (worst case 28 s,
 // stopBudget). The graceful path counts from the first look for qemu: Android gets until gracefulDeadline, and the
 // fallback the rest of the budget (fallbackKillTimeout). A shutdown command that comes back with 0 is followed by one
-// look at the guest (guestShutdownProbe, at most shutdownProbeTimeout), inside that same window, so it moves no limit. adb commands here never re-register (that costs 5 s more),
+// look at the guest (guestShutdownProbe, at most shutdownProbeTimeout), inside that same window, so it moves no limit.
+// Making the private adb usable (adb.Client.PrepareForClose) takes at most adbServerStartOnClose, the try to bring an
+// offline instance back (ModAVD/ModAVD#292) included. adb commands here never re-register (that costs 5 s more),
 // and starting the private server counts against the command's own limit (TotalTimeout).
 //
 // A stop that comes while a start holds the start lock but has not launched qemu yet (prechecks, the private server
@@ -173,6 +175,13 @@ func (m *Manager) Stop(ctx context.Context, i int, opt StopOptions) (*StopResult
 	// The qemu this stop handles: restart waits for this very process (PID and creation time) to be gone.
 	res.PID, res.Process = int(p.PID), p
 	ops := stopOpsOf(mm, ctx, i, p)
+	if prepare := ops.prepare; prepare != nil {
+		ops.prepare = func() (string, string) {
+			state, problem := prepare()
+			res.AdbState = state
+			return state, problem
+		}
+	}
 	var method string
 	var synced bool
 	if launching {
@@ -256,8 +265,9 @@ func fallbackKillTimeout(elapsed time.Duration) time.Duration {
 
 // stopOps are the side effects of a stop, separated so the path selection can be tested without an emulator.
 type stopOps struct {
-	// prepare makes the private adb server usable for this instance; "" when it is, else why not.
-	prepare func() string
+	// prepare makes the private adb server usable for this instance (adb.Client.PrepareForClose): what the server had
+	// of it (StopResult.AdbState), and "" when it is usable, else why not.
+	prepare func() (state, problem string)
 	// home sends an app in the foreground home within timeout (guestHomeScript): sent, and adb's output when the
 	// command failed ("" when it ran).
 	home func(timeout time.Duration) (bool, string)
@@ -364,7 +374,7 @@ func shutdownSign(res adb.Result) string {
 func runStop(ctx context.Context, log *logx.Logger, i int, force bool, started time.Time, ops stopOps) (string, bool, error) {
 	// Starting the private server and registering the instance count against the budget too: when that fails
 	// there is neither a graceful shutdown nor a sync, only the console.
-	problem := ops.prepare()
+	_, problem := ops.prepare()
 
 	if force {
 		synced := syncBeforeKill(log, i, problem, syncTimeout, ops.sync)
@@ -503,7 +513,7 @@ func (m *Manager) stopOpsFor(ctx context.Context, i int, p host.Process) stopOps
 		return m.ADB.Run(ctx, adb.RunOptions{Serial: serial, Timeout: timeout, Reregister: false, TotalTimeout: true}, args...)
 	}
 	return stopOps{
-		prepare: func() string { return m.ADB.PrepareForClose(ctx, console, adbServerStartOnClose) },
+		prepare: func() (string, string) { return m.ADB.PrepareForClose(ctx, console, adbServerStartOnClose) },
 		home: func(timeout time.Duration) (bool, string) {
 			res := closeRun(timeout, "shell", guestHomeScript)
 			if res.Code != 0 {

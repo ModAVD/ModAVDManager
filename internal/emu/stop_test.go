@@ -25,6 +25,7 @@ import (
 // stopFake records the steps runStop takes.
 type stopFake struct {
 	problem      string // prepare's answer
+	adbState     string // prepare's state
 	homeApp      bool   // home sent an app home
 	homeFailure  string // home's command failed
 	gracefulWhy  string // graceful's answer
@@ -55,7 +56,7 @@ func (f *stopFake) ops() stopOps {
 		f.at[name] = time.Now()
 	}
 	return stopOps{
-		prepare: func() string { call("prepare"); return f.problem },
+		prepare: func() (string, string) { call("prepare"); return f.adbState, f.problem },
 		home: func(d time.Duration) (bool, string) {
 			call("home")
 			f.homeTimeout = d
@@ -1140,6 +1141,38 @@ func TestStopReportsItsQemu(t *testing.T) {
 	}
 	if s := string(b); !strings.Contains(s, `"pid":4242`) || strings.Contains(s, "Created") || strings.Contains(s, `"process"`) {
 		t.Fatalf("json: %s", s)
+	}
+}
+
+// The result says what the private adb server had of the instance before the shutdown (ModAVD/ModAVD#292), so a
+// problem report shows why a stop ended in sync_kill or console_kill. Absent when prepare did not run.
+func TestStopReportsAdbState(t *testing.T) {
+	var i int
+	qemu := win.Process{PID: 4242, Name: "qemu-system-x86_64-headless.exe", Created: 77}
+	for _, c := range []struct {
+		f      stopFake
+		method string
+	}{
+		{stopFake{adbState: "offline", gracefulWhy: "24 秒内没有自己退出"}, "sync_kill"},
+		{stopFake{adbState: "recovered", syncOK: true}, "graceful"},
+		{stopFake{adbState: "server_down", problem: "私有 adb server（端口 20050）4 秒内没起来"}, "console_kill"},
+		{stopFake{adbState: "registered"}, "force"},
+	} {
+		f := c.f
+		m, idx, l := stopTestSetup(t, &f, func() map[int]win.Process { return map[int]win.Process{i: qemu} })
+		i = idx
+		l.Unlock()
+		st, err := m.Stop(context.Background(), i, StopOptions{Force: c.method == "force"})
+		if err != nil || st.Method != c.method || st.AdbState != c.f.adbState {
+			t.Fatalf("%s: stop %+v %v", c.f.adbState, st, err)
+		}
+		if b, _ := json.Marshal(st); !strings.Contains(string(b), `"adb_state":"`+c.f.adbState+`"`) {
+			t.Errorf("json: %s", b)
+		}
+	}
+	b, _ := json.Marshal(StopResult{Method: "already_offline"})
+	if strings.Contains(string(b), "adb_state") {
+		t.Errorf("already_offline: %s", b)
 	}
 }
 

@@ -25,7 +25,26 @@ const defaultServerTimeout = 3 * time.Second
 // tool that starts it gets our instance at the next call (the boot watch calls this every bootWatchShareInterval).
 // Returns whether it registered the instance now; nothing listening is not an error.
 func ShareWithDefaultServer(ctx context.Context, console int) (bool, error) {
-	serials, err := serverDevices(ctx, DefaultServerPort, defaultServerTimeout)
+	return shareWith(ctx, DefaultServerPort, console)
+}
+
+// ShareWithScriptServer is ShareWithDefaultServer for the root's script server (scriptAdbServerPort): after the boot
+// watch started that server again, the instance is on it as emulator-<console> (ModAVD/ModAVD#292). It never starts
+// the server either.
+func (c *Client) ShareWithScriptServer(ctx context.Context, console int) (bool, error) {
+	return shareWith(ctx, c.Root.ScriptAdbServerPort(), console)
+}
+
+// ScriptServerUp: the root's script server listens (an adb server; something else on its port is
+// errs.PortConflict, as for EnsureScriptServer). Nothing is started.
+func (c *Client) ScriptServerUp() (bool, error) {
+	return c.serverListening(scriptServer, c.Root.ScriptAdbServerPort())
+}
+
+// shareWith registers instance console with the adb server on port when that server runs and does not list
+// emulator-<console> yet. Whether it registered it now; nothing listening is not an error.
+func shareWith(ctx context.Context, port, console int) (bool, error) {
+	serials, err := serverDevices(ctx, port, defaultServerTimeout)
 	if err != nil {
 		if errors.Is(err, errNoServer) {
 			return false, nil
@@ -38,7 +57,7 @@ func ShareWithDefaultServer(ctx context.Context, console int) (bool, error) {
 			return false, nil
 		}
 	}
-	if err := Register(ctx, DefaultServerPort, console+1, defaultServerTimeout); err != nil {
+	if err := Register(ctx, port, console+1, defaultServerTimeout); err != nil {
 		return false, err
 	}
 	return true, nil

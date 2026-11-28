@@ -411,6 +411,7 @@ func (c *Client) ensure(ctx context.Context, k serverKind, port int, timeout tim
 	case err != nil:
 	case up:
 		c.rememberServer(port)
+		c.countServerStart(port)
 	case ctx.Err() == nil:
 		c.reportServerLog(k, port, timeout)
 	}
@@ -716,11 +717,25 @@ func (c *Client) reregister(ctx context.Context, serial string, booted bool) boo
 	defer func() { <-lock }()
 
 	serverPort := c.Root.AdbServerPort()
-	if c.GetState(ctx, serial, reregisterStateTimeout) == "device" {
+	state := stateOf(serial, c.Run(ctx, RunOptions{Serial: serial, Timeout: reregisterStateTimeout}, "get-state"))
+	if state == CloseDevice {
 		return true // another caller just registered it
 	}
 	if !registrationStillOwned(c, console, qemu) {
 		return false
+	}
+	if state == CloseOffline {
+		// The server ignores a registration of a port it still has a connection to (ModAVD/ModAVD#292): drop that
+		// first. Within the same reregisterWait; the guards above (booting, a young qemu) still apply.
+		c.Log.Warnf("私有 adb server（端口 %d）上 %s 是 offline，断开重连一次", serverPort, serial)
+		started := time.Now()
+		if !c.recoverOffline(ctx, console, started.Add(reregisterWait)) {
+			c.Log.Warnf("%s 断开重连后 %.0f 秒仍未上线", serial, reregisterWait.Seconds())
+			return false
+		}
+		c.Log.Infof("%s 已重新连上私有 adb server（用时 %.0f ms）", serial, msSince(started))
+		c.runReregisterHook(serial)
+		return true
 	}
 	c.Log.Warnf("私有 adb server（端口 %d）上没有 %s，按 adb 端口 %d 重新登记", serverPort, serial, console+1)
 	started := time.Now()
@@ -774,34 +789,149 @@ func msSince(t time.Time) float64 { return float64(time.Since(t)) / float64(time
 // instance within seconds. modavd has neither, and a server that was restarted (kill-server, a crash, `modavd
 // servers`, another instance's command) does not know a running instance until somebody registers it. The shutdown
 // commands do not re-register, so they and the fallback sync would fail with "device not found" and qemu would be
-// killed without a sync. The get-state is answered by the server itself (tens of ms). Any other answer (device,
-// offline, a timeout) is left to the commands that follow, as before.
+// killed without a sync. The get-state is answered by the server itself (tens of ms). A device, or an answer that is
+// neither device, offline nor "not found" (a timeout), is left to the commands that follow, as before.
 //
 // It does not go through Reregister: the boot guard (60 s) and its 5 s wait do not fit a shutdown.
-func (c *Client) PrepareForClose(ctx context.Context, console int, timeout time.Duration) string {
+//
+// An instance the server shows offline gets one try to come back (recoverOffline, at most offlineRecoverWait of what
+// is left of timeout; ModAVD/ModAVD#292): left as it was, the HOME, the sync and the shutdown command would all fail on
+// it and the stop would end qemu without a sync. One still offline after that is left to the commands that follow
+// (adbd may come back meanwhile; the console path would be sure to end it without a sync).
+//
+// state says what the server had of the instance (StopResult.AdbState): CloseDevice, CloseRegistered, CloseRecovered,
+// CloseOffline, CloseUnknown; with a problem, CloseNotFound or CloseServerDown.
+func (c *Client) PrepareForClose(ctx context.Context, console int, timeout time.Duration) (state, problem string) {
 	started := time.Now()
 	port := c.Root.AdbServerPort()
 	serial := "emulator-" + strconv.Itoa(console)
 	up, err := c.serverListening(privateServer, port)
 	if err != nil {
-		return err.Error()
+		return CloseServerDown, err.Error()
 	}
 	if up {
 		res := c.runOnce(ctx, RunOptions{Serial: serial, Timeout: timeout, TotalTimeout: true}, []string{"get-state"})
-		if res.Code == 0 || !DeviceMissing(serial, res.Out) {
-			return ""
+		switch stateOf(serial, res) {
+		case CloseDevice:
+			return CloseDevice, ""
+		case CloseOffline:
+			return c.recoverForClose(ctx, console, started, timeout), ""
+		case CloseNotFound:
+			c.Log.Warnf("私有 adb server（端口 %d）上没有 %s，关机前替它登记", port, serial)
+			if why := c.registerForClose(ctx, console, started, timeout, "私有 adb server"); why != "" {
+				return CloseNotFound, why
+			}
+			return CloseRegistered, ""
 		}
-		c.Log.Warnf("私有 adb server（端口 %d）上没有 %s，关机前替它登记", port, serial)
-		return c.registerForClose(ctx, console, started, timeout, "私有 adb server")
+		return CloseUnknown, ""
 	}
 	ok, err := c.EnsureServer(ctx, timeout)
 	if err != nil {
-		return err.Error()
+		return CloseServerDown, err.Error()
 	}
 	if !ok {
-		return fmt.Sprintf("私有 adb server（端口 %d）%.0f 秒内没起来", port, timeout.Seconds())
+		return CloseServerDown, fmt.Sprintf("私有 adb server（端口 %d）%.0f 秒内没起来", port, timeout.Seconds())
 	}
-	return c.registerForClose(ctx, console, started, timeout, "新起的私有 adb server")
+	if why := c.registerForClose(ctx, console, started, timeout, "新起的私有 adb server"); why != "" {
+		return CloseNotFound, why
+	}
+	return CloseRegistered, ""
+}
+
+// What PrepareForClose found of the instance on the private server (StopResult.AdbState).
+const (
+	CloseDevice     = "device"      // the server knew it, online
+	CloseRegistered = "registered"  // the server did not know it (a restarted server); registered before the shutdown
+	CloseRecovered  = "recovered"   // it was offline; dropped and registered again, online now
+	CloseOffline    = "offline"     // offline, and still after one try to bring it back
+	CloseUnknown    = "unknown"     // get-state said neither (a timeout, unauthorized ...); left to the commands
+	CloseNotFound   = "not_found"   // the server does not know it and it could not be registered (problem says why)
+	CloseServerDown = "server_down" // the private server could not be used (problem says why)
+)
+
+// stateOf reads one get-state of serial: CloseDevice, CloseOffline, CloseNotFound or CloseUnknown. adb answers an
+// offline device with "error: device offline" (exit 1); a plain "offline" (exit 0) counts too.
+func stateOf(serial string, res Result) string {
+	switch {
+	case res.Code == 0 && res.Out == "device":
+		return CloseDevice
+	case strings.Contains(strings.ToLower(res.Out), "offline"):
+		return CloseOffline
+	case res.Code != 0 && DeviceMissing(serial, res.Out):
+		return CloseNotFound
+	}
+	return CloseUnknown
+}
+
+// offlineRecoverWait bounds recoverOffline: dropping the connection, registering the instance again and its
+// get-state polls (registering and coming back online measured at about 0.5 s).
+const offlineRecoverWait = 2 * time.Second
+
+// recoverForClose is PrepareForClose for an instance the server shows offline: recoverOffline within
+// offlineRecoverWait, at most what is left of timeout (from started), only for this root's own qemu. CloseRecovered
+// when it is online again, else CloseOffline.
+func (c *Client) recoverForClose(ctx context.Context, console int, started time.Time, timeout time.Duration) string {
+	port := c.Root.AdbServerPort()
+	serial := "emulator-" + strconv.Itoa(console)
+	qemu, ok := qemuOnAdbPort(c.Root, console)
+	if !ok || !registrationStillOwned(c, console, qemu) {
+		c.Log.Warnf("私有 adb server（端口 %d）上 %s 是 offline，adb 端口 %d 上又不是这台实例的模拟器，不去动它", port,
+			serial, console+1)
+		return CloseOffline
+	}
+	c.Log.Warnf("私有 adb server（端口 %d）上 %s 是 offline，关机前断开重连一次", port, serial)
+	deadline := started.Add(timeout)
+	if limit := time.Now().Add(offlineRecoverWait); limit.Before(deadline) {
+		deadline = limit
+	}
+	if c.recoverOffline(ctx, console, deadline) {
+		c.Log.Infof("关机前 %s 已重新连上私有 adb server（用时 %.0f ms）", serial, msSince(started))
+		return CloseRecovered
+	}
+	c.Log.Warnf("%s 断开重连后仍然不在线，照常关机（按 HOME、sync、关机命令多半会失败）", serial)
+	return CloseOffline
+}
+
+// recoverOffline brings an offline instance back onto the private server once, until deadline: the server drops its
+// connection (`adb -s emulator-<console> reconnect`; an emulator registered with host:emulator is then removed, its
+// connection does not come back by itself), the instance is registered again once it is gone, and get-state is polled
+// until "device". Whether it is online again. The caller has checked that the qemu on its adb port is this root's
+// instance.
+func (c *Client) recoverOffline(ctx context.Context, console int, deadline time.Time) bool {
+	port := c.Root.AdbServerPort()
+	serial := "emulator-" + strconv.Itoa(console)
+	limit := func() time.Duration { return time.Until(deadline) }
+	if d := limit(); d > 0 {
+		c.runOnce(ctx, RunOptions{Serial: serial, Timeout: d, TotalTimeout: true}, []string{"reconnect"})
+	}
+	registered := false
+	for {
+		d := limit()
+		if d <= 0 {
+			return false
+		}
+		res := c.runOnce(ctx, RunOptions{Serial: serial, Timeout: d, TotalTimeout: true}, []string{"get-state"})
+		switch stateOf(serial, res) {
+		case CloseDevice:
+			return true
+		case CloseNotFound:
+			if !registered {
+				registered = true
+				d = limit()
+				if d <= 0 {
+					return false
+				}
+				if err := Register(ctx, port, console+1, d); err != nil {
+					c.Log.Warnf("向私有 adb server 重新登记 %s 失败: %v", serial, err)
+					return false
+				}
+				continue
+			}
+		}
+		if !sleepCtx(ctx, closeStatePoll) {
+			return false
+		}
+	}
 }
 
 // registerForClose is the tail of PrepareForClose once the private server listens but does not know the instance:

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -175,25 +176,33 @@ func TestWatchStartLock(t *testing.T) {
 	stop.Unlock()
 }
 
-// guestStub is what the stubbed guest read answers, and what it was asked.
+// guestStub is what the stubbed guest read answers, and what it was asked; also the private server's identity the
+// watch sees (privateServerIdentity: starts, pid).
 type guestStub struct {
 	booted, missing bool
 	bootID          string
 	reads           atomic.Int32
 	reregisters     []bool // the reregister argument of each read
+	onRead          func() // runs in each read (a read that restarts the server)
+	starts          uint64
+	pid             uint32
 }
 
-// stubGuestBoot replaces the guest read for the test.
+// stubGuestBoot replaces the guest read and the private server's identity for the test (no adb, no listener table).
 func stubGuestBoot(t *testing.T) *guestStub {
 	t.Helper()
 	g := &guestStub{}
-	saved := guestBootRead
+	saved, savedIdentity := guestBootRead, privateServerIdentity
 	guestBootRead = func(_ int, reregister bool) (bool, string, bool) {
 		g.reads.Add(1)
 		g.reregisters = append(g.reregisters, reregister)
+		if g.onRead != nil {
+			g.onRead()
+		}
 		return g.booted, g.bootID, g.missing
 	}
-	t.Cleanup(func() { guestBootRead = saved })
+	privateServerIdentity = func(*Manager) (uint64, uint32) { return g.starts, g.pid }
+	t.Cleanup(func() { guestBootRead, privateServerIdentity = saved, savedIdentity })
 	return g
 }
 
@@ -292,6 +301,163 @@ func TestBootWatchReregisterSchedule(t *testing.T) {
 		if g.reregisters[k] != want[k] {
 			t.Fatalf("reregister per read = %v, want %v", g.reregisters, want)
 		}
+	}
+}
+
+// ModAVD/ModAVD#292: a program ended every adb.exe by name. The watch's own read started the private server again, or
+// another PID listens on its port than at the last look: the server has lost the instance for good, so the watch
+// registers it at once instead of after bootWatchReregisterAfter. Neither (a guest-only reboot, or a PID the table
+// does not show) keeps the wait.
+func TestBootWatchReregistersAfterServerRestart(t *testing.T) {
+	m := markerTestManager(t)
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	m.writeBootRecord(3, bootRecord{QemuPID: q.PID, QemuCreated: q.Created, BootID: testBootA})
+	g := stubGuestBoot(t)
+	g.bootID, g.starts, g.pid = testBootA, 7, 100
+	bw := &bootWatch{m: m, i: 3, q: q}
+	t0 := time.Date(2026, 11, 28, 1, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) { bw.tick(context.Background(), t0.Add(d)) }
+	want := []bool{}
+	check := func(step string, reads ...bool) {
+		t.Helper()
+		want = append(want, reads...)
+		if !slices.Equal(g.reregisters, want) {
+			t.Fatalf("%s: reregister per read = %v, want %v", step, g.reregisters, want)
+		}
+	}
+
+	at(0)
+	check("known", false)
+	g.missing = true
+	g.onRead = func() { g.starts++; g.onRead = nil } // this read starts the server again
+	at(5 * time.Second)
+	check("our read restarted it", false, true)
+	at(10 * time.Second)
+	check("still missing, nothing restarted", false)
+	g.pid = 200 // another process restarted it
+	at(15 * time.Second)
+	check("another PID", false, true)
+	g.pid = 0 // the table does not show it
+	at(20 * time.Second)
+	check("PID unknown", false)
+	g.pid = 250 // compared with the last PID the table showed
+	at(25 * time.Second)
+	check("another PID after an unknown look", false, true)
+	g.missing = false
+	g.pid = 300
+	at(30 * time.Second)
+	check("restarted, but the instance is known", false)
+	g.missing = true
+	at(35 * time.Second)
+	check("guest-only reboot: same server", false)
+	g.pid = 400
+	at(35*time.Second + bootWatchReregisterAfter)
+	check("restarted when the wait is over anyway: one read", true)
+}
+
+// stubScriptServer replaces the script server's side effects of the watch: up answers whether it listens (err a port
+// conflict); ensure whether starting it worked; shares records the registrations.
+type scriptStub struct {
+	up        bool
+	upErr     error
+	ensureOK  bool
+	looks     int
+	ensures   int
+	shares    []int
+	shareSays bool
+}
+
+func stubScriptServer(t *testing.T) *scriptStub {
+	t.Helper()
+	s := &scriptStub{shareSays: true}
+	savedUp, savedEnsure, savedShare := scriptServerUp, ensureScriptServer, shareScriptServer
+	scriptServerUp = func(*Manager) (bool, error) { s.looks++; return s.up, s.upErr }
+	ensureScriptServer = func(context.Context, *Manager) (bool, error) {
+		s.ensures++
+		if s.ensureOK {
+			s.up = true
+		}
+		return s.ensureOK, nil
+	}
+	shareScriptServer = func(_ context.Context, _ *Manager, console int) (bool, error) {
+		s.shares = append(s.shares, console)
+		return s.shareSays, nil
+	}
+	t.Cleanup(func() { scriptServerUp, ensureScriptServer, shareScriptServer = savedUp, savedEnsure, savedShare })
+	return s
+}
+
+// ModAVD/ModAVD#292: nobody else brings the script server back. One that listened at the last look and is gone now
+// is started again and the instance registered with it; one that never listened is left alone (no server nobody
+// uses), and a start that fails is tried once per disappearance. Nothing before a start has finished on the qemu,
+// nor while a stop runs.
+func TestBootWatchScriptServer(t *testing.T) {
+	m, logs := opsTestManager(t)
+	created, err := m.Create(context.Background(), CreateRequest{filesOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := created.Index
+	ctx := context.Background()
+	q := win.Process{PID: 4242, Created: 1_000_500}
+	s := stubScriptServer(t)
+	bw := &bootWatch{m: m, i: i, q: q}
+
+	bw.scriptServerOnce(ctx) // no record
+	if s.looks != 0 {
+		t.Fatal("looked before a start had finished on the qemu")
+	}
+	m.writeBootRecord(i, bootRecord{QemuPID: q.PID, QemuCreated: q.Created, BootID: testBootA})
+	bw.scriptServerOnce(ctx)
+	bw.scriptServerOnce(ctx)
+	if s.looks != 2 || s.ensures != 0 {
+		t.Fatalf("never listened: %d looks, %d starts", s.looks, s.ensures)
+	}
+
+	s.up = true
+	bw.scriptServerOnce(ctx) // listens
+	s.up, s.ensureOK = false, true
+	bw.scriptServerOnce(ctx) // gone: started again, instance registered
+	console := m.Root.Ports().Console(i)
+	if s.ensures != 1 || !slices.Equal(s.shares, []int{console}) {
+		t.Fatalf("gone: %d starts, registrations %v", s.ensures, s.shares)
+	}
+	if w := logs.Messages(); len(w) != 1 || !strings.Contains(w[0], "脚本专用 adb server") || !strings.Contains(w[0], "重新起来") {
+		t.Fatalf("warnings %q", w)
+	}
+	bw.scriptServerOnce(ctx) // up again: nothing more
+	if s.ensures != 1 || len(s.shares) != 1 {
+		t.Fatalf("listening again: %d starts, registrations %v", s.ensures, s.shares)
+	}
+
+	s.up, s.ensureOK = false, false
+	bw.scriptServerOnce(ctx) // gone, and does not come up
+	bw.scriptServerOnce(ctx) // not tried again
+	if s.ensures != 2 || len(s.shares) != 1 {
+		t.Fatalf("failed start: %d starts, registrations %v", s.ensures, s.shares)
+	}
+
+	s.up = true
+	bw.scriptServerOnce(ctx)
+	s.up, s.upErr = false, errs.New(errs.PortConflict, "端口被别的程序占用")
+	bw.scriptServerOnce(ctx) // a conflict is not the watch's to mend
+	if s.ensures != 2 {
+		t.Fatalf("started on a conflict: %d", s.ensures)
+	}
+	s.upErr = nil
+	l, ok, err := win.TryLock(m.lockPath(i, "stop"))
+	if err != nil || !ok {
+		t.Fatalf("stop lock: %v %v", ok, err)
+	}
+	looks := s.looks
+	bw.scriptServerOnce(ctx)
+	l.Unlock()
+	if s.looks != looks || s.ensures != 2 {
+		t.Fatalf("looked while a stop ran")
+	}
+	bw.scriptServerOnce(ctx) // the stop is over; it listened at the last look before the conflict
+	if s.ensures != 3 {
+		t.Fatalf("after the stop: %d starts", s.ensures)
 	}
 }
 

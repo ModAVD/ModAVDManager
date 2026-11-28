@@ -60,7 +60,8 @@ const (
 	// the emulator registers it again itself (10-29: offline, gone, offline, device 13 s after `adb reboot`); a
 	// re-registration then only races it and warns. A server that was restarted has lost the instance for good: the
 	// watch registers it again (which also restarts the logcat capture) once it has been missing this long, and then
-	// at most this often.
+	// at most this often. When the watch can tell that the server was restarted (ModAVD/ModAVD#292: a program ended
+	// every adb.exe by name), it registers the instance at once instead (see tick).
 	bootWatchReregisterAfter = 30 * time.Second
 )
 
@@ -287,11 +288,19 @@ func RunBootWatch(args []string, w io.Writer) int {
 		defer ticker.Stop()
 		watch.shareDefaultAdb(ctx, ticker.C)
 	}()
+	scriptDone := make(chan struct{})
+	go func() {
+		defer close(scriptDone)
+		ticker := time.NewTicker(bootWatchInterval)
+		defer ticker.Stop()
+		watch.watchScriptServer(ctx, ticker.C)
+	}()
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
 	}
 	cancel()
 	<-shareDone
+	<-scriptDone
 	<-memoryDone // write the summary before releasing the watch lock or ending the log
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
@@ -306,6 +315,10 @@ type bootWatch struct {
 	// missingSince: since when the private server has not known the instance (zero: it did at the last look), or
 	// since the watch last registered it again (bootWatchReregisterAfter).
 	missingSince time.Time
+	// serverPID: who listened on the private server's port at the last look (0: unknown). Owned by tick.
+	serverPID uint32
+	// scriptSeen: the script server listened at the last look of watchScriptServer, which owns it.
+	scriptSeen bool
 	// Owned only by watchMemory, independently of guest reboot setup in tick.
 	memory bootWatchMemory
 	// shareFailing: the last registration with the default adb server failed (warned once). Owned by shareDefaultAdb.
@@ -460,6 +473,98 @@ func (w *bootWatch) shareDefaultAdbOnce(ctx context.Context) bool {
 	return true
 }
 
+// privateServerIdentity: how many private servers this process has started so far, and who listens on the private
+// server's port now (0: the system table does not say); tests replace it.
+var privateServerIdentity = func(m *Manager) (starts uint64, pid uint32) {
+	if m.ADB == nil {
+		return 0, 0
+	}
+	return m.ADB.ServerStarts(), m.ADB.ServerPID()
+}
+
+// serverRestarted: the private server was restarted since the last look, as far as the watch can tell: its own adb
+// command of this look started it (startsBefore is the count before that command), or another process did (another
+// PID listens than at the last look). Remembers the PID for the next look.
+func (w *bootWatch) serverRestarted(startsBefore uint64) bool {
+	starts, pid := privateServerIdentity(w.m)
+	restarted := starts != startsBefore || (w.serverPID != 0 && pid != 0 && pid != w.serverPID)
+	if pid != 0 {
+		w.serverPID = pid
+	}
+	return restarted
+}
+
+// The side effects of watchScriptServer; tests replace them.
+var (
+	scriptServerUp     = func(m *Manager) (bool, error) { return m.ADB.ScriptServerUp() }
+	ensureScriptServer = func(ctx context.Context, m *Manager) (bool, error) {
+		return m.ADB.EnsureScriptServer(ctx, scriptServerWait)
+	}
+	shareScriptServer = func(ctx context.Context, m *Manager, console int) (bool, error) {
+		return m.ADB.ShareWithScriptServer(ctx, console)
+	}
+)
+
+// watchScriptServer looks at the script server (scriptAdbServerPort) now and at every tick, until ctx ends (qemu
+// exited). Its own goroutine: tick may block for minutes in a guest reboot setup.
+func (w *bootWatch) watchScriptServer(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		w.scriptServerOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+	}
+}
+
+// scriptServerOnce is one look of watchScriptServer (ModAVD/ModAVD#292). Nobody else brings the script server back
+// when a program ends it (every adb.exe ended by name): a script then finds nothing on its port, or a server its own
+// adb client started, which knows no instance. So a server that listened at the last look and is gone now is started
+// again (detached, as `modavd servers` does) and the instance registered with it, as emulator-<console>. One that
+// never listened is left alone: the watch starts no server nobody uses. Skipped while a stop runs and before a start
+// has finished on q; one try per disappearance.
+func (w *bootWatch) scriptServerOnce(ctx context.Context) {
+	m, i := w.m, w.i
+	rec, ok := m.readBootRecord(i)
+	if !ok || !rec.names(w.q) || m.stopping(i) {
+		return
+	}
+	up, err := scriptServerUp(m)
+	if err != nil {
+		return // something else holds the port: `modavd servers` says so; not the watch's to mend
+	}
+	seen := w.scriptSeen
+	w.scriptSeen = up
+	if up || !seen {
+		return
+	}
+	port := m.Root.ScriptAdbServerPort()
+	m.Log.Warnf("实例 %d：脚本专用 adb server（端口 %d）刚才还在，现在没了（可能被别的程序结束），重新起来", i, port)
+	if up, err := ensureScriptServer(ctx, m); err != nil || !up {
+		m.Log.Warnf("实例 %d：脚本专用 adb server（端口 %d）没能重新起来: %s", i, port, orText(errText(err), "没监听上"))
+		return
+	}
+	w.scriptSeen = true
+	console := m.Root.Ports().Console(i)
+	if registered, err := shareScriptServer(ctx, m, console); err != nil {
+		m.Log.Warnf("实例 %d：没能登记到重新起来的脚本专用 adb server（端口 %d）: %v", i, port, err)
+	} else if registered {
+		m.Log.Infof("实例 %d 已登记到重新起来的脚本专用 adb server（端口 %d），那边是 emulator-%d", i, port, console)
+	}
+}
+
+// errText is err's message, "" for nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // tick is one look of the watch at now: nothing while a start or a stop of the instance runs, or while the record does
 // not name q (no start has finished on it); otherwise, once Android has booted with another boot_id than the
 // record's, the start that sets the boot up again.
@@ -473,7 +578,15 @@ func (w *bootWatch) tick(ctx context.Context, now time.Time) {
 		return
 	}
 	reregister := !w.missingSince.IsZero() && now.Sub(w.missingSince) >= bootWatchReregisterAfter
+	startsBefore, _ := privateServerIdentity(m)
 	booted, bootID, missing := m.guestBoot(ctx, i, reregister)
+	if w.serverRestarted(startsBefore) && missing && !reregister {
+		// The server has lost the instance for good, and nobody else will register it: no need to wait (see
+		// bootWatchReregisterAfter). A guest-only reboot keeps the server, and the wait.
+		m.Log.Infof("实例 %d：私有 adb server 刚重启过，不认识这台实例，马上替它重新登记", i)
+		reregister = true
+		booted, bootID, missing = m.guestBoot(ctx, i, true)
+	}
 	switch {
 	case !missing:
 		w.missingSince = time.Time{}
