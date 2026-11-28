@@ -776,11 +776,12 @@ func (u *Updater) lockForSwap(verb string) (unlock func(), err error) {
 }
 
 // shutdownHelper recognizes only the helpers whose executable belongs to this root and that end by themselves
-// once their emulator is gone: the emulator's shutdown watchdog, the boot guardian (__bootwatch) and the host
-// logcat capture (__logcat, emu/logcat.go: it polls its emulator every 2 seconds and exits when it is gone).
-// Every running instance has a guardian and a capture, so counting them as programs in use would refuse every
-// update asked for while an instance runs. A name alone, unreadable argv, a different root, or additional
-// arguments never grants a wait.
+// once their emulator is gone: the emulator's shutdown watchdog, the boot guardian (__bootwatch), the host
+// logcat capture (__logcat, emu/logcat.go: it polls its emulator every 2 seconds and exits when it is gone) and the
+// boot screen (__bootoverlay, emu/overlay.go: it ends when its instance is online, its qemu or its start is gone, and
+// gives the emulator's windows back before it does). Every running instance has a guardian and a capture, so counting
+// them as programs in use would refuse every update asked for while an instance runs. A name alone, unreadable argv, a
+// different root, or additional arguments never grants a wait.
 func (u *Updater) shutdownHelper(image string, args []string) bool {
 	same := func(a, b string) bool { return strings.EqualFold(realOrSame(a), realOrSame(b)) }
 	positive := func(s string, bits int) bool {
@@ -796,6 +797,8 @@ func (u *Updater) shutdownHelper(image string, args []string) bool {
 	}
 	switch {
 	case len(args) == 6 && args[1] == "__bootwatch":
+	// the boot screen's seventh argument is the round token of the start that started it (letters and digits)
+	case len(args) == 7 && args[1] == "__bootoverlay" && roundToken(args[6]):
 	// the capture is only ever started from tools\modavd.exe; its seventh argument is the runtime token
 	case (len(args) == 6 || len(args) == 7) && args[1] == "__logcat" && same(image, u.l.at("tools/modavd.exe")):
 	default:
@@ -806,6 +809,19 @@ func (u *Updater) shutdownHelper(image string, args []string) bool {
 	}
 	i, err := strconv.Atoi(args[3])
 	return err == nil && root.ValidIndex(i) && positive(args[4], 32) && positive(args[5], 64)
+}
+
+// roundToken: the shape of emu's round token, a short string of letters and digits.
+func roundToken(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 const shutdownHelperWait = 30 * time.Second
