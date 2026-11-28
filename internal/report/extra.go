@@ -10,17 +10,22 @@ import (
 	"time"
 
 	"modavd/internal/adb"
+	"modavd/internal/host"
 	"modavd/internal/root"
 )
 
 // Sections collect-info.ps1 never had, so that whoever sends the problem package is not asked for these separately:
 // what the manager and the boot watch logged, every adb.exe with the adb server's own log, and the TCP ports Windows
-// keeps for itself. The parity tests leave these sections and their files out (goOnlySections, goOnlyEntry).
+// keeps for itself, and whether the processor has hybrid cores (ModAVD/ModAVD#290). The parity tests leave these sections and their files out (goOnlySections, goOnlyEntry).
 const (
 	sectionManagerLogs  = "管理器日志"
 	sectionAdbProcesses = "adb.exe 进程与 adb server 日志"
 	sectionPortExcluded = "Windows 保留的 TCP 端口（netsh）"
+	sectionCoreClasses  = "处理器核的效率等级（大小核）"
 )
+
+// hostCoreClasses reads the host's core efficiency classes (a variable so tests can give their own).
+var hostCoreClasses = host.CoreClasses
 
 var (
 	// managerLogTailBytes: modavd-ui.log starts over at 5 MB (one .1 backup), the boot watch's log at 4 MB.
@@ -225,5 +230,14 @@ func (c *collector) portExclusions() error {
 	} else {
 		c.L("警告：本目录要用的端口被 Windows 保留了，adb server 或模拟器在这些端口上监听不了：" + strings.Join(hits, "；"))
 	}
+	return nil
+}
+
+// coreClasses says whether the host has cores of different efficiency classes (Intel's performance and efficiency
+// cores) and how many logical processors each has: whether Windows may put a background emulator on the slow ones.
+// The processor model is in the 本机 section.
+func (c *collector) coreClasses() error {
+	c.section(sectionCoreClasses)
+	c.L(host.CoreClassesText(hostCoreClasses()))
 	return nil
 }

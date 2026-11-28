@@ -17,6 +17,7 @@ type Listener = win.Listener
 type StartOptions = win.StartOptions
 type FileLock = win.FileLock
 type L3Group = win.L3Group
+type CoreClass = win.CoreClass
 
 const SpawnHelperArg = win.SpawnHelperArg
 const HideConsole = win.HideConsole
@@ -96,6 +97,12 @@ func OpenStableRead(path string) (*os.File, error)       { return win.OpenStable
 func FileChangeStamp(f *os.File) string                  { return win.FileChangeStamp(f) }
 
 func TerminateRefused(p Process) bool { return win.TerminateRefused(p) }
+
+// CoreClasses are the efficiency classes of the host's cores, nil when unreadable.
+func CoreClasses() []CoreClass { return win.CoreClasses() }
+
+// DisableExecutionThrottling turns EcoQoS off for p; errs.Unsupported on a Windows without the switch.
+func DisableExecutionThrottling(p Process) error { return win.DisableExecutionThrottling(p) }
 
 // InfoBox displays an informational message with the Windows backend.
 func InfoBox(message string) error { return win.InfoBox(message) }

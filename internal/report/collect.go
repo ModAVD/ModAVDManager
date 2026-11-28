@@ -261,6 +261,7 @@ func collect(ctx context.Context, rootDir string, h Host, opt CollectOptions) (r
 	}
 	c.step("ModAVD 目录与版本", c.rootAndVersions)
 	c.step("Windows / CPU / 内存 / 显卡", c.computer)
+	c.extra(sectionCoreClasses, c.coreClasses)
 	c.step("虚拟化功能", c.features)
 	c.step("加速检查（emulator -accel-check）", c.accelCheck)
 	c.step("杀毒软件", c.antivirus)

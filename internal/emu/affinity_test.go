@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"modavd/internal/errs"
 	"modavd/internal/host"
 	"modavd/internal/root"
 )
@@ -233,6 +234,33 @@ func TestQemuCoresCommandLine(t *testing.T) {
 	} {
 		if got := m.qemuCores(host.Process{}, c.cmdline, nil, root.PortPlan{}, 6); got != c.want {
 			t.Errorf("%v: %d, want %d", c.cmdline, got, c.want)
+		}
+	}
+}
+
+// The QoS boost (ModAVD/ModAVD#290): MODAVD_QOS_BOOST=off skips the call; a Windows without the switch is a skip,
+// not a failure; any other error is named.
+func TestQoSBoostNote(t *testing.T) {
+	cases := []struct {
+		name, env string
+		err       error
+		called    bool
+		want      string
+	}{
+		{"default", "", nil, true, "已关进程节流"},
+		{"on", "on", nil, true, "已关进程节流"},
+		{"off", "off", nil, false, "按 MODAVD_QOS_BOOST=off 不关进程节流"},
+		{"OFF spaced", " OFF ", nil, false, "按 MODAVD_QOS_BOOST=off 不关进程节流"},
+		{"unsupported", "", errs.New(errs.Unsupported, "x"), true, "系统不支持关进程节流，跳过"},
+		{"wrapped unsupported", "", errs.Wrap(errs.Internal, errs.New(errs.Unsupported, "x"), "y"), true,
+			"系统不支持关进程节流，跳过"},
+		{"failed", "", errs.New(errs.Internal, "拒绝访问"), true, "关进程节流失败（拒绝访问）"},
+	}
+	for _, c := range cases {
+		called := false
+		got := qosBoostNote(c.env, func() error { called = true; return c.err })
+		if got != c.want || called != c.called {
+			t.Errorf("%s: %q called %v, want %q called %v", c.name, got, called, c.want, c.called)
 		}
 	}
 }

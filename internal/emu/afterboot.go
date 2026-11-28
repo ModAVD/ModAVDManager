@@ -14,6 +14,7 @@ import (
 
 	"modavd/internal/adb"
 	"modavd/internal/avd"
+	"modavd/internal/errs"
 	"modavd/internal/guest"
 	"modavd/internal/host"
 	"modavd/internal/jsonord"
@@ -140,6 +141,10 @@ func (m *Manager) afterBoot(ctx context.Context, inst *avd.Instance, mode bootSe
 			note, plan := m.tuneHostScheduling(p, cores)
 			spare = plan.Spare
 			m.Log.Infof("实例 %d 宿主调度: %s", i, note)
+			if root.CurrentPlatform().Windows() {
+				// hybrid cores or not (ModAVD/ModAVD#290): whether the line above matters on this host
+				m.Log.Infof("实例 %d 宿主处理器核: %s", i, host.CoreClassesText(host.CoreClasses()))
+			}
 		},
 		func() {
 			if !root.CurrentPlatform().Windows() {
@@ -295,6 +300,7 @@ func (m *Manager) tuneHostScheduling(p host.Process, cores int) (string, hostPla
 	} else {
 		notes = append(notes, "优先级高于正常")
 	}
+	notes = append(notes, qosBoostNote(os.Getenv(envQoSBoost), func() error { return host.DisableExecutionThrottling(p) }))
 	groups := host.L3Groups()
 	if hasBigL3(groups) {
 		lock, ok, err := host.Lock(affinityLockPath(), affinityLockWait)
@@ -321,6 +327,27 @@ func (m *Manager) tuneHostScheduling(p host.Process, cores int) (string, hostPla
 			groups[plan.Group].Size>>20, cpuRanges(plan.Mask), plan.Free, cores))
 	}
 	return strings.Join(notes, "，"), plan
+}
+
+// envQoSBoost set to "off" leaves the execution speed throttling of qemu to Windows (A/B runs, and the way back).
+// By default it is turned off (ModAVD/ModAVD#290): a headless or background instance is otherwise an EcoQoS candidate,
+// which on hybrid processors means the efficiency cores and lower clocks for the translated game's main thread.
+const envQoSBoost = "MODAVD_QOS_BOOST"
+
+// qosBoostNote runs disable (host.DisableExecutionThrottling) unless env (the value of envQoSBoost) is "off", and says
+// what came of it for the scheduling line. A Windows without the switch is no failure.
+func qosBoostNote(env string, disable func() error) string {
+	if strings.EqualFold(strings.TrimSpace(env), "off") {
+		return "按 " + envQoSBoost + "=off 不关进程节流"
+	}
+	switch err := disable(); {
+	case err == nil:
+		return "已关进程节流"
+	case errs.CodeOf(err) == errs.Unsupported:
+		return "系统不支持关进程节流，跳过"
+	default:
+		return fmt.Sprintf("关进程节流失败（%v）", err)
+	}
 }
 
 // hostCPUs is the logical processor count: those under an L3 group, at least runtime.NumCPU.

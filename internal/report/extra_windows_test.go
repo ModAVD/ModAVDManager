@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"modavd/internal/host"
 )
 
 // setNetsh makes netsh.exe answer stdout, or fail to start with startErr.
@@ -116,5 +118,37 @@ func TestCollectPortExclusions(t *testing.T) {
 		!strings.Contains(strings.Join(res.Problems, "\n"), "Windows 保留的 TCP 端口（netsh）：netsh is gone") ||
 		!strings.Contains(s, "\r\n== 模拟器日志（logs\\） ==\r\n") {
 		t.Errorf("problems %q, summary:\n%s", res.Problems, s)
+	}
+}
+
+// Hybrid cores or not (ModAVD/ModAVD#290): a Go-only section right after 本机, from the host's core topology.
+func TestCollectCoreClasses(t *testing.T) {
+	useGoldenZone(t, "full")
+	old := hostCoreClasses
+	t.Cleanup(func() { hostCoreClasses = old })
+	hostCoreClasses = func() []host.CoreClass {
+		return []host.CoreClass{{Class: 0, Cores: 8, Logical: 8}, {Class: 1, Cores: 8, Logical: 16}}
+	}
+	f := newFixture(t, "full", testTempDir(t), "")
+	guardDials(t, f.adbPort)
+	res, _, files := runCollect(t, f)
+	s := summaryOf(t, files)
+	want := "\r\n== 处理器核的效率等级（大小核） ==\r\n有大小核（效率等级越高越快）：等级 0：8 核 8 个逻辑处理器；等级 1：8 核 16 个逻辑处理器\r\n"
+	if !strings.Contains(s, want) {
+		t.Errorf("want %q in:\n%s", want, s)
+	}
+	if strings.Index(s, "== 本机 ==") > strings.Index(s, "== 处理器核的效率等级（大小核） ==") {
+		t.Error("the section comes before 本机")
+	}
+	if strings.Contains(strings.Join(res.Problems, "\n"), sectionCoreClasses) {
+		t.Errorf("problems %q", res.Problems)
+	}
+
+	hostCoreClasses = func() []host.CoreClass { return nil }
+	f = newFixture(t, "full", testTempDir(t), "")
+	guardDials(t, f.adbPort)
+	_, _, files = runCollect(t, f)
+	if s := summaryOf(t, files); !strings.Contains(s, "\r\n== 处理器核的效率等级（大小核） ==\r\n读不到\r\n") {
+		t.Errorf("unreadable:\n%s", s)
 	}
 }

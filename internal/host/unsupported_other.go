@@ -40,6 +40,19 @@ func GetSystemMemory() (SystemMemory, error) { return SystemMemory{}, errUnsuppo
 // L3Groups lists the L3 caches of the host.
 func L3Groups() []L3Group { return nil }
 
+// CoreClass is one efficiency class of the host's cores (Windows EfficiencyClass).
+type CoreClass struct {
+	Class   uint8
+	Cores   int
+	Logical int
+}
+
+// CoreClasses lists the efficiency classes of the host's cores on Windows.
+func CoreClasses() []CoreClass { return nil }
+
+// DisableExecutionThrottling calls SetProcessInformation(ProcessPowerThrottling) on Windows.
+func DisableExecutionThrottling(Process) error { return errUnsupported }
+
 // SharedMemoryExists calls OpenFileMappingW for the Windows named mapping.
 func SharedMemoryExists(string) bool { return false }
 

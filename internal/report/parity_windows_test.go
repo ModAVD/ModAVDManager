@@ -429,7 +429,7 @@ func TestCollectMatchesScript(t *testing.T) {
 
 // goOnlySections are the summary sections collect-info.ps1 does not have (extra.go).
 var goOnlySections = map[string]bool{sectionManagerLogs: true, sectionAdbProcesses: true, sectionPortExcluded: true,
-	sectionFrameRate: true}
+	sectionFrameRate: true, sectionCoreClasses: true}
 
 // withoutGoOnly drops goOnlySections from summary lines: each with the empty line before its header and its lines.
 func withoutGoOnly(ls []string) []string {
