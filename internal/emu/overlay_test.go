@@ -1016,6 +1016,7 @@ func TestOverlayDoneShowCoversTheEruption(t *testing.T) {
 		t.Errorf("the qemu went while the eruption was shown: %+v", o)
 	}
 }
+
 // "start" returns right after it let the windows go: from the moment the instance is ready the process that started the
 // overlay and the start lock say nothing about the picture, which is played to its end. Only its own length (capped) and
 // the qemu going away end it.
