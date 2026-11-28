@@ -3,8 +3,10 @@
 package win
 
 import (
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"modavd/internal/win/wintest"
 )
@@ -453,5 +455,153 @@ func TestCloseAndEndSessionAskTheOverlayToEnd(t *testing.T) {
 				t.Fatal("the loop did not end")
 			}
 		})
+	}
+}
+
+// ---- layers: the z-order follows the emulator window's layer ----------------------------------------------------------
+
+var procDestroyWindowT = moduser32.NewProc("DestroyWindow")
+
+// thirdPartyTopmost makes a small always-on-top window of this (test) process over rect r: somebody else's window that sits
+// over the emulator window.
+func thirdPartyTopmost(t *testing.T, r Rect) uintptr {
+	t.Helper()
+	cls, _ := syscall.UTF16PtrFromString("STATIC")
+	hwnd, _ := call(procCreateWindowExW, wsExTopmost|wsExToolWindow|wsExNoActivate, uintptr(unsafe.Pointer(cls)), 0,
+		wsPopup|0x10000000, // WS_VISIBLE
+		uintptr(int(r.Left)), uintptr(int(r.Top)), uintptr(r.Width()), uintptr(r.Height()), 0, 0, 0, 0)
+	if hwnd == 0 {
+		t.Fatal("cannot make the topmost window")
+	}
+	t.Cleanup(func() { procDestroyWindowT.Call(hwnd) })
+	return hwnd
+}
+
+func above(a, b uintptr) bool {
+	for w, n := a, 0; w != 0 && n < 100000; n++ {
+		if w == b {
+			return true
+		}
+		w = windowAt(w, gwHwndNext)
+	}
+	return false
+}
+
+// A third party's always-on-top window over the emulator window stays over the cover: the cover is not topmost, never
+// lands above that window, and is back right above the emulator window when that is raised.
+func TestCoverNeverGoesOverAThirdPartyTopmostWindow(t *testing.T) {
+	f := startFakeEmulator(t)
+	g := GeometryOf(f.Main)
+	cx, cy := center(g.Client)
+	top := thirdPartyTopmost(t, Rect{cx - 40, cy - 40, cx + 40, cy + 40})
+	h := startOverlay(t, OverlayOptions{TickEvery: 50 * time.Millisecond, Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Tick: func(o *Overlay) { o.Sync(specsFor(f)) }, Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var cover uintptr
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)); cover = o.CoverOf(f.Main) })
+	check := func(when string) {
+		t.Helper()
+		if exStyleOf(cover)&wsExTopmost != 0 {
+			t.Errorf("%s: the cover is topmost", when)
+		}
+		if WindowFromPoint(cx, cy) != top {
+			t.Errorf("%s: the third party's topmost window is not on top at its place (%#x)", when, WindowFromPoint(cx, cy))
+		}
+		if !above(top, cover) {
+			t.Errorf("%s: the topmost window is not above the cover", when)
+		}
+		if WindowFromPoint(cx+60, cy+60) != cover {
+			t.Errorf("%s: the rest of the picture area is not covered", when)
+		}
+	}
+	check("at the start")
+	procSetWindowPos.Call(f.Main, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate) // the emulator window is raised
+	deadline := time.Now().Add(5 * time.Second)
+	for windowAt(cover, gwHwndNext) != f.Main && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if windowAt(cover, gwHwndNext) != f.Main {
+		t.Fatal("the cover is not back above the raised emulator window")
+	}
+	check("after the emulator window was raised")
+}
+
+// An always-on-top emulator window gets an always-on-top cover right above it; when it is no longer on top the cover is not
+// either. (The stand-in's side toolbar is the window that can be put on top from here: the stand-in's main window does not
+// take that from another process.)
+func TestCoverFollowsTheTopmostStateOfTheEmulatorWindow(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{TickEvery: 50 * time.Millisecond, Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Tick: func(o *Overlay) { o.Sync(specsFor(f)) }, Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var cover uintptr
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)); cover = o.CoverOf(f.Tool) })
+	wait := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !ok() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !ok() {
+			t.Fatalf("timed out: %s", what)
+		}
+	}
+	procSetWindowPos.Call(f.Tool, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+	wait("a topmost cover right above the topmost window", func() bool {
+		return exStyleOf(cover)&wsExTopmost != 0 && windowAt(cover, gwHwndNext) == f.Tool
+	})
+	procSetWindowPos.Call(f.Tool, hwndNoTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+	wait("a cover that is not topmost, right above the window", func() bool {
+		return exStyleOf(cover)&wsExTopmost == 0 && windowAt(cover, gwHwndNext) == f.Tool
+	})
+}
+
+// Two emulator windows over each other: each cover stays right above its own window, so the window that is above the other
+// keeps its cover above it and the lower one's cover does not come over it.
+func TestCoversOfTwoOverlappingEmulatorsStayWithTheirWindows(t *testing.T) {
+	f1, f2 := startFakeEmulator(t), startFakeEmulator(t)
+	specs := func() []CoverSpec { return append(specsFor(f1), specsFor(f2)...) }
+	h := startOverlay(t, OverlayOptions{TickEvery: 50 * time.Millisecond, Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Tick: func(o *Overlay) { o.Sync(specs()) }, Wake: func(o *Overlay) { o.Sync(specs()) }})
+	var c1, c2 uintptr
+	h.on(func(o *Overlay) { o.Sync(specs()); c1, c2 = o.CoverOf(f1.Main), o.CoverOf(f2.Main) })
+	procSetWindowPos.Call(f2.Main, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate) // f2 over f1
+	deadline := time.Now().Add(5 * time.Second)
+	ok := func() bool {
+		return windowAt(c1, gwHwndNext) == f1.Main && windowAt(c2, gwHwndNext) == f2.Main && above(f2.Main, c1) && above(c2, f2.Main)
+	}
+	for !ok() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !ok() {
+		t.Fatalf("below c1 %#x (f1 %#x), below c2 %#x (f2 %#x), f2 over c1 %v, c2 over f2 %v", windowAt(c1, gwHwndNext), f1.Main,
+			windowAt(c2, gwHwndNext), f2.Main, above(f2.Main, c1), above(c2, f2.Main))
+	}
+	x, y := center(GeometryOf(f2.Main).Client)
+	if got := WindowFromPoint(x, y); got != c2 {
+		t.Errorf("the top window at the overlap is %#x, want the upper emulator's cover %#x", got, c2)
+	}
+}
+
+// A cover that cannot be made a layer that only shows is hidden for good, not left taking the mouse.
+func TestPassThroughThatDoesNotTakeHidesTheCover(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var cover uintptr
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)); cover = o.CoverOf(f.Main) })
+	saved := setExStyle
+	t.Cleanup(func() { setExStyle = saved })
+	setExStyle = func(uintptr, uintptr) {} // the style does not take
+	h.on(func(o *Overlay) { o.SetPassThrough(true) })
+	if GeometryOf(cover).Visible {
+		t.Error("a cover that could not become pass-through is still shown")
+	}
+	h.on(func(o *Overlay) { o.Sync(specsFor(f)) })
+	time.Sleep(200 * time.Millisecond)
+	if GeometryOf(cover).Visible {
+		t.Error("the next look showed the cover again")
+	}
+	x, y := center(GeometryOf(f.Main).Client)
+	if got := WindowFromPoint(x, y); got != f.Main {
+		t.Errorf("the mouse does not reach the emulator window: %#x (main %#x tool %#x cover %#x) class %q", got, f.Main, f.Tool, cover, windowText(procGetClassNameW, got))
 	}
 }

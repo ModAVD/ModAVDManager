@@ -274,8 +274,15 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			m.startBootWatch(i, q)
 		}
 	}
+	// roundPublished: the round is in the setup marker or the record. Without it (the write failed) this round has no boot
+	// screen: an overlay could not tell its round from none, and a cover that nothing tracks must not take the keyboard.
+	roundPublished := true
 	coverWindow := func(windowed bool, q host.Process) {
 		if windowed && overlay == nil {
+			if !roundPublished {
+				m.Log.Warnf("实例 %d 这一轮的标记写不进去，这次不起开机遮罩（开机照常进行）", i)
+				return
+			}
 			overlay = m.startBootOverlay(i, roundID)
 		}
 		watchQemu(q)
@@ -356,7 +363,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				// this start works on the boot now: what status waits for until the setup's record comes (bootready.go)
 				mk.AliveMS = readyClockMS()
 				mk.Round = roundID
-				m.writeSetupMarker(i, mk)
+				roundPublished = m.writeSetupMarker(i, mk) == nil
 				marker = &mk
 				mode = setupOwed
 				windowed, known := qemuWindowed(p)
@@ -425,7 +432,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			// qemu's own start). Before the overlay: the round is published first.
 			marker = &setupMarker{EmulatorPID: p.PID, EmulatorCreated: p.Created, LogFile: plan.logPath,
 				ValidUntil: launchedAt.Add(window).Unix(), AliveMS: readyClockMS(), Round: roundID}
-			m.writeSetupMarker(i, *marker)
+			roundPublished = m.writeSetupMarker(i, *marker) == nil
 			coverWindow(launchWindow, host.Process{})
 			prog.emit("launch", fmt.Sprintf("实例 %d 的模拟器已拉起（pid %d），等安卓开机", i, p.PID), progressLaunch)
 		}
@@ -473,7 +480,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			windowed, known := qemuWindowed(qemu)
 			marker = &setupMarker{QemuPID: qemu.PID, QemuCreated: qemu.Created, LogFile: res.LogFile,
 				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix(), AliveMS: readyClockMS(), Round: roundID}
-			m.writeSetupMarker(i, *marker)
+			roundPublished = m.writeSetupMarker(i, *marker) == nil
 			// the record of the boot before names this same qemu and is done: it is of another round, and is taken away
 			// before the overlay is started anyway
 			m.removeReady(i)
@@ -950,16 +957,20 @@ func (m *Manager) readSetupMarker(i int) (setupMarker, bool) {
 	return s, s.QemuPID != 0 || s.EmulatorPID != 0
 }
 
+// setupMarkerWrite stores the marker file (a variable: the tests make it fail).
+var setupMarkerWrite = writeFileReplace
+
 // writeSetupMarker replaces the marker (temp file + rename, so a reader never sees half of it). Only starts write it,
 // under the start lock. A failure costs only the "finish it next time" path: a warning.
-func (m *Manager) writeSetupMarker(i int, s setupMarker) {
+func (m *Manager) writeSetupMarker(i int, s setupMarker) error {
 	b, err := json.Marshal(s)
 	if err == nil {
-		err = writeFileReplace(m.setupMarkerPath(i), b, strconv.Itoa(os.Getpid()))
+		err = setupMarkerWrite(m.setupMarkerPath(i), b, strconv.Itoa(os.Getpid()))
 	}
 	if err != nil {
 		m.Log.Warnf("实例 %d 记不下「这次开机后的设置还没做完」（%v）：这次启动要是被打断，再启动一次补不上客体库补丁", i, err)
 	}
+	return err
 }
 
 // removeSetupMarker deletes the marker of instance i. A marker left behind after a finished setup would make the

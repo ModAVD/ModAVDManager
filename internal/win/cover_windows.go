@@ -95,6 +95,8 @@ const (
 	lwaAlpha          = 0x2
 	htTransparent     = ^uintptr(0) // HTTRANSPARENT (-1)
 	hwndTopmost       = ^uintptr(0) // HWND_TOPMOST (-1)
+	hwndNoTopmost     = ^uintptr(1) // HWND_NOTOPMOST (-2)
+	swpHideWindow     = 0x0080
 	gwHwndNext        = 2
 	gwHwndPrev        = 3
 	swpNoSize         = 0x0001
@@ -357,6 +359,7 @@ type cover struct {
 	shown  bool
 	main   bool
 	canvas Canvas
+	dead   bool // it could not be made a layer that only shows: it stays hidden (a cover that cannot let the mouse through must not stay up)
 }
 
 var (
@@ -464,39 +467,107 @@ func (o *Overlay) Quitting() bool { return o.quit.Load() }
 
 // SetPassThrough turns every cover (and the covers made later) into a layer that only shows, which the mouse goes
 // through to the window below (on) or back into a cover that takes the mouse (off). Only from the overlay's own functions.
+// A cover that cannot be made one (the style does not take) is hidden for good: a cover that keeps taking the mouse when it
+// was to let it through is worse than none.
 func (o *Overlay) SetPassThrough(on bool) {
 	o.pass = on
 	for _, c := range o.covers {
-		setPassThrough(c.hwnd, on)
+		if !setPassThrough(c.hwnd, on) && on {
+			c.dead = true
+			procSetWindowPos.Call(c.hwnd, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpHideWindow)
+			c.shown = false
+		}
 	}
 }
 
-func setPassThrough(hwnd uintptr, on bool) {
-	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
+// setExStyle is SetWindowLongPtr(GWL_EXSTYLE) (a variable: a test makes it fail).
+var setExStyle = func(hwnd, style uintptr) { procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style) }
+
+// setPassThrough sets or clears the layer-that-only-shows style and reports whether the window has it (or not) afterwards.
+func setPassThrough(hwnd uintptr, on bool) bool {
+	style := exStyleOf(hwnd)
 	if on {
 		style |= wsExLayered | wsExTransparent
 	} else {
 		style &^= wsExLayered | wsExTransparent
 	}
-	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
-	if on {
-		procSetLayeredAttrs.Call(hwnd, 0, 255, lwaAlpha)
+	setExStyle(hwnd, style)
+	got := exStyleOf(hwnd) & (wsExLayered | wsExTransparent)
+	if !on {
+		return got == 0
 	}
+	if got != wsExLayered|wsExTransparent {
+		return false
+	}
+	r, _, _ := procSetLayeredAttrs.Call(hwnd, 0, 255, lwaAlpha)
+	return r != 0
 }
 
-// placeAbove puts cover c right above its emulator window in the z-order (SetWindowPos on the cover only): the window
-// below it is the emulator's, or it is lifted to just under whatever is above the emulator window now.
-func placeAbove(c *cover) {
-	if next, _, _ := procGetWindow.Call(c.hwnd, gwHwndNext); next == c.owner {
+func exStyleOf(hwnd uintptr) uintptr {
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
+	return style
+}
+
+// insertAfterFor is where a cover of owner goes in the z-order: right above the owner, in the owner's layer. The cover is
+// topmost exactly when the owner is. Above a non-topmost owner it is put under the window that is above the owner, unless
+// that is a topmost window (a third party's): then at the top of the non-topmost windows, which never makes the cover
+// topmost and never puts it over that window.
+func insertAfterFor(owner uintptr) (after uintptr, topmost bool) {
+	prev, _, _ := procGetWindow.Call(owner, gwHwndPrev)
+	if exStyleOf(owner)&wsExTopmost != 0 {
+		if prev == 0 {
+			return hwndTopmost, true
+		}
+		return prev, true
+	}
+	if prev == 0 || exStyleOf(prev)&wsExTopmost != 0 {
+		return hwndNoTopmost, false
+	}
+	return prev, false
+}
+
+// place makes cover c what s says with one SetWindowPos on the cover (position, size, z-order and visibility together,
+// never activating anything, so nothing is covered for a moment that should not be): nothing is called when the cover is
+// already as it should be.
+func (o *Overlay) place(c *cover, s CoverSpec, w, h int) {
+	rectChanged := s.Rect != c.rect && w > 0 && h > 0
+	if !s.Show {
+		flags := uintptr(swpNoActivate | swpNoZOrder)
+		if c.shown {
+			flags |= swpHideWindow
+		}
+		if c.shown || rectChanged {
+			if !rectChanged {
+				flags |= swpNoMove | swpNoSize
+			}
+			procSetWindowPos.Call(c.hwnd, 0, uintptr(int(s.Rect.Left)), uintptr(int(s.Rect.Top)), uintptr(w), uintptr(h), flags)
+			c.shown = false
+			if rectChanged {
+				c.rect = s.Rect
+				procInvalidateRect.Call(c.hwnd, 0, 0)
+			}
+		}
 		return
 	}
-	prev, _, _ := procGetWindow.Call(c.owner, gwHwndPrev)
-	if prev == 0 {
-		if style, _, _ := procGetWindowLongPtrW.Call(c.owner, gwlExStyle); style&wsExTopmost != 0 {
-			prev = hwndTopmost // an always-on-top emulator window: the cover goes in that layer too
-		}
+	after, topmost := insertAfterFor(c.owner)
+	next, _, _ := procGetWindow.Call(c.hwnd, gwHwndNext)
+	zOK := next == c.owner && (exStyleOf(c.hwnd)&wsExTopmost != 0) == topmost
+	if c.shown && zOK && !rectChanged {
+		return
 	}
-	procSetWindowPos.Call(c.hwnd, prev, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+	flags := uintptr(swpNoActivate | swpShowWindow)
+	if !rectChanged {
+		flags |= swpNoMove | swpNoSize
+	}
+	if c.shown && zOK {
+		flags |= swpNoZOrder
+	}
+	procSetWindowPos.Call(c.hwnd, after, uintptr(int(s.Rect.Left)), uintptr(int(s.Rect.Top)), uintptr(w), uintptr(h), flags)
+	c.shown = true
+	if rectChanged {
+		c.rect = s.Rect
+		procInvalidateRect.Call(c.hwnd, 0, 0)
+	}
 }
 
 // requestClose is a close of a cover or the end of the session: the flag, then OnClose (which puts back what has to be
@@ -544,26 +615,10 @@ func (o *Overlay) Sync(specs []CoverSpec) {
 		}
 		c.main = s.Main
 		w, h := s.Rect.Width(), s.Rect.Height()
-		if w <= 0 || h <= 0 {
+		if w <= 0 || h <= 0 || c.dead {
 			s.Show = false
 		}
-		if s.Rect != c.rect && w > 0 && h > 0 {
-			flags := uintptr(swpNoActivate | swpNoZOrder | swpNoOwnerZOrder)
-			procSetWindowPos.Call(c.hwnd, 0, uintptr(int(s.Rect.Left)), uintptr(int(s.Rect.Top)), uintptr(w), uintptr(h), flags)
-			c.rect = s.Rect
-			procInvalidateRect.Call(c.hwnd, 0, 0)
-		}
-		if s.Show != c.shown {
-			cmd := uintptr(swHide)
-			if s.Show {
-				cmd = swShowNoActivate
-			}
-			procShowWindow.Call(c.hwnd, cmd)
-			c.shown = s.Show
-		}
-		if c.shown {
-			placeAbove(c)
-		}
+		o.place(c, s, w, h)
 	}
 	for owner, c := range o.covers {
 		if !seen[owner] {
@@ -593,10 +648,11 @@ func (o *Overlay) newCover(s CoverSpec) *cover {
 	if hwnd == 0 {
 		return nil
 	}
-	if o.pass {
-		setPassThrough(hwnd, true)
+	c := &cover{hwnd: hwnd, owner: s.Owner, main: s.Main}
+	if o.pass && !setPassThrough(hwnd, true) {
+		c.dead = true
 	}
-	return &cover{hwnd: hwnd, owner: s.Owner, main: s.Main}
+	return c
 }
 
 func (o *Overlay) cover(hwnd uintptr) *cover {

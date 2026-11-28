@@ -89,8 +89,7 @@ type overlayRun struct {
 	start time.Time
 	// the poller's last answer, read by the window thread
 	out  atomic.Pointer[overlayOut]
-	qpid atomic.Uint32 // the qemu the windows belong to
-	qcr  atomic.Uint64
+	qemu atomic.Pointer[host.Process] // the qemu the windows belong to: published whole, so its identity is never half of one
 	// an end was asked for (by the poller, a signal, a close): a latch the window thread looks at on every turn, and the
 	// keeper looks at before every disable
 	quitReq   atomic.Bool
@@ -124,12 +123,12 @@ func (r *overlayRun) run() int {
 	om := newOverlayMachine(r.start)
 	first := overlayOut{Stage: "launch", Percent: -1}
 	r.out.Store(&first)
-	me, _ := host.FindProcess(uint32(os.Getpid()))
+	me, _ := host.FindProcess(uint32(os.Getpid())) // zero when unreadable: the keeper then disables nothing
 	// windows an overlay that is gone left disabled are given back before this one disables any
 	if _, done := r.m.recoverOverlayMark(r.i, "", r.ops); !done {
 		r.log.Warnf("实例 %d 上一个遮罩留下的窗口还没恢复完", r.i)
 	}
-	r.keeper = newWindowKeeper(r.m, r.i, r.ops, r.log, r.round, me)
+	r.keeper = newWindowKeeper(r.m, r.i, r.ops, r.log, r.round, me, func(q host.Process) bool { return r.m.watchRunningFor(r.i, q) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -208,7 +207,7 @@ func (s *overlaySnap) guestBootID() string {
 // record with).
 func (r *overlayRun) probeLoop(ctx context.Context, s *overlaySnap) {
 	for {
-		if r.qpid.Load() != 0 && !s.stop.Load() {
+		if r.qemu.Load() != nil && !s.stop.Load() {
 			pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			if !s.booted.Load() {
 				b, a := r.probe(pctx)
@@ -254,23 +253,23 @@ func (r *overlayRun) poll(ctx context.Context, om *overlayMachine, quit func()) 
 				q, found = p, ok
 				lastScan = now
 				if ok {
-					r.qpid.Store(p.PID)
-					r.qcr.Store(p.Created)
+					pp := p
+					r.qemu.Store(&pp)
 				}
 			}
 		}
 		startHeld := r.m.lockHeld(r.i, "start")
 		booted := snap.booted.Load()
 		in := overlayIn{Now: now, QemuFound: found, Answered: snap.answered.Load(), Booted: booted, StartHeld: startHeld,
-			WatchAlive: !r.watchGone.Load()}
+			WatchAlive: !r.watchGone.Load(), Tracked: r.roundTracked()}
 		if found && booted {
 			in.Setup = r.m.bootSetupOf(r.i, q, startHeld, now, snap.guestBootID, r.round)
 		}
 		out := om.Next(in)
 		if f := r.fixed.Load(); f != nil {
 			out = *f
+			out.Decided = true
 		}
-		out.Decided = true
 		r.out.Store(&out)
 		if out.Release && in.Setup.Ready {
 			snap.stop.Store(true)
@@ -287,6 +286,15 @@ func (r *overlayRun) poll(ctx context.Context, om *overlayMachine, quit func()) 
 		case <-t.C:
 		}
 	}
+}
+
+// roundTracked: this round's setup marker (written by the start before it started this overlay) or setup record is on disk.
+func (r *overlayRun) roundTracked() bool {
+	if mk, ok := r.m.readSetupMarker(r.i); ok && mk.Round == r.round {
+		return true
+	}
+	rec, ok := r.m.readReady(r.i)
+	return ok && rec.Round == r.round
 }
 
 // tick runs on the window thread about every 33 ms.
@@ -330,10 +338,12 @@ func (r *overlayRun) tick(o *win.Overlay) {
 // maintain makes the covers fit the emulator's windows now and tells the keeper which windows have a cover.
 func (r *overlayRun) maintain(o *win.Overlay, now time.Time) {
 	r.lastWindow = now
-	pid := r.qpid.Load()
-	if pid == 0 {
+	qp := r.qemu.Load()
+	if qp == nil {
 		return
 	}
+	q := *qp
+	pid := q.PID
 	if pid != r.watched {
 		o.Watch(pid) // its window events wake us at once: a move, a minimize, the boss key, the z-order
 		r.watched = pid
@@ -368,7 +378,7 @@ func (r *overlayRun) maintain(o *win.Overlay, now time.Time) {
 			covered = append(covered, s.Owner)
 		}
 	}
-	r.keeper.Track(host.Process{PID: pid, Created: r.qcr.Load()}, covered)
+	r.keeper.Track(q, covered)
 }
 
 // release turns the covers into a layer the mouse goes through (the input is free at once, whatever the other process's

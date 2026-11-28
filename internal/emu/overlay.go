@@ -35,8 +35,16 @@ package emu
 //   - Record first: the windows are named in the overlay's mark (.mas_<i>.overlay: round, overlay process, qemu, and per
 //     window the handle, the owning qemu and its class) before they are disabled; when the mark cannot be written nothing is
 //     disabled (the cover still keeps the mouse out).
-//   - Handles are checked before every touch (owning process, class, qemu alive): a handle that is another window now is
-//     dropped, never enabled or disabled.
+//   - Handles are checked before every touch, and again on the goroutine that makes the call, right before it (owning
+//     process, class, qemu alive): a handle that is another window now is dropped, never enabled or disabled.
+//   - Nothing is disabled unless everything the recovery needs is known: the overlay's own process and creation time,
+//     the qemu's (process and creation time, published whole), that this round is tracked (its setup marker or record is
+//     there; a round nobody tracks ends within 2 s having disabled nothing), that the boot watch of exactly this qemu is
+//     running (waited for up to 3 s, then given up on for this run), and that the mark that is already there can be read
+//     (what an earlier overlay left in it is carried into the new one, never overwritten). Otherwise the cover only keeps
+//     the mouse out.
+//   - A start that cannot publish its round starts no overlay. The cap does not depend on adb: counted from the overlay's own
+//     start (DefaultBootTimeout + bootSetupCap) it releases whatever adb says, and once released nothing is disabled again.
 //   - Marks are read, changed and deleted under a lock, and only by the one they belong to (the same round and overlay
 //     process); an enable that fails on a window that still exists keeps its entry for the next try.
 //
@@ -216,25 +224,33 @@ func (m *Manager) overlayMarkLock(i int) (l *host.FileLock, ok bool) {
 // call stuck in it, and the next calls on it are not stacked up behind it.
 var overlayInflight sync.Map
 
-// setEnabledBounded is ops.SetEnabled on a goroutine of its own, waited for at most d. ok: the window is in the state
-// asked for; timedOut: the call did not return in time (or one is stuck in that window already), it may still take effect
-// later, so the window has to be treated as in either state.
-func setEnabledBounded(ops overlayWindows, h uintptr, on bool, d time.Duration) (ok, timedOut bool) {
+// setEnabledChecked is ops.SetEnabled on window w on a goroutine of its own, waited for at most d. The window is
+// checked (owning process, class, qemu alive) on that goroutine, right before the call: a handle that is another window
+// now is skipped, never touched. ok: the window is in the state asked for; timedOut: the call did not return in time (or
+// one is stuck in that window already), it may still take effect later, so the window has to be treated as in either
+// state; skipped: it is not the window it was (or is gone), nothing was called.
+func setEnabledChecked(ops overlayWindows, w overlayWin, on bool, d time.Duration) (ok, timedOut, skipped bool) {
+	h := uintptr(w.H)
 	if _, busy := overlayInflight.LoadOrStore(h, struct{}{}); busy {
-		return false, true
+		return false, true, false
 	}
-	res := make(chan bool, 1)
+	type result struct{ ok, skipped bool }
+	res := make(chan result, 1)
 	go func() {
 		defer overlayInflight.Delete(h)
-		res <- ops.SetEnabled(h, on)
+		if w.stateOf(ops) != windowOurs {
+			res <- result{skipped: true}
+			return
+		}
+		res <- result{ok: ops.SetEnabled(h, on)}
 	}()
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
-	case ok = <-res:
-		return ok, false
+	case r := <-res:
+		return r.ok, false, r.skipped
 	case <-t.C:
-		return false, true
+		return false, true, false
 	}
 }
 
@@ -272,15 +288,12 @@ func restoreWindows(ops overlayWindows, ws []overlayWin, d time.Duration) (left 
 		w := w
 		go func() {
 			defer wg.Done()
-			if w.stateOf(ops) != windowOurs {
-				return
-			}
-			ok, _ := setEnabledBounded(ops, uintptr(w.H), true, d)
+			ok, _, skipped := setEnabledChecked(ops, w, true, d)
 			mu.Lock()
 			defer mu.Unlock()
 			if ok {
 				restored++
-			} else if w.stateOf(ops) == windowOurs { // still there: the next try
+			} else if !skipped && w.stateOf(ops) == windowOurs { // still there: the next try
 				left = append(left, w)
 			}
 		}()
@@ -310,22 +323,33 @@ func (m *Manager) recoverOverlayMark(i int, round string, ops overlayWindows) (r
 		left, restored = restoreWindows(ops, k.Windows, overlayEnableDeadline)
 	}
 	removeFailed := false
-	if len(left) == 0 {
+	switch {
+	case len(left) == 0:
 		removeFailed = m.removeOverlayMark(i) != nil
-	} else {
+		recoverWarned.Delete(i)
+	case len(left) != len(k.Windows):
+		// something changed: the mark says what is left. When nothing did (the same windows still do not answer) it is not
+		// written again, and not warned about again: the boot watch looks every second.
 		k.Windows = left
 		if err := m.writeOverlayMark(i, k); err != nil {
 			m.Log.Debugf("实例 %d 遮罩标记改不了: %v", i, err)
+		}
+		fallthrough
+	default:
+		if prev, _ := recoverWarned.Load(i); prev != len(left) {
+			recoverWarned.Store(i, len(left))
+			m.Log.Warnf("实例 %d 有 %d 个模拟器窗口没应答，还没恢复成能操作，稍后再试", i, len(left))
 		}
 	}
 	if restored > 0 {
 		m.Log.Infof("实例 %d 的遮罩没了（进程 %d），已把模拟器的 %d 个窗口恢复成能操作", i, k.OverlayPID, restored)
 	}
-	if len(left) > 0 {
-		m.Log.Warnf("实例 %d 有 %d 个模拟器窗口没应答，还没恢复成能操作，稍后再试", i, len(left))
-	}
 	return restored, len(left) == 0 && !removeFailed
 }
+
+// recoverWarned: per instance, how many windows the last warning of a recovery named (a warning is given again only when
+// that changes).
+var recoverWarned sync.Map
 
 // RecoverOverlay gives the emulator windows of instance i back when an overlay disabled them and is gone (layers 4 and 5
 // above). It never waits for a window: the work runs in the background and is waited for at most overlayRecoverBudget; what
@@ -354,16 +378,26 @@ func (m *Manager) RecoverOverlay(i int) bool {
 
 // ---- the keeper of the windows -----------------------------------------------------------------------------------------
 
+// overlayGuardianWait: how long the keeper waits for the boot watch of the qemu to be running before it gives up on
+// disabling windows in this run (the cover still keeps the mouse out).
+var overlayGuardianWait = 3 * time.Second
+
 // windowKeeper disables the emulator's windows while the cover is up and gives them back; the overlay's other threads
 // only tell it what they want (Track, Decide, Release, Stop) and never wait for it. All calls into the other process's
 // windows (EnableWindow) are made here, on a goroutine of their own with a deadline.
+//
+// It disables nothing unless it is sure of everything the recovery will need: who the overlay is (process and creation
+// time), which qemu (process and creation time), that the boot watch of that qemu is running (the layer that gives the
+// windows back when the overlay and its start are both gone), and that the mark can be written (and the mark that is
+// there already can be read: what an earlier overlay could not give back is carried into this one's).
 type windowKeeper struct {
-	m     *Manager
-	i     int
-	ops   overlayWindows
-	log   *logx.Logger
-	round string
-	self  host.Process // the overlay's own process (the mark's owner)
+	m        *Manager
+	i        int
+	ops      overlayWindows
+	log      *logx.Logger
+	round    string
+	self     host.Process              // the overlay's own process (the mark's owner)
+	guardian func(q host.Process) bool // the boot watch of qemu q is running; nil: not asked (tests)
 
 	stopped atomic.Bool   // an end was asked for: nothing more is disabled
 	wake    chan struct{} // capacity 1
@@ -372,17 +406,23 @@ type windowKeeper struct {
 
 	mu          sync.Mutex
 	qemu        host.Process
-	covered     []uintptr // windows a cover is over now
-	decided     bool      // the first look at the instance has been made: nothing is disabled before it
-	released    bool
+	covered     []uintptr              // windows a cover is over now
+	decided     bool                   // the round is tracked and the first look at the instance has been made: nothing is disabled before
+	released    bool                   // given back (or to be): nothing is disabled any more
 	held        map[uintptr]overlayWin // windows this keeper disabled (all of them are in the mark)
+	carried     []overlayWin           // windows an earlier overlay left in the mark and did not get back: given back, never disabled
 	markPending bool                   // the mark still has to be removed or rewritten
-	warned      bool
+	warned      map[string]bool
+	guardOK     bool
+	firstWant   time.Time
+	gaveUp      bool
+	lastLeft    string
 }
 
-func newWindowKeeper(m *Manager, i int, ops overlayWindows, log *logx.Logger, round string, self host.Process) *windowKeeper {
-	k := &windowKeeper{m: m, i: i, ops: ops, log: log, round: round, self: self, wake: make(chan struct{}, 1),
-		closed: make(chan struct{}), held: map[uintptr]overlayWin{}}
+func newWindowKeeper(m *Manager, i int, ops overlayWindows, log *logx.Logger, round string, self host.Process,
+	guardian func(q host.Process) bool) *windowKeeper {
+	k := &windowKeeper{m: m, i: i, ops: ops, log: log, round: round, self: self, guardian: guardian, wake: make(chan struct{}, 1),
+		closed: make(chan struct{}), held: map[uintptr]overlayWin{}, warned: map[string]bool{}}
 	go k.loop()
 	return k
 }
@@ -394,7 +434,18 @@ func (k *windowKeeper) signal() {
 	}
 }
 
-// Track says which windows a cover is over now, of which qemu.
+// warnOnce logs a warning once per key.
+func (k *windowKeeper) warnOnce(key, format string, args ...any) {
+	k.mu.Lock()
+	seen := k.warned[key]
+	k.warned[key] = true
+	k.mu.Unlock()
+	if !seen {
+		k.log.Warnf(format, args...)
+	}
+}
+
+// Track says which windows a cover is over now, of which qemu (one value: the identity is never half of one).
 func (k *windowKeeper) Track(q host.Process, hs []uintptr) {
 	k.mu.Lock()
 	k.qemu, k.covered = q, slices.Clone(hs)
@@ -402,7 +453,8 @@ func (k *windowKeeper) Track(q host.Process, hs []uintptr) {
 	k.signal()
 }
 
-// Decide says the instance has been looked at once (what the overlay shows is what it found): from now on windows are disabled.
+// Decide says the round is tracked (its marker or record is there) and the instance has been looked at once: from now on
+// windows are disabled.
 func (k *windowKeeper) Decide() {
 	k.mu.Lock()
 	k.decided = true
@@ -420,6 +472,16 @@ func (k *windowKeeper) Release() {
 
 // Stop says an end was asked for: nothing is disabled from now on, not even by a step that has begun.
 func (k *windowKeeper) Stop() { k.stopped.Store(true) }
+
+// mustNotDisable: an end was asked for, or the windows are given back.
+func (k *windowKeeper) mustNotDisable() bool {
+	if k.stopped.Load() {
+		return true
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.released
+}
 
 // Close is the end: stops disabling, waits for the step that is under way (at most d), gives everything back (at most d)
 // and stops the worker. What did not answer stays in the mark for the layers that come after.
@@ -481,25 +543,76 @@ func (k *windowKeeper) heldList() []overlayWin {
 	return out
 }
 
+// markList is everything the mark has to name: what is held and what was carried.
+func (k *windowKeeper) markList() []overlayWin {
+	out := k.heldList()
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, w := range k.carried {
+		if !slices.ContainsFunc(out, func(o overlayWin) bool { return o.H == w.H }) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func (k *windowKeeper) ownMark(cur overlayMark) bool {
 	return cur.Round == k.round && cur.OverlayPID == k.self.PID && cur.OverlayCreated == k.self.Created
 }
 
-// writeMark stores the mark with windows ws, under the lock.
+// readMarkStrict reads the mark on disk: found, absent, or unreadable (a file that is there and cannot be read or
+// parsed is not "absent").
+func (m *Manager) readMarkStrict(i int) (k overlayMark, found bool, err error) {
+	b, err := os.ReadFile(m.overlayMarkPath(i))
+	if errors.Is(err, fs.ErrNotExist) {
+		return overlayMark{}, false, nil
+	}
+	if err != nil {
+		return overlayMark{}, false, err
+	}
+	if err := json.Unmarshal(b, &k); err != nil {
+		return overlayMark{}, false, fmt.Errorf("遮罩标记读不懂: %w", err)
+	}
+	return k, true, nil
+}
+
+// writeMark stores the mark with windows ws (plus what was carried), under the lock. A mark of another overlay that is
+// still there (an earlier one that could not give everything back) is read under the same lock and its windows are
+// carried into this one: it is never overwritten with a list that has lost them. A mark that cannot be read is an error.
 func (k *windowKeeper) writeMark(ws []overlayWin) error {
 	l, ok := k.m.overlayMarkLock(k.i)
 	if !ok {
 		return errors.New("遮罩标记的锁拿不到")
 	}
 	defer l.Unlock()
+	cur, found, err := k.m.readMarkStrict(k.i)
+	if err != nil {
+		return err
+	}
+	if found && !k.ownMark(cur) {
+		k.mu.Lock()
+		for _, w := range cur.Windows {
+			if !slices.ContainsFunc(k.carried, func(o overlayWin) bool { return o.H == w.H }) {
+				k.carried = append(k.carried, w)
+			}
+		}
+		k.mu.Unlock()
+	}
+	list := slices.Clone(ws)
 	k.mu.Lock()
 	q := k.qemu
+	for _, w := range k.carried {
+		if !slices.ContainsFunc(list, func(o overlayWin) bool { return o.H == w.H }) {
+			list = append(list, w)
+		}
+	}
 	k.mu.Unlock()
 	return k.m.writeOverlayMark(k.i, overlayMark{Round: k.round, OverlayPID: k.self.PID, OverlayCreated: k.self.Created,
-		QemuPID: q.PID, QemuCreated: q.Created, Windows: ws})
+		QemuPID: q.PID, QemuCreated: q.Created, Windows: list})
 }
 
-// finishMark makes the mark say what is held: deleted when nothing is, rewritten otherwise; only a mark of this keeper.
+// finishMark makes the mark say what is held and carried: deleted when nothing is, rewritten otherwise; only a mark of this
+// keeper.
 func (k *windowKeeper) finishMark() {
 	l, ok := k.m.overlayMarkLock(k.i)
 	if !ok {
@@ -513,11 +626,11 @@ func (k *windowKeeper) finishMark() {
 	if !exists || !k.ownMark(cur) {
 		return
 	}
-	left := k.heldList()
+	left := k.markList()
 	pending := false
 	if len(left) == 0 {
 		pending = k.m.removeOverlayMark(k.i) != nil
-	} else {
+	} else if len(left) != len(cur.Windows) {
 		cur.Windows = left
 		if err := k.m.writeOverlayMark(k.i, cur); err != nil {
 			k.log.Debugf("实例 %d 遮罩标记改不了: %v", k.i, err)
@@ -529,23 +642,93 @@ func (k *windowKeeper) finishMark() {
 	k.mu.Unlock()
 }
 
-// restoreHeld enables what is held (the ones that answer), drops the rest the way restoreWindows does and fixes the mark.
+// restoreHeld enables what is held and carried (the ones that answer), drops the rest the way restoreWindows does and
+// fixes the mark.
 func (k *windowKeeper) restoreHeld(why string) {
-	ws := k.heldList()
+	ws := k.markList()
 	left, n := restoreWindows(k.ops, ws, overlayEnableDeadline)
 	k.mu.Lock()
-	k.held = map[uintptr]overlayWin{}
+	held := map[uintptr]overlayWin{}
+	var carried []overlayWin
 	for _, w := range left {
-		k.held[uintptr(w.H)] = w
+		if _, ok := k.held[uintptr(w.H)]; ok {
+			held[uintptr(w.H)] = w
+		} else {
+			carried = append(carried, w)
+		}
 	}
+	k.held, k.carried = held, carried
+	sig := ""
+	for _, w := range left {
+		sig += fmt.Sprintf("%d,", w.H)
+	}
+	changed := sig != k.lastLeft
+	k.lastLeft = sig
 	k.mu.Unlock()
 	k.finishMark()
 	if n > 0 {
 		k.log.Infof("实例 %d 开机遮罩把 %d 个模拟器窗口恢复成能操作（%s）", k.i, n, why)
 	}
-	if len(left) > 0 {
+	if len(left) > 0 && changed {
 		k.log.Warnf("实例 %d 开机遮罩有 %d 个模拟器窗口没应答，没能恢复成能操作（标记留着，稍后再试）", k.i, len(left))
 	}
+}
+
+// restoreCarried gives back only what an earlier overlay left (not what this keeper holds).
+func (k *windowKeeper) restoreCarried() {
+	k.mu.Lock()
+	ws := slices.Clone(k.carried)
+	k.mu.Unlock()
+	if len(ws) == 0 {
+		return
+	}
+	left, n := restoreWindows(k.ops, ws, overlayEnableDeadline)
+	k.mu.Lock()
+	k.carried = left
+	k.mu.Unlock()
+	k.finishMark()
+	if n > 0 {
+		k.log.Infof("实例 %d 开机遮罩把上一个遮罩留下的 %d 个模拟器窗口恢复成能操作", k.i, n)
+	}
+}
+
+// ready: the keeper is sure enough of everything to disable windows now; false: not yet, or never in this run (the cover
+// goes on keeping the mouse out).
+func (k *windowKeeper) ready(qemu host.Process) bool {
+	if k.self.PID == 0 || k.self.Created == 0 {
+		k.warnOnce("self", "实例 %d 读不到遮罩进程自己的创建时间，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i)
+		return false
+	}
+	if qemu.PID == 0 || qemu.Created == 0 {
+		return false
+	}
+	k.mu.Lock()
+	gaveUp, ok := k.gaveUp, k.guardOK
+	first := k.firstWant
+	if first.IsZero() {
+		k.firstWant = time.Now()
+		first = k.firstWant
+	}
+	k.mu.Unlock()
+	if gaveUp {
+		return false
+	}
+	if ok || k.guardian == nil {
+		return true
+	}
+	if k.guardian(qemu) {
+		k.mu.Lock()
+		k.guardOK = true
+		k.mu.Unlock()
+		return true
+	}
+	if time.Since(first) > overlayGuardianWait {
+		k.mu.Lock()
+		k.gaveUp = true
+		k.mu.Unlock()
+		k.warnOnce("guardian", "实例 %d 的开机守护 %v 内没就位，不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, overlayGuardianWait)
+	}
+	return false
 }
 
 // step is one turn of the worker.
@@ -555,30 +738,34 @@ func (k *windowKeeper) step() {
 	k.mu.Lock()
 	released, decided, qemu, pending := k.released, k.decided, k.qemu, k.markPending
 	covered := slices.Clone(k.covered)
+	nCarried := len(k.carried)
 	k.mu.Unlock()
 	if released {
-		if len(k.heldList()) > 0 {
+		if len(k.heldList()) > 0 || nCarried > 0 {
 			k.restoreHeld("release")
 		} else if pending {
 			k.finishMark()
 		}
 		return
 	}
-	if k.stopped.Load() || !decided || qemu.PID == 0 {
+	if k.stopped.Load() || !decided || !k.ready(qemu) {
 		return
+	}
+	// what an earlier overlay could not give back is given back first
+	if nCarried > 0 {
+		k.restoreCarried()
 	}
 	// a window Qt enabled again is disabled again; one that is not the window it was is dropped
 	dropped := false
 	for _, w := range k.heldList() {
-		if k.stopped.Load() {
+		if k.mustNotDisable() {
 			return
 		}
-		switch w.stateOf(k.ops) {
-		case windowOurs:
-			if k.ops.Enabled(uintptr(w.H)) {
-				setEnabledBounded(k.ops, uintptr(w.H), false, overlayEnableDeadline)
-			}
-		default:
+		if w.stateOf(k.ops) == windowOurs && !k.ops.Enabled(uintptr(w.H)) {
+			continue
+		}
+		_, _, skipped := setEnabledChecked(k.ops, w, false, overlayEnableDeadline)
+		if skipped {
 			k.mu.Lock()
 			delete(k.held, uintptr(w.H))
 			k.mu.Unlock()
@@ -589,10 +776,9 @@ func (k *windowKeeper) step() {
 	var fresh []overlayWin
 	k.mu.Lock()
 	for _, h := range covered {
-		if _, ok := k.held[h]; ok {
-			continue
+		if _, ok := k.held[h]; !ok {
+			fresh = append(fresh, overlayWin{H: uint64(h)})
 		}
-		fresh = append(fresh, overlayWin{H: uint64(h)})
 	}
 	k.mu.Unlock()
 	fresh = slices.DeleteFunc(fresh, func(w overlayWin) bool {
@@ -612,18 +798,12 @@ func (k *windowKeeper) step() {
 		}
 		return
 	}
-	if k.stopped.Load() {
+	if k.mustNotDisable() {
 		return
 	}
 	all := append(k.heldList(), fresh...)
 	if err := k.writeMark(all); err != nil {
-		k.mu.Lock()
-		warned := k.warned
-		k.warned = true
-		k.mu.Unlock()
-		if !warned {
-			k.log.Warnf("实例 %d 记不下遮罩禁用的窗口（%v）：这次不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, err)
-		}
+		k.warnOnce("mark", "实例 %d 记不下遮罩禁用的窗口（%v）：这次不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, err)
 		return
 	}
 	k.mu.Lock()
@@ -631,16 +811,17 @@ func (k *windowKeeper) step() {
 		k.held[uintptr(w.H)] = w
 	}
 	k.mu.Unlock()
+	k.restoreCarried() // the mark just carried what an earlier overlay could not give back: it is given back now
 	failed := false
 	for _, w := range fresh {
-		if k.stopped.Load() {
+		if k.mustNotDisable() {
 			return // they are in the mark and held: Close enables them (a window that was never disabled stays as it is)
 		}
-		ok, timedOut := setEnabledBounded(k.ops, uintptr(w.H), false, overlayEnableDeadline)
+		ok, timedOut, skipped := setEnabledChecked(k.ops, w, false, overlayEnableDeadline)
 		switch {
 		case timedOut:
 			k.log.Warnf("实例 %d 的模拟器窗口 %#x 没在 %v 内应答（EnableWindow），按已禁用对待，会照常恢复", k.i, w.H, overlayEnableDeadline)
-		case !ok:
+		case skipped || !ok:
 			k.mu.Lock()
 			delete(k.held, uintptr(w.H))
 			k.mu.Unlock()
@@ -775,6 +956,7 @@ func (h *overlayHandle) release() {
 type overlayIn struct {
 	Now        time.Time
 	QemuFound  bool
+	Tracked    bool // this round's setup marker or record is there: some start is doing this round's setup
 	Answered   bool // adb answered the getprop
 	Booted     bool
 	StartHeld  bool
@@ -801,13 +983,24 @@ type overlayMachine struct {
 	noStart      time.Time // since when no start holds the lock (zero: one does)
 	releasedAt   time.Time // when the cap put the windows back
 	releasedStep string
+	trackedSeen  bool   // the round was seen tracked once
+	lastStage    string // the stage of the last look (what the hard cap names)
 }
+
+// overlayTrackGrace: a round that is not seen tracked (no marker, no record of it) within this long is not one anybody is
+// setting up: the overlay ends without having disabled anything.
+const overlayTrackGrace = 2 * time.Second
+
+// overlayHardCap is the cap that does not depend on adb or on the setup record: counted from the overlay's start, the
+// longest a start waits for Android (DefaultBootTimeout) plus the setup's own cap. The record's deadline (bootSetupOf)
+// still decides earlier when the setup is under way. A variable for tests.
+var overlayHardCap = func() time.Duration { return DefaultBootTimeout + bootSetupCap }
 
 func newOverlayMachine(now time.Time) *overlayMachine { return &overlayMachine{started: now} }
 
 // Next is the decision for the look in.
 func (om *overlayMachine) Next(in overlayIn) overlayOut {
-	out := overlayOut{Stage: "launch"}
+	out := overlayOut{Stage: "launch", Decided: true}
 	switch {
 	case !in.WatchAlive:
 		return overlayOut{Exit: true, Reason: "watch-gone"}
@@ -833,6 +1026,17 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 			return overlayOut{Exit: true, Reason: "start-gone"}
 		}
 	}
+	// Nothing is decided (nothing disabled) before this round is seen tracked: a marker or record of the round says some
+	// start is setting it up. Reading none is not "done", and not "tracked" either.
+	if in.Tracked {
+		om.trackedSeen = true
+	}
+	if !om.trackedSeen {
+		if in.Now.Sub(om.started) >= overlayTrackGrace {
+			return overlayOut{Exit: true, Reason: "untracked"}
+		}
+		return overlayOut{Stage: "launch", Percent: -1}
+	}
 	if !om.releasedAt.IsZero() { // the cap passed: the note stays up for a while, then the cover goes
 		out.Release, out.Note, out.Percent, out.Stage = true, om.releasedStep, 1, "sdcard"
 		if in.Now.Sub(om.releasedAt) >= overlayCapNote {
@@ -844,6 +1048,11 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 	case in.Booted && in.Setup.Ready && in.Setup.Unfinished != "":
 		om.releasedAt, om.releasedStep = in.Now, in.Setup.Unfinished
 		out.Release, out.Note, out.Percent, out.Stage = true, in.Setup.Unfinished, 1, in.Setup.Unfinished
+	case !(in.Booted && in.Setup.Ready) && in.Now.Sub(om.started) >= overlayHardCap():
+		// the cap from the overlay's own start, whatever adb says or does not: the windows come back
+		step := orText(om.lastStage, readyStepBoot)
+		om.releasedAt, om.releasedStep = in.Now, step
+		out.Release, out.Note, out.Percent, out.Stage = true, step, 1, step
 	case in.Booted && in.Setup.Ready:
 		return overlayOut{Exit: true, Release: true, Reason: "ready", Percent: 1}
 	case in.Booted && in.Setup.Step != "" && in.Setup.Step != readyStepBoot:
@@ -856,6 +1065,7 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 	default:
 		out.Percent, out.Stage = -1, "launch"
 	}
+	om.lastStage = out.Stage
 	return out
 }
 
