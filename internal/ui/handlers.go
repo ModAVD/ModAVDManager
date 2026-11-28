@@ -315,14 +315,36 @@ func (s *server) handleClone(w http.ResponseWriter, r *http.Request) {
 
 // handleStart boots an instance with its window: the manager starts no headless ones (only the CLI does). One already
 // running headless is not adopted (emu: no switch while it runs).
+//
+// {"launch": "<package>[/<activity>]"} also opens that app once the instance is up (emu.StartOptions.Launch); a bad
+// name is 400 before any job, an app that cannot be opened is in the result's app, the job still done.
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	i, ok := pathIndex(w, r)
-	if !ok || !decode(w, r, &struct{}{}) {
+	if !ok {
 		return
 	}
-	s.respondJob(w)(s.startJob(kindStart, i, func(ctx context.Context, j *job, b backend) (any, error) {
-		return b.Start(ctx, i, emu.StartOptions{Window: true, Progress: s.progressFn(j)})
-	}))
+	var body struct {
+		Launch string `json:"launch"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	s.respondJob(w)(s.startInstanceJob(i, body.Launch))
+}
+
+// startInstanceJob is the start job of instance i, with the app to open afterwards when launch is not "".
+func (s *server) startInstanceJob(i int, launch string) (jobView, error) {
+	var target *emu.AppTarget
+	if launch != "" {
+		t, err := emu.ParseAppTarget(launch)
+		if err != nil {
+			return jobView{}, err
+		}
+		target = &t
+	}
+	return s.startJob(kindStart, i, func(ctx context.Context, j *job, b backend) (any, error) {
+		return b.Start(ctx, i, emu.StartOptions{Window: true, Progress: s.progressFn(j), Launch: target})
+	})
 }
 
 func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {

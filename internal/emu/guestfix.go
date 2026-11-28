@@ -494,7 +494,7 @@ func guestFixCheckReports(i int, out string, profiles []guestpatch.Profile) []re
 // first topResumedActivity / mResumedActivity line of dumpsys) and the default HOME activity ("home: " and the last
 // line of resolve-activity --brief). Tagged lines: a dumpsys cut short by grep -m1 may add a "Broken pipe" line, and
 // adb errors come without the tags.
-const foregroundProbeScript = `echo "top: $(dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity')"; ` +
+const foregroundProbeScript = foregroundTopScript + `; ` +
 	`echo "home: $(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n1)"`
 
 // systemUIPackage in front (lock screen, notification shade) is no app in use.

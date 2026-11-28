@@ -37,6 +37,12 @@ import (
 	"modavd/internal/update"
 )
 
+// StartRequest is an instance for Run to start, and the app (package or package/activity) to open on it afterwards.
+type StartRequest struct {
+	Index  int
+	Launch string
+}
+
 // Options of Run.
 type Options struct {
 	Root *root.Root
@@ -65,6 +71,10 @@ type Options struct {
 	// Windows only, ignored elsewhere). The manager then stays after its window closed, in the tray, until 退出 in the
 	// icon's menu (or the process is told to end).
 	Tray bool
+	// Start, when set, starts that instance with its window as soon as the server listens, the same job as POST
+	// /api/instances/{i}/start (ModAVD.exe --start). A failure to even begin the job is only logged: the manager runs
+	// on, and the job's own outcome is on its page.
+	Start *StartRequest
 
 	// Test hooks.
 	newTray        newTrayFunc // the tray of Tray; nil = the real one
@@ -332,6 +342,11 @@ func Run(ctx context.Context, opt Options) error {
 	s.log.Infof("管理器已启动: %s（根目录 %s）", base, s.root.Dir)
 	if opt.Ready != nil {
 		opt.Ready(base, s.token)
+	}
+	if opt.Start != nil {
+		if _, err := s.startInstanceJob(opt.Start.Index, opt.Start.Launch); err != nil {
+			s.log.Errorf("按命令行要求开实例 %d 失败: %v", opt.Start.Index, err)
+		}
 	}
 	var w *Window
 	if opt.OpenWindow {

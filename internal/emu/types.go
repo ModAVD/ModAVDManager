@@ -263,6 +263,9 @@ type StartOptions struct {
 	bridgePrep bool
 	// launchHeadless: set by Start for start: a launch is headless whatever Window says (a bridge prep boot).
 	launchHeadless bool
+	// Launch: open this app once the instance is booted and set up, and report it in StartResult.App (the instance
+	// stays up when the app cannot be opened). nil: open nothing.
+	Launch *AppTarget
 }
 
 type Progress struct {
@@ -300,6 +303,9 @@ type StartResult struct {
 	SetupPending bool     `json:"setup_pending"`
 	Warnings     []string `json:"warnings"` // never null; setup steps that failed (none of them stop the boot)
 	HostIME      bool     `json:"host_ime"`
+	// App is the outcome of StartOptions.Launch; absent without it. A failure to open the app is not a failure of the
+	// start: the instance is up, and the exit code of `modavd start` (not the envelope) says so.
+	App *AppLaunch `json:"app,omitempty"`
 
 	// launchWindow: the qemu this call launched has the emulator window (false for a headless launch, and when it
 	// launched nothing). A start asked for a window launches headless while the execution bridge is still to be
