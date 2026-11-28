@@ -251,6 +251,12 @@ func RunBootWatch(args []string, w io.Writer) int {
 	if !q.Alive() {
 		return 0
 	}
+	// who this watch is and which qemu it is for: what the boot screen looks at before it disables the emulator's windows
+	// (it only does when the watch that gives them back if everything else is gone is there)
+	if me, ok := host.FindProcess(uint32(os.Getpid())); ok {
+		m.writeWatchInfo(i, watchInfo{QemuPID: q.PID, QemuCreated: q.Created, WatchPID: me.PID, WatchCreated: me.Created})
+		defer m.removeWatchInfo(i, me)
+	}
 	log.Infof("实例 %d 开机守护已起（qemu pid %d）：客体自己重启后补做开机后调优", i, q.PID)
 	watch := &bootWatch{m: m, i: i, q: q}
 	// Canceled as soon as qemu exits: a set-up the watch started after a guest reboot holds the start lock and would
@@ -287,11 +293,19 @@ func RunBootWatch(args []string, w io.Writer) int {
 		defer ticker.Stop()
 		watch.shareDefaultAdb(ctx, ticker.C)
 	}()
+	// The layer of the boot screen (overlay.go) that does not depend on any other process being alive: windows an overlay
+	// disabled and left behind are given back within a second or so, with nobody asking for the status.
+	overlayDone := make(chan struct{})
+	go func() {
+		defer close(overlayDone)
+		watch.watchOverlayMarks(ctx, overlayWatchRecoverEvery)
+	}()
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
 	}
 	cancel()
 	<-shareDone
+	<-overlayDone
 	<-memoryDone // write the summary before releasing the watch lock or ending the log
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
@@ -409,6 +423,71 @@ func (w *bootWatch) logMemorySummary() {
 		msg += fmt.Sprintf("；最近读取失败：%v", m.readErr)
 	}
 	w.m.Log.Infof("%s；精确退出峰值未知", msg)
+}
+
+// watchInfo is the content of watchInfoPath: the boot watch's own process and the qemu it is for.
+type watchInfo struct {
+	QemuPID      uint32 `json:"qemu_pid"`
+	QemuCreated  uint64 `json:"qemu_created"`
+	WatchPID     uint32 `json:"watch_pid"`
+	WatchCreated uint64 `json:"watch_created"`
+}
+
+// watchInfoPath is <root>\avd\.mas_<i>.watchinfo.
+func (m *Manager) watchInfoPath(i int) string {
+	return filepath.Join(m.Root.AvdHome(), "."+root.AvdName(i)+".watchinfo")
+}
+
+func (m *Manager) writeWatchInfo(i int, w watchInfo) {
+	b, err := json.Marshal(w)
+	if err == nil {
+		err = writeFileReplace(m.watchInfoPath(i), b, strconv.Itoa(os.Getpid()))
+	}
+	if err != nil {
+		m.Log.Warnf("实例 %d 开机守护记不下自己是谁（%v）：开机遮罩会因此不禁用模拟器窗口", i, err)
+	}
+}
+
+// removeWatchInfo deletes the info when it is this watch's.
+func (m *Manager) removeWatchInfo(i int, me host.Process) {
+	if w, ok := m.readWatchInfo(i); ok && w.WatchPID == me.PID && w.WatchCreated == me.Created {
+		os.Remove(m.watchInfoPath(i))
+	}
+}
+
+func (m *Manager) readWatchInfo(i int) (watchInfo, bool) {
+	var w watchInfo
+	b, err := os.ReadFile(m.watchInfoPath(i))
+	if err != nil || json.Unmarshal(b, &w) != nil {
+		return watchInfo{}, false
+	}
+	return w, w.WatchPID != 0 && w.WatchCreated != 0 && w.QemuPID != 0 && w.QemuCreated != 0
+}
+
+// watchRunningFor: the boot watch of exactly this qemu (process and creation time) is running: its info names q, its
+// process is alive, and it holds the instance's watch lock.
+func (m *Manager) watchRunningFor(i int, q host.Process) bool {
+	w, ok := m.readWatchInfo(i)
+	return ok && w.QemuPID == q.PID && w.QemuCreated == q.Created &&
+		(host.Process{PID: w.WatchPID, Created: w.WatchCreated}).Alive() && m.lockHeld(i, "watch")
+}
+
+// watchOverlayMarks looks for the mark of a boot-screen overlay that is gone, of this watch's qemu (process and creation
+// time, not only the instance number), every interval until ctx ends (qemu exited), and gives the windows it left disabled
+// back (in the background: a window that does not answer does not hold the look up, and is tried again at the next).
+func (w *bootWatch) watchOverlayMarks(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if k, ok := w.m.readOverlayMark(w.i); ok && k.QemuPID == w.q.PID && k.QemuCreated == w.q.Created {
+			w.m.RecoverOverlay(w.i)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // bootWatchShareInterval: how often the watch makes sure the default adb server (5037) knows the instance. A tool that

@@ -199,7 +199,10 @@ func init() {
 			name: "status", args: "<i>", summary: "一台实例的状态",
 			details: "status：offline 已关机 / starting 开机中 / online 运行中 / creating 新建中 / create_failed 新建失败；" +
 				"running 是 qemu 进程在不在，booted 是 Android 开完没有（新建中这两个可能是 true，以 status 为准）；" +
-				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它，它自己在关（关了窗口、安卓里关机）也报 stopping；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。",
+				"busy 是另一个 modavd 正在开机（starting）或关机（stopping）它，它自己在关（关了窗口、安卓里关机）也报 stopping；新建中 creation_progress 是做完的百分比（0–100，按做完的步骤算）。" +
+				"online 是安卓开完、并且这次开机后的设置也做完了；中间这段 status 仍是 starting，setup_step 是在做哪一步，setup_progress 是做完的百分比（0–100，按做完的步骤算）。" +
+				"最多等到开机设置开始后 60 秒，到点就报 online（setup_unfinished 是还在做的那一步）；没有 modavd 在做设置的实例（别的工具拉起的，或做设置的那次启动被取消、被结束了），安卓开完就是 online。" +
+				"脚本和工具等 status 是 online 再操作，或者直接用 start（它返回就是准备好了）。",
 			posNames: []string{"实例编号"}, minPos: 1, maxPos: 1,
 			run: runStatus, human: humanOf(formatStatus),
 		},
@@ -521,6 +524,10 @@ type StatusResult struct {
 	CreationLog   string     `json:"creation_log"`
 	// CreationProgress: 0–100 while status is creating (emu.InstanceInfo.CreationProgress)
 	CreationProgress int `json:"creation_progress"`
+	// SetupStep, SetupProgress, SetupUnfinished: emu.InstanceInfo's, the after-boot setup behind starting / online
+	SetupStep       string `json:"setup_step"`
+	SetupProgress   int    `json:"setup_progress"`
+	SetupUnfinished string `json:"setup_unfinished"`
 	// Where to reach the instance, in its root's port plan (mas-avd.json portBase): take these rather than counting
 	// from 20000 (ModAVD/ModAVD#75).
 	Serial     string    `json:"serial"`
@@ -816,7 +823,8 @@ func intPtrOpt(inv *invocation, name string) *int {
 func statusOf(in *emu.InstanceInfo) *StatusResult {
 	return &StatusResult{Index: in.Index, Name: in.Name, Status: in.Status, Running: in.Running, Booted: in.Booted, Window: in.Window,
 		Busy: in.Busy, PID: in.PID, Creation: in.Creation, CreationError: in.CreationError, CreationLog: in.CreationLog,
-		CreationProgress: in.CreationProgress, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports, DataSpace: in.DataSpace}
+		CreationProgress: in.CreationProgress, SetupStep: in.SetupStep, SetupProgress: in.SetupProgress,
+		SetupUnfinished: in.SetupUnfinished, Serial: in.Serial, AdbAddress: in.AdbAddress, Ports: in.Ports, DataSpace: in.DataSpace}
 }
 
 // ---- run functions -----------------------------------------------------------------------------------------------

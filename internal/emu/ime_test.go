@@ -468,7 +468,12 @@ func TestRunHostIme(t *testing.T) {
 			if c.faults.noApkSHA {
 				apkSHA = ""
 			}
-			ours := m.runHostIme(0, fakeApkPath, 3, apkSHA, g.io())
+			var installing int
+			ours := m.runHostIme(0, fakeApkPath, 3, apkSHA, g.io(), func() { installing++ })
+			// the take-over's record (bootready.go) starts exactly when the package is about to be installed or replaced
+			if (installing > 0) != (len(c.adb) > 0) || installing > 1 {
+				t.Errorf("onInstall called %d times with adb calls %q", installing, c.adb)
+			}
 			if len(g.unknown) > 0 {
 				t.Fatalf("unexpected guest commands: %q", g.unknown)
 			}

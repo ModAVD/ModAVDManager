@@ -247,6 +247,12 @@ func TestPathAliasProcessOwnership(t *testing.T) {
 						if u.shutdownHelper(image, []string{image, "__bootwatch", t.TempDir(), "0", "123", "456"}) {
 							t.Error("another root's bootwatch was recognized")
 						}
+						if !u.shutdownHelper(image, []string{image, "__bootoverlay", imageRoot, "0", "123", "456", "abc123"}) {
+							t.Error("same root's boot screen was not recognized")
+						}
+						if u.shutdownHelper(image, []string{image, "__bootoverlay", t.TempDir(), "0", "123", "456", "abc123"}) {
+							t.Error("another root's boot screen was recognized")
+						}
 					}
 				})
 			}
@@ -304,7 +310,8 @@ func TestPathAliasDifferentRoot(t *testing.T) {
 	if uses, err := u.scanProcesses(true, ownProcesses, win.Process.ImagePath); err != nil || len(uses) != 0 {
 		t.Fatalf("another root's program matched: %+v, %v", uses, err)
 	}
-	if u.shutdownHelper(other, []string{other, "__bootwatch", alias, "0", "123", "456"}) {
+	if u.shutdownHelper(other, []string{other, "__bootwatch", alias, "0", "123", "456"}) ||
+		u.shutdownHelper(other, []string{other, "__bootoverlay", alias, "0", "123", "456", "abc123"}) {
 		t.Fatal("another root's program was treated as a shutdown helper")
 	}
 }

@@ -345,24 +345,10 @@ func (m *Manager) lock(ctx context.Context, i int, kind string, wait time.Durati
 }
 
 // booting: some modavd process is between launch and boot completion of instance i (holds its boot lock).
-func (m *Manager) booting(i int) bool {
-	l, ok, err := host.TryLock(m.lockPath(i, "boot"))
-	if err != nil || !ok {
-		return err == nil
-	}
-	l.Unlock()
-	return false
-}
+func (m *Manager) booting(i int) bool { return m.lockHeld(i, "boot") }
 
 // stopping: some modavd process is stopping instance i.
-func (m *Manager) stopping(i int) bool {
-	l, ok, err := host.TryLock(m.lockPath(i, "stop"))
-	if err != nil || !ok {
-		return err == nil
-	}
-	l.Unlock()
-	return false
-}
+func (m *Manager) stopping(i int) bool { return m.lockHeld(i, "stop") }
 
 // setupMarkerPath is <root>\avd\.mas_<i>.setup: written by a start that launched qemu (it holds that qemu's PID and
 // creation time) and removed once the whole after-boot setup is done. A later start that adopts the same qemu and
@@ -381,10 +367,12 @@ func (m *Manager) guestLockPath(i int) string {
 // removeLockFiles deletes the lock files, the setup marker, create's progress / cancellation files, the clock source
 // record and the boot record (after Delete); best effort.
 func (m *Manager) removeLockFiles(i int) {
-	for _, kind := range []string{"start", "boot", "stop", "watch", "logcat", "bridge", "create", "proxy", "disk"} {
+	for _, kind := range []string{"start", "boot", "stop", "watch", "logcat", "bridge", "create", "proxy", "disk", "overlay"} {
 		os.Remove(m.lockPath(i, kind))
 	}
 	os.Remove(m.setupMarkerPath(i))
+	os.Remove(m.readyPath(i))
+	os.Remove(m.overlayMarkPath(i))
 	os.Remove(m.createProgressPath(i))
 	os.Remove(m.createCancelPath(i))
 	os.Remove(m.guestLockPath(i))

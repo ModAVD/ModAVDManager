@@ -22,6 +22,7 @@ func TestShutdownHelperOwnershipAndArguments(t *testing.T) {
 	watch := []string{cli, "__bootwatch", u.l.root, "0", "123", "456"}
 	logcat := []string{cli, "__logcat", u.l.root, "0", "123", "456"}
 	logcatToken := append(append([]string{}, logcat...), "eyJ0b2tlbiI6MX0")
+	overlay := []string{cli, "__bootoverlay", u.l.root, "0", "123", "456", "0a1b2c3d4e5f6071"}
 	change := func(args []string, i int, s string) []string {
 		out := append([]string{}, args...)
 		out[i] = s
@@ -67,6 +68,19 @@ func TestShutdownHelperOwnershipAndArguments(t *testing.T) {
 		{"logcat capture, reserved instance", cli, change(logcat, 3, "5"), false},
 		{"logcat capture, zero PID", cli, change(logcat, 4, "0"), false},
 		{"logcat capture, zero creation time", cli, change(logcat, 5, "0"), false},
+		{"boot screen", cli, overlay, true},
+		{"gui boot screen", u.l.at("ModAVD.exe"), change(overlay, 0, u.l.at("ModAVD.exe")), true},
+		{"boot screen, case insensitive root", cli, change(overlay, 2, strings.ToUpper(u.l.root)), true},
+		{"boot screen of another root", cli, change(overlay, 2, other), false},
+		{"boot screen from another manager", filepath.Join(other, "tools", "modavd.exe"), overlay, false},
+		{"boot screen, relative root", cli, change(overlay, 2, "."), false},
+		{"boot screen, no round", cli, overlay[:6], false},
+		{"boot screen, empty round", cli, change(overlay, 6, ""), false},
+		{"boot screen, odd round", cli, change(overlay, 6, "a b;c"), false},
+		{"boot screen, extra arg", cli, append(append([]string{}, overlay...), "extra"), false},
+		{"boot screen, reserved instance", cli, change(overlay, 3, "5"), false},
+		{"boot screen, zero starter PID", cli, change(overlay, 4, "0"), false},
+		{"boot screen, zero starter creation time", cli, change(overlay, 5, "0"), false},
 		{"bootwatch with a seventh arg", cli, append(append([]string{}, watch...), "eyJ0b2tlbiI6MX0"), false},
 		{"normal manager", cli, []string{cli, "mcp"}, false},
 		{"other internal helper", cli, change(watch, 1, "__orphan"), false},

@@ -1063,13 +1063,13 @@ func TestStatusSubset(t *testing.T) {
 	// where to reach it comes along (ModAVD/ModAVD#75): a root with portBase is not on 20000 + 10 * i
 	const at = `"serial":"emulator-20030","adb_address":"127.0.0.1:20031","ports":{"console":20030,"adb":20031,"grpc":20032}` +
 		`,"data_space":{"free_bytes":0,"total_bytes":0,"checked_at":"","low":false,"host_bytes":0,"host_free_bytes":0,"state":"","message":"","advice":""}`
-	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0,` + at + `}}` + "\n"
+	want := `{"ok":true,"data":{"index":3,"name":"mas_3","status":"online","running":true,"booted":true,"window":true,"busy":"stopping","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0,"setup_step":"","setup_progress":0,"setup_unfinished":"",` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("stdout = %s\nwant     %s", r.stdout, want)
 	}
 	h.fake.info = nil
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"window":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0,` + at + `}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"offline","running":false,"booted":false,"window":false,"busy":"","pid":0,"creation":"","creation_error":"","creation_log":"","creation_progress":0,"setup_step":"","setup_progress":0,"setup_unfinished":"",` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("offline stdout = %s", r.stdout)
 	}
@@ -1081,12 +1081,24 @@ func TestStatusSubset(t *testing.T) {
 		return &in, nil
 	}
 	r = h.run(t, nil, "status", "3", "--json")
-	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"window":false,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35,` + at + `}}` + "\n"
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"creating","running":true,"booted":true,"window":false,"busy":"creating","pid":4242,"creation":"creating","creation_error":"","creation_log":"","creation_progress":35,"setup_step":"","setup_progress":0,"setup_unfinished":"",` + at + `}}` + "\n"
 	if r.stdout != want {
 		t.Errorf("creating stdout = %s", r.stdout)
 	}
 	if r = h.run(t, nil, "status", "3"); r.stdout != "实例 3：新建中 35%（PID 4242）\n" {
 		t.Errorf("creating text = %q", r.stdout)
+	}
+	// the after-boot setup: still starting (Android has booted), with the step and how far; online once it is done
+	h.fake.info = func(i int) (*emu.InstanceInfo, error) {
+		in := sampleInstance(i)
+		in.Status, in.Running, in.Booted, in.PID, in.Busy = emu.StatusStarting, true, true, 4242, "starting"
+		in.SetupStep, in.SetupProgress = "ime", 60
+		return &in, nil
+	}
+	r = h.run(t, nil, "status", "3", "--json")
+	want = `{"ok":true,"data":{"index":3,"name":"mas_3","status":"starting","running":true,"booted":true,"window":false,"busy":"starting","pid":4242,"creation":"","creation_error":"","creation_log":"","creation_progress":0,"setup_step":"ime","setup_progress":60,"setup_unfinished":"",` + at + `}}` + "\n"
+	if r.stdout != want {
+		t.Errorf("setup stdout = %s", r.stdout)
 	}
 }
 

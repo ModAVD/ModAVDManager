@@ -62,6 +62,7 @@ func (m *Manager) SetWindowVisible(ctx context.Context, i int, visible bool) (*W
 	if _, err := m.instance(i); err != nil {
 		return nil, err
 	}
+	m.RecoverOverlay(i)
 	res := &WindowResult{Index: i, Visible: visible}
 	p, ok, err := m.qemuOf(i)
 	if err != nil {

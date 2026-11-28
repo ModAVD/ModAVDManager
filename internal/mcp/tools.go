@@ -139,7 +139,10 @@ func toolDefs() []*toolDef {
 	return []*toolDef{
 		newTool("list_instances", "List instances",
 			"List every ModAVD instance under the server's root (fixed by --root) with its status (offline / "+
-				"starting / online), adb serial and address, ports, diagnostics logging state and the options of its next boot.",
+				"starting / online), adb serial and address, ports, diagnostics logging state and the options of its next boot. "+
+				"online means Android has booted and the setup after that boot is done; until then the status is starting, with "+
+				"setup_step and setup_progress (0-100); at most 60 s after the setup began it reads online anyway "+
+				"(setup_unfinished names the step still running). Wait for online before working on an instance.",
 			readOnly(), reflect.TypeFor[emu.ListResult](), nil,
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				return b.List(ctx)
@@ -147,7 +150,8 @@ func toolDefs() []*toolDef {
 
 		newTool("get_instance", "Get instance",
 			"Get one instance by index: status, adb serial and address, ports, screenshot shared memory and the "+
-				"options of its next boot.",
+				"options of its next boot. status online means Android has booted and the setup after that boot is "+
+				"done (see list_instances: setup_step, setup_progress, setup_unfinished).",
 			readOnly(), reflect.TypeFor[emu.InstanceInfo](), []prop{indexProp(true)},
 			func(ctx context.Context, b backend, a args, _ func(emu.Progress)) (any, error) {
 				i, err := a.reqInt("index")

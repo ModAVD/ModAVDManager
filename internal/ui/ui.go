@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"modavd/internal/bootscreen"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/logx"
@@ -218,6 +219,14 @@ func newServer(opt Options) (*server, error) {
 	files, err := loadStatic(web)
 	if err != nil {
 		return nil, errs.Wrap(errs.Internal, err, "读不出打包的页面文件")
+	}
+	// the boot screen's pictures are the Go package's own files, served beside the page's assets (js/bootview.js)
+	art, err := loadStatic(bootscreen.ArtFS())
+	if err != nil {
+		return nil, errs.Wrap(errs.Internal, err, "读不出打包的开机画面美术")
+	}
+	for name, f := range art {
+		files["assets/boot/"+name] = f
 	}
 	idle := opt.IdleExit
 	if idle == 0 {
