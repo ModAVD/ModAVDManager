@@ -4,51 +4,76 @@ package emu
 // over the emulator's window from the moment the window shows until the instance reads online (bootready.go), and the
 // emulator's windows take no mouse and keyboard input. Windows only; the picture is internal/bootscreen.
 //
-// Who starts it, who ends it. The start that launches a windowed qemu (Start, from the command line or the manager)
-// starts a small process of this same executable: `<exe> __bootoverlay <root> <i> <start pid> <start created>`
-// (RunBootOverlay), detached like the boot watch. Everything the cover shows it reads from disk and from the guest
-// the way status does (the setup record, the start lock, one getprop), so it has no channel to the start, and a cover
-// started by anyone looks the same. It ends itself, restoring the windows first, when
-//   - the instance is online: Android has booted and the setup is done (bootSetupOf says ready). The cap (the setup
-//     went on past bootSetupCap) puts the windows back at once and leaves the cover up three more seconds with a line
-//     saying which step was not finished;
+// Who starts it, who ends it. A start that works on a boot that has a window (it launched the qemu, took over a boot
+// whose setup was left unfinished or whose guest rebooted by itself, or is about to do real setup work on a running
+// one) starts a small process of this same executable: `<exe> __bootoverlay <root> <i> <start pid> <start created>
+// <round>` (RunBootOverlay), detached like the boot watch, and makes sure the boot watch of that qemu runs (it is the
+// fourth layer below). Everything the cover shows it reads from disk and from the guest the way status does (the setup
+// record, the start lock, the guest's boot state), so it has no channel to the start, and a cover started by anyone
+// looks the same. It ends itself, putting the windows back first, when
+//   - the instance is online: Android has booted and the setup of THIS round is done (bootSetupOf with the round says
+//     ready). The cap (the setup went on past bootSetupCap) turns the covers into a layer the mouse goes through at once,
+//     puts the windows back, and leaves the picture up three more seconds with a line saying which step was not finished;
 //   - the qemu it covers is gone, or never showed up in 30 s;
 //   - no start holds the start lock any more for 1.5 s (the start was cancelled, failed or killed, or the manager that
 //     ran it exited: the lock goes with the process);
-//   - the process that started it is gone (the same, one more way to see it);
-//   - it is told to end (Ctrl+C, a close, the session ends).
+//   - the process that started it is gone (waited for with a handle to that process, not looked at now and then);
+//   - it is told to end (Ctrl+C, a close of its windows, the end of the session).
 //
-// What keeps input out. A cover is an owned pop-up over the picture area of the main window and over the side
-// toolbar, so mouse input lands on the cover (internal/win cover_windows.go); the keyboard cannot be covered, so the
-// emulator's windows are also disabled (EnableWindow FALSE) like under a modal dialog, which is state of the other
-// process's windows and has to be given back whatever happens to the cover. Four layers see to that:
-//  1. the overlay restores them before it exits, whatever the reason (a deferred restore, also on a panic, a signal,
-//     the end of the session);
-//  2. the start that started it watches the overlay's process every 500 ms and restores them when it is gone however it
-//     went (guardOverlay): at most about a second;
-//  3. the overlay watches the start (above): a killed or cancelled start ends the overlay and the windows come back
-//     within 1.5 s;
-//  4. when both are gone at once the overlay's mark on disk (.mas_<i>.overlay: its process, the qemu, the windows it
-//     disabled) is found by the next modavd that looks at the instance (status / list / info, start, stop, window:
-//     RecoverOverlay), which restores them and deletes the mark. The manager polls status every few seconds when it is
-//     open; with nothing open it is the next command that does it.
-// A qemu that is gone takes its windows with it, so nothing is left to restore then.
+// The round. Every start attempt has a round token (a random string). It goes into the setup marker, into the setup
+// record, into the overlay's arguments and into its mark, and it is written BEFORE the overlay is started. The overlay
+// (and status, through the marker of the start that holds the lock) only believes a setup record of its own round: a
+// "done" left by an earlier boot of the same qemu (a guest that restarted by itself) never releases a later round.
 //
-// This file is the part that does not depend on the platform: the mark, the recovery, the guard, what to show and when
-// to end. The windows are in overlay_windows.go.
+// What keeps input out. A cover is a pop-up over the picture area of the main window and over the side toolbar, so mouse
+// input lands on the cover (internal/win cover_windows.go); it has no owner and follows the emulator window with
+// SetWindowPos on itself, so a hung emulator window cannot hang it. The keyboard cannot be covered, so the emulator's
+// windows are also disabled (EnableWindow FALSE) like under a modal dialog. That is state of the other process's
+// windows, it has to be given back whatever happens to the cover, and EnableWindow sends a message to the window's own
+// thread and waits, so it is only ever called on a worker (windowKeeper) with a deadline, never on the cover's thread and
+// never in a lifecycle command.
+//   - Record first: the windows are named in the overlay's mark (.mas_<i>.overlay: round, overlay process, qemu, and per
+//     window the handle, the owning qemu and its class) before they are disabled; when the mark cannot be written nothing is
+//     disabled (the cover still keeps the mouse out).
+//   - Handles are checked before every touch (owning process, class, qemu alive): a handle that is another window now is
+//     dropped, never enabled or disabled.
+//   - Marks are read, changed and deleted under a lock, and only by the one they belong to (the same round and overlay
+//     process); an enable that fails on a window that still exists keeps its entry for the next try.
+//
+// Layers that give the windows back, and how long they take at most (EnableWindow answering; a window that does not
+// answer is given up on after overlayEnableDeadline, 2 s, and tried again by the next layer):
+//  1. the overlay, before it exits, whatever the reason (a deferred close, also on a panic, a signal, WM_CLOSE, the end of
+//     the session): about 0.1 s after the instance is ready, at most 3 s;
+//  2. the start that started it holds a handle to the overlay's process and recovers as soon as it ends: at once;
+//  3. the overlay holds a handle to the start's process, and watches the start lock: a killed start ends the overlay at
+//     once, a cancelled one within 1.5 s;
+//  4. the boot watch of the instance (__bootwatch, which lives as long as the qemu; started together with the overlay)
+//     looks at the mark every second: a mark whose overlay process is gone is recovered: at most about 1 s (+ 2 s if a
+//     window is slow to answer) after both the overlay and the start were killed;
+//  5. last, any modavd that looks at the instance (status / list / info, start, stop, window) recovers it, in the
+//     background with a budget of overlayRecoverBudget (1 s): the command never waits for a window.
+//
+// This file is the part that does not depend on the platform: the mark, the recovery, the keeper of the windows, the
+// guard, what to show and when to end. The windows themselves are in overlay_windows.go.
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"modavd/internal/host"
 	"modavd/internal/i18n"
+	"modavd/internal/logx"
 	"modavd/internal/root"
 )
 
@@ -58,6 +83,16 @@ const BootOverlayArg = "__bootoverlay"
 var (
 	// overlayCapNote: how long the cover stays up with its note after the cap put the windows back.
 	overlayCapNote = 3 * time.Second
+	// overlayEnableDeadline: how long one EnableWindow call is waited for.
+	overlayEnableDeadline = 2 * time.Second
+	// overlayRecoverBudget: how long a lifecycle command waits for a recovery it started in the background.
+	overlayRecoverBudget = time.Second
+	// overlayMarkLockWait: how long taking the mark's lock is waited for.
+	overlayMarkLockWait = 300 * time.Millisecond
+	// overlayWatchRecoverEvery: how often the boot watch looks for a mark whose overlay is gone.
+	overlayWatchRecoverEvery = time.Second
+	// overlayConfirmWait: how long a start that is done waits for its overlay to have given the windows back.
+	overlayConfirmWait = 2 * time.Second
 )
 
 const (
@@ -67,8 +102,8 @@ const (
 	overlayNoStartGrace = 1500 * time.Millisecond
 	// overlayQemuGrace: a process scan that misses the qemu for this long means it is gone.
 	overlayQemuGrace = 2 * time.Second
-	// overlayGuardEvery: how often the start looks whether its overlay process is still there.
-	overlayGuardEvery = 500 * time.Millisecond
+	// overlayGuardRetry: how often the start's guard tries again to give back windows that did not answer.
+	overlayGuardRetry = 500 * time.Millisecond
 )
 
 // overlayWindows is what the overlay needs of the emulator's windows; Windows has the real one (overlay_windows.go),
@@ -78,28 +113,43 @@ type overlayWindows interface {
 	Windows(pid uint32) ([]uintptr, error)
 	// IsToolbar: the window is the side toolbar (its cover is plain, the screen goes on the main window).
 	IsToolbar(h uintptr) bool
-	// SetEnabled enables or disables h and reports whether it is in that state afterwards.
+	// SetEnabled enables or disables h and reports whether it is in that state afterwards. It may not return for a window
+	// that does not answer: call it through setEnabledBounded.
 	SetEnabled(h uintptr, on bool) bool
 	Enabled(h uintptr) bool
-	// ProcessOf is the process that owns h, 0 when the window is gone.
-	ProcessOf(h uintptr) uint32
+	// Identity is the process that owns h and its class name; pid 0 when the window is gone. It never waits for the window.
+	Identity(h uintptr) (pid uint32, class string)
 }
 
 // overlayOS is the platform's window operations; nil where there are none.
 var overlayOS overlayWindows
 
-// overlayMark is the content of overlayMarkPath: the overlay's process (PID + creation time), the qemu it covers and
-// the windows it disabled.
+// overlayWin is a window an overlay disabled, with who it was: a handle can be reused by another window.
+type overlayWin struct {
+	H           uint64 `json:"h"`
+	QemuPID     uint32 `json:"qemu_pid"`
+	QemuCreated uint64 `json:"qemu_created"`
+	Class       string `json:"class"`
+}
+
+// overlayMark is the content of overlayMarkPath: the round it is of, the overlay's process (PID + creation time), the qemu
+// it covers and the windows it disabled.
 type overlayMark struct {
-	OverlayPID     uint32   `json:"overlay_pid"`
-	OverlayCreated uint64   `json:"overlay_created"`
-	QemuPID        uint32   `json:"qemu_pid"`
-	QemuCreated    uint64   `json:"qemu_created"`
-	Windows        []uint64 `json:"windows"`
+	Round          string       `json:"round"`
+	OverlayPID     uint32       `json:"overlay_pid"`
+	OverlayCreated uint64       `json:"overlay_created"`
+	QemuPID        uint32       `json:"qemu_pid"`
+	QemuCreated    uint64       `json:"qemu_created"`
+	Windows        []overlayWin `json:"windows"`
 }
 
 func (k overlayMark) overlayAlive() bool {
 	return k.OverlayPID != 0 && (host.Process{PID: k.OverlayPID, Created: k.OverlayCreated}).Alive()
+}
+
+// sameOwner: both marks are of the same round and the same overlay process.
+func (k overlayMark) sameOwner(o overlayMark) bool {
+	return k.Round == o.Round && k.OverlayPID == o.OverlayPID && k.OverlayCreated == o.OverlayCreated
 }
 
 // overlayMarkPath is <root>\avd\.mas_<i>.overlay.
@@ -116,7 +166,8 @@ func (m *Manager) readOverlayMark(i int) (overlayMark, bool) {
 	return k, k.OverlayPID != 0
 }
 
-func (m *Manager) writeOverlayMark(i int, k overlayMark) error {
+// overlayMarkWrite stores the mark (a variable: the tests make it fail).
+var overlayMarkWrite = func(m *Manager, i int, k overlayMark) error {
 	b, err := json.Marshal(k)
 	if err == nil {
 		err = writeFileReplace(m.overlayMarkPath(i), b, strconv.Itoa(os.Getpid()))
@@ -124,45 +175,497 @@ func (m *Manager) writeOverlayMark(i int, k overlayMark) error {
 	return err
 }
 
-func (m *Manager) removeOverlayMark(i int) {
-	if err := os.Remove(m.overlayMarkPath(i)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		m.Log.Debugf("实例 %d 删不掉遮罩标记: %v", i, err)
+// writeOverlayMark stores the mark; the caller holds the mark's lock.
+func (m *Manager) writeOverlayMark(i int, k overlayMark) error { return overlayMarkWrite(m, i, k) }
+
+// removeOverlayMark deletes the mark. On Windows a file that somebody has open for reading (status looks at the mark
+// without the lock) cannot be deleted at that moment, so it is tried again for up to 0.2 s; an error is what is left after
+// that, and the caller keeps the work to do (the mark stays, the next try deletes it).
+func (m *Manager) removeOverlayMark(i int) error {
+	var err error
+	for n := 0; n < 40; n++ {
+		if err = os.Remove(m.overlayMarkPath(i)); err == nil || errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.Log.Debugf("实例 %d 删不掉遮罩标记: %v", i, err)
+	return err
+}
+
+// overlayMarkLock takes the lock every read-change-delete of the mark of instance i is done under, waiting up to
+// overlayMarkLockWait; ok=false when it could not be had (somebody else is at it, or the lock file cannot be opened).
+func (m *Manager) overlayMarkLock(i int) (l *host.FileLock, ok bool) {
+	path := m.lockPath(i, "overlaymark")
+	deadline := time.Now().Add(overlayMarkLockWait)
+	for {
+		l, free, err := host.TryLock(path)
+		if err == nil && free {
+			return l, true
+		}
+		if err != nil || !time.Now().Before(deadline) {
+			return nil, false
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-// RecoverOverlay gives the emulator windows of instance i back when an overlay disabled them and is gone (layers 2 and
-// 4 above): it enables the windows the mark names, as long as they still belong to that qemu, and deletes the mark.
-// Nothing happens while the overlay lives. It reports whether it put windows back. Cheap when there is no mark.
+// ---- calls to the other process's windows ------------------------------------------------------------------------------
+
+// overlayInflight holds the windows an EnableWindow call is running on right now: a window that does not answer has one
+// call stuck in it, and the next calls on it are not stacked up behind it.
+var overlayInflight sync.Map
+
+// setEnabledBounded is ops.SetEnabled on a goroutine of its own, waited for at most d. ok: the window is in the state
+// asked for; timedOut: the call did not return in time (or one is stuck in that window already), it may still take effect
+// later, so the window has to be treated as in either state.
+func setEnabledBounded(ops overlayWindows, h uintptr, on bool, d time.Duration) (ok, timedOut bool) {
+	if _, busy := overlayInflight.LoadOrStore(h, struct{}{}); busy {
+		return false, true
+	}
+	res := make(chan bool, 1)
+	go func() {
+		defer overlayInflight.Delete(h)
+		res <- ops.SetEnabled(h, on)
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case ok = <-res:
+		return ok, false
+	case <-t.C:
+		return false, true
+	}
+}
+
+type windowState int
+
+const (
+	windowGone    windowState = iota // the window or its qemu is gone
+	windowForeign                    // the handle is another window's now
+	windowOurs
+)
+
+// stateOf is what w is now: the same window of the same qemu, another window with that handle, or nothing.
+func (w overlayWin) stateOf(ops overlayWindows) windowState {
+	if w.QemuPID != 0 && !(host.Process{PID: w.QemuPID, Created: w.QemuCreated}).Alive() {
+		return windowGone
+	}
+	pid, class := ops.Identity(uintptr(w.H))
+	switch {
+	case pid == 0:
+		return windowGone
+	case pid != w.QemuPID || class != w.Class:
+		return windowForeign
+	}
+	return windowOurs
+}
+
+// restoreWindows enables every window of ws that is still the window it was; windows that are gone or are other windows
+// now are dropped. The calls run side by side and are waited for at most d each. left: the windows that still exist and
+// could not be enabled (the call failed or did not answer), to be tried again.
+func restoreWindows(ops overlayWindows, ws []overlayWin, d time.Duration) (left []overlayWin, restored int) {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, w := range ws {
+		wg.Add(1)
+		w := w
+		go func() {
+			defer wg.Done()
+			if w.stateOf(ops) != windowOurs {
+				return
+			}
+			ok, _ := setEnabledBounded(ops, uintptr(w.H), true, d)
+			mu.Lock()
+			defer mu.Unlock()
+			if ok {
+				restored++
+			} else if w.stateOf(ops) == windowOurs { // still there: the next try
+				left = append(left, w)
+			}
+		}()
+	}
+	wg.Wait()
+	return left, restored
+}
+
+// recoverOverlayMark gives back the windows of the mark of instance i when its overlay is gone (round "": of any round;
+// else only that round's), under the mark's lock: what is enabled is dropped from the mark, and the mark is deleted when
+// nothing is left. done=false: the lock could not be had or windows are left, so the mark stays for the next try.
+func (m *Manager) recoverOverlayMark(i int, round string, ops overlayWindows) (restored int, done bool) {
+	if _, ok := m.readOverlayMark(i); !ok {
+		return 0, true
+	}
+	l, ok := m.overlayMarkLock(i)
+	if !ok {
+		return 0, false
+	}
+	defer l.Unlock()
+	k, ok := m.readOverlayMark(i)
+	if !ok || k.overlayAlive() || (round != "" && k.Round != round) {
+		return 0, true // none, or its overlay lives (it gives back its own), or it is another round's
+	}
+	var left []overlayWin
+	if ops != nil {
+		left, restored = restoreWindows(ops, k.Windows, overlayEnableDeadline)
+	}
+	removeFailed := false
+	if len(left) == 0 {
+		removeFailed = m.removeOverlayMark(i) != nil
+	} else {
+		k.Windows = left
+		if err := m.writeOverlayMark(i, k); err != nil {
+			m.Log.Debugf("实例 %d 遮罩标记改不了: %v", i, err)
+		}
+	}
+	if restored > 0 {
+		m.Log.Infof("实例 %d 的遮罩没了（进程 %d），已把模拟器的 %d 个窗口恢复成能操作", i, k.OverlayPID, restored)
+	}
+	if len(left) > 0 {
+		m.Log.Warnf("实例 %d 有 %d 个模拟器窗口没应答，还没恢复成能操作，稍后再试", i, len(left))
+	}
+	return restored, len(left) == 0 && !removeFailed
+}
+
+// RecoverOverlay gives the emulator windows of instance i back when an overlay disabled them and is gone (layers 4 and 5
+// above). It never waits for a window: the work runs in the background and is waited for at most overlayRecoverBudget; what
+// is not done by then is left (mark kept) for the boot watch and the next command. It reports whether it put windows back
+// in time. Nothing happens while the overlay lives. Cheap when there is no mark.
 func (m *Manager) RecoverOverlay(i int) bool {
 	k, ok := m.readOverlayMark(i)
 	if !ok || k.overlayAlive() {
 		return false
 	}
-	return m.restoreOverlayMark(i, k, overlayOS)
+	res := make(chan int, 1)
+	go func() {
+		n, _ := m.recoverOverlayMark(i, "", overlayOS)
+		res <- n
+	}()
+	t := time.NewTimer(overlayRecoverBudget)
+	defer t.Stop()
+	select {
+	case n := <-res:
+		return n > 0
+	case <-t.C:
+		m.Log.Debugf("实例 %d 恢复遮罩禁用的窗口超过 %v 还没做完，放到后台继续", i, overlayRecoverBudget)
+		return false
+	}
 }
 
-// restoreOverlayMark enables the windows of mark k and deletes it.
-func (m *Manager) restoreOverlayMark(i int, k overlayMark, ops overlayWindows) bool {
-	restored := 0
-	qemuUp := k.QemuPID != 0 && (host.Process{PID: k.QemuPID, Created: k.QemuCreated}).Alive()
-	if ops != nil && qemuUp {
-		for _, h := range k.Windows {
-			// a handle that was reused by another process's window is not ours to enable
-			if ops.ProcessOf(uintptr(h)) == k.QemuPID && ops.SetEnabled(uintptr(h), true) {
-				restored++
-			}
+// ---- the keeper of the windows -----------------------------------------------------------------------------------------
+
+// windowKeeper disables the emulator's windows while the cover is up and gives them back; the overlay's other threads
+// only tell it what they want (Track, Decide, Release, Stop) and never wait for it. All calls into the other process's
+// windows (EnableWindow) are made here, on a goroutine of their own with a deadline.
+type windowKeeper struct {
+	m     *Manager
+	i     int
+	ops   overlayWindows
+	log   *logx.Logger
+	round string
+	self  host.Process // the overlay's own process (the mark's owner)
+
+	stopped atomic.Bool   // an end was asked for: nothing more is disabled
+	wake    chan struct{} // capacity 1
+	closed  chan struct{}
+	stepMu  sync.Mutex // held while the worker does one step
+
+	mu          sync.Mutex
+	qemu        host.Process
+	covered     []uintptr // windows a cover is over now
+	decided     bool      // the first look at the instance has been made: nothing is disabled before it
+	released    bool
+	held        map[uintptr]overlayWin // windows this keeper disabled (all of them are in the mark)
+	markPending bool                   // the mark still has to be removed or rewritten
+	warned      bool
+}
+
+func newWindowKeeper(m *Manager, i int, ops overlayWindows, log *logx.Logger, round string, self host.Process) *windowKeeper {
+	k := &windowKeeper{m: m, i: i, ops: ops, log: log, round: round, self: self, wake: make(chan struct{}, 1),
+		closed: make(chan struct{}), held: map[uintptr]overlayWin{}}
+	go k.loop()
+	return k
+}
+
+func (k *windowKeeper) signal() {
+	select {
+	case k.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Track says which windows a cover is over now, of which qemu.
+func (k *windowKeeper) Track(q host.Process, hs []uintptr) {
+	k.mu.Lock()
+	k.qemu, k.covered = q, slices.Clone(hs)
+	k.mu.Unlock()
+	k.signal()
+}
+
+// Decide says the instance has been looked at once (what the overlay shows is what it found): from now on windows are disabled.
+func (k *windowKeeper) Decide() {
+	k.mu.Lock()
+	k.decided = true
+	k.mu.Unlock()
+	k.signal()
+}
+
+// Release says the windows are to be given back now (and not disabled again), in the background.
+func (k *windowKeeper) Release() {
+	k.mu.Lock()
+	k.released = true
+	k.mu.Unlock()
+	k.signal()
+}
+
+// Stop says an end was asked for: nothing is disabled from now on, not even by a step that has begun.
+func (k *windowKeeper) Stop() { k.stopped.Store(true) }
+
+// Close is the end: stops disabling, waits for the step that is under way (at most d), gives everything back (at most d)
+// and stops the worker. What did not answer stays in the mark for the layers that come after.
+func (k *windowKeeper) Close(why string, d time.Duration) {
+	k.stopped.Store(true)
+	k.mu.Lock()
+	k.released = true
+	k.mu.Unlock()
+	deadline := time.Now().Add(d)
+	got := false
+	for !got && time.Now().Before(deadline) {
+		if got = k.stepMu.TryLock(); !got {
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	m.removeOverlayMark(i)
-	if restored > 0 {
-		m.Log.Infof("实例 %d 的遮罩没了（进程 %d），已把模拟器的 %d 个窗口恢复成能操作", i, k.OverlayPID, restored)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		k.restoreHeld(why)
+	}()
+	t := time.NewTimer(max(time.Until(deadline), 50*time.Millisecond))
+	select {
+	case <-done:
+	case <-t.C:
+		k.log.Warnf("实例 %d 遮罩收尾时有窗口没在 %v 内应答，留给恢复的后几层", k.i, d)
 	}
-	return restored > 0
+	t.Stop()
+	if got {
+		k.stepMu.Unlock()
+	}
+	select {
+	case <-k.closed:
+	default:
+		close(k.closed)
+	}
 }
 
-// spawnBootOverlay starts the overlay process of instance i for the start running in this process (a variable for the
-// tests): `<exe> __bootoverlay <root> <i> <start pid> <start created>`, detached. Only on Windows.
-var spawnBootOverlay = func(m *Manager, i int) (host.Process, error) {
+func (k *windowKeeper) loop() {
+	t := time.NewTicker(500 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-k.closed:
+			return
+		case <-k.wake:
+		case <-t.C:
+		}
+		k.step()
+	}
+}
+
+func (k *windowKeeper) heldList() []overlayWin {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	out := make([]overlayWin, 0, len(k.held))
+	for _, w := range k.held {
+		out = append(out, w)
+	}
+	return out
+}
+
+func (k *windowKeeper) ownMark(cur overlayMark) bool {
+	return cur.Round == k.round && cur.OverlayPID == k.self.PID && cur.OverlayCreated == k.self.Created
+}
+
+// writeMark stores the mark with windows ws, under the lock.
+func (k *windowKeeper) writeMark(ws []overlayWin) error {
+	l, ok := k.m.overlayMarkLock(k.i)
+	if !ok {
+		return errors.New("遮罩标记的锁拿不到")
+	}
+	defer l.Unlock()
+	k.mu.Lock()
+	q := k.qemu
+	k.mu.Unlock()
+	return k.m.writeOverlayMark(k.i, overlayMark{Round: k.round, OverlayPID: k.self.PID, OverlayCreated: k.self.Created,
+		QemuPID: q.PID, QemuCreated: q.Created, Windows: ws})
+}
+
+// finishMark makes the mark say what is held: deleted when nothing is, rewritten otherwise; only a mark of this keeper.
+func (k *windowKeeper) finishMark() {
+	l, ok := k.m.overlayMarkLock(k.i)
+	if !ok {
+		k.mu.Lock()
+		k.markPending = true
+		k.mu.Unlock()
+		return
+	}
+	defer l.Unlock()
+	cur, exists := k.m.readOverlayMark(k.i)
+	if !exists || !k.ownMark(cur) {
+		return
+	}
+	left := k.heldList()
+	pending := false
+	if len(left) == 0 {
+		pending = k.m.removeOverlayMark(k.i) != nil
+	} else {
+		cur.Windows = left
+		if err := k.m.writeOverlayMark(k.i, cur); err != nil {
+			k.log.Debugf("实例 %d 遮罩标记改不了: %v", k.i, err)
+			pending = true
+		}
+	}
+	k.mu.Lock()
+	k.markPending = pending
+	k.mu.Unlock()
+}
+
+// restoreHeld enables what is held (the ones that answer), drops the rest the way restoreWindows does and fixes the mark.
+func (k *windowKeeper) restoreHeld(why string) {
+	ws := k.heldList()
+	left, n := restoreWindows(k.ops, ws, overlayEnableDeadline)
+	k.mu.Lock()
+	k.held = map[uintptr]overlayWin{}
+	for _, w := range left {
+		k.held[uintptr(w.H)] = w
+	}
+	k.mu.Unlock()
+	k.finishMark()
+	if n > 0 {
+		k.log.Infof("实例 %d 开机遮罩把 %d 个模拟器窗口恢复成能操作（%s）", k.i, n, why)
+	}
+	if len(left) > 0 {
+		k.log.Warnf("实例 %d 开机遮罩有 %d 个模拟器窗口没应答，没能恢复成能操作（标记留着，稍后再试）", k.i, len(left))
+	}
+}
+
+// step is one turn of the worker.
+func (k *windowKeeper) step() {
+	k.stepMu.Lock()
+	defer k.stepMu.Unlock()
+	k.mu.Lock()
+	released, decided, qemu, pending := k.released, k.decided, k.qemu, k.markPending
+	covered := slices.Clone(k.covered)
+	k.mu.Unlock()
+	if released {
+		if len(k.heldList()) > 0 {
+			k.restoreHeld("release")
+		} else if pending {
+			k.finishMark()
+		}
+		return
+	}
+	if k.stopped.Load() || !decided || qemu.PID == 0 {
+		return
+	}
+	// a window Qt enabled again is disabled again; one that is not the window it was is dropped
+	dropped := false
+	for _, w := range k.heldList() {
+		if k.stopped.Load() {
+			return
+		}
+		switch w.stateOf(k.ops) {
+		case windowOurs:
+			if k.ops.Enabled(uintptr(w.H)) {
+				setEnabledBounded(k.ops, uintptr(w.H), false, overlayEnableDeadline)
+			}
+		default:
+			k.mu.Lock()
+			delete(k.held, uintptr(w.H))
+			k.mu.Unlock()
+			dropped = true
+		}
+	}
+	// windows that take input and have a cover now: named in the mark first, then disabled
+	var fresh []overlayWin
+	k.mu.Lock()
+	for _, h := range covered {
+		if _, ok := k.held[h]; ok {
+			continue
+		}
+		fresh = append(fresh, overlayWin{H: uint64(h)})
+	}
+	k.mu.Unlock()
+	fresh = slices.DeleteFunc(fresh, func(w overlayWin) bool {
+		pid, class := k.ops.Identity(uintptr(w.H))
+		if pid != qemu.PID || class == "" || !k.ops.Enabled(uintptr(w.H)) { // not the qemu's, or disabled before us: left as it is
+			return true
+		}
+		return false
+	})
+	for n := range fresh {
+		_, class := k.ops.Identity(uintptr(fresh[n].H))
+		fresh[n].QemuPID, fresh[n].QemuCreated, fresh[n].Class = qemu.PID, qemu.Created, class
+	}
+	if len(fresh) == 0 {
+		if dropped {
+			k.finishMark()
+		}
+		return
+	}
+	if k.stopped.Load() {
+		return
+	}
+	all := append(k.heldList(), fresh...)
+	if err := k.writeMark(all); err != nil {
+		k.mu.Lock()
+		warned := k.warned
+		k.warned = true
+		k.mu.Unlock()
+		if !warned {
+			k.log.Warnf("实例 %d 记不下遮罩禁用的窗口（%v）：这次不禁用模拟器窗口（遮罩照样挡住鼠标，键盘没挡）", k.i, err)
+		}
+		return
+	}
+	k.mu.Lock()
+	for _, w := range fresh {
+		k.held[uintptr(w.H)] = w
+	}
+	k.mu.Unlock()
+	failed := false
+	for _, w := range fresh {
+		if k.stopped.Load() {
+			return // they are in the mark and held: Close enables them (a window that was never disabled stays as it is)
+		}
+		ok, timedOut := setEnabledBounded(k.ops, uintptr(w.H), false, overlayEnableDeadline)
+		switch {
+		case timedOut:
+			k.log.Warnf("实例 %d 的模拟器窗口 %#x 没在 %v 内应答（EnableWindow），按已禁用对待，会照常恢复", k.i, w.H, overlayEnableDeadline)
+		case !ok:
+			k.mu.Lock()
+			delete(k.held, uintptr(w.H))
+			k.mu.Unlock()
+			failed = true
+		}
+	}
+	if failed {
+		k.finishMark()
+	}
+}
+
+// ---- starting it ---------------------------------------------------------------------------------------------------------
+
+// newRound is a fresh round token (see the top of this file).
+func newRound() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// spawnBootOverlay starts the overlay process of instance i for the start of round `round` running in this process (a
+// variable for the tests): `<exe> __bootoverlay <root> <i> <start pid> <start created> <round>`, detached. Only on Windows.
+var spawnBootOverlay = func(m *Manager, i int, round string) (host.Process, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return host.Process{}, err
@@ -174,46 +677,85 @@ var spawnBootOverlay = func(m *Manager, i int) (host.Process, error) {
 	logPath := filepath.Join(m.Root.LogsDir(), overlayLogName)
 	rotateLog(logPath, bootWatchLogMax)
 	return host.StartOrphan(exe, []string{BootOverlayArg, m.Root.Dir, strconv.Itoa(i), strconv.FormatUint(uint64(me.PID), 10),
-		strconv.FormatUint(me.Created, 10)}, host.StartOptions{OutputPath: logPath})
+		strconv.FormatUint(me.Created, 10), round}, host.StartOptions{OutputPath: logPath})
 }
 
 const overlayLogName = "modavd-bootoverlay.log"
 
-// overlayHandle is the start's side of its overlay: the guard that gives the windows back when the overlay's process is
-// gone.
+// overlayHandle is the start's side of its overlay: the guard that gives the windows back as soon as the overlay's process
+// is gone, and the check, when the start is done, that the overlay has given them back. Bound to the start's round.
 type overlayHandle struct {
-	stop chan struct{}
+	m     *Manager
+	i     int
+	round string
+	proc  host.Process
+	stop  chan struct{}
 }
 
-// startBootOverlay starts the overlay for the windowed boot this start is running and the guard that goes with it
-// (layer 2). nil when there is none to start (not Windows, or it could not be started: a warning, the boot goes on
+// startBootOverlay starts the overlay for the windowed boot this start (round) is running and the guard that goes with
+// it (layer 2). nil when there is none to start (not Windows, or it could not be started: a warning, the boot goes on
 // without the cover). Not for a headless instance: the caller checks that.
-func (m *Manager) startBootOverlay(i int) *overlayHandle {
+func (m *Manager) startBootOverlay(i int, round string) *overlayHandle {
 	if overlayOS == nil {
 		return nil
 	}
-	p, err := spawnBootOverlay(m, i)
+	p, err := spawnBootOverlay(m, i, round)
 	if err != nil {
 		m.Log.Warnf("实例 %d 开机画面没起来（开机照常进行，只是没有遮罩）: %v", i, err)
 		return nil
 	}
-	h := &overlayHandle{stop: make(chan struct{})}
+	h := &overlayHandle{m: m, i: i, round: round, proc: p, stop: make(chan struct{})}
+	exited := make(chan struct{})
 	go func() {
-		t := time.NewTicker(overlayGuardEvery)
-		defer t.Stop()
+		p.Wait(6 * time.Hour) // a handle to the overlay's process: returns the moment it ends, however it ends
+		close(exited)
+	}()
+	go func() {
+		select {
+		case <-h.stop:
+			return
+		case <-exited:
+		}
+		// gone (a normal end finds no mark of this round: nothing to do); windows that did not answer are tried again
 		for {
+			if _, done := m.recoverOverlayMark(i, round, overlayOS); done {
+				return
+			}
 			select {
 			case <-h.stop:
 				return
-			case <-t.C:
-				if !p.Alive() {
-					m.RecoverOverlay(i)
-					return
-				}
+			case <-time.After(overlayGuardRetry):
 			}
 		}
 	}()
 	return h
+}
+
+// confirm is for a start that is done: waits (at most d) until the overlay has given the windows back (its mark of this
+// round is gone) or has ended. An overlay that is still holding them after that is ended and the windows are given back
+// here. Never for a start that failed (the overlay itself gives back when the start lock is released).
+func (h *overlayHandle) confirm(d time.Duration) {
+	if h == nil {
+		return
+	}
+	deadline := time.Now().Add(d)
+	for {
+		if !h.proc.Alive() {
+			h.m.recoverOverlayMark(h.i, h.round, overlayOS)
+			return
+		}
+		if k, ok := h.m.readOverlayMark(h.i); !ok || k.Round != h.round {
+			return // given back (or never taken)
+		}
+		if !time.Now().Before(deadline) {
+			h.m.Log.Warnf("实例 %d 的开机遮罩在 %v 内没放开模拟器窗口，结束它并恢复窗口", h.i, d)
+			h.proc.Kill()
+			h.proc.Wait(time.Second)
+			h.m.recoverOverlayMark(h.i, h.round, overlayOS)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // release ends the guard (the start is over; the overlay ends itself).
@@ -248,6 +790,7 @@ type overlayOut struct {
 	Note    string  // the step that was not finished, while the cover stays up with its note
 	Percent float64 // the bar, 0 to 1; negative: no real percentage yet (the bar is indeterminate)
 	Stage   string  // launch, android, or the setup step
+	Decided bool    // the poller has looked at the instance at least once (nothing is disabled before)
 }
 
 // overlayMachine decides, look after look. Not safe for concurrent use.

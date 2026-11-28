@@ -287,11 +287,19 @@ func RunBootWatch(args []string, w io.Writer) int {
 		defer ticker.Stop()
 		watch.shareDefaultAdb(ctx, ticker.C)
 	}()
+	// The layer of the boot screen (overlay.go) that does not depend on any other process being alive: windows an overlay
+	// disabled and left behind are given back within a second or so, with nobody asking for the status.
+	overlayDone := make(chan struct{})
+	go func() {
+		defer close(overlayDone)
+		watch.watchOverlayMarks(ctx, overlayWatchRecoverEvery)
+	}()
 	for !q.Wait(bootWatchInterval) {
 		watch.tick(ctx, time.Now())
 	}
 	cancel()
 	<-shareDone
+	<-overlayDone
 	<-memoryDone // write the summary before releasing the watch lock or ending the log
 	m.Wait(10 * time.Second)
 	log.Infof("实例 %d 的模拟器（qemu pid %d）已退出，开机守护结束", i, q.PID)
@@ -409,6 +417,22 @@ func (w *bootWatch) logMemorySummary() {
 		msg += fmt.Sprintf("；最近读取失败：%v", m.readErr)
 	}
 	w.m.Log.Infof("%s；精确退出峰值未知", msg)
+}
+
+// watchOverlayMarks looks for the mark of a boot-screen overlay that is gone every interval until ctx ends (qemu exited),
+// and gives the windows it left disabled back (RecoverOverlay: in the background, a window that does not answer does not
+// hold the look up, and is tried again at the next).
+func (w *bootWatch) watchOverlayMarks(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		w.m.RecoverOverlay(w.i)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // bootWatchShareInterval: how often the watch makes sure the default adb server (5037) knows the instance. A tool that

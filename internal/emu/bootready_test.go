@@ -182,7 +182,7 @@ func TestBootSetupOf(t *testing.T) {
 		reset()
 		c.setup()
 		idReads = 0
-		got := m.bootSetupOf(i, q, c.held, now, c.boot)
+		got := m.bootSetupOf(i, q, c.held, now, c.boot, "")
 		if got != c.want {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
 		}
@@ -196,7 +196,7 @@ func TestBootSetupOf(t *testing.T) {
 	if err := os.WriteFile(m.readyPath(i), []byte(`{"qemu_pid":4242,"qemu_cre`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.bootSetupOf(i, q, true, now, nil); !got.Ready {
+	if got := m.bootSetupOf(i, q, true, now, nil, ""); !got.Ready {
 		t.Errorf("a torn record held the instance back: %+v", got)
 	}
 }
@@ -210,13 +210,13 @@ func TestReadyDeadlineIsOnTheCounter(t *testing.T) {
 	m := markerTestManager(t)
 	const i = 3
 	q := win.Process{PID: 4242, Created: 1_000_500}
-	tr := m.beginReady(i, q, testBootA)
+	tr := m.beginReady(i, q, testBootA, "")
 	defer tr.close()
 	rec, ok := m.readReady(i)
 	if !ok || rec.DeadlineMS != 9_000_000+60_000 {
 		t.Fatalf("deadline %d, want the counter + the cap", rec.DeadlineMS)
 	}
-	state := func() bootSetupState { return m.bootSetupOf(i, q, true, time.Now(), nil) }
+	state := func() bootSetupState { return m.bootSetupOf(i, q, true, time.Now(), nil, "") }
 	if s := state(); s.Ready || s.Step != readyStepBoot {
 		t.Fatalf("at the start: %+v", s)
 	}
@@ -247,7 +247,7 @@ func TestReadyCapLogFollowsTheDeadline(t *testing.T) {
 	m := markerTestManager(t)
 	m.Log = logx.New(logs.Sink())
 	q := win.Process{PID: 4242, Created: 1_000_500}
-	tr := m.beginReady(3, q, "")
+	tr := m.beginReady(3, q, "", "")
 	defer tr.close()
 	tr.step("ime")
 	time.Sleep(400 * time.Millisecond) // the real timer has fired; the counter has not moved
@@ -272,7 +272,7 @@ func TestReadyTrackerFile(t *testing.T) {
 	const i = 3
 	q := win.Process{PID: 4242, Created: 1_000_500}
 	pid, created := ownerOfTests(t)
-	tr := m.beginReady(i, q, testBootA)
+	tr := m.beginReady(i, q, testBootA, "")
 	rec, ok := m.readReady(i)
 	if !ok || !rec.names(q) || rec.BootID != testBootA || rec.Step != readyStepBoot || rec.Percent != 0 || rec.Done ||
 		rec.OwnerPID != pid || rec.OwnerCreated != created || rec.ownerGone() {
@@ -305,11 +305,11 @@ func TestReadyTrackerFile(t *testing.T) {
 	}
 
 	// the next round: the earlier "done" is gone before the new record is written, and reads as this round's activity
-	tr2 := m.beginReady(i, q, testBootB)
+	tr2 := m.beginReady(i, q, testBootB, "")
 	if rec, _ = m.readReady(i); rec.Done || rec.BootID != testBootB || rec.Step != readyStepBoot {
 		t.Fatalf("new round: %+v", rec)
 	}
-	if s := m.bootSetupOf(i, q, true, time.Now(), nil); s.Ready {
+	if s := m.bootSetupOf(i, q, true, time.Now(), nil, ""); s.Ready {
 		t.Fatalf("an old done record overruled the new round: %+v", s)
 	}
 	tr2.step("tune")
@@ -348,7 +348,7 @@ func TestBeginReadyWriteFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(m.readyPath(i), "x"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if tr := m.beginReady(i, q, testBootA); tr != nil {
+	if tr := m.beginReady(i, q, testBootA, ""); tr != nil {
 		t.Fatal("a tracker for a record that cannot be written")
 	}
 	var warned bool
@@ -361,7 +361,7 @@ func TestBeginReadyWriteFailure(t *testing.T) {
 	if mk, ok := m.readSetupMarker(i); !ok || mk.AliveMS != 0 {
 		t.Errorf("marker after the failure: %+v %v", mk, ok)
 	}
-	if s := m.bootSetupOf(i, q, true, time.Now(), nil); !s.Ready {
+	if s := m.bootSetupOf(i, q, true, time.Now(), nil, ""); !s.Ready {
 		t.Errorf("held back with no record: %+v", s)
 	}
 }

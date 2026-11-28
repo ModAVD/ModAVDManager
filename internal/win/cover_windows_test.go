@@ -135,9 +135,13 @@ func TestCoverIsOnTopAndTheEmulatorWindowsTakeNoInput(t *testing.T) {
 	if got := WindowFromPoint(mx, mainG.Frame.Top+5); got != f.Main {
 		t.Errorf("top window on the title bar: %#x, want the emulator window %#x", got, f.Main)
 	}
-	// the cover is owned by the emulator window and stays above it
-	if owner := windowOwner(mainCover); owner != f.Main {
-		t.Errorf("owner of the cover %#x, want %#x", owner, f.Main)
+	// the cover has no owner (an owner would tie its input queue to the emulator window's thread) and sits right above
+	// the emulator window
+	if owner := windowOwner(mainCover); owner != 0 {
+		t.Errorf("owner of the cover %#x, want none", owner)
+	}
+	if next := windowAt(mainCover, gwHwndNext); next != f.Main {
+		t.Errorf("the window right below the cover is %#x, want the emulator window %#x", next, f.Main)
 	}
 	if fg := foregroundWindow(); fg == mainCover || fg == toolCover || (fg == f.Main && before != f.Main) {
 		t.Errorf("a cover or an emulator window took the foreground (%#x, was %#x)", fg, before)
@@ -158,8 +162,10 @@ func TestCoverIsOnTopAndTheEmulatorWindowsTakeNoInput(t *testing.T) {
 	}
 }
 
-func windowOwner(hwnd uintptr) uintptr {
-	r, _, _ := procGetWindow.Call(hwnd, gwOwner)
+func windowOwner(hwnd uintptr) uintptr { return windowAt(hwnd, gwOwner) }
+
+func windowAt(hwnd, rel uintptr) uintptr {
+	r, _, _ := procGetWindow.Call(hwnd, rel)
 	return r
 }
 
@@ -197,7 +203,7 @@ func TestCoverFollowsMoveMinimizeAndHide(t *testing.T) {
 		t.Error("the middle of the moved picture area is not covered")
 	}
 
-	// minimized: the cover goes with it (an owned window); restored: it is back over the picture area
+	// minimized: the cover is hidden by the next look at the window; restored: it is back over the picture area
 	f.Minimize()
 	waitFor("the cover goes with a minimized window", func() bool { return !GeometryOf(mainCover).Visible })
 	f.Restore()
@@ -329,5 +335,123 @@ func TestHelperWindowIsNeverTouched(t *testing.T) {
 	after, enabledAfter := state()
 	if after != before || enabledAfter != enabled {
 		t.Errorf("the helper window changed: %+v enabled %v, was %+v enabled %v", after, enabledAfter, before, enabled)
+	}
+}
+
+var procSendMessageW = moduser32.NewProc("SendMessageW")
+
+// A cover stays right above its emulator window: when the window is raised over it (the user clicks the emulator window
+// in the taskbar), the next look puts the cover back above it (SetWindowPos on the cover only).
+func TestCoverStaysAboveItsWindowWhenRaised(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{TickEvery: 50 * time.Millisecond, Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Tick: func(o *Overlay) { o.Sync(specsFor(f)) }, Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var mainCover uintptr
+	h.on(func(o *Overlay) { o.Watch(f.PID); o.Sync(specsFor(f)); mainCover = o.CoverOf(f.Main) })
+	procSetWindowPos.Call(f.Main, 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate) // HWND_TOP: over the cover
+	deadline := time.Now().Add(5 * time.Second)
+	for windowAt(mainCover, gwHwndNext) != f.Main && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if next := windowAt(mainCover, gwHwndNext); next != f.Main {
+		t.Fatalf("the cover is not back right above the emulator window (below it: %#x)", next)
+	}
+	x, y := center(GeometryOf(f.Main).Client)
+	if WindowFromPoint(x, y) != mainCover {
+		t.Error("the middle of the picture area is not covered after the window was raised")
+	}
+}
+
+// A cover that only shows: the mouse goes through it to the emulator window below, the cover stays visible; and back.
+func TestPassThroughLetsTheMouseGoThrough(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	var mainCover, toolCover uintptr
+	h.on(func(o *Overlay) {
+		o.Watch(f.PID)
+		o.Sync(specsFor(f))
+		mainCover, toolCover = o.CoverOf(f.Main), o.CoverOf(f.Tool)
+	})
+	x, y := center(GeometryOf(f.Main).Client)
+	tx, ty := center(GeometryOf(f.Tool).Frame)
+	if WindowFromPoint(x, y) != mainCover {
+		t.Fatal("not covered to begin with")
+	}
+	h.on(func(o *Overlay) { o.SetPassThrough(true) })
+	if got := WindowFromPoint(x, y); got != f.Main {
+		t.Errorf("with the cover passing the mouse through, the window at the middle is %#x, want the emulator window %#x", got, f.Main)
+	}
+	if got := WindowFromPoint(tx, ty); got != f.Tool {
+		t.Errorf("on the toolbar: %#x, want the toolbar %#x", got, f.Tool)
+	}
+	if !GeometryOf(mainCover).Visible || !GeometryOf(toolCover).Visible {
+		t.Error("the covers are not shown any more")
+	}
+	// a cover made after that passes the mouse through too
+	h.on(func(o *Overlay) { o.Sync(nil); o.Sync(specsFor(f)); mainCover = o.CoverOf(f.Main) })
+	if got := WindowFromPoint(x, y); got != f.Main {
+		t.Errorf("a new cover took the mouse: %#x", got)
+	}
+	h.on(func(o *Overlay) { o.SetPassThrough(false) })
+	if got := WindowFromPoint(x, y); got != mainCover {
+		t.Errorf("after pass-through was turned off the window at the middle is %#x, want the cover %#x", got, mainCover)
+	}
+}
+
+// A request to end is a flag the loop looks at, not only a message: with the posted message lost, the loop still ends on
+// the next turn of its timer.
+func TestQuitSurvivesALostMessage(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{TickEvery: 30 * time.Millisecond, Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	h.o.quit.Store(true) // as Quit does, without the PostMessage that would carry it
+	select {
+	case err := <-h.ended:
+		if err != nil {
+			t.Errorf("RunOverlay: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the loop did not end on the latched request")
+	}
+}
+
+// A close of a cover and the end of the session take the same road as Quit: OnClose runs (before the answer: the process
+// may be ended right after it), and the loop ends. WM_QUERYENDSESSION says yes.
+func TestCloseAndEndSessionAskTheOverlayToEnd(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		send func(cover uintptr)
+		why  string
+	}{
+		{"close", func(cover uintptr) { moduser32.NewProc("PostMessageW").Call(cover, wmClose, 0, 0) }, "close"},
+		{"end of the session", func(cover uintptr) { procSendMessageW.Call(cover, wmEndSession, 1, 0) }, "endsession"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := startFakeEmulator(t)
+			closed := make(chan string, 4)
+			h := startOverlay(t, OverlayOptions{Paint: func(cv *Canvas, main bool) { cv.Fill(0x2A1B14) },
+				Wake:    func(o *Overlay) { o.Sync(specsFor(f)) },
+				OnClose: func(why string) { closed <- why }})
+			var cover uintptr
+			h.on(func(o *Overlay) { o.Sync(specsFor(f)); cover = o.CoverOf(f.Main) })
+			if r, _, _ := procSendMessageW.Call(cover, wmQueryEndSession, 0, 0); r != 1 {
+				t.Errorf("WM_QUERYENDSESSION answered %d, want 1", r)
+			}
+			c.send(cover)
+			select {
+			case why := <-closed:
+				if why != c.why {
+					t.Errorf("OnClose(%q), want %q", why, c.why)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("OnClose was not called")
+			}
+			select {
+			case <-h.ended:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the loop did not end")
+			}
+		})
 	}
 }

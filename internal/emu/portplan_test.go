@@ -45,7 +45,7 @@ func TestMain(m *testing.M) {
 		os.Exit(wintest.ChildMain()) // the stand-in for the emulator's windows (overlay_test.go)
 	}
 	// no test starts a real boot screen process
-	spawnBootOverlay = func(*Manager, int) (host.Process, error) {
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) {
 		return host.Process{}, errors.New("no boot overlay in tests")
 	}
 	if len(os.Args) > 1 {

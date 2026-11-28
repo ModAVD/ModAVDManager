@@ -203,7 +203,7 @@ func (m *Manager) instanceInfo(ctx context.Context, in *avd.Instance, p *host.Pr
 	// Booted is Android's own state and stays as it is; online also needs the after-boot setup of this boot to be done
 	// (bootready.go). Not for the result of Start itself (booted known): it is built right after the setup.
 	if info.Status == StatusOnline && booted == nil {
-		setup := m.bootSetupOf(i, *p, startHeld, time.Now(), m.guestBootIDOf(ctx, i))
+		setup := m.bootSetupOf(i, *p, startHeld, time.Now(), m.guestBootIDOf(ctx, i), "")
 		if !setup.Ready {
 			info.Status, info.SetupStep, info.SetupProgress = StatusStarting, setup.Step, setup.Progress
 		}

@@ -18,22 +18,32 @@ import (
 	"time"
 
 	"modavd/internal/host"
+	"modavd/internal/jsonord"
 	"modavd/internal/logx"
 	"modavd/internal/win"
 	"modavd/internal/win/wintest"
 )
 
-// fakeOverlayWindows is overlayWindows on made-up handles: who owns each, whether each takes input.
+const fakeClass = "Qt653QWindowIcon"
+
+// fakeOverlayWindows is overlayWindows on made-up handles: who owns each, its class, whether each takes input; and
+// the failures a real window can have: a call that does not return (hang), one that does not take effect (fail).
 type fakeOverlayWindows struct {
-	mu      sync.Mutex
-	owner   map[uintptr]uint32
-	enabled map[uintptr]bool
-	toolbar map[uintptr]bool
-	calls   int
+	mu       sync.Mutex
+	owner    map[uintptr]uint32
+	class    map[uintptr]string
+	enabled  map[uintptr]bool
+	toolbar  map[uintptr]bool
+	hang     map[uintptr]chan struct{} // SetEnabled on it waits until the channel is closed
+	fail     map[uintptr]bool          // SetEnabled on it leaves it as it is and says no
+	setCalls map[uintptr]int
+	calls    int
+	onSet    func(h uintptr, on bool) // called before the state changes (not under the lock)
 }
 
 func newFakeOverlayWindows(owner uint32, handles ...uintptr) *fakeOverlayWindows {
-	f := &fakeOverlayWindows{owner: map[uintptr]uint32{}, enabled: map[uintptr]bool{}, toolbar: map[uintptr]bool{}}
+	f := &fakeOverlayWindows{owner: map[uintptr]uint32{}, class: map[uintptr]string{}, enabled: map[uintptr]bool{},
+		toolbar: map[uintptr]bool{}, hang: map[uintptr]chan struct{}{}, fail: map[uintptr]bool{}, setCalls: map[uintptr]int{}}
 	for _, h := range handles {
 		f.owner[h], f.enabled[h] = owner, false // as an overlay left them
 	}
@@ -54,11 +64,25 @@ func (f *fakeOverlayWindows) Windows(pid uint32) ([]uintptr, error) {
 func (f *fakeOverlayWindows) IsToolbar(h uintptr) bool { return f.toolbar[h] }
 func (f *fakeOverlayWindows) SetEnabled(h uintptr, on bool) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
-	if _, ok := f.owner[h]; !ok {
+	f.setCalls[h]++
+	_, exists := f.owner[h]
+	ch, hang, fail, onSet := f.hang[h], f.hang[h] != nil, f.fail[h], f.onSet
+	f.mu.Unlock()
+	if !exists {
 		return false
 	}
+	if hang {
+		<-ch
+	}
+	if onSet != nil {
+		onSet(h, on)
+	}
+	if fail {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.enabled[h] = on
 	return true
 }
@@ -67,10 +91,32 @@ func (f *fakeOverlayWindows) Enabled(h uintptr) bool {
 	defer f.mu.Unlock()
 	return f.enabled[h]
 }
-func (f *fakeOverlayWindows) ProcessOf(h uintptr) uint32 {
+func (f *fakeOverlayWindows) Identity(h uintptr) (uint32, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.owner[h]
+	p, ok := f.owner[h]
+	if !ok {
+		return 0, ""
+	}
+	if c := f.class[h]; c != "" {
+		return p, c
+	}
+	return p, fakeClass
+}
+func (f *fakeOverlayWindows) setEnabled(h uintptr, on bool) {
+	f.mu.Lock()
+	f.enabled[h] = on
+	f.mu.Unlock()
+}
+func (f *fakeOverlayWindows) setCallsOf(h uintptr) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.setCalls[h]
+}
+func (f *fakeOverlayWindows) reown(h uintptr, pid uint32) {
+	f.mu.Lock()
+	f.owner[h] = pid
+	f.mu.Unlock()
 }
 
 func withOverlayOS(t *testing.T, ops overlayWindows) {
@@ -86,6 +132,778 @@ func deadProcess(t *testing.T) win.Process {
 	p, kill := startSleeper(t)
 	kill()
 	return p
+}
+
+func withVar[T any](t *testing.T, v *T, val T) {
+	t.Helper()
+	saved := *v
+	*v = val
+	t.Cleanup(func() { *v = saved })
+}
+
+// winsOf names windows as an overlay's mark does: of qemu q, with the class the fake gives.
+func winsOf(q win.Process, hs ...uint64) []overlayWin {
+	var out []overlayWin
+	for _, h := range hs {
+		out = append(out, overlayWin{H: h, QemuPID: q.PID, QemuCreated: q.Created, Class: fakeClass})
+	}
+	return out
+}
+
+func markOf(round string, overlay, q win.Process, ws []overlayWin) overlayMark {
+	return overlayMark{Round: round, OverlayPID: overlay.PID, OverlayCreated: overlay.Created, QemuPID: q.PID, QemuCreated: q.Created, Windows: ws}
+}
+
+func putMark(t *testing.T, m *Manager, i int, k overlayMark) {
+	t.Helper()
+	if err := m.writeOverlayMark(i, k); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func eventually(t *testing.T, what string, d time.Duration, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out: %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func markHas(m *Manager, i int, h uintptr) bool {
+	k, ok := m.readOverlayMark(i)
+	if !ok {
+		return false
+	}
+	for _, w := range k.Windows {
+		if w.H == uint64(h) {
+			return true
+		}
+	}
+	return false
+}
+
+// ---- giving the windows back ---------------------------------------------------------------------------------------
+
+// A mark of an overlay that is gone gives the windows back and is deleted; a handle that another process's window or a
+// window of another class has now is left alone; nothing happens while the overlay lives, without a mark, or when the
+// qemu is gone too.
+func TestRecoverOverlay(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	other, _ := startSleeper(t)
+	dead := deadProcess(t)
+	live, _ := startSleeper(t)
+	ops := newFakeOverlayWindows(qemu.PID, 101, 102, 104)
+	ops.owner[103] = other.PID        // a handle that was reused by somebody else's window
+	ops.class[104] = "SomeOtherClass" // a handle that is another kind of window of the same process now
+	withOverlayOS(t, ops)
+
+	if m.RecoverOverlay(i) {
+		t.Error("recovered with no mark")
+	}
+	// the overlay lives: left alone
+	putMark(t, m, i, markOf("r", live, qemu, winsOf(qemu, 101, 102)))
+	if m.RecoverOverlay(i) || ops.Enabled(101) {
+		t.Error("windows were enabled under a live overlay")
+	}
+	if _, ok := m.readOverlayMark(i); !ok {
+		t.Error("the mark of a live overlay was deleted")
+	}
+	// the overlay is gone
+	putMark(t, m, i, markOf("r", dead, qemu, winsOf(qemu, 101, 102, 103, 104)))
+	if !m.RecoverOverlay(i) {
+		t.Fatal("nothing recovered")
+	}
+	if !ops.Enabled(101) || !ops.Enabled(102) {
+		t.Error("the windows of the qemu were not enabled")
+	}
+	if ops.Enabled(103) || ops.setCallsOf(103) != 0 {
+		t.Error("a window of another process was touched")
+	}
+	if ops.Enabled(104) || ops.setCallsOf(104) != 0 {
+		t.Error("a window of another class was touched")
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark stays")
+	}
+	// the qemu is gone too: the mark goes, nothing is touched
+	calls := ops.calls
+	putMark(t, m, i, markOf("r", dead, deadProcess(t), winsOf(deadProcess(t), 101)))
+	if m.RecoverOverlay(i) || ops.calls != calls {
+		t.Error("windows of a qemu that is gone were touched")
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark of a gone qemu stays")
+	}
+	// a torn mark is none
+	if err := os.WriteFile(m.overlayMarkPath(i), []byte(`{"overlay_pid":12`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if m.RecoverOverlay(i) {
+		t.Error("recovered from a torn mark")
+	}
+}
+
+// A window that still exists and does not take the enable stays in the mark for the next try; a window that is gone
+// counts as done.
+func TestRecoverOverlayKeepsWhatCouldNotBeEnabled(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	dead := deadProcess(t)
+	ops := newFakeOverlayWindows(qemu.PID, 501, 502)
+	ops.fail[501] = true
+	withOverlayOS(t, ops)
+	putMark(t, m, i, markOf("r", dead, qemu, winsOf(qemu, 501, 502, 503))) // 503 does not exist: gone
+	if n, done := m.recoverOverlayMark(i, "", ops); n != 1 || done {
+		t.Fatalf("recovered %d, done %v: want 1 and not done", n, done)
+	}
+	k, ok := m.readOverlayMark(i)
+	if !ok || len(k.Windows) != 1 || k.Windows[0].H != 501 {
+		t.Fatalf("the mark after the first try: %+v %v", k, ok)
+	}
+	ops.mu.Lock()
+	ops.fail[501] = false
+	ops.mu.Unlock()
+	if n, done := m.recoverOverlayMark(i, "", ops); n != 1 || !done || !ops.Enabled(501) {
+		t.Fatalf("second try: %d %v enabled %v", n, done, ops.Enabled(501))
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark stays after everything was given back")
+	}
+}
+
+// A recovery only touches the mark of the round it is for, and a mark is changed under its lock: a recovery that cannot
+// have the lock leaves everything as it is.
+func TestRecoverOverlayIsPerRoundAndUnderTheLock(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	dead := deadProcess(t)
+	ops := newFakeOverlayWindows(qemu.PID, 601)
+	putMark(t, m, i, markOf("round-A", dead, qemu, winsOf(qemu, 601)))
+	if n, done := m.recoverOverlayMark(i, "round-B", ops); n != 0 || !done || ops.Enabled(601) {
+		t.Fatalf("a recovery for another round touched the mark: %d %v enabled %v", n, done, ops.Enabled(601))
+	}
+	if _, ok := m.readOverlayMark(i); !ok {
+		t.Fatal("the mark of round A was deleted by a recovery of round B")
+	}
+	withVar(t, &overlayMarkLockWait, 100*time.Millisecond)
+	l, ok := m.overlayMarkLock(i)
+	if !ok {
+		t.Fatal("cannot take the mark lock")
+	}
+	begin := time.Now()
+	if n, done := m.recoverOverlayMark(i, "", ops); n != 0 || done || ops.Enabled(601) {
+		t.Fatalf("recovered without the lock: %d %v", n, done)
+	}
+	if d := time.Since(begin); d < 90*time.Millisecond || d > time.Second {
+		t.Errorf("waited %v for the lock", d)
+	}
+	l.Unlock()
+	if n, done := m.recoverOverlayMark(i, "round-A", ops); n != 1 || !done || !ops.Enabled(601) {
+		t.Fatalf("recovery of round A: %d %v", n, done)
+	}
+}
+
+// A lifecycle command never waits for a window that does not answer: RecoverOverlay gives up after its budget, the
+// mark stays, and the work goes on in the background and finishes when the window answers.
+func TestRecoverOverlayDoesNotWaitForAHungWindow(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	dead := deadProcess(t)
+	ops := newFakeOverlayWindows(qemu.PID, 701, 702)
+	hang := make(chan struct{})
+	ops.hang[701] = hang
+	withOverlayOS(t, ops)
+	withVar(t, &overlayRecoverBudget, 200*time.Millisecond)
+	putMark(t, m, i, markOf("r", dead, qemu, winsOf(qemu, 701, 702)))
+	begin := time.Now()
+	if m.RecoverOverlay(i) {
+		t.Error("reported a recovery that was not done in time")
+	}
+	if d := time.Since(begin); d > time.Second {
+		t.Fatalf("RecoverOverlay waited %v for a window that does not answer", d)
+	} else {
+		t.Logf("RecoverOverlay returned after %v with a window that does not answer", d.Round(10*time.Millisecond))
+	}
+	eventually(t, "the window that answers is enabled", 2*time.Second, func() bool { return ops.Enabled(702) })
+	close(hang) // the window answers at last
+	eventually(t, "the mark is gone after the window answered", 5*time.Second, func() bool {
+		_, ok := m.readOverlayMark(i)
+		return !ok
+	})
+	if !ops.Enabled(701) {
+		t.Error("the window that answered late was not enabled")
+	}
+}
+
+// ---- the keeper of the windows ---------------------------------------------------------------------------------------
+
+type keeperFixture struct {
+	t    *testing.T
+	m    *Manager
+	i    int
+	q    win.Process
+	ops  *fakeOverlayWindows
+	k    *windowKeeper
+	logs *logx.Collector
+}
+
+func newKeeperFixture(t *testing.T, self *win.Process, handles ...uintptr) *keeperFixture {
+	t.Helper()
+	m, i := opsTestInstance(t)
+	q, _ := startSleeper(t)
+	logs := &logx.Collector{}
+	ops := newFakeOverlayWindows(q.PID, handles...)
+	for _, h := range handles {
+		ops.enabled[h] = true
+	}
+	me, ok := host.FindProcess(uint32(os.Getpid()))
+	if !ok {
+		t.Fatal("cannot read self")
+	}
+	if self != nil {
+		me = *self
+	}
+	k := newWindowKeeper(m, i, ops, logx.New(logs.Sink()), "round-1", me)
+	t.Cleanup(func() { k.Close("test end", time.Second) })
+	return &keeperFixture{t: t, m: m, i: i, q: q, ops: ops, k: k, logs: logs}
+}
+
+func handlesOf(hs ...uint64) []uintptr {
+	var out []uintptr
+	for _, h := range hs {
+		out = append(out, uintptr(h))
+	}
+	return out
+}
+
+// The windows are named in the mark before they are disabled, with who they are; they are given back and the mark is
+// deleted at the end.
+func TestKeeperNamesTheWindowsBeforeDisablingThem(t *testing.T) {
+	f := newKeeperFixture(t, nil, 301, 302)
+	var mu sync.Mutex
+	named := map[uintptr]bool{}
+	f.ops.onSet = func(h uintptr, on bool) {
+		if !on {
+			mu.Lock()
+			named[h] = markHas(f.m, f.i, h)
+			mu.Unlock()
+		}
+	}
+	f.k.Track(f.q, handlesOf(301, 302))
+	f.k.Decide()
+	eventually(t, "both windows disabled", 3*time.Second, func() bool { return !f.ops.Enabled(301) && !f.ops.Enabled(302) })
+	mu.Lock()
+	defer mu.Unlock()
+	if !named[301] || !named[302] {
+		t.Errorf("a window was disabled before the mark named it: %v", named)
+	}
+	k, ok := f.m.readOverlayMark(f.i)
+	if !ok || k.Round != "round-1" || k.QemuPID != f.q.PID || len(k.Windows) != 2 {
+		t.Fatalf("mark %+v %v", k, ok)
+	}
+	for _, w := range k.Windows {
+		if w.QemuPID != f.q.PID || w.QemuCreated != f.q.Created || w.Class != fakeClass {
+			t.Errorf("window entry %+v does not say who it is", w)
+		}
+	}
+	f.k.Close("test", 2*time.Second)
+	if !f.ops.Enabled(301) || !f.ops.Enabled(302) {
+		t.Error("the windows were not given back")
+	}
+	if _, ok := f.m.readOverlayMark(f.i); ok {
+		t.Error("the mark stays")
+	}
+}
+
+// When the mark cannot be written nothing is disabled (the cover still keeps the mouse out): one warning, no calls to
+// the windows; when it can be written again the windows are disabled.
+func TestKeeperDisablesNothingWhenTheMarkCannotBeWritten(t *testing.T) {
+	f := newKeeperFixture(t, nil, 311, 312)
+	var fail atomic.Bool
+	fail.Store(true)
+	saved := overlayMarkWrite
+	t.Cleanup(func() { overlayMarkWrite = saved })
+	overlayMarkWrite = func(m *Manager, i int, k overlayMark) error {
+		if fail.Load() {
+			return errors.New("disk full")
+		}
+		return saved(m, i, k)
+	}
+	f.k.Track(f.q, handlesOf(311, 312))
+	f.k.Decide()
+	time.Sleep(1300 * time.Millisecond) // a few turns of the worker
+	if f.ops.calls != 0 || !f.ops.Enabled(311) || !f.ops.Enabled(312) {
+		t.Fatalf("windows were disabled without a mark: calls %d", f.ops.calls)
+	}
+	warned := 0
+	for _, msg := range f.logs.Messages() {
+		if strings.Contains(msg, "记不下遮罩禁用的窗口") {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Errorf("%d warnings, want 1: %q", warned, f.logs.Messages())
+	}
+	fail.Store(false)
+	eventually(t, "the windows disabled once the mark can be written", 3*time.Second, func() bool {
+		return !f.ops.Enabled(311) && !f.ops.Enabled(312)
+	})
+}
+
+// Nothing is disabled before the first look at the instance (the instance may be ready already), and nothing after an
+// end was asked for, not even by a step that is under way.
+func TestKeeperWaitsForTheFirstLookAndHonoursStop(t *testing.T) {
+	f := newKeeperFixture(t, nil, 321, 322)
+	f.k.Track(f.q, handlesOf(321, 322))
+	time.Sleep(700 * time.Millisecond)
+	if f.ops.calls != 0 {
+		t.Fatal("a window was disabled before the first look")
+	}
+	// the end is asked for while the first disable does not answer: the second window is never disabled
+	hang := make(chan struct{})
+	f.ops.hang[321] = hang
+	f.k.Decide()
+	eventually(t, "the call into the first window", 3*time.Second, func() bool { return f.ops.setCallsOf(321) == 1 })
+	f.k.Stop()
+	close(hang)
+	time.Sleep(700 * time.Millisecond)
+	if f.ops.setCallsOf(322) != 0 || !f.ops.Enabled(322) {
+		t.Error("a window was disabled after the end was asked for")
+	}
+	f.k.Close("test", 2*time.Second)
+	if !f.ops.Enabled(321) || !f.ops.Enabled(322) {
+		t.Error("the windows are not back")
+	}
+}
+
+// A handle that is another process's window now (the window was destroyed and the number reused) is dropped: not
+// disabled again, not enabled at the end.
+func TestKeeperDropsAHandleThatIsAnotherWindowNow(t *testing.T) {
+	f := newKeeperFixture(t, nil, 331, 332)
+	other, _ := startSleeper(t)
+	f.k.Track(f.q, handlesOf(331, 332))
+	f.k.Decide()
+	eventually(t, "both disabled", 3*time.Second, func() bool { return !f.ops.Enabled(331) && !f.ops.Enabled(332) })
+	f.ops.reown(331, other.PID) // somebody else's window has that handle now, and it takes input
+	f.ops.setEnabled(331, true)
+	f.ops.setEnabled(332, true) // Qt enabled ours again: disabled again at once
+	eventually(t, "the window that is ours is disabled again", 3*time.Second, func() bool { return !f.ops.Enabled(332) })
+	calls := f.ops.setCallsOf(331)
+	time.Sleep(600 * time.Millisecond)
+	if f.ops.setCallsOf(331) != calls || !f.ops.Enabled(331) {
+		t.Error("the other process's window was touched again")
+	}
+	f.k.Close("test", 2*time.Second)
+	if f.ops.setCallsOf(331) != calls {
+		t.Error("the other process's window was enabled at the end")
+	}
+	if !f.ops.Enabled(332) {
+		t.Error("our window is not back")
+	}
+	if _, ok := f.m.readOverlayMark(f.i); ok {
+		t.Error("the mark stays")
+	}
+}
+
+// The calls into windows that do not answer are the keeper's, not the caller's: Release returns at once, Close is back
+// within its limit, the mark keeps the window that did not answer, and the boot watch's recovery gives it back once it
+// answers.
+func TestKeeperDoesNotWaitForAWindowThatDoesNotAnswer(t *testing.T) {
+	withVar(t, &overlayEnableDeadline, 300*time.Millisecond)
+	dead := deadProcess(t) // as the overlay that owns the mark once it is gone
+	f := newKeeperFixture(t, &dead, 341, 342)
+	f.k.Track(f.q, handlesOf(341, 342))
+	f.k.Decide()
+	eventually(t, "both disabled", 3*time.Second, func() bool { return !f.ops.Enabled(341) && !f.ops.Enabled(342) })
+	hang := make(chan struct{})
+	f.ops.hang[342] = hang
+	begin := time.Now()
+	f.k.Release()
+	if d := time.Since(begin); d > 50*time.Millisecond {
+		t.Errorf("Release took %v", d)
+	}
+	eventually(t, "the window that answers is enabled", 3*time.Second, func() bool { return f.ops.Enabled(341) })
+	begin = time.Now()
+	f.k.Close("test", 900*time.Millisecond)
+	if d := time.Since(begin); d > 2*time.Second {
+		t.Errorf("Close took %v with a window that does not answer", d)
+	}
+	if !markHas(f.m, f.i, 342) || markHas(f.m, f.i, 341) {
+		k, ok := f.m.readOverlayMark(f.i)
+		t.Fatalf("the mark after the close: %+v %v (want only window 342)", k, ok)
+	}
+	close(hang)
+	eventually(t, "the later layer gives it back", 3*time.Second, func() bool {
+		f.m.recoverOverlayMark(f.i, "", f.ops)
+		return f.ops.Enabled(342)
+	})
+	if _, ok := f.m.readOverlayMark(f.i); ok {
+		t.Error("the mark stays")
+	}
+}
+
+// A keeper only changes or deletes a mark that is its own: the mark of another round (or overlay) is left.
+func TestKeeperOnlyDeletesItsOwnMark(t *testing.T) {
+	f := newKeeperFixture(t, nil, 351)
+	other, _ := startSleeper(t)
+	putMark(t, f.m, f.i, markOf("round-2", other, f.q, winsOf(f.q, 351)))
+	f.k.Close("test", time.Second)
+	if k, ok := f.m.readOverlayMark(f.i); !ok || k.Round != "round-2" {
+		t.Errorf("the mark of another round after Close: %+v %v", k, ok)
+	}
+}
+
+// The boot watch looks for orphan marks and recovers them within about a second, with nobody asking for the status.
+func TestBootWatchRecoversAnOrphanMark(t *testing.T) {
+	m := markerTestManager(t)
+	const i = 3
+	qemu, _ := startSleeper(t)
+	dead := deadProcess(t)
+	ops := newFakeOverlayWindows(qemu.PID, 801, 802)
+	withOverlayOS(t, ops)
+	w := &bootWatch{m: m, i: i, q: qemu}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.watchOverlayMarks(ctx, 100*time.Millisecond); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	time.Sleep(250 * time.Millisecond)
+	killed := time.Now()
+	putMark(t, m, i, markOf("r", dead, qemu, winsOf(qemu, 801, 802)))
+	eventually(t, "the watch gives the windows back", 3*time.Second, func() bool { return ops.Enabled(801) && ops.Enabled(802) })
+	t.Logf("the watch gave the windows back %v after the mark was left (look every 100 ms in this test, every %v in the product)",
+		time.Since(killed).Round(10*time.Millisecond), overlayWatchRecoverEvery)
+	if overlayWatchRecoverEvery > time.Second {
+		t.Errorf("the product looks every %v", overlayWatchRecoverEvery)
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark stays")
+	}
+}
+
+// ---- the start's side: the guard and the check at the end ----------------------------------------------------------------
+
+// Layer 2: the start's guard waits on a handle to the overlay's process and gives the windows back the moment it ends,
+// however it ended; only its own round's mark. It does nothing while the process lives, and ends with the start.
+func TestGuardGivesTheWindowsBackWhenTheOverlayIsKilled(t *testing.T) {
+	m, i := opsTestInstance(t)
+	qemu, _ := startSleeper(t)
+	overlayProc, kill := startSleeper(t)
+	ops := newFakeOverlayWindows(qemu.PID, 201, 202)
+	withOverlayOS(t, ops)
+	saved := spawnBootOverlay
+	t.Cleanup(func() { spawnBootOverlay = saved })
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) { return overlayProc, nil }
+	putMark(t, m, i, markOf("R1", overlayProc, qemu, winsOf(qemu, 201, 202)))
+
+	h := m.startBootOverlay(i, "R1")
+	if h == nil {
+		t.Fatal("no handle")
+	}
+	time.Sleep(700 * time.Millisecond)
+	if ops.Enabled(201) {
+		t.Fatal("the guard enabled windows under a live overlay")
+	}
+	killed := time.Now()
+	kill()
+	eventually(t, "the windows given back", 5*time.Second, func() bool { return ops.Enabled(201) && ops.Enabled(202) })
+	if d := time.Since(killed); d > time.Second {
+		t.Errorf("the windows came back %v after the overlay was killed", d)
+	} else {
+		t.Logf("windows back %v after the overlay process ended", d.Round(10*time.Millisecond))
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark stays")
+	}
+	h.release()
+	h.release()
+
+	// another round's mark is not this start's to recover
+	other, killOther := startSleeper(t)
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) { return other, nil }
+	ops.setEnabled(201, false)
+	putMark(t, m, i, markOf("R2", other, qemu, winsOf(qemu, 201)))
+	h2 := m.startBootOverlay(i, "R1")
+	killOther()
+	time.Sleep(700 * time.Millisecond)
+	if ops.Enabled(201) {
+		t.Error("a guard of one round gave back the windows of another round")
+	}
+	h2.release()
+
+	// a start that ends before its overlay does leaves the overlay alone
+	live, _ := startSleeper(t)
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) { return live, nil }
+	putMark(t, m, i, markOf("R1", live, qemu, winsOf(qemu, 201)))
+	m.startBootOverlay(i, "R1").release()
+	time.Sleep(700 * time.Millisecond)
+	if ops.Enabled(201) {
+		t.Error("a released guard touched the windows of a live overlay")
+	}
+}
+
+// A start that is done waits (briefly) until its overlay has given the windows back, and ends an overlay that holds
+// them for too long.
+func TestOverlayHandleConfirm(t *testing.T) {
+	m, i := opsTestInstance(t)
+	qemu, _ := startSleeper(t)
+	live, _ := startSleeper(t)
+	ops := newFakeOverlayWindows(qemu.PID, 211)
+	withOverlayOS(t, ops)
+	saved := spawnBootOverlay
+	t.Cleanup(func() { spawnBootOverlay = saved })
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) { return live, nil }
+
+	// the overlay gives them back after a moment (its mark goes): confirm returns then
+	putMark(t, m, i, markOf("R1", live, qemu, winsOf(qemu, 211)))
+	h := m.startBootOverlay(i, "R1")
+	defer h.release()
+	time.AfterFunc(150*time.Millisecond, func() { m.removeOverlayMark(i) })
+	begin := time.Now()
+	h.confirm(3 * time.Second)
+	if d := time.Since(begin); d < 100*time.Millisecond || d > time.Second {
+		t.Errorf("confirm waited %v", d)
+	}
+	if h.proc.Alive() == false {
+		t.Error("an overlay that gave the windows back was ended")
+	}
+
+	// it holds them: ended after the limit, windows given back by the start
+	putMark(t, m, i, markOf("R1", live, qemu, winsOf(qemu, 211)))
+	ops.setEnabled(211, false)
+	begin = time.Now()
+	h.confirm(300 * time.Millisecond)
+	if d := time.Since(begin); d > 3*time.Second {
+		t.Errorf("confirm waited %v", d)
+	}
+	if h.proc.Alive() {
+		t.Error("the overlay that did not give the windows back is still running")
+	}
+	if !ops.Enabled(211) {
+		t.Error("the windows were not given back")
+	}
+	if _, ok := m.readOverlayMark(i); ok {
+		t.Error("the mark stays")
+	}
+	// nil handle: nothing
+	(*overlayHandle)(nil).confirm(time.Second)
+}
+
+// An overlay that cannot start is a warning and a boot without the cover.
+func TestStartBootOverlayFailureIsOnlyAWarning(t *testing.T) {
+	logs := &logx.Collector{}
+	m := markerTestManager(t)
+	m.Log = logx.New(logs.Sink())
+	withOverlayOS(t, newFakeOverlayWindows(1))
+	saved := spawnBootOverlay
+	t.Cleanup(func() { spawnBootOverlay = saved })
+	spawnBootOverlay = func(*Manager, int, string) (host.Process, error) { return host.Process{}, errors.New("boom") }
+	if h := m.startBootOverlay(3, "r"); h != nil {
+		t.Error("a handle for an overlay that did not start")
+	}
+	var warned bool
+	for _, msg := range logs.Messages() {
+		warned = warned || strings.Contains(msg, "开机画面没起来")
+	}
+	if !warned {
+		t.Errorf("no warning in %q", logs.Messages())
+	}
+	withOverlayOS(t, nil)
+	if h := m.startBootOverlay(3, "r"); h != nil {
+		t.Error("an overlay without window operations")
+	}
+}
+
+// ---- Start starts it ----------------------------------------------------------------------------------------------
+
+// Start starts the boot screen for a boot that has a window and is set up here (launched, owed, or a take-over that is
+// about to do real work), once; never for a headless one, and never for a take-over that only checks. The round is
+// published (in the setup marker, or the setup record) before the overlay starts.
+func TestStartStartsTheOverlayOnlyForAWindowedBoot(t *testing.T) {
+	setCap(t, time.Hour)
+	withOverlayOS(t, newFakeOverlayWindows(1))
+	for _, c := range []struct {
+		name          string
+		windowed      bool
+		owed          bool
+		uninitialized bool
+		want          int32
+	}{
+		{"owed, windowed", true, true, false, 1},
+		{"owed, headless", false, true, false, 0},
+		{"plain take-over, windowed", true, false, false, 0},
+		{"take-over with first-boot setup to do, windowed", true, false, true, 1},
+		{"take-over with first-boot setup to do, headless", false, false, true, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sleeper, _ := startSleeper(t) // before the fake adb is in the environment: it would run as that
+			s := newStartRun(t)
+			var spawned atomic.Int32
+			var published atomic.Bool
+			saved := spawnBootOverlay
+			t.Cleanup(func() { spawnBootOverlay = saved })
+			spawnBootOverlay = func(m *Manager, i int, round string) (host.Process, error) {
+				spawned.Add(1)
+				mk, ok := m.readSetupMarker(i)
+				rec, rok := m.readReady(i)
+				published.Store(round != "" && (ok && mk.Round == round || rok && rec.Round == round))
+				return sleeper, nil
+			}
+			if c.windowed {
+				q := s.q
+				q.Name = "qemu-system-x86_64.exe" // the windowed build
+				startFindQemu = func(*Manager, int) (host.Process, bool, error) { return q, true, nil }
+				waitBootFindQemu = func(*Manager, int) (host.Process, bool, error) { return q, true, nil }
+			}
+			switch {
+			case c.owed:
+				s.owedMarker()
+			case c.uninitialized:
+				if err := s.m.Root.EditInstanceMeta(s.i, func(meta *jsonord.Obj) error {
+					meta.Set("initialized", jsonord.NewBool(false))
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				s.m.writeBootRecord(s.i, bootRecord{QemuPID: s.q.PID, QemuCreated: s.q.Created, BootID: testBootA})
+			}
+			if _, err := s.start(context.Background(), nil); err != nil {
+				t.Fatal(err)
+			}
+			if n := spawned.Load(); n != c.want {
+				t.Errorf("overlay started %d times, want %d", n, c.want)
+			}
+			if c.want > 0 && !published.Load() {
+				t.Error("the round was not in the marker or the record when the overlay was started")
+			}
+		})
+	}
+}
+
+// A start that sets up a boot again after a guest reboot starts its overlay with a round of its own: the "done" record of
+// the boot before (same qemu) is gone before the overlay starts, and a setup record of another round is no record for it.
+func TestOldDoneRecordNeverReleasesALaterRound(t *testing.T) {
+	sleeper, _ := startSleeper(t) // before the fake adb is in the environment: it would run as that
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	withOverlayOS(t, newFakeOverlayWindows(1))
+	q := s.q
+	q.Name = "qemu-system-x86_64.exe"
+	startFindQemu = func(*Manager, int) (host.Process, bool, error) { return q, true, nil }
+	waitBootFindQemu = func(*Manager, int) (host.Process, bool, error) { return q, true, nil }
+	s.m.writeBootRecord(s.i, bootRecord{QemuPID: s.q.PID, QemuCreated: s.q.Created, BootID: testBootA})
+	s.guestBoot(testBootB) // the guest restarted by itself
+	putRecord(t, s.m, s.i, s.q, func(r *readyRecord) { r.Done, r.Percent, r.Step, r.Round = true, 100, "sdcard", "old-round" })
+	var recordAtSpawn atomic.Bool
+	var roundSeen atomic.Value
+	saved := spawnBootOverlay
+	t.Cleanup(func() { spawnBootOverlay = saved })
+	spawnBootOverlay = func(m *Manager, i int, round string) (host.Process, error) {
+		_, ok := m.readReady(i)
+		recordAtSpawn.Store(ok)
+		roundSeen.Store(round)
+		return sleeper, nil
+	}
+	if _, err := s.start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if recordAtSpawn.Load() {
+		t.Error("the done record of the boot before was still there when the overlay started")
+	}
+	if r, _ := roundSeen.Load().(string); r == "" || r == "old-round" {
+		t.Errorf("round %q", r)
+	}
+
+	// the readers of a given round: the old record does not count, whatever it says
+	m := s.m
+	putRecord(t, m, s.i, s.q, func(r *readyRecord) { r.Done, r.Round = true, "old-round" })
+	unlock := lockStart(t, m, s.i)
+	defer unlock()
+	// the start of the new round has published its marker (the round, and a fresh heartbeat) and has no record yet
+	m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix(),
+		AliveMS: readyClockMS(), Round: "new-round"})
+	if st := m.bootSetupOf(s.i, s.q, true, time.Now(), nil, "new-round"); st.Ready || st.Step != readyStepBoot {
+		t.Errorf("a done record of another round released the round: %+v", st)
+	}
+	putRecord(t, m, s.i, s.q, func(r *readyRecord) { r.Done, r.Round = true, "new-round" })
+	if st := m.bootSetupOf(s.i, s.q, true, time.Now(), nil, "new-round"); !st.Ready {
+		t.Error("the round's own done record did not release it")
+	}
+	// status: the round of the start that holds the lock is the one its marker names
+	m.writeSetupMarker(s.i, setupMarker{QemuPID: s.q.PID, QemuCreated: s.q.Created, ValidUntil: time.Now().Add(time.Hour).Unix(),
+		AliveMS: readyClockMS(), Round: "newer-round"})
+	if st := m.bootSetupOf(s.i, s.q, true, time.Now(), nil, ""); st.Ready || st.Step != readyStepBoot {
+		t.Errorf("status read an old round's done record while a newer start holds the lock: %+v", st)
+	}
+}
+
+// ---- the record that cannot be written ---------------------------------------------------------------------------------
+
+// "Done" cannot be written (only that write fails): the readers do not go on reading the step before it; the instance
+// reads online at once and the start returns.
+func TestStartDoneRecordWriteFailureIsStillOnline(t *testing.T) {
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	s.owedMarker()
+	withVar(t, &readyWrite, func(path string, data []byte, tag string) error {
+		if bytes.Contains(data, []byte(`"done":true`)) {
+			return errors.New("disk full")
+		}
+		return writeFileReplace(path, data, tag)
+	})
+	seen := map[string]InstanceInfo{}
+	res, err := s.start(context.Background(), func(step string, in InstanceInfo) { seen[step] = in })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in := seen["tune"]; in.Status != StatusStarting {
+		t.Errorf("at tune: %s", in.Status)
+	}
+	if in := seen["done"]; in.Status != StatusOnline {
+		t.Errorf("at done, the done record could not be written: %s step %q", in.Status, in.SetupStep)
+	}
+	if res.Instance.Status != StatusOnline {
+		t.Errorf("result %s", res.Instance.Status)
+	}
+	if in := infoOf(t, s.m, s.i, &s.q); in.Status != StatusOnline || in.Busy != "" {
+		t.Errorf("after: %s busy %q", in.Status, in.Busy)
+	}
+}
+
+// Neither the record nor the marker can be written or removed at the end: the start returning (its lock released) is
+// the release; it is never "starting" with nobody working on it.
+func TestStartRecordAndMarkerBothFailingStillEndsOnline(t *testing.T) {
+	s := newStartRun(t)
+	setCap(t, time.Hour)
+	s.owedMarker()
+	var obstacle sync.Once
+	withVar(t, &readyWrite, func(path string, data []byte, tag string) error {
+		if bytes.Contains(data, []byte(`"done":true`)) {
+			// the marker's place becomes a folder with a file in it: it can be neither rewritten nor removed
+			obstacle.Do(func() {
+				mp := s.m.setupMarkerPath(s.i)
+				os.Remove(mp)
+				os.MkdirAll(mp, 0o755)
+				os.WriteFile(filepath.Join(mp, "x"), []byte("x"), 0o644)
+			})
+			return errors.New("disk full")
+		}
+		return writeFileReplace(path, data, tag)
+	})
+	if _, err := s.start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if in := infoOf(t, s.m, s.i, &s.q); in.Status != StatusOnline || in.Busy != "" || in.SetupStep != "" {
+		t.Errorf("after the start: %s busy %q step %q", in.Status, in.Busy, in.SetupStep)
+	}
 }
 
 // ---- the decisions ------------------------------------------------------------------------------------------------
@@ -241,203 +1059,20 @@ func TestOverlayTextsAreTranslatedAndNameTheStep(t *testing.T) {
 	}
 }
 
-// ---- giving the windows back ---------------------------------------------------------------------------------------
-
-// A mark of an overlay that is gone gives the windows back and is deleted; a handle that another process's window has
-// now is left alone; nothing happens while the overlay lives, without a mark, or when the qemu is gone too.
-func TestRecoverOverlay(t *testing.T) {
-	m := markerTestManager(t)
-	const i = 3
-	qemu, _ := startSleeper(t)
-	other, _ := startSleeper(t)
-	dead := deadProcess(t)
-	live, _ := startSleeper(t)
-	ops := newFakeOverlayWindows(qemu.PID, 101, 102)
-	ops.owner[103] = other.PID // a handle that was reused by somebody else's window
-	ops.enabled[103] = false
-	withOverlayOS(t, ops)
-
-	mark := func(overlay, q win.Process, hs ...uint64) overlayMark {
-		return overlayMark{OverlayPID: overlay.PID, OverlayCreated: overlay.Created, QemuPID: q.PID, QemuCreated: q.Created, Windows: hs}
-	}
-	if m.RecoverOverlay(i) {
-		t.Error("recovered with no mark")
-	}
-	// the overlay lives: left alone
-	if err := m.writeOverlayMark(i, mark(live, qemu, 101, 102)); err != nil {
-		t.Fatal(err)
-	}
-	if m.RecoverOverlay(i) || ops.Enabled(101) {
-		t.Error("windows were enabled under a live overlay")
-	}
-	if _, ok := m.readOverlayMark(i); !ok {
-		t.Error("the mark of a live overlay was deleted")
-	}
-	// the overlay is gone
-	if err := m.writeOverlayMark(i, mark(dead, qemu, 101, 102, 103)); err != nil {
-		t.Fatal(err)
-	}
-	if !m.RecoverOverlay(i) {
-		t.Fatal("nothing recovered")
-	}
-	if !ops.Enabled(101) || !ops.Enabled(102) {
-		t.Error("the windows of the qemu were not enabled")
-	}
-	if ops.Enabled(103) {
-		t.Error("a window of another process was enabled")
-	}
-	if _, ok := m.readOverlayMark(i); ok {
-		t.Error("the mark stays")
-	}
-	// the qemu is gone too: the mark goes, nothing is touched
-	calls := ops.calls
-	if err := m.writeOverlayMark(i, mark(dead, deadProcess(t), 101)); err != nil {
-		t.Fatal(err)
-	}
-	if m.RecoverOverlay(i) || ops.calls != calls {
-		t.Error("windows of a qemu that is gone were touched")
-	}
-	if _, ok := m.readOverlayMark(i); ok {
-		t.Error("the mark of a gone qemu stays")
-	}
-	// a torn mark is none
-	if err := os.WriteFile(m.overlayMarkPath(i), []byte(`{"overlay_pid":12`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if m.RecoverOverlay(i) {
-		t.Error("recovered from a torn mark")
-	}
-}
-
-// Layer 2: the start's guard sees the overlay's process go, however it went, and gives the windows back within about
-// a second. It does nothing while the process lives, and ends with the start.
-func TestGuardGivesTheWindowsBackWhenTheOverlayIsKilled(t *testing.T) {
-	m, i := opsTestInstance(t)
-	qemu, _ := startSleeper(t)
-	overlayProc, kill := startSleeper(t)
-	ops := newFakeOverlayWindows(qemu.PID, 201, 202)
-	withOverlayOS(t, ops)
-	saved := spawnBootOverlay
-	t.Cleanup(func() { spawnBootOverlay = saved })
-	spawnBootOverlay = func(*Manager, int) (host.Process, error) { return overlayProc, nil }
-	if err := m.writeOverlayMark(i, overlayMark{OverlayPID: overlayProc.PID, OverlayCreated: overlayProc.Created, QemuPID: qemu.PID,
-		QemuCreated: qemu.Created, Windows: []uint64{201, 202}}); err != nil {
-		t.Fatal(err)
-	}
-
-	h := m.startBootOverlay(i)
-	if h == nil {
-		t.Fatal("no handle")
-	}
-	time.Sleep(3 * overlayGuardEvery)
-	if ops.Enabled(201) {
-		t.Fatal("the guard enabled windows under a live overlay")
-	}
-	killed := time.Now()
-	kill()
-	deadline := time.Now().Add(5 * time.Second)
-	for !(ops.Enabled(201) && ops.Enabled(202)) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !ops.Enabled(201) || !ops.Enabled(202) {
-		t.Fatal("the windows were not given back")
-	}
-	if d := time.Since(killed); d > 2*time.Second {
-		t.Errorf("the windows came back %v after the overlay was killed", d)
-	} else {
-		t.Logf("windows back %v after the overlay process ended", d.Round(10*time.Millisecond))
-	}
-	if _, ok := m.readOverlayMark(i); ok {
-		t.Error("the mark stays")
-	}
-	h.release()
-	h.release()
-
-	// a start that ends before its overlay does leaves the overlay alone
-	live, _ := startSleeper(t)
-	spawnBootOverlay = func(*Manager, int) (host.Process, error) { return live, nil }
-	ops.enabled[201] = false
-	if err := m.writeOverlayMark(i, overlayMark{OverlayPID: live.PID, OverlayCreated: live.Created, QemuPID: qemu.PID,
-		QemuCreated: qemu.Created, Windows: []uint64{201}}); err != nil {
-		t.Fatal(err)
-	}
-	m.startBootOverlay(i).release()
-	time.Sleep(2 * overlayGuardEvery)
-	if ops.Enabled(201) {
-		t.Error("a released guard touched the windows of a live overlay")
-	}
-}
-
-// An overlay that cannot start is a warning and a boot without the cover.
-func TestStartBootOverlayFailureIsOnlyAWarning(t *testing.T) {
-	logs := &logx.Collector{}
-	m := markerTestManager(t)
-	m.Log = logx.New(logs.Sink())
-	withOverlayOS(t, newFakeOverlayWindows(1))
-	saved := spawnBootOverlay
-	t.Cleanup(func() { spawnBootOverlay = saved })
-	spawnBootOverlay = func(*Manager, int) (host.Process, error) { return host.Process{}, errors.New("boom") }
-	if h := m.startBootOverlay(3); h != nil {
-		t.Error("a handle for an overlay that did not start")
-	}
-	var warned bool
-	for _, msg := range logs.Messages() {
-		warned = warned || strings.Contains(msg, "开机画面没起来")
-	}
-	if !warned {
-		t.Errorf("no warning in %q", logs.Messages())
-	}
-	withOverlayOS(t, nil)
-	if h := m.startBootOverlay(3); h != nil {
-		t.Error("an overlay without window operations")
-	}
-}
-
-// ---- Start starts it ----------------------------------------------------------------------------------------------
-
-// Start starts the boot screen for a boot that has a window and is set up here (launched, or owed), once; never for a
-// headless one, and never for a take-over that owes nothing.
-func TestStartStartsTheOverlayOnlyForAWindowedBoot(t *testing.T) {
-	setCap(t, time.Hour)
-	withOverlayOS(t, newFakeOverlayWindows(1))
-	for _, c := range []struct {
-		name     string
-		windowed bool
-		owed     bool
-		want     int32
-	}{
-		{"owed, windowed", true, true, 1},
-		{"owed, headless", false, true, 0},
-		{"plain take-over, windowed", true, false, 0},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			sleeper, _ := startSleeper(t) // before the fake adb is in the environment: it would run as that
-			s := newStartRun(t)
-			var spawned atomic.Int32
-			saved := spawnBootOverlay
-			t.Cleanup(func() { spawnBootOverlay = saved })
-			spawnBootOverlay = func(*Manager, int) (host.Process, error) { spawned.Add(1); return sleeper, nil }
-			if c.windowed {
-				q := s.q
-				q.Name = "qemu-system-x86_64.exe" // the windowed build
-				startFindQemu = func(*Manager, int) (host.Process, bool, error) { return q, true, nil }
-			}
-			if c.owed {
-				s.owedMarker()
-			} else {
-				s.m.writeBootRecord(s.i, bootRecord{QemuPID: s.q.PID, QemuCreated: s.q.Created, BootID: testBootA})
-			}
-			if _, err := s.start(context.Background(), nil); err != nil {
-				t.Fatal(err)
-			}
-			if n := spawned.Load(); n != c.want {
-				t.Errorf("overlay started %d times, want %d", n, c.want)
-			}
-		})
-	}
-}
-
 // ---- the overlay process itself, on windows of a stand-in emulator ------------------------------------------------
+
+const testRound = "round-test"
+
+// record writes the setup record of the round the overlay is of, naming the stand-in qemu.
+func (f *overlayFixture) record(mut func(*readyRecord)) readyRecord {
+	f.t.Helper()
+	return putRecord(f.t, f.m, f.i, f.q, func(r *readyRecord) {
+		r.Round = testRound
+		if mut != nil {
+			mut(r)
+		}
+	})
+}
 
 type overlayFixture struct {
 	t     *testing.T
@@ -463,7 +1098,8 @@ func newOverlayFixture(t *testing.T) *overlayFixture {
 	f := &overlayFixture{t: t, m: m, i: i, emu: e, q: q, code: make(chan int, 1)}
 	f.boot.Store(&[2]bool{false, false})
 	me, _ := host.FindProcess(uint32(os.Getpid()))
-	f.run = newOverlayRun(m, i, logx.Nop(), me)
+	f.run = newOverlayRun(m, i, logx.Nop(), me, testRound)
+	f.run.bootID = func(context.Context) string { return "" }
 	f.run.find = func() (host.Process, bool, error) { return q, true, nil }
 	f.run.probe = func(context.Context) (bool, bool) { b := f.boot.Load(); return b[0], b[1] }
 	return f
@@ -528,8 +1164,13 @@ func TestOverlayRunCoversUntilTheInstanceIsOnline(t *testing.T) {
 		t.Errorf("the title bar is covered (top window %#x)", top)
 	}
 	k, ok := f.m.readOverlayMark(f.i)
-	if !ok || len(k.Windows) != 2 || k.QemuPID != f.q.PID || k.OverlayPID != uint32(os.Getpid()) {
+	if !ok || len(k.Windows) != 2 || k.QemuPID != f.q.PID || k.OverlayPID != uint32(os.Getpid()) || k.Round != testRound {
 		t.Errorf("mark %+v %v", k, ok)
+	}
+	for _, w := range k.Windows {
+		if pid, class := win.WindowIdentity(uintptr(w.H)); pid != f.q.PID || class != w.Class || w.QemuPID != f.q.PID || w.QemuCreated != f.q.Created {
+			t.Errorf("mark entry %+v does not say who the window is (%d %q)", w, pid, class)
+		}
 	}
 	tg := win.GeometryOf(f.emu.Tool)
 	if top := win.WindowFromPoint((tg.Frame.Left+tg.Frame.Right)/2, (tg.Frame.Top+tg.Frame.Bottom)/2); top == f.emu.Tool || top == 0 {
@@ -538,7 +1179,7 @@ func TestOverlayRunCoversUntilTheInstanceIsOnline(t *testing.T) {
 
 	// Android booted, the setup is running: still covered
 	f.boot.Store(&[2]bool{true, true})
-	putRecord(t, f.m, f.i, f.q, nil)
+	f.record(nil)
 	time.Sleep(900 * time.Millisecond)
 	if a, b := f.windowsEnabled(); a || b || !f.covered() || f.ended.Load() {
 		t.Fatalf("while the setup runs: enabled %v %v covered %v ended %v", a, b, f.covered(), f.ended.Load())
@@ -550,7 +1191,7 @@ func TestOverlayRunCoversUntilTheInstanceIsOnline(t *testing.T) {
 
 	// done: the windows are back at once and the overlay ends
 	done := time.Now()
-	putRecord(t, f.m, f.i, f.q, func(r *readyRecord) { r.Done = true })
+	f.record(func(r *readyRecord) { r.Done = true })
 	if c := f.wait("setup done", 5*time.Second); c != 0 {
 		t.Errorf("exit code %d", c)
 	}
@@ -581,11 +1222,11 @@ func TestOverlayRunTouchesOnlyWhatItDisabled(t *testing.T) {
 	f.start()
 	f.waitFor("the main window disabled", 10*time.Second, func() bool { return !win.IsWindowEnabled(f.emu.Main) })
 	k, ok := f.m.readOverlayMark(f.i)
-	if !ok || len(k.Windows) != 1 || k.Windows[0] != uint64(f.emu.Main) {
+	if !ok || len(k.Windows) != 1 || k.Windows[0].H != uint64(f.emu.Main) {
 		t.Errorf("mark %+v: want the main window only", k)
 	}
 	f.boot.Store(&[2]bool{true, true})
-	putRecord(t, f.m, f.i, f.q, func(r *readyRecord) { r.Done = true })
+	f.record(func(r *readyRecord) { r.Done = true })
 	if c := f.wait("done", 5*time.Second); c != 0 {
 		t.Errorf("exit code %d", c)
 	}
@@ -654,16 +1295,26 @@ func TestOverlayRunCapPutsTheWindowsBackAndKeepsANote(t *testing.T) {
 	unlock := lockStart(t, f.m, f.i)
 	defer unlock()
 	f.boot.Store(&[2]bool{true, true})
-	putRecord(t, f.m, f.i, f.q, nil)
+	f.record(nil)
 	f.start()
 	f.waitFor("the windows disabled", 10*time.Second, func() bool { a, b := f.windowsEnabled(); return !a && !b })
+	gm := win.GeometryOf(f.emu.Main)
+	cover := win.WindowFromPoint((gm.Client.Left+gm.Client.Right)/2, (gm.Client.Top+gm.Client.Bottom)/2)
+	coverVisible := func() bool { return cover != 0 && cover != f.emu.Main && win.GeometryOf(cover).Visible }
 	at := time.Now()
-	putRecord(t, f.m, f.i, f.q, func(r *readyRecord) { r.DeadlineMS = readyClockMS() - 1; r.Step = "ime" })
+	f.record(func(r *readyRecord) { r.DeadlineMS = readyClockMS() - 1; r.Step = "ime" })
 	f.waitFor("the windows back at the cap", 5*time.Second, func() bool { a, b := f.windowsEnabled(); return a && b })
 	if f.ended.Load() {
 		t.Error("the cover went with the windows: no time to read the note")
 	}
-	if !f.covered() {
+	// the picture stays up for the note, but it no longer takes the mouse: what is at the middle of the picture area is the
+	// emulator window again (the cover is a layer that only shows)
+	g := win.GeometryOf(f.emu.Main)
+	cx, cy := (g.Client.Left+g.Client.Right)/2, (g.Client.Top+g.Client.Bottom)/2
+	if top := win.WindowFromPoint(cx, cy); top != f.emu.Main {
+		t.Errorf("after the cap the mouse still lands on %#x, not on the emulator window %#x", top, f.emu.Main)
+	}
+	if !coverVisible() {
 		t.Error("the note is not on the cover")
 	}
 	t.Logf("windows back %v after the cap", time.Since(at).Round(10*time.Millisecond))
@@ -685,10 +1336,12 @@ func TestRecoverOverlayOnRealWindows(t *testing.T) {
 			t.Fatal("cannot disable")
 		}
 	}
-	if err := f.m.writeOverlayMark(f.i, overlayMark{OverlayPID: dead.PID, OverlayCreated: dead.Created, QemuPID: f.q.PID,
-		QemuCreated: f.q.Created, Windows: []uint64{uint64(f.emu.Main), uint64(f.emu.Tool)}}); err != nil {
-		t.Fatal(err)
+	var ws []overlayWin
+	for _, h := range []uintptr{f.emu.Main, f.emu.Tool} {
+		_, class := win.WindowIdentity(h)
+		ws = append(ws, overlayWin{H: uint64(h), QemuPID: f.q.PID, QemuCreated: f.q.Created, Class: class})
 	}
+	putMark(t, f.m, f.i, markOf("r", dead, f.q, ws))
 	// what status, list and info do for a running instance
 	savedScan, savedBooted := qemuScan, statusBooted
 	t.Cleanup(func() { qemuScan, statusBooted = savedScan, savedBooted })
@@ -707,8 +1360,45 @@ func TestRecoverOverlayOnRealWindows(t *testing.T) {
 	t.Logf("recovered by one Info call in %v", time.Since(start).Round(time.Millisecond))
 }
 
+// An end asked for before the loop has begun is not lost: nothing is disabled, no mark is written, the overlay ends.
+func TestOverlayRunEndAskedForBeforeTheLoopBegins(t *testing.T) {
+	f := newOverlayFixture(t)
+	unlock := lockStart(t, f.m, f.i)
+	defer unlock()
+	f.run.quitReq.Store(true)
+	f.start()
+	if c := f.wait("end", 5*time.Second); c != 0 {
+		t.Errorf("exit code %d", c)
+	}
+	if a, b := f.windowsEnabled(); !a || !b {
+		t.Errorf("windows disabled by an overlay that was told to end first: %v %v", a, b)
+	}
+	if _, ok := f.m.readOverlayMark(f.i); ok {
+		t.Error("a mark was written")
+	}
+}
+
+// What the poller decides never waits for adb: a getprop that does not return does not hold up the end of the overlay
+// when the start is gone (the windows are back within the start-lock grace plus a look).
+func TestOverlayRunDoesNotWaitForADBToEnd(t *testing.T) {
+	f := newOverlayFixture(t)
+	f.run.probe = func(context.Context) (bool, bool) { time.Sleep(8 * time.Second); return false, false }
+	unlock := lockStart(t, f.m, f.i)
+	f.start()
+	f.waitFor("the windows disabled", 10*time.Second, func() bool { a, b := f.windowsEnabled(); return !a && !b })
+	gone := time.Now()
+	unlock()
+	if c := f.wait("start gone with a probe that hangs", 6*time.Second); c != 0 {
+		t.Errorf("exit code %d", c)
+	}
+	if a, b := f.windowsEnabled(); !a || !b {
+		t.Errorf("windows not back: %v %v", a, b)
+	}
+	t.Logf("windows back %v after the start lock was released, with a getprop that never returns", time.Since(gone).Round(10*time.Millisecond))
+}
 func TestBootOverlayArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"x"}, {"root", "99", "1", "2"}, {"root", "3", "0", "2"}, {"root", "x", "1", "2"}} {
+	for _, args := range [][]string{nil, {"x"}, {"root", "3", "1", "2"}, {"root", "99", "1", "2", "r"}, {"root", "3", "0", "2", "r"},
+		{"root", "x", "1", "2", "r"}, {"root", "3", "1", "2", ""}} {
 		if code := RunBootOverlay(args, discard{}); code != 2 {
 			t.Errorf("args %q: exit code %d, want 2", slices.Clone(args), code)
 		}

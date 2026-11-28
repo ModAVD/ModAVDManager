@@ -261,12 +261,24 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	earlyRestarted := false // earlyGuestFixes restarted zygote during the boot
 	// The boot screen over the emulator's window (overlay.go): started once, by the first point at which this start knows
 	// it works on a boot that has a window; the guard that goes with it ends with the start.
+	// The round of this attempt is in the setup marker or the setup record before the overlay is started (overlay.go).
+	roundID := newRound()
 	var overlay *overlayHandle
 	defer func() { overlay.release() }()
-	coverWindow := func(windowed bool) {
-		if windowed && overlay == nil {
-			overlay = m.startBootOverlay(i)
+	watching := false
+	// The boot watch of the qemu is the one process that lives as long as it, so the layer that gives the windows back
+	// when the overlay and this start are both gone: it is started with the overlay (and again, harmlessly, at the end).
+	watchQemu := func(q host.Process) {
+		if overlay != nil && !watching && q.PID != 0 && q.Created != 0 {
+			watching = true
+			m.startBootWatch(i, q)
 		}
+	}
+	coverWindow := func(windowed bool, q host.Process) {
+		if windowed && overlay == nil {
+			overlay = m.startBootOverlay(i, roundID)
+		}
+		watchQemu(q)
 	}
 	// owed: errors from here on leave a boot whose setup the next start finishes
 	owed := func(err error) error {
@@ -276,6 +288,7 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 		return withSetupAdvice(err, setupAdvice(marker.until(), time.Now()))
 	}
 	onQemu := func(q host.Process) {
+		watchQemu(q)
 		if marker == nil {
 			return
 		}
@@ -342,11 +355,12 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				}
 				// this start works on the boot now: what status waits for until the setup's record comes (bootready.go)
 				mk.AliveMS = readyClockMS()
+				mk.Round = roundID
 				m.writeSetupMarker(i, mk)
 				marker = &mk
 				mode = setupOwed
 				windowed, known := qemuWindowed(p)
-				coverWindow(known && windowed)
+				coverWindow(known && windowed, p)
 				if regularFile(mk.LogFile) {
 					res.LogFile = mk.LogFile // exactly this boot's emulator log (the IME channel is read from it)
 				}
@@ -405,14 +419,14 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 			res.Launched = true
 			res.launchWindow = launchWindow
 			mode = setupLaunched
-			coverWindow(launchWindow)
 			res.LogFile = plan.logPath
 			// written before qemu shows up (a cancel may come first): until then it names qemu by its parent
 			// emulator.exe, and the deadline counts from the launch (qemu starts right after it; onQemu moves it to
-			// qemu's own start)
+			// qemu's own start). Before the overlay: the round is published first.
 			marker = &setupMarker{EmulatorPID: p.PID, EmulatorCreated: p.Created, LogFile: plan.logPath,
-				ValidUntil: launchedAt.Add(window).Unix(), AliveMS: readyClockMS()}
+				ValidUntil: launchedAt.Add(window).Unix(), AliveMS: readyClockMS(), Round: roundID}
 			m.writeSetupMarker(i, *marker)
+			coverWindow(launchWindow, host.Process{})
 			prog.emit("launch", fmt.Sprintf("实例 %d 的模拟器已拉起（pid %d），等安卓开机", i, p.PID), progressLaunch)
 		}
 
@@ -457,10 +471,13 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 				shortBootID(rec.BootID), shortBootID(bootID))
 			mode = setupOwed
 			windowed, known := qemuWindowed(qemu)
-			coverWindow(known && windowed)
 			marker = &setupMarker{QemuPID: qemu.PID, QemuCreated: qemu.Created, LogFile: res.LogFile,
-				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix(), AliveMS: readyClockMS()}
+				ValidUntil: time.Now().Add(SetupMarkerGrace).Unix(), AliveMS: readyClockMS(), Round: roundID}
 			m.writeSetupMarker(i, *marker)
+			// the record of the boot before names this same qemu and is done: it is of another round, and is taken away
+			// before the overlay is started anyway
+			m.removeReady(i)
+			coverWindow(known && windowed, qemu)
 		}
 	}
 
@@ -468,11 +485,26 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	// nothing only checks, and the instance stays online.
 	// A take-over that finds it has real work to do (the first-boot setup, installing the host input method) starts
 	// the record at that point (progressor.needReady).
-	begin := func() *readyTracker { return m.beginReady(i, qemu, bootID) }
+	begin := func() *readyTracker { return m.beginReady(i, qemu, bootID, roundID) }
 	if mode != setupAdopted || !m.initialized(i) {
 		prog.ready = begin()
+		if prog.ready != nil && mode == setupAdopted {
+			// a take-over that has the first-boot setup to do: the boot screen, after the record (a launched or owed boot has it
+			// since before)
+			windowed, known := qemuWindowed(qemu)
+			coverWindow(known && windowed, qemu)
+		}
 	} else {
-		prog.lazyReady = begin
+		// A take-over that finds real work to do (first-boot setup, installing the input method) on a boot with a window
+		// gets the boot screen too, started after its record (a mere check shows nothing).
+		prog.lazyReady = func() *readyTracker {
+			t := begin()
+			if t != nil {
+				windowed, known := qemuWindowed(qemu)
+				coverWindow(known && windowed, qemu)
+			}
+			return t
+		}
 	}
 	defer func() { prog.ready.close() }()
 
@@ -532,6 +564,9 @@ func (m *Manager) start(ctx context.Context, inst *avd.Instance, opt StartOption
 	if opt.watchQemu == nil {
 		m.startBootWatch(i, qemu)
 	}
+	// the setup is recorded as done: the boot screen gives the windows back within a look; not left to chance when this
+	// start is about to return
+	overlay.confirm(overlayConfirmWait)
 
 	// the first-boot setup changed mas-avd.json (initialized, launcher, renderer): build the result from disk again
 	if fresh, err := m.instance(i); err == nil {
@@ -835,6 +870,9 @@ type setupMarker struct {
 	// and refreshed during the boot wait). While no ready record of the boot exists, the marker holds status at starting
 	// only for bootSetupCap after it (bootready.go). 0: not held.
 	AliveMS int64 `json:"alive_ms,omitempty"`
+	// Round: the start attempt that works on this boot (overlay.go, "The round"); written before that start's boot screen is
+	// started. Status reads the setup record of this round only while that start holds the lock.
+	Round string `json:"round,omitempty"`
 }
 
 // until is ValidUntil as a time; zero when unset.

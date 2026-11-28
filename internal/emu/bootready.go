@@ -86,6 +86,8 @@ type readyRecord struct {
 	OwnerPID     uint32 `json:"owner_pid,omitempty"`
 	OwnerCreated uint64 `json:"owner_created,omitempty"`
 	BootID       string `json:"boot_id,omitempty"`
+	// Round: the start attempt that wrote the record (overlay.go, "The round"); "" in records of an older modavd.
+	Round string `json:"round,omitempty"`
 	// DeadlineMS (host.MonotonicMS): when the wait for this setup ends, fixed when it began.
 	DeadlineMS int64  `json:"deadline_ms"`
 	Step       string `json:"step"`
@@ -144,11 +146,25 @@ type bootSetupState struct {
 
 // bootSetupOf is the state of the setup of the boot of qemu q of instance i, at now. startHeld: some modavd process
 // holds the instance's start lock right now (a start is running). guestBootID reads the guest's boot_id; it is called
-// only when a record that is not done would hold the instance, and may be nil. Android has booted already when this
-// is asked.
-func (m *Manager) bootSetupOf(i int, q host.Process, startHeld bool, now time.Time, guestBootID func() string) bootSetupState {
+// only when a record that is not done would hold the instance, and may be nil (the overlay passes a cached read: it
+// must not wait for adb). Android has booted already when this is asked.
+//
+// round: only a record of that round counts ("" for status: the round of the start that holds the lock, as its setup
+// marker names it, when there is one; any record otherwise). A record of another round, which is what an earlier boot
+// of the same qemu left, is no record: it never reads as this round's done.
+func (m *Manager) bootSetupOf(i int, q host.Process, startHeld bool, now time.Time, guestBootID func() string, round string) bootSetupState {
 	clock := readyClockMS()
-	if rec, ok := m.readReady(i); ok && rec.names(q) {
+	var mk setupMarker
+	var mkOK, mkUse bool
+	if startHeld {
+		mk, mkOK = m.readSetupMarker(i)
+		mkUse, _ = setupMarkerUse(mk, mkOK, q, now)
+	}
+	want := round
+	if want == "" && mkUse {
+		want = mk.Round
+	}
+	if rec, ok := m.readReady(i); ok && rec.names(q) && (want == "" || rec.Round == want) {
 		if rec.Done || !startHeld || rec.ownerGone() {
 			// done, or the start that was doing it is gone (cancelled, killed, failed): nobody will finish it
 			return bootSetupState{Ready: true}
@@ -169,12 +185,9 @@ func (m *Manager) bootSetupOf(i int, q host.Process, startHeld bool, now time.Ti
 	// No record of this boot yet. A start that launched it (or took over an unfinished boot) left the setup marker,
 	// refreshes its AliveMS during the boot wait and writes the record within seconds of Android's boot; any other
 	// qemu has no setup to wait for, and a marker nobody refreshed for bootSetupCap is not waited for either.
-	if startHeld {
-		mk, ok := m.readSetupMarker(i)
-		if use, _ := setupMarkerUse(mk, ok, q, now); use && mk.AliveMS != 0 {
-			if age := clock - mk.AliveMS; age >= 0 && age < bootSetupCap.Milliseconds() {
-				return bootSetupState{Step: readyStepBoot}
-			}
+	if startHeld && mkUse && mk.AliveMS != 0 && (round == "" || mk.Round == round) {
+		if age := clock - mk.AliveMS; age >= 0 && age < bootSetupCap.Milliseconds() {
+			return bootSetupState{Step: readyStepBoot}
 		}
 	}
 	return bootSetupState{Ready: true}
@@ -193,12 +206,12 @@ type readyTracker struct {
 }
 
 // beginReady deletes the record of the earlier boot, writes the record of the setup that begins now for qemu q
-// (bootID: the guest's boot_id, "" if unknown) and arms the cap's log line. nil when the record cannot be written:
-// that is warned about, the setup is then not tracked and status does not wait for it (the setup marker's heartbeat is
-// stopped too, which would otherwise hold it for a while).
-func (m *Manager) beginReady(i int, q host.Process, bootID string) *readyTracker {
+// (bootID: the guest's boot_id, "" if unknown; round: this start attempt's) and arms the cap's log line. nil when the
+// record cannot be written: that is warned about, the setup is then not tracked and status does not wait for it (the
+// setup marker's heartbeat is stopped too, which would otherwise hold it for a while).
+func (m *Manager) beginReady(i int, q host.Process, bootID, round string) *readyTracker {
 	m.removeReady(i)
-	t := &readyTracker{m: m, i: i, rec: readyRecord{QemuPID: q.PID, QemuCreated: q.Created, BootID: bootID,
+	t := &readyTracker{m: m, i: i, rec: readyRecord{QemuPID: q.PID, QemuCreated: q.Created, BootID: bootID, Round: round,
 		DeadlineMS: readyClockMS() + bootSetupCap.Milliseconds(), Step: readyStepBoot}}
 	if me, ok := host.FindProcess(uint32(os.Getpid())); ok {
 		t.rec.OwnerPID, t.rec.OwnerCreated = me.PID, me.Created
@@ -215,11 +228,14 @@ func (m *Manager) beginReady(i int, q host.Process, bootID string) *readyTracker
 	return t
 }
 
+// readyWrite stores a record (a variable: the tests make it fail).
+var readyWrite = func(path string, data []byte, tag string) error { return writeFileReplace(path, data, tag) }
+
 // write stores the record (t.mu held).
 func (t *readyTracker) write() error {
 	b, err := json.Marshal(t.rec)
 	if err == nil {
-		err = writeFileReplace(t.m.readyPath(t.i), b, strconv.Itoa(os.Getpid()))
+		err = readyWrite(t.m.readyPath(t.i), b, strconv.Itoa(os.Getpid()))
 	}
 	if err != nil {
 		t.m.Log.Debugf("实例 %d 记不下开机调优进度: %v", t.i, err)
@@ -303,7 +319,14 @@ func (t *readyTracker) finish() {
 		return
 	}
 	t.rec.Done, t.rec.Percent = true, 100
-	t.write()
+	if err := t.write(); err != nil {
+		// "done" cannot be written, so the readers would go on reading the step before it until the start is gone. Take
+		// the record away and stop the marker's heartbeat: with neither, readers (status, the overlay) read the boot as
+		// set up now. Whatever fails here, the start returning (its lock released) is the release all the same.
+		t.m.Log.Warnf("实例 %d 记不下「调优做完」（%v）：状态直接按做完处理", t.i, err)
+		t.m.removeReady(t.i)
+		t.m.releaseSetupMarker(t.i)
+	}
 	if t.timer != nil {
 		t.timer.Stop()
 	}

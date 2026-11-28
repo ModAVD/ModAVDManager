@@ -15,11 +15,16 @@ import (
 
 // Cover windows: the boot screen laid over the emulator's windows (ModAVD/ModAVD#259, emu overlay.go).
 //
-// A cover is a pop-up window owned by the emulator window it covers, so Windows keeps it above that window, hides it
-// when the emulator window is minimized or hidden and brings it back with it. It never takes the focus
-// (WS_EX_NOACTIVATE, SW_SHOWNOACTIVATE, MA_NOACTIVATE) and swallows the mouse. It has no taskbar button
-// (WS_EX_TOOLWINDOW). All of it, the timer, the window-event hooks and the painting, runs on the one OS thread of
-// RunOverlay; other goroutines reach it through Post and Quit.
+// A cover is a pop-up window with no owner: an owner would tie its input queue to the emulator window's thread (a window
+// owned across processes shares activation and message state with its owner), and a hung emulator window would hang the
+// cover with it. So the cover follows the emulator window by itself: Sync, called at every window event of the emulator's
+// process and every 100 ms, puts it where the window is, shows or hides it as the window is, and lifts it to the place
+// right above that window in the z-order (SetWindowPos on the cover only; nothing is ever sent to the other process's
+// window). It never takes the focus (WS_EX_NOACTIVATE, SW_SHOWNOACTIVATE, MA_NOACTIVATE) and swallows the mouse until
+// SetPassThrough turns it into a layer that only shows (WS_EX_TRANSPARENT | WS_EX_LAYERED, HTTRANSPARENT). It has no
+// taskbar button (WS_EX_TOOLWINDOW). All of it, the timer, the window-event hooks and the painting, runs on the one OS
+// thread of RunOverlay; other goroutines reach it through Post and Quit. A request to end (Quit, WM_CLOSE, the end of the
+// session) is a flag that the loop looks at on every turn, not only a posted message.
 
 // Rect is a rectangle in screen pixels (right and bottom are not part of it, as RECT).
 type Rect struct{ Left, Top, Right, Bottom int32 }
@@ -41,6 +46,9 @@ var (
 	modgdi32 = syscall.NewLazyDLL("gdi32.dll")
 
 	procEnableWindow        = moduser32.NewProc("EnableWindow")
+	procGetWindowLongPtrW   = moduser32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW   = moduser32.NewProc("SetWindowLongPtrW")
+	procSetLayeredAttrs     = moduser32.NewProc("SetLayeredWindowAttributes")
 	procIsWindowEnabled     = moduser32.NewProc("IsWindowEnabled")
 	procIsWindow            = moduser32.NewProc("IsWindow")
 	procWindowFromPoint     = moduser32.NewProc("WindowFromPoint")
@@ -81,6 +89,16 @@ const (
 	wsExNoActivate    = 0x08000000
 	wsExTopmost       = 0x00000008
 	swShowNoActivate  = 4
+	gwlExStyle        = ^uintptr(19) // GWL_EXSTYLE (-20)
+	wsExLayered       = 0x00080000
+	wsExTransparent   = 0x00000020
+	lwaAlpha          = 0x2
+	htTransparent     = ^uintptr(0) // HTTRANSPARENT (-1)
+	hwndTopmost       = ^uintptr(0) // HWND_TOPMOST (-1)
+	gwHwndNext        = 2
+	gwHwndPrev        = 3
+	swpNoSize         = 0x0001
+	swpNoMove         = 0x0002
 	swpNoZOrder       = 0x0004
 	swpNoActivate     = 0x0010
 	swpShowWindow     = 0x0040
@@ -119,6 +137,7 @@ const (
 	eventObjectShow        = 0x8002
 	eventObjectHide        = 0x8003
 	eventObjectLocation    = 0x800B
+	eventSystemForeground  = 0x0003
 	eventSystemMinStart    = 0x0016
 	eventSystemMinEnd      = 0x0017
 	eventSystemMoveSizeEnd = 0x000B
@@ -208,8 +227,23 @@ func WindowProcessID(hwnd uintptr) uint32 {
 	return pid
 }
 
+// WindowIdentity is who hwnd is now: the process that owns it and its class name. pid 0: the window is gone. Nothing is
+// sent to the window (a hung window cannot hold this up). A window handle can be reused by another window once the
+// first is destroyed; whoever keeps a handle for later compares this with what it recorded.
+func WindowIdentity(hwnd uintptr) (pid uint32, class string) {
+	if hwnd == 0 {
+		return 0, ""
+	}
+	if ok, _, _ := procIsWindow.Call(hwnd); ok == 0 {
+		return 0, ""
+	}
+	return WindowProcessID(hwnd), windowText(procGetClassNameW, hwnd)
+}
+
 // SetWindowEnabled is EnableWindow: a disabled window takes no mouse or keyboard input. It reports whether the window
-// is in the state asked for afterwards.
+// is in the state asked for afterwards. EnableWindow sends WM_ENABLE to the window and waits for the answer, so on a
+// window of another process that does not answer this does not return: callers that must not wait run it on a thread of
+// their own with a deadline (emu overlay.go).
 func SetWindowEnabled(hwnd uintptr, enabled bool) bool {
 	v := uintptr(0)
 	if enabled {
@@ -297,6 +331,10 @@ type OverlayOptions struct {
 	Paint func(c *Canvas, main bool)
 	// Ended is called once when the loop ends, before the covers are destroyed (the session or the machine ends, Quit).
 	Ended func()
+	// OnClose is called on the overlay's thread, at once and before the answer, when something asks the overlay to end
+	// the hard way: a close of one of its windows ("close"), the end of the session ("endsession"). The process may be
+	// ended right after the answer to the end of the session, so whatever has to be put back is put back in here.
+	OnClose func(why string)
 }
 
 // Overlay is the running set of covers. Methods marked "any goroutine" may be called from anywhere, the others only
@@ -309,6 +347,7 @@ type Overlay struct {
 	done   chan struct{}
 	hooks  []uintptr
 	quit   atomic.Bool
+	pass   bool // the covers only show (SetPassThrough)
 }
 
 type cover struct {
@@ -371,7 +410,7 @@ func RunOverlay(opt OverlayOptions) error {
 	}
 
 	var m winMsg
-	for {
+	for !o.quit.Load() {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			break
@@ -404,19 +443,70 @@ func (o *Overlay) Watch(pid uint32) {
 		return
 	}
 	for _, r := range [][2]uintptr{{eventSystemMinStart, eventSystemMinEnd}, {eventObjectDestroy, eventObjectLocation},
-		{eventSystemMoveSizeEnd, eventSystemMoveSizeEnd}} {
+		{eventSystemMoveSizeEnd, eventSystemMoveSizeEnd}, {eventSystemForeground, eventSystemForeground}} {
 		if h, _, _ := procSetWinEventHook.Call(r[0], r[1], 0, winEventCb(), uintptr(pid), 0, winEventOutOfContext); h != 0 {
 			o.hooks = append(o.hooks, h)
 		}
 	}
 }
 
-// Quit ends RunOverlay (any goroutine).
+// Quit ends RunOverlay (any goroutine). The request is the flag first: the loop looks at it on every turn and the timer
+// (every TickEvery) makes a turn at least that often, so a posted message that is lost does not lose the request.
 func (o *Overlay) Quit() {
 	if o.quit.Swap(true) {
 		return
 	}
 	procPostMessageW.Call(o.ctl, wmClose, 0, 0)
+}
+
+// Quitting: an end was asked for (any goroutine).
+func (o *Overlay) Quitting() bool { return o.quit.Load() }
+
+// SetPassThrough turns every cover (and the covers made later) into a layer that only shows, which the mouse goes
+// through to the window below (on) or back into a cover that takes the mouse (off). Only from the overlay's own functions.
+func (o *Overlay) SetPassThrough(on bool) {
+	o.pass = on
+	for _, c := range o.covers {
+		setPassThrough(c.hwnd, on)
+	}
+}
+
+func setPassThrough(hwnd uintptr, on bool) {
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
+	if on {
+		style |= wsExLayered | wsExTransparent
+	} else {
+		style &^= wsExLayered | wsExTransparent
+	}
+	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
+	if on {
+		procSetLayeredAttrs.Call(hwnd, 0, 255, lwaAlpha)
+	}
+}
+
+// placeAbove puts cover c right above its emulator window in the z-order (SetWindowPos on the cover only): the window
+// below it is the emulator's, or it is lifted to just under whatever is above the emulator window now.
+func placeAbove(c *cover) {
+	if next, _, _ := procGetWindow.Call(c.hwnd, gwHwndNext); next == c.owner {
+		return
+	}
+	prev, _, _ := procGetWindow.Call(c.owner, gwHwndPrev)
+	if prev == 0 {
+		if style, _, _ := procGetWindowLongPtrW.Call(c.owner, gwlExStyle); style&wsExTopmost != 0 {
+			prev = hwndTopmost // an always-on-top emulator window: the cover goes in that layer too
+		}
+	}
+	procSetWindowPos.Call(c.hwnd, prev, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+}
+
+// requestClose is a close of a cover or the end of the session: the flag, then OnClose (which puts back what has to be
+// put back, before the answer is given), then the loop ends.
+func (o *Overlay) requestClose(why string) {
+	o.quit.Store(true)
+	if o.opt.OnClose != nil {
+		o.opt.OnClose(why)
+	}
+	procPostQuitMessage.Call(0)
 }
 
 // Post runs f on the overlay's thread (any goroutine); false when the overlay has ended.
@@ -471,6 +561,9 @@ func (o *Overlay) Sync(specs []CoverSpec) {
 			procShowWindow.Call(c.hwnd, cmd)
 			c.shown = s.Show
 		}
+		if c.shown {
+			placeAbove(c)
+		}
 	}
 	for owner, c := range o.covers {
 		if !seen[owner] {
@@ -494,11 +587,14 @@ func (o *Overlay) newCover(s CoverSpec) *cover {
 	inst, _, _ := procGetModuleHandleW.Call(0)
 	cls, _ := syscall.UTF16PtrFromString(coverClassName)
 	w, h := max(s.Rect.Width(), 1), max(s.Rect.Height(), 1)
-	// created hidden (no WS_VISIBLE); ShowWindow(SW_SHOWNOACTIVATE) shows it without taking the focus
+	// created hidden (no WS_VISIBLE) and without an owner; ShowWindow(SW_SHOWNOACTIVATE) shows it without taking the focus
 	hwnd, _ := call(procCreateWindowExW, wsExToolWindow|wsExNoActivate, uintptr(unsafe.Pointer(cls)), 0, wsPopup,
-		uintptr(int(s.Rect.Left)), uintptr(int(s.Rect.Top)), uintptr(w), uintptr(h), s.Owner, 0, inst, 0)
+		uintptr(int(s.Rect.Left)), uintptr(int(s.Rect.Top)), uintptr(w), uintptr(h), 0, 0, inst, 0)
 	if hwnd == 0 {
 		return nil
+	}
+	if o.pass {
+		setPassThrough(hwnd, true)
 	}
 	return &cover{hwnd: hwnd, owner: s.Owner, main: s.Main}
 }
@@ -520,7 +616,11 @@ func ctlProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	}
 	switch uint32(msg) {
 	case wmTimer:
-		if o.opt.Tick != nil && !o.quit.Load() {
+		if o.quit.Load() {
+			procPostQuitMessage.Call(0) // the request to end may have been a lost message: the timer finds the flag
+			return 0
+		}
+		if o.opt.Tick != nil {
 			o.opt.Tick(o)
 		}
 		return 0
@@ -543,7 +643,7 @@ func ctlProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 0
 	case wmEndSession:
 		if wparam != 0 {
-			procPostQuitMessage.Call(0)
+			o.requestClose("endsession")
 		}
 		return 0
 	case wmQueryEndSession:
@@ -566,6 +666,9 @@ func coverProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	o := overlayCur.Load()
 	switch uint32(msg) {
 	case wmNcHitTest:
+		if o != nil && o.pass {
+			return htTransparent
+		}
 		return htClient
 	case wmMouseActivate:
 		return maNoActivate
@@ -594,7 +697,19 @@ func coverProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case wmClose:
-		return 0 // nothing closes a cover but the overlay
+		// something closes a cover (a tool that closes windows, Alt+F4 sent to it): the overlay ends the way it does when it
+		// is told to, which puts the emulator's windows back first
+		if o != nil {
+			o.requestClose("close")
+		}
+		return 0
+	case wmQueryEndSession:
+		return 1 // the session may end; the overlay has nothing to save
+	case wmEndSession:
+		if o != nil && wparam != 0 {
+			o.requestClose("endsession")
+		}
+		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
 	return r
