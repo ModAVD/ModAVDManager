@@ -3,31 +3,23 @@
 // code here: a Screen paints a frame into an image and says which lines of text go over it, and whoever owns a window
 // (emu's overlay, the page) shows that.
 //
-// The picture is the placeholder: the brand avatar (avatar.png, the brand's transparent avatar at 512 px) on the brand
-// brown with the layout the final artwork (v3, layers.json "progressUi") has: under the character a thin rounded
-// progress bar about 60 % as wide as the character (cream 20 % track, coral #F07060 fill, a small warm light at the head
-// of the fill), the percentage to the right of the bar and the step that is being done under it, the lines drawn by
-// the code, not by the picture. While there is no real percentage the bar is indeterminate (a light running to and fro)
-// and the number is "…". It is built from layers drawn back to front (Layer), so the final artwork (the character in
-// parts that move a little, the screen she holds filling in with the progress, the eruption at the end) replaces the
-// avatar layer and adds layers that read State.Progress, without touching the windows or the progress logic.
+// The picture is the v3 artwork (v3.go, art/): the character in parts that move a little, the screen she holds filling in with the
+// progress, and the eruption when the instance is ready; under her a thin rounded progress bar about 60 % as wide as the character
+// (cream 20 % track, coral #F07060 fill, a small warm light at the head of the fill), the percentage to the right of the bar and the
+// step that is being done under it (layers.json "progressUi"), the lines drawn by the code, not by the picture. While there is no real
+// percentage the bar is indeterminate (a light running to and fro) and the number is "…". It is built from layers drawn back to
+// front (Layer).
 package bootscreen
 
 import (
-	"bytes"
-	_ "embed"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
-	"image/png"
 	"math"
 	"sync"
 	"time"
 )
-
-//go:embed avatar.png
-var avatarPNG []byte
 
 // Colours (0xRRGGBB): the progress bar and the text, from layers.json of the artwork.
 const (
@@ -46,6 +38,9 @@ type State struct {
 	Indeterminate bool
 	// Elapsed is the animation clock: any increasing time, the movement of the bar goes by it.
 	Elapsed time.Duration
+	// Done: the instance is ready; DoneFor is how long ago (the eruption's clock, the fade). The bar is full and the step says so.
+	Done    bool
+	DoneFor time.Duration
 	// Step is the line under the bar (what is being done), Note replaces it when there is something the user should
 	// know (the setup did not finish in time). Both already in the language of the manager.
 	Step, Note string
@@ -214,22 +209,6 @@ func (RadialLayer) Draw(dst *image.RGBA, _ State) {
 	}
 }
 
-// AvatarLayer paints the avatar where the artwork's rig has it. (The final artwork replaces this layer by the parts of
-// the character.)
-type AvatarLayer struct{ Img image.Image }
-
-func (AvatarLayer) Static() bool { return true }
-func (l AvatarLayer) Draw(dst *image.RGBA, _ State) {
-	b := dst.Bounds()
-	lay := LayoutFor(b.Dx(), b.Dy())
-	if lay.AvatarSize <= 0 {
-		return
-	}
-	scaled := Resample(l.Img, lay.AvatarSize, lay.AvatarSize)
-	x, y := b.Min.X+lay.AvatarX, b.Min.Y+lay.AvatarY
-	draw.Draw(dst, image.Rect(x, y, x+lay.AvatarSize, y+lay.AvatarSize), scaled, image.Point{}, draw.Over)
-}
-
 // BarLayer is the progress bar: a cream track of 20 % opacity, the coral fill with a warm light at its head and a
 // brighter band running along it, or, while the percentage is unknown, a coral piece running to and fro.
 type BarLayer struct{}
@@ -319,36 +298,6 @@ func blend(under, over color.RGBA, a float64) color.RGBA {
 
 func mix(a, b color.RGBA, t float64) color.RGBA { return blend(a, b, t) }
 
-var (
-	avatarOnce sync.Once
-	avatarImg  image.Image
-)
-
-// Avatar is the brand avatar the placeholder shows (transparent background); nil when the embedded picture cannot be
-// read.
-func Avatar() image.Image {
-	avatarOnce.Do(func() {
-		img, err := png.Decode(bytes.NewReader(avatarPNG))
-		if err == nil {
-			avatarImg = img
-		}
-	})
-	return avatarImg
-}
-
-// AvatarPNG is the embedded avatar file as it is (the manager's page serves the same bytes from its own assets).
-func AvatarPNG() []byte { return avatarPNG }
-
-// NewPlaceholder is the placeholder screen: the avatar on the brand brown, the bar, the percentage and the step.
-func NewPlaceholder() *Stack {
-	layers := []Layer{RadialLayer{}}
-	if a := Avatar(); a != nil {
-		layers = append(layers, AvatarLayer{Img: a})
-	}
-	layers = append(layers, BarLayer{})
-	return &Stack{Layers: layers, Lines: placeholderLines}
-}
-
 // Percent is the number shown at the right of the bar: "NN%", or "…" while there is no real percentage.
 func Percent(st State) string {
 	if st.Indeterminate {
@@ -357,8 +306,8 @@ func Percent(st State) string {
 	return fmt.Sprintf("%d%%", int(math.Min(math.Max(st.Progress, 0), 1)*100+0.5))
 }
 
-// placeholderLines puts the percentage at the right of the bar, centred under it the step, or the note instead.
-func placeholderLines(w, h int, st State) []Label {
+// Lines puts the percentage at the right of the bar, centred under it the step, or the note instead.
+func Lines(w, h int, st State) []Label {
 	l := LayoutFor(w, h)
 	out := []Label{{Text: Percent(st), X: l.PctX, Y: l.BarMid - l.PctH/2, W: min(l.PctW, w-l.PctX), H: l.PctH, Px: l.PctPx, RGB: TextPct,
 		Bold: true, Left: true}}

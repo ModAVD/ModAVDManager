@@ -1165,16 +1165,8 @@ dialog > .toasts .toast.out { animation-name: toast-out-left; }
   .f-label { padding-top: 10px; }
 }
 
-/* the boot screen of the viewer (js/bootview.js): the brand avatar on the brand brown, a thin bar with the percentage at its right, the step under it */
-.viewer-frame.booting { background: radial-gradient(ellipse 60% 75% at 50% 42%, #52352a 0%, #3c271f 48%, #251915 100%); }
-.vboot { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; color: #eed7c5; }
+/* the boot screen of the viewer (js/bootview.js): drawn on a canvas, the same picture as the emulator window's (internal/bootscreen) */
+.vboot { position: absolute; inset: 0; background: #251915; }
 .vboot[hidden] { display: none; }
-.vboot-avatar { width: min(52%, 340px); max-height: 58%; object-fit: contain; -webkit-user-drag: none; }
-.vboot-row { display: flex; align-items: center; gap: 14px; width: min(82%, 520px); justify-content: center; }
-.vboot-bar { position: relative; flex: 0 1 60%; height: 7px; border-radius: 4px; background: rgba(255, 245, 229, 0.2); overflow: hidden; }
-.vboot-fill { height: 100%; width: 0; border-radius: 4px; background: #f07060; transition: width .6s ease; }
-.vboot-bar.indet .vboot-fill { width: 30%; animation: vboot-run 2.4s ease-in-out infinite alternate; transition: none; }
-.vboot-pct { min-width: 3.2em; font-weight: 600; font-size: 14px; color: #ffeddb; }
-.vboot-step { font-size: 13px; text-align: center; }
-@keyframes vboot-run { from { margin-left: 0; } to { margin-left: 70%; } }
-@media (prefers-reduced-motion: reduce) { .vboot-bar.indet .vboot-fill { animation: none; margin-left: 35%; } .vboot-fill { transition: none; } }
+.vboot-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.vboot-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

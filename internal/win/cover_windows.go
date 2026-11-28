@@ -342,14 +342,16 @@ type OverlayOptions struct {
 // Overlay is the running set of covers. Methods marked "any goroutine" may be called from anywhere, the others only
 // from the overlay's own functions.
 type Overlay struct {
-	opt    OverlayOptions
-	ctl    uintptr
-	covers map[uintptr]*cover
-	calls  chan func()
-	done   chan struct{}
-	hooks  []uintptr
-	quit   atomic.Bool
-	pass   bool // the covers only show (SetPassThrough)
+	opt      OverlayOptions
+	ctl      uintptr
+	covers   map[uintptr]*cover
+	calls    chan func()
+	done     chan struct{}
+	hooks    []uintptr
+	quit     atomic.Bool
+	pass     bool  // the covers only show (SetPassThrough)
+	alpha    uint8 // how opaque they are while they only show (SetAlpha)
+	alphaSet bool
 }
 
 type cover struct {
@@ -478,6 +480,27 @@ func (o *Overlay) SetPassThrough(on bool) {
 			c.shown = false
 		}
 	}
+}
+
+// SetAlpha makes the covers a, 0 to 255, opaque (the whole picture fades with it). Only once they only show (SetPassThrough(true));
+// before that it is remembered for the covers made later and does nothing. Only from the overlay's own functions.
+func (o *Overlay) SetAlpha(a uint8) {
+	if o.alphaSet && o.alpha == a {
+		return
+	}
+	o.alpha, o.alphaSet = a, true
+	if !o.pass {
+		return
+	}
+	for _, c := range o.covers {
+		if !c.dead {
+			setCoverAlpha(c.hwnd, a)
+		}
+	}
+}
+
+func setCoverAlpha(hwnd uintptr, a uint8) {
+	procSetLayeredAttrs.Call(hwnd, 0, uintptr(a), lwaAlpha)
 }
 
 // setExStyle is SetWindowLongPtr(GWL_EXSTYLE) (a variable: a test makes it fail).
@@ -651,6 +674,8 @@ func (o *Overlay) newCover(s CoverSpec) *cover {
 	c := &cover{hwnd: hwnd, owner: s.Owner, main: s.Main}
 	if o.pass && !setPassThrough(hwnd, true) {
 		c.dead = true
+	} else if o.pass && o.alphaSet {
+		setCoverAlpha(hwnd, o.alpha)
 	}
 	return c
 }

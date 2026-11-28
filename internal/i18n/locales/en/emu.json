@@ -220,6 +220,7 @@
   "写不了文件清单": "Cannot write the file list",
   "写成 socks5://127.0.0.1:端口 或 http://127.0.0.1:端口": "Write it as socks5://127.0.0.1:port or http://127.0.0.1:port",
   "写的是 %s://，这个端口说的是 %s，改成了 %s": "You wrote %s://, but this port speaks %s; changed to %s",
+  "准备好了": "Ready",
   "创建模拟器日志失败: %v": "Failed to create the emulator log: %v",
   "初始化没做完": "Initial setup not finished",
   "删不掉 arm64 客体残留的执行桥开机标记: %v": "Cannot delete the leftover execution bridge boot marker of the arm64 guest: %v",

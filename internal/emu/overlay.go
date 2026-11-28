@@ -91,6 +91,9 @@ const BootOverlayArg = "__bootoverlay"
 var (
 	// overlayCapNote: how long the cover stays up with its note after the cap put the windows back.
 	overlayCapNote = 3 * time.Second
+	// overlayDoneShow: how long the picture goes on after the instance is ready (the eruption and the fade, bootscreen.EruptionLength): the
+	// windows are given back at once, the picture only shows.
+	overlayDoneShow = 2300 * time.Millisecond
 	// overlayEnableDeadline: how long one EnableWindow call is waited for.
 	overlayEnableDeadline = 2 * time.Second
 	// overlayRecoverBudget: how long a lifecycle command waits for a recovery it started in the background.
@@ -989,6 +992,7 @@ type overlayOut struct {
 	Percent float64 // the bar, 0 to 1; negative: no real percentage yet (the bar is indeterminate)
 	Stage   string  // launch, android, or the setup step
 	Decided bool    // the poller has looked at the instance at least once (nothing is disabled before)
+	Done    bool    // the instance is ready: the eruption and the fade are shown, for overlayDoneShow, with the windows already given back
 }
 
 // overlayMachine decides, look after look. Not safe for concurrent use.
@@ -999,8 +1003,9 @@ type overlayMachine struct {
 	noStart      time.Time // since when no start holds the lock (zero: one does)
 	releasedAt   time.Time // when the cap put the windows back
 	releasedStep string
-	trackedSeen  bool   // the round was seen tracked once
-	lastStage    string // the stage of the last look (what the hard cap names)
+	doneAt       time.Time // when the instance was seen ready
+	trackedSeen  bool      // the round was seen tracked once
+	lastStage    string    // the stage of the last look (what the hard cap names)
 }
 
 // overlayTrackGrace: a round that is not seen tracked (no marker, no record of it) within this long is not one anybody is
@@ -1053,6 +1058,13 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 		}
 		return overlayOut{Stage: "launch", Percent: -1}
 	}
+	if !om.doneAt.IsZero() { // ready: the windows are back, the eruption is shown and fades, then the cover goes
+		out.Release, out.Done, out.Percent, out.Stage = true, true, 1, "ready"
+		if in.Now.Sub(om.doneAt) >= overlayDoneShow {
+			out.Exit, out.Reason = true, "ready"
+		}
+		return out
+	}
 	if !om.releasedAt.IsZero() { // the cap passed: the note stays up for a while, then the cover goes
 		out.Release, out.Note, out.Percent, out.Stage = true, om.releasedStep, 1, "sdcard"
 		if in.Now.Sub(om.releasedAt) >= overlayCapNote {
@@ -1070,7 +1082,8 @@ func (om *overlayMachine) Next(in overlayIn) overlayOut {
 		om.releasedAt, om.releasedStep = in.Now, step
 		out.Release, out.Note, out.Percent, out.Stage = true, step, 1, step
 	case in.Booted && in.Setup.Ready:
-		return overlayOut{Exit: true, Release: true, Reason: "ready", Percent: 1}
+		om.doneAt = in.Now
+		return overlayOut{Release: true, Done: true, Percent: 1, Stage: "ready", Decided: true}
 	case in.Booted && in.Setup.Step != "" && in.Setup.Step != readyStepBoot:
 		// the setup says how far it is: the bar is that percentage
 		out.Percent, out.Stage = float64(min(max(in.Setup.Progress, 0), 100))/100, in.Setup.Step
@@ -1103,6 +1116,8 @@ func overlayTitle(stage string) string {
 		s = "正在等存储就绪…"
 	case readyStepBoot:
 		s = "正在收尾…"
+	case "ready":
+		s = "准备好了"
 	default:
 		s = "正在做开机后调优…"
 	}

@@ -401,6 +401,43 @@ func TestPassThroughLetsTheMouseGoThrough(t *testing.T) {
 	}
 }
 
+// The picture fades by the window's own opacity once the covers only show; set before that it waits, and a cover made later
+// gets it too.
+func TestAlphaFadesTheCoversThatOnlyShow(t *testing.T) {
+	f := startFakeEmulator(t)
+	h := startOverlay(t, OverlayOptions{Paint: func(c *Canvas, main bool) { c.Fill(0x2A1B14) },
+		Wake: func(o *Overlay) { o.Sync(specsFor(f)) }})
+	getAlpha := func(hwnd uintptr) (uint8, bool) {
+		var key uint32
+		var a uint8
+		var flags uint32
+		r, _, _ := moduser32.NewProc("GetLayeredWindowAttributes").Call(hwnd, uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&a)), uintptr(unsafe.Pointer(&flags)))
+		return a, r != 0 && flags&lwaAlpha != 0
+	}
+	var mainCover uintptr
+	h.on(func(o *Overlay) {
+		o.Watch(f.PID)
+		o.Sync(specsFor(f))
+		o.SetAlpha(90) // not passing through yet: nothing is layered, nothing changes
+		mainCover = o.CoverOf(f.Main)
+	})
+	if _, ok := getAlpha(mainCover); ok {
+		t.Error("a cover that takes the mouse is a layered window")
+	}
+	h.on(func(o *Overlay) { o.SetPassThrough(true); o.SetAlpha(100) })
+	if a, ok := getAlpha(mainCover); !ok || a != 100 {
+		t.Errorf("alpha %d (layered %v), want 100", a, ok)
+	}
+	h.on(func(o *Overlay) { o.SetAlpha(0) })
+	if a, ok := getAlpha(mainCover); !ok || a != 0 {
+		t.Errorf("alpha %d (layered %v), want 0", a, ok)
+	}
+	h.on(func(o *Overlay) { o.Sync(nil); o.Sync(specsFor(f)); mainCover = o.CoverOf(f.Main) })
+	if a, ok := getAlpha(mainCover); !ok || a != 0 {
+		t.Errorf("a cover made later: alpha %d (layered %v), want 0", a, ok)
+	}
+}
+
 // A request to end is a flag the loop looks at, not only a message: with the posted message lost, the loop still ends on
 // the next turn of its timer.
 func TestQuitSurvivesALostMessage(t *testing.T) {

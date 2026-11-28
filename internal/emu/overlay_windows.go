@@ -103,6 +103,7 @@ type overlayRun struct {
 	indet      bool // no real percentage: the bar is indeterminate
 	title      string
 	note       string
+	doneAt     time.Time // when the window thread first saw the instance ready (the eruption's clock)
 	frame      *image.RGBA
 	lastDraw   time.Time
 	lastWindow time.Time
@@ -110,7 +111,7 @@ type overlayRun struct {
 }
 
 func newOverlayRun(m *Manager, i int, log *logx.Logger, watch host.Process, round string) *overlayRun {
-	r := &overlayRun{m: m, i: i, log: log, ops: overlayOS, watch: watch, round: round, screen: bootscreen.NewPlaceholder(),
+	r := &overlayRun{m: m, i: i, log: log, ops: overlayOS, watch: watch, round: round, screen: bootscreen.NewScreen(),
 		find:   func() (host.Process, bool, error) { return m.findQemu(i) },
 		probe:  func(ctx context.Context) (bool, bool) { return m.bootProbe(ctx, i, 2*time.Second, false) },
 		bootID: func(ctx context.Context) string { _, id, _ := m.guestBoot(ctx, i, false); return id }}
@@ -329,7 +330,17 @@ func (r *overlayRun) tick(o *win.Overlay) {
 	if out.Note != "" {
 		r.note = overlayNote(out.Note)
 	}
-	if now.Sub(r.lastDraw) >= 50*time.Millisecond {
+	if out.Done && r.doneAt.IsZero() {
+		r.doneAt = now
+	}
+	if !r.doneAt.IsZero() { // the whole picture fades out at the end of the eruption
+		o.SetAlpha(uint8(bootscreen.Fade(r.state(now))*255 + 0.5))
+	}
+	every := 50 * time.Millisecond
+	if !r.doneAt.IsZero() {
+		every = 33 * time.Millisecond
+	}
+	if now.Sub(r.lastDraw) >= every {
 		r.lastDraw = now
 		o.Invalidate()
 	}
@@ -389,6 +400,15 @@ func (r *overlayRun) release(o *win.Overlay) {
 	r.keeper.Release()
 }
 
+// state is what the picture shows at now.
+func (r *overlayRun) state(now time.Time) bootscreen.State {
+	st := bootscreen.State{Progress: r.shownPct, Indeterminate: r.indet, Elapsed: now.Sub(r.start), Step: r.title, Note: r.note}
+	if !r.doneAt.IsZero() {
+		st.Done, st.DoneFor = true, now.Sub(r.doneAt)
+	}
+	return st
+}
+
 // paint draws one frame of a cover (window thread).
 func (r *overlayRun) paint(c *win.Canvas, main bool) {
 	w, h := c.Size()
@@ -399,7 +419,7 @@ func (r *overlayRun) paint(c *win.Canvas, main bool) {
 	if r.frame == nil || r.frame.Bounds().Dx() != w || r.frame.Bounds().Dy() != h {
 		r.frame = image.NewRGBA(image.Rect(0, 0, w, h))
 	}
-	st := bootscreen.State{Progress: r.shownPct, Indeterminate: r.indet, Elapsed: time.Since(r.start), Step: r.title, Note: r.note}
+	st := r.state(time.Now())
 	labels := r.screen.Draw(r.frame, st)
 	c.Image(r.frame)
 	for _, l := range labels {

@@ -3,13 +3,16 @@
 package ui
 
 import (
+	"bytes"
 	"io"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"modavd/internal/bootscreen"
 	"modavd/internal/emu"
 	"modavd/internal/errs"
 	"modavd/internal/testutil"
@@ -256,6 +259,20 @@ func TestStaticFiles(t *testing.T) {
 		}
 		if len(body) == 0 {
 			t.Errorf("%s: empty body", path)
+		}
+	}
+
+	// the boot screen's pictures are the Go package's own files, served beside the assets
+	for name, ct := range map[string]string{"rig.json": "application/json; charset=utf-8", "part-face.png": "image/png", "screen-state-40.png": "image/png"} {
+		want, err := fs.ReadFile(bootscreen.ArtFS(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := h.do("GET", "/assets/boot/"+name, nil, noCookie)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != ct || !bytes.Equal(body, want) {
+			t.Errorf("assets/boot/%s: status %d, type %q, %d bytes (want %d)", name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body), len(want))
 		}
 	}
 

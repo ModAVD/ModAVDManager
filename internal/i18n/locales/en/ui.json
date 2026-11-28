@@ -254,6 +254,7 @@
   "请选择源模拟器和实例": "Select a source emulator and instance",
   "读不了日志 %v: %v": "Cannot read log %v: %v",
   "读不了日志文件夹 %v: %v": "Cannot read log folder %v: %v",
+  "读不出打包的开机画面美术": "Cannot read the bundled boot screen artwork",
   "读不出打包的页面文件": "Cannot read the bundled page files",
   "读请求体失败: %v": "Failed to read the request body: %v",
   "运行不了 tools\\modavd.exe：%v": "Cannot run tools\\modavd.exe: %v",

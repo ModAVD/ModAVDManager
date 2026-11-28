@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"modavd/internal/bootscreen"
 	"modavd/internal/host"
 	"modavd/internal/jsonord"
 	"modavd/internal/logx"
@@ -950,8 +951,41 @@ func TestOverlayMachineLifecycle(t *testing.T) {
 	}
 	b = in(32)
 	b.Answered, b.Booted, b.Setup = true, true, bootSetupState{Ready: true}
-	if o = step(b); !o.Exit || o.Reason != "ready" || !o.Release || o.Percent != 1 {
-		t.Fatalf("ready: %+v (the windows come back at once, no wait)", o)
+	if o = step(b); o.Exit || !o.Release || !o.Done || o.Percent != 1 || o.Stage != "ready" {
+		t.Fatalf("ready: %+v (the windows come back at once, the eruption is shown)", o)
+	}
+	// the picture goes on for overlayDoneShow, whatever the setup says now (done stays done), then the cover goes
+	b2 := in(33)
+	b2.Answered, b2.Booted = true, true
+	if o = step(b2); o.Exit || !o.Release || !o.Done {
+		t.Fatalf("during the eruption: %+v", o)
+	}
+	if o = step(in(32 + overlayDoneShow.Seconds() - 0.05)); o.Exit || !o.Done {
+		t.Fatalf("a moment before the end of the show: %+v", o)
+	}
+	if o = step(in(32 + overlayDoneShow.Seconds() + 0.05)); !o.Exit || o.Reason != "ready" || !o.Release {
+		t.Fatalf("after the show: %+v", o)
+	}
+}
+
+// The show of the eruption is as long as the artwork's eruption and its fade.
+func TestOverlayDoneShowCoversTheEruption(t *testing.T) {
+	if overlayDoneShow < bootscreen.EruptionLength() || overlayDoneShow > bootscreen.EruptionLength()+time.Second {
+		t.Errorf("overlayDoneShow %v, the eruption is %v", overlayDoneShow, bootscreen.EruptionLength())
+	}
+	// the qemu going away while it is shown ends it all the same
+	t0 := time.Date(2026, 11, 27, 22, 0, 0, 0, time.UTC)
+	om := newOverlayMachine(t0)
+	look := func(s float64, found bool) overlayOut {
+		return om.Next(overlayIn{Now: t0.Add(time.Duration(s * float64(time.Second))), QemuFound: found, StartHeld: true, WatchAlive: true,
+			Tracked: true, Answered: true, Booted: true, Setup: bootSetupState{Ready: true}})
+	}
+	if o := look(10, true); !o.Done || o.Exit {
+		t.Fatalf("ready: %+v", o)
+	}
+	look(10.5, false)
+	if o := look(12.6, false); !o.Exit || o.Reason != "qemu-gone" {
+		t.Errorf("the qemu went while the eruption was shown: %+v", o)
 	}
 }
 func TestOverlayMachineEndsWhenThereIsNothingToCover(t *testing.T) {
